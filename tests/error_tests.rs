@@ -227,6 +227,8 @@ mod misc;
 mod narrowing;
 #[path = "error_tests/image.rs"]
 mod image;
+#[path = "error_tests/mysqli.rs"]
+mod mysqli;
 
 // --- Iterator-related errors ---
 

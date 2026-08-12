@@ -166,6 +166,41 @@ try {
     assert_eq!(out, "te-result|te-link");
 }
 
+/// `bind_param` validates offline: a type character outside `i`/`d`/`s`/`b`
+/// throws `ValueError`; a types-vs-variables count mismatch reports and
+/// returns `false` under REPORT_OFF; execute on an unprepared statement fails
+/// with `errno` set.
+#[test]
+fn test_mysqli_stmt_bind_param_validation() {
+    // The statement comes from a `mysqli_stmt|false`-typed helper, the same
+    // union shape `mysqli::prepare` returns: statement method calls dispatch
+    // dynamically on the union receiver (a concretely-typed receiver would
+    // instead hit the checker's by-ref storage rule at compile time — loud,
+    // and documented).
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+function make_stmt(): mysqli_stmt|false {
+    return new mysqli_stmt();
+}
+$stmt = make_stmt();
+$v = 1;
+$w = 2;
+try {
+    $stmt->bind_param("x", $v);
+    echo "no";
+} catch (ValueError $e) {
+    echo "ve";
+}
+echo "|", $stmt->bind_param("is", $v) ? "T" : "F";
+echo "|", $stmt->bind_param("i", $v, $w) ? "T" : "F";
+echo "|", $stmt->execute() ? "T" : "F";
+echo "|", $stmt->errno;
+"#,
+    );
+    assert_eq!(out, "ve|F|F|F|2006");
+}
+
 /// The mysqli exception hierarchy is mysqli's own: `mysqli_sql_exception`
 /// extends `RuntimeException`, and the locked `MYSQLI_*` constants carry
 /// php-src's values.

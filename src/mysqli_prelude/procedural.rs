@@ -416,4 +416,104 @@ function mysqli_free_result(mixed $result): void {
     }
     $result->free();
 }
+
+function mysqli_prepare(mixed $mysql, string $query): mysqli_stmt|false {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_prepare(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->prepare($query);
+}
+
+// -- elephc PHP >= 8.2 mysqli execute_query begin --
+function mysqli_execute_query(mixed $mysql, string $query, ?array $params = null): mysqli_result|bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_execute_query(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->execute_query($query, $params);
+}
+// -- elephc PHP >= 8.2 mysqli execute_query end --
+
+function mysqli_stmt_bind_param(mixed $statement, string $types, mixed &...$vars): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_bind_param(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    // Same bind-time value capture as the method; see statement.rs for the
+    // documented divergence from PHP's read-at-execute reference semantics.
+    $_values = [];
+    $_given = count($vars);
+    for ($_i = 0; $_i < $_given; $_i++) {
+        $_values[] = $vars[$_i];
+    }
+    return $statement->__elephcBindParamValues($types, $_values);
+}
+
+function mysqli_stmt_execute(mixed $statement, ?array $params = null): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_execute(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->execute($params);
+}
+
+function mysqli_stmt_get_result(mixed $statement): mysqli_result|false {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_get_result(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->get_result();
+}
+
+function mysqli_stmt_store_result(mixed $statement): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_store_result(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->store_result();
+}
+
+function mysqli_stmt_reset(mixed $statement): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_reset(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->reset();
+}
+
+function mysqli_stmt_close(mixed $statement): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_close(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->close();
+}
+
+function mysqli_stmt_affected_rows(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_affected_rows(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->affected_rows;
+}
+
+function mysqli_stmt_errno(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_errno(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->errno;
+}
+
+function mysqli_stmt_error(mixed $statement): string {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_error(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->error;
+}
+
+function mysqli_stmt_num_rows(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_num_rows(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->num_rows;
+}
+
+function mysqli_stmt_param_count(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_param_count(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->param_count;
+}
 "#;

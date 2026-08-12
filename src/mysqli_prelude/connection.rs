@@ -436,6 +436,53 @@ class mysqli {
         return $_result;
     }
 
+    public function prepare(string $query): mysqli_stmt|false {
+        if ($query === "") {
+            throw new ValueError("mysqli::prepare(): Argument #1 (\$query) must not be empty");
+        }
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        // Native (non-emulated) prepare: real `?` placeholders on the server.
+        $_handle = elephc_pdo_prepare($this->conn, $query, 0);
+        if ($_handle < 0) {
+            $this->opFailed();
+            return false;
+        }
+        $this->clearError();
+        return mysqli_stmt::__elephcFromPrepare($this, $_handle, $query);
+    }
+
+    // -- elephc PHP >= 8.2 mysqli execute_query begin --
+    public function execute_query(string $query, ?array $params = null): mysqli_result|bool {
+        // prepare + execute($params) + get_result in one call (PHP 8.2+).
+        $_statement = $this->prepare($query);
+        if ($_statement === false) {
+            return false;
+        }
+        if (!$_statement->execute($params)) {
+            $_statement->close();
+            return false;
+        }
+        if ($_statement->field_count == 0) {
+            // Non-select: mirror the statement's outcome on the connection and
+            // report success as `true`, like mysqli::query does.
+            $this->affected_rows = $_statement->affected_rows;
+            $this->insert_id = $_statement->insert_id;
+            $this->field_count = 0;
+            $_statement->close();
+            return true;
+        }
+        $_result = $_statement->get_result();
+        $_statement->close();
+        if ($_result === false) {
+            return false;
+        }
+        $this->field_count = $_result->field_count;
+        return $_result;
+    }
+    // -- elephc PHP >= 8.2 mysqli execute_query end --
+
     public function real_query(string $query): bool {
         if ($query === "") {
             throw new ValueError("mysqli::real_query(): Argument #1 (\$query) must not be empty");

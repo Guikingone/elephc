@@ -37,6 +37,7 @@ mod exception;
 mod fragments;
 mod procedural;
 mod result;
+mod statement;
 
 static PARSED_PRELUDE_CACHE: OnceLock<Mutex<HashMap<PhpVersion, Program>>> = OnceLock::new();
 
@@ -77,6 +78,7 @@ pub fn fragment_sources() -> &'static [(&'static str, &'static str)] {
         ("mysqli_prelude(exception)", exception::SRC),
         ("mysqli_prelude(connection)", connection::SRC),
         ("mysqli_prelude(result)", result::SRC),
+        ("mysqli_prelude(statement)", statement::SRC),
         ("mysqli_prelude(procedural)", procedural::SRC),
     ]
 }

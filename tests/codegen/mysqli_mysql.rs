@@ -175,6 +175,127 @@ $db->query("DROP TABLE mn");
     assert_eq!(out, "T|1|1|2|rq|3|empty");
 }
 
+/// Prepared statements: `bind_param` + `execute` + `get_result`, with a
+/// re-executable statement. Bound values are captured at bind_param time
+/// (documented divergence from PHP's read-at-execute references), so fresh
+/// values come from re-binding or `execute($params)`.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_bind_param_and_get_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS ms");
+$db->query("CREATE TABLE ms (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(32), score DOUBLE)");
+$ins = $db->prepare("INSERT INTO ms (name, score) VALUES (?, ?)");
+echo $ins->param_count, "|";
+$name = "Ada";
+$score = 1.5;
+$ins->bind_param("sd", $name, $score);
+$ins->execute();
+$name = "Ben";
+$score = 2.25;
+$ins->bind_param("sd", $name, $score);
+$ins->execute();
+echo $ins->affected_rows, "|";
+$sel = $db->prepare("SELECT name, score FROM ms WHERE name = ?");
+$who = "Ben";
+$sel->bind_param("s", $who);
+$sel->execute();
+$r = $sel->get_result();
+if (!($r instanceof mysqli_result)) {
+    echo "no-result";
+    exit(1);
+}
+$row = $r->fetch_assoc();
+echo $row["name"], ":", $row["score"], "|";
+$who = "Ada";
+$sel->bind_param("s", $who);
+$sel->execute();
+$r2 = $sel->get_result();
+if (!($r2 instanceof mysqli_result)) {
+    echo "no-result2";
+    exit(1);
+}
+$row2 = $r2->fetch_assoc();
+echo $row2["name"], "|";
+$sel->close();
+$ins->close();
+$db->query("DROP TABLE ms");
+"#,
+    ));
+    assert_eq!(out, "2|1|Ben:2.25|Ada|");
+}
+
+/// `execute($params)` binds an array per execution (PHP 8.1+ shape), and
+/// `store_result` makes `num_rows` valid on the statement.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_execute_params_and_store_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mb");
+$db->query("CREATE TABLE mb (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(32))");
+$ins = $db->prepare("INSERT INTO mb (name) VALUES (?)");
+$ins->execute(["Ada"]);
+$ins->execute(["Ben"]);
+echo $ins->insert_id, "|";
+$sel = $db->prepare("SELECT id, name FROM mb ORDER BY id");
+$sel->execute();
+$sel->store_result();
+echo $sel->num_rows, "|";
+$sel->execute();
+$r = $sel->get_result();
+if (!($r instanceof mysqli_result)) {
+    echo "no-result";
+    exit(1);
+}
+$out = "";
+foreach ($r as $row) {
+    $out = $out . $row["id"] . ":" . $row["name"] . ",";
+}
+echo $out;
+$sel->close();
+$ins->close();
+$db->query("DROP TABLE mb");
+"#,
+    ));
+    assert_eq!(out, "2|2|1:Ada,2:Ben,");
+}
+
+/// `execute_query` (PHP 8.2+) is prepare + execute + get_result in one call,
+/// and the procedural statement pipeline works end to end.
+#[test]
+#[ignore]
+fn test_mysqli_execute_query_and_procedural_stmt() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mq");
+$db->query("CREATE TABLE mq (id INT PRIMARY KEY AUTO_INCREMENT, v INT)");
+echo $db->execute_query("INSERT INTO mq (v) VALUES (?)", [7]) === true ? "ins" : "no";
+$r = $db->execute_query("SELECT v FROM mq");
+if (!($r instanceof mysqli_result)) {
+    echo "no-result";
+    exit(1);
+}
+echo "|", $r->fetch_column(0);
+$stmt = mysqli_prepare($db, "SELECT v + ? FROM mq");
+$delta = 5;
+echo "|", mysqli_stmt_bind_param($stmt, "i", $delta) ? "bp" : "no";
+echo "|", mysqli_stmt_execute($stmt) ? "ex" : "no";
+$pr = mysqli_stmt_get_result($stmt);
+if (!($pr instanceof mysqli_result)) {
+    echo "no-presult";
+    exit(1);
+}
+echo "|", $pr->fetch_column(0);
+echo "|", mysqli_stmt_param_count($stmt);
+mysqli_stmt_close($stmt);
+$db->query("DROP TABLE mq");
+"#,
+    ));
+    assert_eq!(out, "ins|7|bp|ex|12|1");
+}
+
 /// Connection information, ping, charset, autocommit, and a commit round-trip
 /// against the live server.
 #[test]

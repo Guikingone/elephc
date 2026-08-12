@@ -23,7 +23,21 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
     source.push_str(super::exception::SRC);
     source.push_str(super::connection::SRC);
     source.push_str(super::result::SRC);
+    source.push_str(super::statement::SRC);
     source.push_str(super::procedural::SRC);
+    if php_version < PhpVersion::Php82 {
+        // mysqli::execute_query / mysqli_execute_query are PHP 8.2+.
+        remove_version_block(
+            &mut source,
+            "    // -- elephc PHP >= 8.2 mysqli execute_query begin --",
+            "    // -- elephc PHP >= 8.2 mysqli execute_query end --",
+        );
+        remove_version_block(
+            &mut source,
+            "// -- elephc PHP >= 8.2 mysqli execute_query begin --",
+            "// -- elephc PHP >= 8.2 mysqli execute_query end --",
+        );
+    }
     if php_version < PhpVersion::Php81 {
         // PHP 8.0's default mysqli_report mode is MYSQLI_REPORT_OFF; 8.1+
         // defaults to MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT.
@@ -89,6 +103,16 @@ mod tests {
             crate::parser::parse_internal(&tokens)
                 .unwrap_or_else(|e| panic!("{version:?} prelude must parse: {e:?}"));
         }
+    }
+
+    /// `execute_query` (method and procedural alias) exists from PHP 8.2 only.
+    #[test]
+    fn execute_query_is_version_gated() {
+        let php81 = source_for_version(PhpVersion::Php81);
+        assert!(!php81.contains("execute_query"));
+        let php82 = source_for_version(PhpVersion::Php82);
+        assert!(php82.contains("public function execute_query"));
+        assert!(php82.contains("function mysqli_execute_query"));
     }
 
     /// `fetch_column` (method and procedural alias) exists from PHP 8.1 only.
