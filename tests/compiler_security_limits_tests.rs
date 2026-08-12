@@ -16,6 +16,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static LIMIT_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// Heap capacity used by the large-frame recursion fixture.
+///
+/// This stays above the runtime stack guard's 64 MiB cap so the fixture reaches
+/// the stack diagnostic before accumulated recursive-frame values exhaust the heap.
+const LARGE_FRAME_TEST_HEAP_BYTES: usize = 128 * 1024 * 1024;
+
 /// Resolves the compiler binary built for this integration test.
 fn elephc_bin() -> String {
     std::env::var("CARGO_BIN_EXE_elephc").unwrap_or_else(|_| {
@@ -144,6 +150,7 @@ fn large_frames_report_runtime_recursion_limit_before_stack_overflow() {
 
     let compile = Command::new(elephc_bin())
         .env("XDG_CACHE_HOME", dir.join("cache"))
+        .arg(format!("--heap-size={LARGE_FRAME_TEST_HEAP_BYTES}"))
         .arg(&php)
         .output()
         .expect("compile large-frame recursion fixture");
