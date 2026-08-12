@@ -68,6 +68,18 @@ fn emit_file_get_contents_bytes(
             emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(false);
         }
+        if let Some(scheme_end) = path_literal.find("://") {
+            let scheme = &path_literal[..scheme_end];
+            let builtin = crate::types::stream_constants::STREAM_WRAPPERS
+                .iter()
+                .any(|known| *known == scheme)
+                || scheme == "compress.zlib"
+                || scheme == "compress.bzip2";
+            if !builtin {
+                super::emit_literal_wrapper_file_get_contents_bytes(ctx, path_literal)?;
+                return Ok(false);
+            }
+        }
         if path_literal == "php://input" {
             // file_get_contents('php://input'): under --web `__rt_php_input` copies
             // the captured request body into an owned string; in a non-web build it

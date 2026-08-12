@@ -192,13 +192,38 @@ pub(super) use string_validation::load_string_to_result;
 /// and stamps the filter chain — so this reuses that opener rather than teaching the
 /// filesystem helper about filters. The bytes are taken into owned storage BEFORE the close,
 /// because the read answers with the stream's own buffer and closing it takes that away.
+/// Reads a literal URI whose scheme belongs to no built-in wrapper through `fopen()`.
+///
+/// php-src has no separate reader here: `file_get_contents` is `php_stream_open_wrapper` followed
+/// by `_php_stream_copy_to_mem`, so every scheme the opener knows is readable by definition. The
+/// hand-rolled scheme ladder underneath knows `http`, `https` and `ftp` and then falls back to a
+/// filename, which is why a registered user wrapper answered `Failed to open stream` here while
+/// `fopen()` on the same URI worked. The opener already scans the wrapper registry and reports an
+/// unknown scheme the way php does, so delegating covers both outcomes.
+fn emit_literal_wrapper_file_get_contents_bytes(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+) -> Result<()> {
+    fopen_core::emit_literal_fopen_result(ctx, LiteralOpenMode::ReadOnly, path)?;
+    emit_open_read_close_tail(ctx, "fgc_wrapper")
+}
+
 fn emit_literal_php_filter_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,
 ) -> Result<()> {
     emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::ReadOnly, path)?;
-    let fail = ctx.next_label("fgc_filter_failed");
-    let done = ctx.next_label("fgc_filter_done");
+    emit_open_read_close_tail(ctx, "fgc_filter")
+}
+
+/// Turns a boxed `fopen()` result already in the result register into the bytes it holds.
+///
+/// Reads the whole stream, takes ownership of the bytes before the close reclaims the buffer,
+/// closes the stream php opened on the caller's behalf, and leaves the pair in the string result
+/// registers. A failed open leaves a null pointer, which the boxer reads as PHP `false`.
+fn emit_open_read_close_tail(ctx: &mut FunctionContext<'_>, label_prefix: &str) -> Result<()> {
+    let fail = ctx.next_label(&format!("{label_prefix}_failed"));
+    let done = ctx.next_label(&format!("{label_prefix}_done"));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_reserve_temporary_stack(ctx.emitter, 32);

@@ -8071,6 +8071,41 @@ fclose($h);
     assert_eq!(out, "0|wrapped|7|3|pped|7");
 }
 
+/// `file_get_contents()` reads through a registered wrapper, as `fopen()` already did.
+///
+/// php-src has no separate reader here — `file_get_contents` is `php_stream_open_wrapper`
+/// followed by `_php_stream_copy_to_mem` — so every scheme the opener knows is readable by
+/// definition. elephc had a hand-rolled scheme ladder that knew `http`, `https` and `ftp` and
+/// then fell back to a filename, so a registered wrapper answered `Failed to open stream` from
+/// `file_get_contents()` while `fopen()` on the very same URI worked.
+///
+/// The unknown scheme at the end is the other half: delegating to the opener has to keep
+/// reporting a scheme nobody registered, rather than turn it into a silent empty read.
+#[test]
+fn test_file_get_contents_reads_through_a_registered_wrapper() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Src {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_close() {}
+}
+stream_wrapper_register("memg", "Src");
+echo var_export(file_get_contents("memg://y"), true), "|";
+echo var_export(@file_get_contents("nosuchscheme://y"), true);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "'wrapped payload'|false");
+}
+
 /// A failing IPv6 server has to say why, like its IPv4 sibling.
 ///
 /// The IPv6 helper is tail-called from the dispatcher, which clears the error stash before jumping;
