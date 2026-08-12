@@ -213,7 +213,7 @@ fn binary_add_sub(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scale::{get_scale, set_scale};
+    use crate::scale::{set_scale, ScaleTestGuard};
 
     /// Verifies addition truncates or pads exactly to the selected scale.
     #[test]
@@ -240,11 +240,10 @@ mod tests {
     /// Verifies global scale is consumed only when an explicit scale is absent.
     #[test]
     fn omitted_scale_reads_process_state() {
-        let saved = get_scale();
+        let _guard = ScaleTestGuard::acquire();
         set_scale(4).expect("set scale");
         assert_eq!(bc_add("1", "1", None).expect("add"), "2.0000");
         assert_eq!(bc_add("1", "1", Some(0)).expect("add"), "2");
-        set_scale(i64::from(saved)).expect("restore scale");
     }
 
     /// Verifies modulo and divmod retain PHP's quotient and dividend-sign rules.
@@ -262,4 +261,3 @@ mod tests {
         assert_eq!(bc_mod("5.7", "1.3", Some(1)).expect("mod"), "0.5");
     }
 }
-

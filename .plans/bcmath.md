@@ -78,17 +78,24 @@ Put unit tests in each module (or `src/ops.rs` `#[cfg(test)]`) that encode PHP 8
 
 ```rust
 #[test]
-fn parse_accepts_trimmed_signed_decimal() {
-    let n = parse_bcmath_number("  -003.50  ").unwrap();
+fn parse_accepts_signed_decimal() {
+    let n = parse_bcmath_number("-003.50").unwrap();
     assert_eq!(format_bcmath_number(&n, 2).unwrap(), "-3.50");
 }
 
 #[test]
-fn parse_rejects_scientific_and_empty() {
+fn parse_accepts_digitless_zero_forms() {
+    for value in ["", "+", "-", ".", "+.", "-."] {
+        let n = parse_bcmath_number(value).unwrap();
+        assert_eq!(format_bcmath_number(&n, 2).unwrap(), "0.00");
+    }
+}
+
+#[test]
+fn parse_rejects_whitespace_and_scientific_notation() {
+    assert!(parse_bcmath_number(" 0").is_err());
+    assert!(parse_bcmath_number("0 ").is_err());
     assert!(parse_bcmath_number("1e2").is_err());
-    assert!(parse_bcmath_number("").is_err());
-    assert!(parse_bcmath_number(".").is_err());
-    assert!(parse_bcmath_number("+").is_err());
 }
 
 #[test]
@@ -142,7 +149,7 @@ pub struct BcNum {
 }
 ```
 
-`parse.rs`: trim ASCII whitespace, apply the well-formed grammar from the spec, reject scientific notation.
+`parse.rs`: scan input verbatim, normalize syntactically valid digitless forms to zero, and reject whitespace, scientific notation, and other junk.
 
 `format.rs`: emit PHP strings for a requested result scale (pad or truncate, never round). Normalize `-0` to `0` / `0.000`.
 

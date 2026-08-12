@@ -301,8 +301,9 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// This is only the always-present core set. Bridge-linked extensions (e.g. `PDO`, `hash`,
 /// `openssl`) are added on top per-compilation from the linked-bridge set via
 /// `crate::codegen::linked_extensions()` — see [`extension_is_loaded`] and
-/// `lower_get_loaded_extensions`. The magician eval interpreter has no AOT link step, so it
-/// reports only this core set (documented divergence: `extension_loaded('PDO')` is `false` in eval).
+/// `lower_get_loaded_extensions`. Magician mirrors this set but always adds `bcmath`, which it
+/// implements directly; AOT adds `bcmath` only when `elephc_bcmath` is linked. Other bridge-linked
+/// extensions such as `PDO` remain absent in eval because it has no AOT link manifest.
 pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",
@@ -419,4 +420,3 @@ pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates() -> V
     }
     candidates
 }
-

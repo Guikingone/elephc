@@ -114,16 +114,17 @@ the existing `round()` lowering.
 
 ### Well-formed numeric strings
 
-After trimming ASCII whitespace:
+The input is scanned verbatim; surrounding whitespace is not trimmed:
 
 - optional leading `+` or `-`
 - zero or more digits
 - optional `.`
 - zero or more digits
-- at least one digit must be present
+- zero digits are allowed only when the remaining input is an optional sign and optional point;
+  those digitless forms normalize to zero
 
-Valid: `"0"`, `"00"`, `".5"`, `"5."`, `"+1.20"`, `"  -3.0  "`.
-Invalid: `""`, `"+"`, `"-"`, `"."`, `"1e2"`, `"1.2.3"`, `"abc"`.
+Valid: `"0"`, `"00"`, `".5"`, `"5."`, `"+1.20"`, `""`, `"+"`, `"-"`, `"."`, `"+."`, `"-."`.
+Invalid: `" 0"`, `"0 "`, `"1e2"`, `"1.2.3"`, `"abc"`.
 
 Scientific notation is never accepted.
 
@@ -189,7 +190,7 @@ Even explicit-scale calls `MAY_THROW`, so unused calls must not be DCE’d.
 | File | Responsibility |
 |---|---|
 | `src/lib.rs` | C ABI, status codes, `elephc_bcmath_free` |
-| `src/parse.rs` | well-formed scan + trim |
+| `src/parse.rs` | verbatim well-formed scan + digitless-zero normalization |
 | `src/num.rs` | `BcNum` (sign, base-10 digits, scale) |
 | `src/format.rs` | PHP result string (scale padding, sign, zero) |
 | `src/ops.rs` | add, sub, mul, div, mod, comp, divmod |

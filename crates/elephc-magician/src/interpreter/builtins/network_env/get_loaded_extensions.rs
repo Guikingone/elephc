@@ -12,7 +12,10 @@ use super::*;
 
 /// Regular (non-Zend) extension list returned by `get_loaded_extensions(false)`.
 ///
-/// KEEP IN SYNC with `src/codegen/lower_inst/builtins.rs` (`CORE_LOADED_EXTENSIONS`).
+/// Most entries mirror AOT's `CORE_LOADED_EXTENSIONS`. BCMath deliberately differs: Magician
+/// always implements every `bc*` function, so eval always lists `bcmath`; AOT lists it only when
+/// `elephc_bcmath` is linked through static detection or `--with-bcmath`. Other bridge-linked AOT
+/// extensions remain absent because eval has no AOT link manifest.
 const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",

@@ -23,6 +23,29 @@ echo bcadd($left, $right, 4);
     assert_eq!(out, "6.2340");
 }
 
+/// Verifies digitless operands become zero while surrounding whitespace remains malformed.
+#[test]
+fn test_bcmath_php_numeric_string_grammar() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (['', '+', '-', '.', '+.', '-.'] as $zero) {
+    echo bcadd($zero, '2', 2), '|';
+}
+foreach ([' 0', '0 ', "\t0"] as $bad) {
+    try {
+        bcadd($bad, '2', 2);
+    } catch (\ValueError $e) {
+        echo get_class($e), '|';
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "2.00|2.00|2.00|2.00|2.00|2.00|ValueError|ValueError|ValueError|"
+    );
+}
+
 /// Verifies the scaled arithmetic, comparison, power, and root operations together.
 #[test]
 fn test_bcmath_arithmetic_surface() {

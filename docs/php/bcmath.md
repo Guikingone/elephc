@@ -56,10 +56,11 @@ negative zero, and is padded with trailing zeros to the selected scale.
 
 ## Accepted numbers and errors
 
-Numeric strings may contain surrounding ASCII whitespace, an optional sign,
-and decimal digits with an optional point. Forms such as `.5`, `5.`, and
-`+1.20` are valid; empty strings, exponent notation such as `1e2`, multiple
-decimal points, and non-numeric text are not.
+Numeric strings are scanned verbatim and may contain an optional sign plus
+decimal digits with an optional point. Forms such as `.5`, `5.`, and `+1.20`
+are valid. PHP also normalizes digitless forms such as `""`, `+`, `-`, `.`,
+`+.`, and `-.` to zero. Surrounding whitespace, exponent notation such as
+`1e2`, multiple decimal points, and other non-numeric text are not accepted.
 
 Malformed numbers, negative or out-of-range scales, invalid powers or square
 roots, and unsupported rounding modes throw a catchable `ValueError`.

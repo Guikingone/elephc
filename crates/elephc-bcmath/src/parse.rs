@@ -6,8 +6,8 @@
 //! - Crate tests that pin accepted and rejected numeric strings.
 //!
 //! Key details:
-//! - ASCII edge whitespace is trimmed, while scientific notation is rejected.
-//! - At least one digit is required across the integer and fractional portions.
+//! - Input is scanned verbatim: whitespace, scientific notation, and other junk are rejected.
+//! - PHP normalizes the otherwise-valid digitless forms (`""`, signs, and a point) to zero.
 
 use crate::error::BcError;
 use crate::num::BcNum;
@@ -24,7 +24,7 @@ pub(crate) fn parse_bcmath_number_for(
     arg_pos: u32,
     arg_name: &'static str,
 ) -> Result<BcNum, BcError> {
-    let bytes = trim_ascii(input.as_bytes());
+    let bytes = input.as_bytes();
     let mut index = 0usize;
     let mut negative = false;
     if matches!(bytes.first(), Some(b'+') | Some(b'-')) {
@@ -33,13 +33,11 @@ pub(crate) fn parse_bcmath_number_for(
     }
 
     let mut digits = Vec::with_capacity(bytes.len());
-    let mut saw_digit = false;
     let mut saw_dot = false;
     let mut scale = 0i32;
     while index < bytes.len() {
         match bytes[index] {
             b'0'..=b'9' => {
-                saw_digit = true;
                 digits.push(bytes[index] - b'0');
                 if saw_dot {
                     scale = scale.checked_add(1).ok_or(BcError::Malformed {
@@ -60,25 +58,7 @@ pub(crate) fn parse_bcmath_number_for(
         }
         index += 1;
     }
-    if !saw_digit {
-        return Err(BcError::Malformed {
-            func,
-            arg_pos,
-            arg_name,
-        });
-    }
     Ok(BcNum::new(negative, digits, scale))
-}
-
-/// Trims only the ASCII whitespace accepted around BCMath numeric strings.
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
 }
 
 #[cfg(test)]
@@ -86,17 +66,26 @@ mod tests {
     use super::*;
     use crate::format::format_bcmath_number;
 
-    /// Verifies signed decimals with surrounding ASCII whitespace are accepted and normalized.
+    /// Verifies signed decimals without surrounding whitespace are accepted and normalized.
     #[test]
-    fn parse_accepts_trimmed_signed_decimal() {
-        let number = parse_bcmath_number("  -003.50  ").expect("valid decimal");
+    fn parse_accepts_signed_decimal() {
+        let number = parse_bcmath_number("-003.50").expect("valid decimal");
         assert_eq!(format_bcmath_number(&number, 2).expect("format"), "-3.50");
     }
 
-    /// Verifies empty, sign-only, dot-only, and scientific forms are rejected.
+    /// Verifies PHP's syntactically valid digitless forms normalize to positive zero.
     #[test]
-    fn parse_rejects_scientific_and_empty() {
-        for invalid in ["1e2", "", ".", "+", "-"] {
+    fn parse_accepts_digitless_zero_forms() {
+        for zero in ["", "+", "-", ".", "+.", "-."] {
+            let number = parse_bcmath_number(zero).expect("digitless zero");
+            assert_eq!(format_bcmath_number(&number, 2).expect("format"), "0.00");
+        }
+    }
+
+    /// Verifies whitespace, scientific notation, and malformed punctuation are rejected.
+    #[test]
+    fn parse_rejects_whitespace_scientific_and_junk() {
+        for invalid in [" 0", "0 ", "\t0", "1e2", "1.2.3", "..", "+-"] {
             assert!(parse_bcmath_number(invalid).is_err(), "accepted {invalid:?}");
         }
     }
@@ -116,4 +105,3 @@ mod tests {
         );
     }
 }
-

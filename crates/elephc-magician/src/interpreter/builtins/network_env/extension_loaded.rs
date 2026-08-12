@@ -11,16 +11,17 @@
 
 use super::*;
 
-/// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()`.
+/// Eval's compile-time-known set of "loaded" PHP extensions for `extension_loaded()`.
 ///
-/// KEEP IN SYNC with the core set in `src/codegen/lower_inst/builtins.rs`
-/// (`CORE_LOADED_EXTENSIONS`).
+/// Most entries mirror AOT's `CORE_LOADED_EXTENSIONS`. BCMath deliberately differs: Magician
+/// always implements every `bc*` function, so eval always reports `bcmath`; AOT reports it only
+/// when `elephc_bcmath` is linked through static detection or `--with-bcmath`.
 ///
-/// Deliberate divergence from native codegen: the native backend also reports the bridge
+/// The native backend also reports the other bridge
 /// staticlibs it links (e.g. `PDO`, `hash`, `openssl`), but the eval interpreter runs at compile
-/// time with no AOT link step and therefore no linked bridges, so it reports only this core set.
+/// time with no AOT link manifest and therefore does not expose those extensions.
 /// `extension_loaded('PDO')` is thus `false` under eval even when the surrounding program is
-/// compiled `--with-pdo` — same rationale as eval not seeing the link manifest.
+/// compiled `--with-pdo`.
 const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",

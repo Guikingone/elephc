@@ -8,14 +8,47 @@
 //! - Expected strings were captured from PHP 8.4.19 with the bcmath extension.
 //! - Tests cover truncation, padding, signs, global scale, rounding, and typed failures.
 
+use std::sync::{Mutex, MutexGuard};
+
 use elephc_bcmath::{
     bc_add, bc_ceil, bc_comp, bc_div, bc_divmod, bc_floor, bc_mod, bc_mul, bc_pow,
     bc_powmod, bc_round, bc_sqrt, bc_sub, get_scale, set_scale, BcError,
 };
 
+static SCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Restores the integration-test process scale before releasing its serialization lock.
+struct ScaleTestGuard {
+    previous: i32,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl ScaleTestGuard {
+    /// Acquires the integration-test scale lock and snapshots the current value.
+    fn acquire() -> Self {
+        let lock = SCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Self {
+            previous: get_scale(),
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for ScaleTestGuard {
+    /// Restores the original process scale even when the guarded test panics.
+    fn drop(&mut self) {
+        set_scale(i64::from(self.previous)).expect("restore bcmath scale");
+    }
+}
+
 /// Verifies core arithmetic output strings against PHP 8.4 fixtures.
 #[test]
 fn arithmetic_fixtures_match_php() {
+    for zero in ["", "+", "-", ".", "+.", "-."] {
+        assert_eq!(bc_add(zero, "2", Some(2)).expect("digitless zero"), "2.00");
+    }
     assert_eq!(bc_add("1.234", "5", Some(0)).expect("add"), "6");
     assert_eq!(bc_add("1.234", "5", Some(4)).expect("add"), "6.2340");
     assert_eq!(bc_sub("1", "2.5", Some(2)).expect("sub"), "-1.50");
@@ -67,20 +100,21 @@ fn rounding_fixtures_match_php() {
 /// Verifies global scale affects omitted-scale calls and explicit zero overrides it.
 #[test]
 fn process_scale_fixture_matches_php() {
-    let saved = get_scale();
+    let _guard = ScaleTestGuard::acquire();
     set_scale(4).expect("set scale");
     assert_eq!(bc_mul("1", "1", None).expect("mul"), "1.0000");
     assert_eq!(bc_mul("1", "1", Some(0)).expect("mul"), "1");
-    set_scale(i64::from(saved)).expect("restore scale");
 }
 
 /// Verifies malformed values, invalid scales, and division failures retain typed errors.
 #[test]
 fn failure_fixtures_match_php_categories() {
-    assert!(matches!(
-        bc_add("1e2", "1", Some(0)),
-        Err(BcError::Malformed { .. })
-    ));
+    for malformed in [" 0", "0 ", "\t0", "1e2"] {
+        assert!(matches!(
+            bc_add(malformed, "1", Some(0)),
+            Err(BcError::Malformed { .. })
+        ));
+    }
     assert!(matches!(
         bc_add("1", "2", Some(-1)),
         Err(BcError::ScaleRange { .. })

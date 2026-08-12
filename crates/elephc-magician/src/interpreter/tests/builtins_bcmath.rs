@@ -7,13 +7,44 @@
 //! Key details:
 //! - Fixtures cover shared scale, exact decimal outputs, array results, discovery, and Throwables.
 
+use std::sync::{Mutex, MutexGuard};
+
 use super::super::*;
 use super::support::*;
+
+static BCMATH_SCALE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serializes Magician BCMath tests and restores their shared process scale on drop.
+struct BcmathScaleTestGuard {
+    previous: i32,
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl BcmathScaleTestGuard {
+    /// Acquires the BCMath test lock, resets scale to zero, and saves the prior value.
+    fn acquire() -> Self {
+        let lock = BCMATH_SCALE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = elephc_bcmath::set_scale(0).expect("reset bcmath scale");
+        Self {
+            previous,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for BcmathScaleTestGuard {
+    /// Restores the prior scale before releasing the Magician BCMath test lock.
+    fn drop(&mut self) {
+        elephc_bcmath::set_scale(i64::from(self.previous)).expect("restore bcmath scale");
+    }
+}
 
 /// Verifies all BCMath result shapes and process-scale reads through direct eval calls.
 #[test]
 fn execute_program_dispatches_bcmath_arithmetic() {
-    elephc_bcmath::set_scale(0).expect("reset bcmath scale");
+    let _guard = BcmathScaleTestGuard::acquire();
     let program = parse_fragment(
         br#"bcscale(4);
 echo bcadd("1.234", "5"), ":";
@@ -36,7 +67,6 @@ return bcscale();"#,
     let mut values = FakeOps::default();
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
-    elephc_bcmath::set_scale(0).expect("restore bcmath scale");
 
     assert_eq!(
         values.output,
@@ -45,9 +75,40 @@ return bcscale();"#,
     assert_eq!(values.get(result), FakeValue::Int(4));
 }
 
+/// Verifies eval follows PHP's digitless-zero and verbatim-whitespace numeric grammar.
+#[test]
+fn execute_program_dispatches_bcmath_numeric_grammar() {
+    let _guard = BcmathScaleTestGuard::acquire();
+    let program = parse_fragment(
+        br#"foreach (["", "+", "-", ".", "+.", "-."] as $zero) {
+    echo bcadd($zero, "2", 2), "|";
+}
+foreach ([" 0", "0 ", "\t0"] as $bad) {
+    try {
+        bcadd($bad, "2", 2);
+    } catch (ValueError $e) {
+        echo get_class($e), "|";
+    }
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "2.00|2.00|2.00|2.00|2.00|2.00|ValueError|ValueError|ValueError|"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies case-insensitive names, named/callable binding, and BCMath discovery under eval.
 #[test]
 fn execute_program_dispatches_bcmath_metadata_and_callables() {
+    let _guard = BcmathScaleTestGuard::acquire();
     let program = parse_fragment(
         br#"echo BCADD(num1: "1", num2: "2", scale: 0), ":";
 echo call_user_func("bcsqrt", "9", 0), ":";
@@ -69,6 +130,7 @@ return is_callable("bcround");"#,
 /// Verifies malformed input and zero division become catchable PHP error classes with messages.
 #[test]
 fn execute_program_dispatches_bcmath_throwables() {
+    let _guard = BcmathScaleTestGuard::acquire();
     let program = parse_fragment(
         br#"try {
     bcadd("1e2", "1");
