@@ -272,12 +272,18 @@ fn validate_instruction_result(
 }
 
 /// Validates that non-refinable opcodes carry their canonical effect set.
+/// `load_local` additionally admits exactly `PURE`, which is attached only after
+/// the immutable-local pass proves that the named scalar slot cannot change.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     let expected = inst.op.default_effects();
-    if !inst.op.allows_effect_refinement() && inst.effects != expected {
+    let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    if !inst.op.allows_effect_refinement()
+        && !immutable_local_refinement
+        && inst.effects != expected
+    {
         return Err(ValidationError::EffectMismatch {
             inst: inst_id,
             expected,
@@ -421,7 +427,8 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
-        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => {
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
+        | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),

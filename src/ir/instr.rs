@@ -274,6 +274,15 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// Adds two integers with PHP overflow promotion, then applies PHP's integer cast
+    /// without materializing the intermediate boxed `Mixed` value.
+    ICheckedAddToInt,
+    /// Subtracts two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedSubToInt,
+    /// Multiplies two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedMulToInt,
     ICheckedPow,
     IDiv,
     ISDiv,
@@ -561,6 +570,9 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | ICheckedAddToInt
+            | ICheckedSubToInt
+            | ICheckedMulToInt
             | IPow
             | INeg
             | IBitAnd
@@ -844,6 +856,9 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedAddToInt => "ichecked_add_to_int",
+            ICheckedSubToInt => "ichecked_sub_to_int",
+            ICheckedMulToInt => "ichecked_mul_to_int",
             ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",

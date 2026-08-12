@@ -9311,33 +9311,49 @@ fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     );
 }
 
-/// Verifies eval failure classes map to distinct stable user-facing diagnostics.
+/// Compiles one eval fixture that must fail with the requested diagnostic fragment.
+fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
+    let stderr = compile_and_run_expect_failure(source);
+    assert!(
+        stderr.contains(expected),
+        "stderr did not contain expected eval diagnostic {expected:?}: {stderr}"
+    );
+    stderr
+}
+
+/// Verifies eval parse failures retain their stable user-facing diagnostic.
 #[test]
-fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning() {
-    let parse_err = compile_and_run_expect_failure("<?php eval('if (');");
-    assert!(
-        parse_err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse-error diagnostic: {parse_err}"
+fn test_eval_error_contract_reports_parse_failure() {
+    let stderr = assert_eval_failure_contains(
+        "<?php eval('if (');",
+        "Parse error: eval() fragment is invalid",
     );
-    assert_no_rust_panic_leaked(&parse_err);
+    assert_no_rust_panic_leaked(&stderr);
+}
 
-    let unsupported_err = compile_and_run_expect_failure(
+/// Verifies unsupported eval syntax retains its stable user-facing diagnostic.
+#[test]
+fn test_eval_error_contract_reports_unsupported_construct() {
+    let stderr = assert_eval_failure_contains(
         "<?php eval('function eval_bad_static_return(): static {}');",
+        "Fatal error: eval() fragment uses an unsupported construct",
     );
-    assert!(
-        unsupported_err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported-construct diagnostic: {unsupported_err}"
-    );
-    assert_no_rust_panic_leaked(&unsupported_err);
+    assert_no_rust_panic_leaked(&stderr);
+}
 
-    let runtime_err =
-        compile_and_run_expect_failure("<?php eval('return MissingEvalContractConst;');");
-    assert!(
-        runtime_err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime-fatal diagnostic: {runtime_err}"
+/// Verifies eval runtime failures retain their stable user-facing diagnostic.
+#[test]
+fn test_eval_error_contract_reports_runtime_failure() {
+    let stderr = assert_eval_failure_contains(
+        "<?php eval('return MissingEvalContractConst;');",
+        "Fatal error: eval() runtime failed",
     );
-    assert_no_rust_panic_leaked(&runtime_err);
+    assert_no_rust_panic_leaked(&stderr);
+}
 
+/// Verifies eval warnings remain non-fatal and are written to stderr.
+#[test]
+fn test_eval_error_contract_reports_non_fatal_warning() {
     let warning = compile_and_run_capture(
         r#"<?php
 eval('define("EvalErrorContractConst", 1);');
@@ -14815,9 +14831,9 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
 }
 
-/// Verifies eval-declared method overrides enforce covariant return types.
+/// Verifies eval-declared method overrides accept covariant return types.
 #[test]
-fn test_eval_declared_method_return_type_override_contracts() {
+fn test_eval_declared_method_return_type_override_accepts_covariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReturnBase {
@@ -14853,8 +14869,12 @@ echo $child->id();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "2");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject nullable return widening.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_nullable_widening() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnNarrowBase {
     public function id(): int { return 1; }
@@ -14863,13 +14883,14 @@ class EvalReturnWiderNullable extends EvalReturnNarrowBase {
     public function id(): ?int { return 2; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject replacing `static` with `self`.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_static_to_self() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnStaticBase {
     public function make(): static { return $this; }
@@ -14878,13 +14899,14 @@ class EvalReturnSelfChild extends EvalReturnStaticBase {
     public function make(): self { return $this; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject widening nullable returns to `mixed`.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_mixed_widening() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnNullableBase {
     public function maybe(): ?int { return null; }
@@ -14893,16 +14915,13 @@ class EvalReturnMixedChildBad extends EvalReturnNullableBase {
     public function maybe(): mixed { return null; }
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        "Fatal error: eval() runtime failed",
     );
 }
 
-/// Verifies eval-declared method overrides enforce contravariant parameter types.
+/// Verifies eval-declared method overrides accept contravariant parameter types.
 #[test]
-fn test_eval_declared_method_parameter_type_override_contracts() {
+fn test_eval_declared_method_parameter_type_override_accepts_contravariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalParamBase {
@@ -14927,8 +14946,12 @@ echo $child->maybeInt(null) === null ? "null" : "bad";');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:mixed:ok:null");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject unrelated child types.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_unrelated_type() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamTypeBase {
     public function read(int $value) { return $value; }
@@ -14937,13 +14960,14 @@ class EvalParamStringChild extends EvalParamTypeBase {
     public function read(string $value) { return $value; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject removing parent nullability.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_nullable_narrowing() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamNullableBase {
     public function maybe(?int $value) { return $value; }
@@ -14952,13 +14976,14 @@ class EvalParamNonNullChild extends EvalParamNullableBase {
     public function maybe(int $value) { return $value; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject narrowing an untyped parent.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_typed_child() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamUntypedBase {
     public function read($value) { return $value; }
@@ -14967,10 +14992,7 @@ class EvalParamTypedChild extends EvalParamUntypedBase {
     public function read(int $value) { return $value; }
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        "Fatal error: eval() runtime failed",
     );
 }
 
@@ -19472,10 +19494,10 @@ eval('class EvalAotFinalPropertyChild extends EvalAotFinalPropertyBase {
     );
 }
 
-/// Verifies eval validates generated/AOT parent property visibility and storage contracts.
+/// Verifies eval rejects reducing a generated/AOT parent property's visibility.
 #[test]
-fn test_eval_declared_class_rejects_incompatible_aot_parent_property_contracts() {
-    for source in [
+fn test_eval_declared_class_rejects_reduced_aot_parent_property_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotPublicPropertyBase {
     public int $value = 1;
@@ -19484,6 +19506,14 @@ eval('class EvalAotProtectedPropertyChild extends EvalAotPublicPropertyBase {
     protected int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects replacing a generated/AOT static property with an instance property.
+#[test]
+fn test_eval_declared_class_rejects_aot_static_property_as_instance() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotStaticPropertyBase {
     public static int $value = 1;
@@ -19492,6 +19522,14 @@ eval('class EvalAotInstancePropertyChild extends EvalAotStaticPropertyBase {
     public int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects replacing a generated/AOT readonly property with a mutable property.
+#[test]
+fn test_eval_declared_class_rejects_aot_readonly_property_as_mutable() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotReadonlyPropertyBase {
     public readonly int $value;
@@ -19500,6 +19538,14 @@ eval('class EvalAotMutablePropertyChild extends EvalAotReadonlyPropertyBase {
     public int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects redeclaring a generated/AOT private-set property.
+#[test]
+fn test_eval_declared_class_rejects_redeclared_aot_private_set_property() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotPrivateSetPropertyBase {
     public private(set) int $value = 1;
@@ -19508,13 +19554,8 @@ eval('class EvalAotPrivateSetPropertyChild extends EvalAotPrivateSetPropertyBase
     public private(set) int $value = 2;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "stderr did not contain eval runtime fatal diagnostic: {err}"
-        );
-    }
+        "Fatal error: eval() runtime failed",
+    );
 }
 
 /// Verifies eval rejects incompatible generated/AOT parent property types.
@@ -19756,37 +19797,56 @@ return EvalMultiConstEnum::G + EvalMultiConstEnum::H;');
     assert_eq!(out.stdout, "12:34:56:15");
 }
 
-/// Verifies eval rejects PHP's reserved `class` class-constant name.
+/// Verifies eval classes reject PHP's reserved `class` constant name.
 #[test]
-fn test_eval_declared_reserved_class_constant_name_fails() {
-    for source in [
+fn test_eval_declared_class_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalBadConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval interfaces reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_interface_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalBadIfaceConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval traits reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_trait_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('trait EvalBadTraitConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval enums reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_enum_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('enum EvalBadEnumConstName {
     const class = 1;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
 }
 
 /// Asserts one eval fragment rejects a PHP-reserved class-like declaration name.
@@ -19945,9 +20005,9 @@ eval('class EvalAotFinalConstChild extends EvalAotFinalConstBase {
     );
 }
 
-/// Verifies eval-declared class constants preserve PHP visibility redeclaration rules.
+/// Verifies eval-declared class constants accept public visibility redeclarations.
 #[test]
-fn test_eval_declared_class_constant_visibility_contracts() {
+fn test_eval_declared_class_constant_visibility_accepts_public_redeclarations() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalConstVisibilityBase {
@@ -19972,8 +20032,12 @@ echo EvalConstVisibilityImpl::TOKEN;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:5");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared class constants cannot reduce inherited public visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_parent_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalConstPublicBase {
     public const SEED = 1;
@@ -19982,13 +20046,14 @@ class EvalConstProtectedChild extends EvalConstPublicBase {
     protected const SEED = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared classes cannot reduce interface constant visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_interface_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalConstPublicContract {
     public const SEED = 1;
@@ -19997,22 +20062,20 @@ class EvalConstProtectedImpl implements EvalConstPublicContract {
     protected const SEED = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared interfaces reject protected constants.
+#[test]
+fn test_eval_declared_interface_rejects_protected_constant() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalConstProtectedIface {
     protected const SEED = 1;
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        "Fatal error: eval() fragment uses an unsupported construct",
     );
 }
 
