@@ -2356,16 +2356,21 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
-    let context_offset = class_info
+    // Stored as offset + 1. Zero is a perfectly valid property offset — the first one a class
+    // declares — so a bare offset cannot say "this wrapper declares no $context". It used to,
+    // and a wrapper that declared `$context` first was read as declaring none: it never received
+    // its context, and later collected the dynamic-property deprecation meant for classes that
+    // really had not declared it.
+    let context_slot = class_info
         .properties
         .iter()
         .find(|(property, php_type)| {
             property == "context" && matches!(php_type, PhpType::Mixed)
         })
         .and_then(|(property, _)| class_info.property_offsets.get(property))
-        .copied()
+        .map(|offset| offset + 1)
         .unwrap_or(0);
-    out.push_str(&format!("    .quad {}\n", context_offset));
+    out.push_str(&format!("    .quad {}\n", context_slot));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.

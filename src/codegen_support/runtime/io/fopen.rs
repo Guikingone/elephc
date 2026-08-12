@@ -215,8 +215,9 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x0]");                                        // load the wrapper class id
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's wrapper vtable
-    emitter.instruction("ldr x11, [x10, #184]");                                // load slot 23's untyped context-property offset
-    emitter.instruction("cbz x11, __rt_fopen_uw_context_dynamic");              // php invents the property and, since 8.2, deprecates doing so
+    emitter.instruction("ldr x11, [x10, #184]");                                // slot 23 holds the context-property offset PLUS ONE
+    emitter.instruction("cbz x11, __rt_fopen_uw_context_dynamic");              // zero means undeclared; php invents the property and deprecates it
+    emitter.instruction("sub x11, x11, #1");                                    // recover the real offset, which may legitimately be zero
     abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
     emitter.instruction("ldr x1, [x9]");                                        // load the borrowed context selected by fopen lowering
     emitter.instruction("cbz x1, __rt_fopen_uw_context_done");                  // callers outside fopen may have no selected context bridge
@@ -486,9 +487,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the wrapper class id
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load this class's wrapper vtable
-    emitter.instruction("mov r10, QWORD PTR [r11 + 184]");                      // load slot 23's untyped context-property offset
+    emitter.instruction("mov r10, QWORD PTR [r11 + 184]");                      // slot 23 holds the offset PLUS ONE
     emitter.instruction("test r10, r10");                                       // does the wrapper declare an injectable context property?
-    emitter.instruction("jz __rt_fopen_uw_context_done_x86");                   // skip wrappers without the declared property
+    emitter.instruction("jz __rt_fopen_uw_context_dynamic_x86");                // zero means undeclared; php deprecates the invented property
+    emitter.instruction("sub r10, 1");                                          // recover the real offset, which may legitimately be zero
     abi::emit_symbol_address(emitter, "r11", "_stream_current_context_handle");
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the borrowed context selected by fopen lowering
     emitter.instruction("test rdi, rdi");                                       // did this caller publish a selected context?
@@ -505,6 +507,11 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
     emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // reload the declared context-property offset
     emitter.instruction("mov QWORD PTR [r10 + r11], rax");                      // transfer the owned Mixed context cell into `$this->context`
+    emitter.instruction("jmp __rt_fopen_uw_context_done_x86");
+    emitter.label("__rt_fopen_uw_context_dynamic_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // its class id names the property's owner
+    emitter.instruction("call __rt_dynamic_context_deprecation");
     emitter.label("__rt_fopen_uw_context_done_x86");
 
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --

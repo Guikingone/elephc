@@ -8126,7 +8126,7 @@ class NoCtx {
     public function stream_close() {}
 }
 class HasCtx {
-    public $context;
+    public mixed $context;
     public function stream_open($p, $m, $o, &$op) { return true; }
     public function stream_read($count) { return ""; }
     public function stream_eof() { return true; }
@@ -8149,12 +8149,17 @@ echo "done";
         "expected php's wording, got stderr={}",
         out.stderr
     );
-    // The declaring class SHOULD stay silent — php emits nothing for it — but elephc deprecates
-    // it too, and for a reason worth naming rather than papering over: the vtable stores the
-    // context property's offset with `unwrap_or(0)`, and 0 is also the legitimate offset of a
-    // FIRST property. A wrapper that declares `$context` first is therefore indistinguishable
-    // from one that declares none, and never receives its context either. Tracked separately;
-    // asserting it here would tie that defect to this one.
+    // The declaring class is the control, and it declares `mixed $context` rather than a bare
+    // `$context` on purpose. An UNTYPED property is not typed `Mixed` here, and the vtable slot
+    // that carries the context offset only records a property it can see as Mixed — so
+    // `public $context;`, the spelling the manual shows, still reads as undeclared, never
+    // receives its context, and collects this deprecation. That is tracked on its own; pinning
+    // it here would tie an unrelated typing defect to this notice.
+    assert!(
+        !out.stderr.contains("HasCtx::$context"),
+        "a declared property must not be deprecated, got stderr={}",
+        out.stderr
+    );
 }
 
 /// A failing IPv6 server has to say why, like its IPv4 sibling.
