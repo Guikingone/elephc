@@ -836,7 +836,10 @@ fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
             }
             Arch::X86_64 => {
                 abi::emit_push_reg(ctx.emitter, "rax");
-                ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");        // the hash the cell carries
+                // __rt_decref_hash takes its pointer in RAX on x86, not rdi. Passing it in rdi
+                // decremented whatever rax happened to hold and corrupted the heap — a segfault
+                // at startup in every program, on the one architecture this host cannot run.
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the hash the cell carries
                 abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
                 abi::emit_pop_reg(ctx.emitter, "rax");
             }
