@@ -132,6 +132,18 @@ pub(crate) const DISK_FREE_SPACE_WARNING: &str = "Warning: disk_free_space(): ";
 /// The `disk_total_space()` form of [`DISK_FREE_SPACE_WARNING`].
 pub(crate) const DISK_TOTAL_SPACE_WARNING: &str = "Warning: disk_total_space(): ";
 
+/// The text between the caller's name and the scheme in PHP's unknown-wrapper warning.
+///
+/// PHP emits TWO warnings for `fopen("bogus://x", "r")`: this one naming the scheme, then the
+/// ordinary failed-open warning. elephc emitted only the second, which reports "No such file or
+/// directory" — true of the path but silent about the actual cause, a wrapper that is not there.
+pub(crate) const UNKNOWN_WRAPPER_HEAD: &str = "Warning: ";
+/// The fixed text between the caller's name and the scheme.
+pub(crate) const UNKNOWN_WRAPPER_MIDDLE: &str = "(): Unable to find the wrapper \"";
+/// The fixed text after the scheme, copied from php-src verbatim.
+pub(crate) const UNKNOWN_WRAPPER_TAIL: &str =
+    "\" - did you forget to enable it when you configured PHP?\n";
+
 pub(crate) const OB_NTC_NO_END_FLUSH: &str =
     "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
 /// ob_get_flush() no-buffer notice line.

@@ -25,6 +25,7 @@ use super::{
     DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
     SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE,
     SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_REASON_UNKNOWN, SOCKET_FAILED_SERVER_PREFIX,
+    UNKNOWN_WRAPPER_HEAD, UNKNOWN_WRAPPER_MIDDLE, UNKNOWN_WRAPPER_TAIL,
     SOCKET_FAILED_UNABLE,
     SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
     STR_REPEAT_TIMES_MSG,
@@ -152,6 +153,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_dyn_prop_dep_tail", DYNAMIC_PROP_DEPRECATED_TAIL),
         ("_disk_free_space_warn", DISK_FREE_SPACE_WARNING),
         ("_disk_total_space_warn", DISK_TOTAL_SPACE_WARNING),
+        ("_unknown_wrapper_head", UNKNOWN_WRAPPER_HEAD),
+        ("_unknown_wrapper_mid", UNKNOWN_WRAPPER_MIDDLE),
+        ("_unknown_wrapper_tail", UNKNOWN_WRAPPER_TAIL),
         ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
         ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
         ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),
@@ -559,6 +563,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_open_failed_middle\n_diag_open_failed_middle:\n    .ascii \"): Failed to open stream: \"\n");
     out.push_str(".globl _diag_open_failed_fopen_prefix\n_diag_open_failed_fopen_prefix:\n    .ascii \"Warning: fopen(\"\n");
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
+    // Bare callee names for the unknown-wrapper warning, which puts "Warning: " and "(): "
+    // around the name itself rather than before an open parenthesis.
+    out.push_str(".globl _uww_name_fopen\n_uww_name_fopen:\n    .ascii \"fopen\"\n");
+    out.push_str(".globl _uww_name_fgc\n_uww_name_fgc:\n    .ascii \"file_get_contents\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fputcsv_msg\n_diag_csv_escape_deprecated_fputcsv_msg:\n    .ascii \"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_str_getcsv_msg\n_diag_csv_escape_deprecated_str_getcsv_msg:\n    .ascii \"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
@@ -1211,6 +1219,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_filter_missing_msg", crate::codegen_support::runtime::io::FILTER_MISSING_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_str_offset_msg", crate::codegen_support::runtime::objects::STRING_OFFSET_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_open_failed_msg", crate::codegen_support::runtime::io::OPEN_FAILED_MSG_CAPACITY, target));
+    out.push_str(&comm_directive("_unknown_wrapper_msg", crate::codegen_support::runtime::io::UNKNOWN_WRAPPER_MSG_CAPACITY, target));
     out.push_str(&format!(
         ".globl _gai_msg_prefix\n_gai_msg_prefix:\n    .ascii {GAI_MSG_PREFIX:?}\n"
     ));

@@ -705,6 +705,70 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an unknown scheme reports the MISSING WRAPPER, which is the reason php gives first.
+///
+/// php-src emits two warnings here. elephc emitted only the second, which says "No such file or
+/// directory" — true of the path, and silent about the cause.
+#[test]
+fn test_unknown_wrapper_names_itself_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("bogus://x", "r");
+echo $h === false ? "false" : "resource";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.stderr.contains(
+            "Warning: fopen(): Unable to find the wrapper \"bogus\" - did you forget to enable it when you configured PHP?"
+        ),
+        "missing the unknown-wrapper warning, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("Warning: fopen(bogus://x): Failed to open stream:"),
+        "the failed-open warning must still follow it, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies the unknown-wrapper warning stays silent for every scheme that DOES have a wrapper.
+///
+/// The check has to run at run time, not at lowering: `stream_wrapper_register()` is a runtime
+/// call, so a scheme the compiler never heard of can be perfectly valid by the time an open
+/// happens. Both authorities are consulted, and a path with no scheme at all is not a wrapper.
+#[test]
+fn test_a_known_wrapper_does_not_report_itself_missing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Mem {
+    public $context;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { $this->pos = $this->pos + 1; return $this->pos > 1 ? "" : "hi"; }
+    public function stream_eof() { return $this->pos > 1; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("mine", "Mem");
+$h = fopen("mine://x", "r");
+fclose($h);
+$p = fopen("php://memory", "w+");
+fclose($p);
+$m = @fopen("/no/such/file", "r");
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        !out.stderr.contains("Unable to find the wrapper"),
+        "a registered wrapper, a built-in scheme and a plain path must all stay quiet, got stderr={}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "done");
+}
+
 /// Verifies `fputcsv()` casts every field, as `php_fputcsv` does through `zval_get_tmp_string`.
 ///
 /// Each row here is a DIFFERENT element layout, and the layout — not a static string-array

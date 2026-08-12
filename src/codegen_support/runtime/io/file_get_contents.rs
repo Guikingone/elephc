@@ -113,6 +113,14 @@ pub fn emit_file_get_contents(emitter: &mut Emitter) {
     } else {
         emitter.instruction("mov x3, x0");                                      // macOS answers the errno itself
     }
+    // php-src warns TWICE when the scheme names no wrapper, the missing-wrapper line first
+    // because it is the one that says WHY. The helper is silent for any path a wrapper claims.
+    emitter.instruction("str x3, [sp, #-16]!");                                 // the errno survives the extra warning
+    emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_uww_name_fgc");
+    emitter.instruction(&format!("mov x1, #{}", "file_get_contents".len()));    // bare callee name
+    emitter.instruction("bl __rt_unknown_wrapper_warning");
+    emitter.instruction("ldr x3, [sp], #16");                                   // restore the errno
     emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
     abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fgc_prefix");
     emitter.instruction("mov x1, #27");                                          // prefix length
@@ -194,6 +202,16 @@ fn emit_file_get_contents_linux_x86_64(emitter: &mut Emitter) {
     // C path is held in the frame rather than a register.
     emitter.instruction("call __errno_location");
     emitter.instruction("movsxd rcx, DWORD PTR [rax]");                         // the errno to describe
+    // php-src warns TWICE when the scheme names no wrapper, the missing-wrapper line first
+    // because it is the one that says WHY. The helper is silent for any path a wrapper claims.
+    emitter.instruction("push rcx");                                            // the errno survives the extra warning
+    emitter.instruction("push rcx");                                            // keep rsp 16-byte aligned for the call
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_uww_name_fgc");
+    emitter.instruction(&format!("mov esi, {}", "file_get_contents".len()));    // bare callee name
+    emitter.instruction("call __rt_unknown_wrapper_warning");
+    emitter.instruction("pop rcx");                                             // discard the alignment copy
+    emitter.instruction("pop rcx");                                             // restore the errno
     emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", path_off));   // the null-terminated path
     abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fgc_prefix");
     emitter.instruction("mov esi, 27");                                          // prefix length
