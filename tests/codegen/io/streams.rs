@@ -7970,6 +7970,61 @@ echo fread($srv, 16);
     assert_eq!(out, "srv|cli|v6-udp");
 }
 
+/// A wrapper's untyped contract parameters carry the types PHP documents for them.
+///
+/// `stream_write($data) { return strlen($data); }` is the signature the manual shows, and it
+/// failed to compile: a wrapper's methods are reached through a runtime vtable with raw
+/// fixed-ABI arguments, so they are deliberately excluded from the pass that widens untyped
+/// parameters to boxed Mixed — and they kept the `Int` an untyped parameter is seeded with.
+///
+/// Every contract method here uses its parameter AS its documented type, so a wrong seeding
+/// fails the build rather than the assertion. The plain class at the end is the control: a
+/// method named `stream_write` on something that is not a wrapper must keep its own inference,
+/// because a method name is not a contract.
+///
+/// The second `fread()` is what pins `stream_read($count)`'s parameter: the wrapper slices with
+/// `substr(self::$data, $this->pos, $count)`, so a count seeded as anything but an integer would
+/// hand back the wrong window rather than fail the build. `ftell()` is deliberately absent — it
+/// answers garbage on a wrapper stream today, which this test discovered and which is tracked
+/// separately; asserting it here would tie an unrelated defect to this one.
+#[test]
+fn test_wrapper_contract_params_carry_their_documented_types() {
+    let out = compile_and_run(
+        r#"<?php
+class Mem {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($path, $mode, $opts, &$opened) {
+        $this->pos = 0;
+        return strlen($path) > 0 && strlen($mode) > 0;
+    }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memc", "Mem");
+$h = fopen("memc://x", "r");
+echo fread($h, 7), "|";
+echo fread($h, 8), "|";
+fclose($h);
+
+class NotAWrapper {
+    public function stream_write($d) { return $d + 1; }
+}
+$n = new NotAWrapper();
+echo $n->stream_write(41);
+"#,
+    );
+    assert_eq!(out, "wrapped| payload|42");
+}
+
 /// A failing IPv6 server has to say why, like its IPv4 sibling.
 ///
 /// The IPv6 helper is tail-called from the dispatcher, which clears the error stash before jumping;

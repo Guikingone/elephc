@@ -131,6 +131,7 @@ impl Checker {
                     if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
+                    self.patch_stream_contract_method_env(class, method, &mut method_env);
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
@@ -194,6 +195,52 @@ impl Checker {
             .iter()
             .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type()))
             .collect()
+    }
+
+    /// Patches an untyped stream-wrapper contract parameter with the type PHP documents for it.
+    ///
+    /// A wrapper's methods are reached through a runtime vtable with raw fixed-ABI arguments, so
+    /// `normalize_method_map_for_eir` deliberately leaves their untyped parameters alone rather
+    /// than widening them to boxed Mixed, which would desynchronize the dispatcher from the body.
+    /// The consequence was that they kept the `Int` an untyped parameter is seeded with, and an
+    /// ordinary `stream_write($data) { return strlen($data); }` — the signature the manual shows —
+    /// failed to compile with `strlen() argument must be string`.
+    ///
+    /// The dispatcher's argument types are not unknown, only undeclared: PHP specifies them. So
+    /// they are seeded here instead of widened, which leaves the fixed ABI exactly as it was and
+    /// lets the body use its own arguments. Only parameters WITHOUT a type hint are touched, and
+    /// only in a class that really is a wrapper — a lone `stream_write()` on an unrelated class
+    /// keeps its inference, because a method name is not a contract.
+    fn patch_stream_contract_method_env(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        method_env: &mut TypeEnv,
+    ) {
+        let Some(ci) = self.classes.get(&class.name).cloned() else {
+            return;
+        };
+        if !ci.methods.contains_key("stream_open") {
+            return;
+        }
+        let key = crate::names::php_symbol_key(&method.name);
+        let Some(contract) = stream_wrapper_contract_param_types(&key) else {
+            return;
+        };
+        for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+            if type_ann.is_some() {
+                continue;
+            }
+            let Some(ty) = contract.get(i) else { continue };
+            method_env.insert(pname.clone(), ty.clone());
+            if let Some(ci_mut) = self.classes.get_mut(&class.name) {
+                if let Some(sig) = ci_mut.methods.get_mut(&key) {
+                    if i < sig.params.len() {
+                        sig.params[i].1 = ty.clone();
+                    }
+                }
+            }
+        }
     }
 
     /// Patches untyped constructor parameters with property types when the constructor
@@ -492,4 +539,26 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
+}
+
+/// The parameter types PHP documents for each `streamWrapper` contract method.
+///
+/// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth
+/// parameter is by-reference `?string`, and is seeded as a string because that is what the body
+/// may assign into it. Filter classes are deliberately absent: `filter()`'s first two parameters
+/// are bucket brigades, which have no PHP type to seed.
+fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>> {
+    let ints = |n: usize| vec![PhpType::Int; n];
+    Some(match method_key {
+        "stream_open" => vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],
+        "stream_write" => vec![PhpType::Str],
+        "stream_read" | "stream_truncate" | "stream_lock" | "stream_cast" => ints(1),
+        "stream_seek" => ints(2),
+        "stream_set_option" => ints(3),
+        "unlink" => vec![PhpType::Str],
+        "rename" => vec![PhpType::Str, PhpType::Str],
+        "url_stat" | "rmdir" | "dir_opendir" => vec![PhpType::Str, PhpType::Int],
+        "mkdir" => vec![PhpType::Str, PhpType::Int, PhpType::Int],
+        _ => return None,
+    })
 }
