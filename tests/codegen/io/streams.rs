@@ -3358,9 +3358,11 @@ fn test_stream_socket_client_so_broadcast_does_not_crash() {
     // socket.so_broadcast = 1 triggers __rt_apply_socket_client_opts, which sets
     // SO_BROADCAST on the UDP socket via setsockopt. Not observable from PHP
     // (best-effort) but the option must be accepted without breaking the socket.
+    // STREAM_SERVER_BIND is required for any datagram server; see
+    // test_datagram_server_refuses_the_default_listen_flags.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:0");
+$srv = stream_socket_server("udp://127.0.0.1:0", $e, $m, STREAM_SERVER_BIND);
 $addr = stream_socket_get_name($srv, false);
 stream_context_set_option(stream_context_get_default(), "socket", "so_broadcast", 1);
 $client = stream_socket_client("udp://" . $addr);
@@ -4151,9 +4153,12 @@ echo $a . "/" . $b;
 #[test]
 fn test_stream_socket_recvfrom_address_out_param() {
     // The optional 4th argument receives the sender address by reference.
+    //
+    // STREAM_SERVER_BIND is not decoration: PHP's default flags also ask for listen(), which no
+    // datagram transport accepts, so a udp:// server opened without it is `false` in PHP too.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54745");
+$srv = stream_socket_server("udp://127.0.0.1:54745", $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udp://127.0.0.1:54745");
 fwrite($cli, "hello");
 $addr = "";
@@ -4189,9 +4194,10 @@ echo $data . "|" . $addr . "|" . strlen($addr);
 /// Verifies compiled PHP output for udp socket round trip.
 #[test]
 fn test_udp_socket_round_trip() {
+    // See test_stream_socket_recvfrom_address_out_param on STREAM_SERVER_BIND.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54740");
+$srv = stream_socket_server("udp://127.0.0.1:54740", $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udp://127.0.0.1:54740");
 fwrite($cli, "udp datagram");
 echo fread($srv, 32);
@@ -4205,14 +4211,51 @@ echo fread($srv, 32);
 fn test_stream_socket_sendto_to_udp_address() {
     let out = compile_and_run(
         r#"<?php
-$a = stream_socket_server("udp://127.0.0.1:54741");
-$b = stream_socket_server("udp://127.0.0.1:54742");
+$a = stream_socket_server("udp://127.0.0.1:54741", $e1, $m1, STREAM_SERVER_BIND);
+$b = stream_socket_server("udp://127.0.0.1:54742", $e2, $m2, STREAM_SERVER_BIND);
 echo stream_socket_sendto($b, "abc", 0, "udp://127.0.0.1:54741");
 echo "|";
 echo fread($a, 16);
 "#,
     );
     assert_eq!(out, "3|abc");
+}
+
+/// A datagram transport cannot listen, so PHP fails the server its default flags ask for.
+///
+/// `$flags` defaults to `STREAM_SERVER_BIND|STREAM_SERVER_LISTEN`, and `listen()` is meaningless on
+/// a datagram socket, so `stream_socket_server("udp://…")` is `false` in PHP unless the caller
+/// passes `STREAM_SERVER_BIND` alone. elephc skipped `listen()` for udp and handed back a working
+/// socket, so a script written against PHP took a branch PHP never takes.
+///
+/// Both datagram transports are checked, because the refusal has to sit ahead of the dispatch that
+/// separates them; and the bind-only server is checked in the same program, because a refusal that
+/// also broke the legitimate call would look just as green in the first assertion.
+#[test]
+fn test_datagram_server_refuses_the_default_listen_flags() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$e = 12345;
+$m = "untouched";
+$s = stream_socket_server("udp://127.0.0.1:54906", $e, $m);
+echo ($s === false ? "false" : "resource"), "|", $e, "|[", $m, "]";
+$ok = stream_socket_server("udp://127.0.0.1:54907", $e2, $m2, STREAM_SERVER_BIND);
+echo "|", (is_resource($ok) ? "bind-only-open" : "bind-only-failed");
+$g = stream_socket_server("udg://" . sys_get_temp_dir() . "/elephc_dgram_listen.sock");
+echo "|", ($g === false ? "udg-false" : "udg-open");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|0|[]|bind-only-open|udg-false");
+    // PHP words a failure nothing described as "Unknown error", not as an empty pair of
+    // parentheses, and still leaves `&$error_message` empty — the two come from different places.
+    assert!(
+        out.stderr.contains(
+            "Warning: stream_socket_server(): Unable to connect to udp://127.0.0.1:54906 (Unknown error)"
+        ),
+        "expected PHP's wording for a failure with no reason, got stderr={}",
+        out.stderr
+    );
 }
 
 /// Verifies compiled PHP output for unix socket round trip.
@@ -4239,11 +4282,13 @@ fn test_udg_socket_round_trip() {
     // udg:// is the Unix-domain datagram transport: the server binds (no
     // listen/accept, since datagrams are connectionless), and the client's
     // connect() sets the default destination so fwrite can send a datagram.
+    // Being connectionless is also why STREAM_SERVER_BIND is required — PHP's
+    // default flags ask for a listen() the transport cannot perform.
     let out = compile_and_run(
         r#"<?php
 $path = "/tmp/elephc_udg_codegen_test.sock";
 unlink($path);
-$srv = stream_socket_server("udg://" . $path);
+$srv = stream_socket_server("udg://" . $path, $e, $m, STREAM_SERVER_BIND);
 $cli = stream_socket_client("udg://" . $path);
 fwrite($cli, "udg datagram");
 echo fread($srv, 32);
@@ -4265,8 +4310,8 @@ $srv_path = "/tmp/elephc_udg_sendto_srv.sock";
 $cli_path = "/tmp/elephc_udg_sendto_cli.sock";
 unlink($srv_path);
 unlink($cli_path);
-$srv = stream_socket_server("udg://" . $srv_path);
-$cli = stream_socket_server("udg://" . $cli_path);
+$srv = stream_socket_server("udg://" . $srv_path, $e1, $m1, STREAM_SERVER_BIND);
+$cli = stream_socket_server("udg://" . $cli_path, $e2, $m2, STREAM_SERVER_BIND);
 $n = stream_socket_sendto($cli, "udg-via-sendto", 0, "udg://" . $srv_path);
 echo $n . "|" . fread($srv, 32);
 unlink($srv_path);
@@ -7908,17 +7953,43 @@ fn test_udp_ipv6_round_trip() {
     // (no listen), stream_socket_client connects (sets default target),
     // fwrite/fread carry one datagram each way. This exercises the
     // udp:// scheme detection in both v6 dispatchers.
+    //
+    // STREAM_SERVER_BIND is required: PHP's default flags ask for listen() too, and a datagram
+    // transport refuses it. The port is left to the kernel because the fixed one this test used to
+    // name is owned by a macOS system service on some machines, which failed the bind outright.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://[::1]:54939");
+$srv = stream_socket_server("udp://[::1]:0", $e, $m, STREAM_SERVER_BIND);
 echo is_resource($srv) ? "srv|" : "srv_fail|";
-$cli = stream_socket_client("udp://[::1]:54939");
+$cli = stream_socket_client("udp://" . stream_socket_get_name($srv, false));
 echo is_resource($cli) ? "cli|" : "cli_fail|";
 fwrite($cli, "v6-udp");
 echo fread($srv, 16);
 "#,
     );
     assert_eq!(out, "srv|cli|v6-udp");
+}
+
+/// A failing IPv6 server has to say why, like its IPv4 sibling.
+///
+/// The IPv6 helper is tail-called from the dispatcher, which clears the error stash before jumping;
+/// the helper then failed its `bind()` without recording anything, so `&$error_message` came back
+/// empty and the warning read `()`. PHP reports `Address already in use` for exactly this, and it
+/// is the difference between a script that logs why it could not start and one that logs nothing.
+#[test]
+fn test_ipv6_server_reports_why_the_bind_failed() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$held = stream_socket_server("tcp://[::1]:54897");
+echo is_resource($held) ? "held|" : "hold_failed|";
+$e = 0;
+$m = "";
+$dup = @stream_socket_server("tcp://[::1]:54897", $e, $m);
+echo ($dup === false ? "false" : "resource"), "|", $m;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "held|false|Address already in use");
 }
 
 /// Verifies compiled PHP output for stream socket get name ipv6.
@@ -8044,7 +8115,7 @@ fn test_stream_socket_get_name_udp() {
     // (server) and peer (client) sides should report the bound port.
     let out = compile_and_run(
         r#"<?php
-$srv = stream_socket_server("udp://127.0.0.1:54928");
+$srv = stream_socket_server("udp://127.0.0.1:54928", $e, $m, STREAM_SERVER_BIND);
 echo stream_socket_get_name($srv, false);
 echo "|";
 $cli = stream_socket_client("udp://127.0.0.1:54928");

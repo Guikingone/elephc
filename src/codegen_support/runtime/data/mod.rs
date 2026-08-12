@@ -83,6 +83,14 @@ pub(crate) const SOCKET_GAI_REASON_CLAMP: i64 = 200;
 /// Separator between the socket warning's address and the reason for the failure.
 pub(crate) const SOCKET_FAILED_REASON_OPEN: &str = " (";
 
+/// What the warning says when the failure carries no reason at all.
+///
+/// php-src prints `errstr == NULL ? "Unknown error" : errstr`, so a failure no syscall described —
+/// a datagram transport asked to listen, for one — still names something inside the parentheses.
+/// Only the warning substitutes it: the caller's `&$error_message` stays the empty string PHP
+/// leaves there, so this cannot come from `__rt_socket_strerror`, which feeds both.
+pub(crate) const SOCKET_FAILED_REASON_UNKNOWN: &str = "Unknown error";
+
 /// Tail of the socket warning, after the reason.
 pub(crate) const SOCKET_FAILED_REASON_CLOSE: &str = ")\n";
 

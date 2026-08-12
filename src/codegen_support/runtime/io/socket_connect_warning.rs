@@ -19,7 +19,8 @@
 use super::socket_errno::SOCKET_ERRNO_SYMBOL;
 use crate::codegen_support::runtime::data::{
     SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE,
-    SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_SERVER_PREFIX, SOCKET_FAILED_UNABLE,
+    SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_REASON_UNKNOWN, SOCKET_FAILED_SERVER_PREFIX,
+    SOCKET_FAILED_UNABLE,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -118,6 +119,10 @@ fn emit_socket_connect_warning_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_socket_strerror");                             // x0 = message, x1 = length
     emitter.instruction("mov x2, x1");                                          // the diagnostic helper takes the length in x2
     emitter.instruction("mov x1, x0");                                          // and the pointer in x1
+    emitter.instruction("cbnz x2, __rt_scw_reason_ready");                      // a described failure prints its own reason
+    abi::emit_symbol_address(emitter, "x1", "_sock_fail_unknown");              // nothing described this one
+    emitter.instruction(&format!("mov x2, #{}", SOCKET_FAILED_REASON_UNKNOWN.len()));
+    emitter.label("__rt_scw_reason_ready");
     emitter.instruction("bl __rt_diag_warning");
     abi::emit_symbol_address(emitter, "x1", "_sock_fail_close");
     emitter.instruction(&format!("mov x2, #{}", SOCKET_FAILED_REASON_CLOSE.len()));
@@ -204,6 +209,11 @@ fn emit_socket_connect_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_socket_strerror");                           // rax = message, rdx = length
     emitter.instruction("mov rdi, rax");                                        // the diagnostic helper takes the pointer in rdi
     emitter.instruction("mov rsi, rdx");                                        // and the length in rsi
+    emitter.instruction("test rsi, rsi");
+    emitter.instruction("jnz __rt_scw_reason_ready_x86");                       // a described failure prints its own reason
+    abi::emit_symbol_address(emitter, "rdi", "_sock_fail_unknown");             // nothing described this one
+    emitter.instruction(&format!("mov rsi, {}", SOCKET_FAILED_REASON_UNKNOWN.len()));
+    emitter.label("__rt_scw_reason_ready_x86");
     emitter.instruction("call __rt_diag_warning");
     abi::emit_symbol_address(emitter, "rdi", "_sock_fail_close");
     emitter.instruction(&format!("mov rsi, {}", SOCKET_FAILED_REASON_CLOSE.len()));

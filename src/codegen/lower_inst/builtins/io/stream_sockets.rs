@@ -9,6 +9,7 @@
 
 use super::*;
 use crate::codegen_support::runtime::io::{SOCKET_WARNING_CLIENT, SOCKET_WARNING_SERVER};
+use crate::types::stream_constants::STREAM_SERVER_DEFAULT_FLAGS;
 
 /// Lowers `stream_socket_server(address)` and boxes `resource|false`.
 pub(crate) fn lower_stream_socket_server(
@@ -17,15 +18,34 @@ pub(crate) fn lower_stream_socket_server(
 ) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "stream_socket_server", 1, 6)?;
     let address = expect_operand(inst, 0)?;
+    // The flags travel to the runtime because only they say whether the caller wants a listening
+    // socket, and PHP refuses that on a datagram transport. They are loaded first: materializing
+    // the address overwrites the result register.
+    if inst.operands.len() >= 4 {
+        let flags = expect_operand(inst, 3)?;
+        require_int(
+            ctx.load_value_to_result(flags)?.codegen_repr(),
+            "stream_socket_server flags",
+        )?;
+    } else {
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            STREAM_SERVER_DEFAULT_FLAGS,
+        );
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_string_to_result(ctx, address, "stream_socket_server address")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the socket address pointer as the first runtime argument
             ctx.emitter.instruction("mov x1, x2");                              // pass the socket address byte length as the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x2");                               // pass the server flags as the third runtime argument
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the socket address pointer as the first runtime argument
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the socket address byte length as the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rdx");                              // pass the server flags as the third runtime argument
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_socket_server");

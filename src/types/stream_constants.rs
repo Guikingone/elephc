@@ -64,13 +64,23 @@ pub(crate) const STREAM_FILTERS: &[&str] = &[
     "bzip2.decompress",
 ];
 
+/// `STREAM_SERVER_BIND`: give the socket its address.
+pub(crate) const STREAM_SERVER_BIND: i64 = 4;
+
+/// `STREAM_SERVER_LISTEN`: also make it a listening socket, which only a stream transport accepts.
+/// `udp://` and `udg://` carry datagrams, so PHP fails a server asked for this on either of them.
+pub(crate) const STREAM_SERVER_LISTEN: i64 = 8;
+
+/// What `stream_socket_server()` uses when the caller omits `$flags`.
+pub(crate) const STREAM_SERVER_DEFAULT_FLAGS: i64 = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN;
+
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     // Client / server connection flags.
     ("STREAM_CLIENT_CONNECT", 1),
     ("STREAM_CLIENT_PERSISTENT", 2),
     ("STREAM_CLIENT_ASYNC_CONNECT", 4),
-    ("STREAM_SERVER_BIND", 4),
-    ("STREAM_SERVER_LISTEN", 8),
+    ("STREAM_SERVER_BIND", STREAM_SERVER_BIND),
+    ("STREAM_SERVER_LISTEN", STREAM_SERVER_LISTEN),
     // Shutdown directions for stream_socket_shutdown().
     ("STREAM_SHUT_RD", 0),
     ("STREAM_SHUT_WR", 1),

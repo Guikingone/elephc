@@ -10,11 +10,123 @@
 //!   parsed `[tcp://]A.B.C.D:port` address; returns the descriptor or -1.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
+use crate::types::stream_constants::STREAM_SERVER_LISTEN;
 
 use super::socket_errno;
 
+/// Emits the refusal PHP returns for a listening socket on a datagram transport.
+///
+/// `$flags` defaults to `STREAM_SERVER_BIND|STREAM_SERVER_LISTEN`, and `listen()` is meaningless on
+/// a datagram socket, so PHP fails every `udp://` and `udg://` server that is not opened with
+/// `STREAM_SERVER_BIND` alone. It reports no error number for it, which is why the refusal happens
+/// here rather than at a syscall: the reset above has already cleared the stash, so the caller's
+/// `&$errstr` stays empty and the warning reads `(Unknown error)`, both as PHP words them.
+///
+/// Emitted before any dispatch, so the IPv4, IPv6 and Unix-domain paths all obey it. Both schemes
+/// are six bytes and differ in one, so a single prefix test covers them.
+fn emit_datagram_listen_refusal(emitter: &mut Emitter) {
+    let (flags, addr, len, byte, wide) = match emitter.target.arch {
+        Arch::AArch64 => ("x2", "x0", "x1", "w9", "x9"),
+        Arch::X86_64 => ("rdx", "rdi", "rsi", "r10d", "r10"),
+    };
+    // Both arches emit into one assembly file per target, but the label names must still differ:
+    // a branch that keeps the other arch's spelling assembles and only fails at link time.
+    let suffix = match emitter.target.arch {
+        Arch::AArch64 => "",
+        Arch::X86_64 => "_x86",
+    };
+    let sep = format!("__rt_sss_dgram_sep{suffix}");
+    let allow = format!("__rt_sss_may_listen{suffix}");
+    emitter.comment("--- a datagram transport cannot listen ---");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("tst {flags}, #{STREAM_SERVER_LISTEN}"));  // did the caller ask to listen?
+            emitter.instruction(&format!("b.eq {allow}"));                          // bind-only: nothing to refuse
+            emitter.instruction(&format!("cmp {len}, #6"));                         // both schemes are six bytes
+            emitter.instruction(&format!("b.lt {allow}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("test {flags}, {STREAM_SERVER_LISTEN}"));  // did the caller ask to listen?
+            emitter.instruction(&format!("je {allow}"));                            // bind-only: nothing to refuse
+            emitter.instruction(&format!("cmp {len}, 6"));                          // both schemes are six bytes
+            emitter.instruction(&format!("jl {allow}"));
+        }
+    }
+    // 'u', 'd', then 'p' or 'g', then "://".
+    for (offset, expected) in [(0u32, 117u32), (1, 100)] {
+        emit_scheme_byte_guard(emitter, addr, byte, wide, offset, expected, &allow);
+    }
+    emit_load_scheme_byte(emitter, addr, byte, wide, 2);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {byte}, #112"));                      // 'p', as in udp://
+            emitter.instruction(&format!("b.eq {sep}"));
+            emitter.instruction(&format!("cmp {byte}, #103"));                      // 'g', as in udg://
+            emitter.instruction(&format!("b.ne {allow}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {byte}, 112"));                       // 'p', as in udp://
+            emitter.instruction(&format!("je {sep}"));
+            emitter.instruction(&format!("cmp {byte}, 103"));                       // 'g', as in udg://
+            emitter.instruction(&format!("jne {allow}"));
+        }
+    }
+    emitter.label(&sep);
+    for (offset, expected) in [(3u32, 58u32), (4, 47), (5, 47)] {
+        emit_scheme_byte_guard(emitter, addr, byte, wide, offset, expected, &allow);
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #-1");                                     // the failure PHP reports for it
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, -1");                                     // the failure PHP reports for it
+            emitter.instruction("ret");
+        }
+    }
+    emitter.label(&allow);
+}
+
+/// Loads one byte of the address scheme into the scratch register.
+fn emit_load_scheme_byte(emitter: &mut Emitter, addr: &str, byte: &str, wide: &str, offset: u32) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            let _ = wide;
+            emitter.instruction(&format!("ldrb {byte}, [{addr}, #{offset}]"));
+        }
+        Arch::X86_64 => {
+            let _ = byte;
+            emitter.instruction(&format!("movzx {wide}d, BYTE PTR [{addr} + {offset}]"));
+        }
+    }
+}
+
+/// Loads one scheme byte and leaves the guarded path when it is not the expected one.
+fn emit_scheme_byte_guard(
+    emitter: &mut Emitter,
+    addr: &str,
+    byte: &str,
+    wide: &str,
+    offset: u32,
+    expected: u32,
+    allow: &str,
+) {
+    emit_load_scheme_byte(emitter, addr, byte, wide, offset);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {byte}, #{expected}"));
+            emitter.instruction(&format!("b.ne {allow}"));
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {byte}, {expected}"));
+            emitter.instruction(&format!("jne {allow}"));
+        }
+    }
+}
+
 /// stream_socket_server: open a listening TCP socket on an IPv4 address.
-/// Input:  x0 = address string pointer, x1 = address string length
+/// Input:  x0 = address string pointer, x1 = address string length, x2 = the `$flags` the caller passed
 /// Output: x0 = listening descriptor, or -1 on failure
 pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -26,9 +138,12 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
-    // Clear the stash before dispatching, for the reason spelled out in the client helper: the
-    // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
+    // Clear the stash before dispatching, for the reason spelled out in the client helper: a
+    // tail-called helper that never reaches a failing syscall would otherwise be described by the
+    // previous call's error number. The IPv6 helper does publish its own, so what survives here is
+    // only the genuinely reasonless failure — which the warning words as PHP does.
     socket_errno::emit_reset_socket_error_state(emitter);
+    emit_datagram_listen_refusal(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -245,9 +360,10 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
-    // Clear the stash before dispatching, for the reason spelled out in the client helper: the
-    // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
+    // See the AArch64 counterpart: the stash is cleared so a tail-called helper that never reaches
+    // a failing syscall cannot be described by the previous call's error number.
     socket_errno::emit_reset_socket_error_state(emitter);
+    emit_datagram_listen_refusal(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both

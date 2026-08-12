@@ -13,6 +13,7 @@
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
+use crate::types::stream_constants::STREAM_SERVER_DEFAULT_FLAGS;
 
 builtin! {
     name: "stream_socket_server",
@@ -21,7 +22,7 @@ builtin! {
         address: Str,
         ref(Int) error_code: Mixed = DefaultSpec::Null,
         ref(Str) error_message: Mixed = DefaultSpec::Null,
-        flags: Int = DefaultSpec::Int(12),
+        flags: Int = DefaultSpec::Int(STREAM_SERVER_DEFAULT_FLAGS),
         context: Mixed = DefaultSpec::Null
     ],
     returns: Mixed,
