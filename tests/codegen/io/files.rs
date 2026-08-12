@@ -47,6 +47,57 @@ echo var_export($f <= disk_total_space("/"), true);
     assert_eq!(out, "false|false|true,true,true");
 }
 
+/// An append stream reports the position PHP maintains, not the descriptor's.
+///
+/// `O_APPEND` puts every write at the end of the file, so after writing one byte to a four-byte
+/// file the descriptor is at 5 — but PHP answers 1, because it advances a position of its own by
+/// the bytes written, wherever they land. elephc reported the descriptor's offset.
+///
+/// Every case here is a `php -n` witness. The `a+` read matters most: it is the one the fix could
+/// have broken, since a read moves the descriptor and PHP's position by the same amount and must
+/// therefore be left alone. The seek matters next: it puts the two back in agreement, and without
+/// clearing the running total the following write answers a negative number.
+#[test]
+fn test_append_stream_reports_phps_position_not_the_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+$p = sys_get_temp_dir() . "/elephc_append_tell.txt";
+@unlink($p);
+file_put_contents($p, "seed");
+$h = fopen($p, "a");
+echo ftell($h), ",";
+fwrite($h, "X");
+echo ftell($h), ",";
+fwrite($h, "YZ");
+echo ftell($h), ",";
+fseek($h, 0);
+echo ftell($h), ",";
+fwrite($h, "Q");
+echo ftell($h), "|";
+fclose($h);
+echo file_get_contents($p), "|";
+
+@unlink($p);
+file_put_contents($p, "seed");
+$g = fopen($p, "a+");
+echo ftell($g), ",";
+fread($g, 2);
+echo ftell($g), ",";
+fwrite($g, "X");
+echo ftell($g), "|";
+fclose($g);
+
+@unlink($p);
+$w = fopen($p, "w");
+fwrite($w, "abc");
+echo ftell($w);
+fclose($w);
+@unlink($p);
+"#,
+    );
+    assert_eq!(out, "0,1,3,0,1|seedXYZQ|0,2,3|3");
+}
+
 /// A disk-space failure names itself and the reason, as php does.
 ///
 /// Answering `false` was only half of it: php also prints `disk_free_space(): No such file or

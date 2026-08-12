@@ -159,7 +159,61 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.label(&after_dispatch_label);
         }
     }
+    emit_subtract_append_skip(ctx, stream)?;
     store_if_result(ctx, inst)
+}
+
+/// Turns the descriptor's offset into the position PHP reports.
+///
+/// They are the same for every stream but an append one, where `O_APPEND` puts each write at the
+/// end of the file while PHP's position advances only by the bytes written. `__rt_fwrite`
+/// accumulates the difference on the stream state; the helper answers zero for everything else,
+/// including a user wrapper, so the subtraction needs no branch of its own.
+fn emit_subtract_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the descriptor's own offset
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_append_skip");
+            ctx.emitter.instruction("mov x1, x0");                              // what O_APPEND jumped over
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("sub x0, x0, x1");                          // PHP's position
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the descriptor's own offset
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_append_skip");
+            ctx.emitter.instruction("mov rcx, rax");                            // what O_APPEND jumped over
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("sub rax, rcx");                            // PHP's position
+        }
+    }
+    Ok(())
+}
+
+/// Puts PHP's position back in agreement with the descriptor after a successful seek.
+///
+/// PHP answers `0` right after `fseek($h, 0)` on an append stream and `1` after one more byte, so
+/// the running total starts again from the seek. Without this it stays and the answer goes
+/// negative.
+fn emit_clear_append_skip(ctx: &mut FunctionContext<'_>, stream: ValueId, name: &str) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the seek result the caller is owed
+            load_stream_handle_to_result(ctx, stream, name)?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_clear_append_skip");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the seek result the caller is owed
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_clear_append_skip");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `fseek(stream, offset, whence?)` and clears EOF state on success.
@@ -183,6 +237,7 @@ pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         Arch::AArch64 => lower_fseek_aarch64(ctx, &success_label, &done_label),
         Arch::X86_64 => lower_fseek_x86_64(ctx, &success_label, &done_label),
     }
+    emit_clear_append_skip(ctx, stream, "fseek")?;
     store_if_result(ctx, inst)
 }
 
@@ -197,6 +252,7 @@ pub(crate) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::AArch64 => lower_rewind_aarch64(ctx, &success_label, &done_label),
         Arch::X86_64 => lower_rewind_x86_64(ctx, &success_label, &done_label),
     }
+    emit_clear_append_skip(ctx, stream, "rewind")?;
     store_if_result(ctx, inst)
 }
 

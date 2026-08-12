@@ -190,6 +190,16 @@ pub(crate) const STREAM_MODE_LEN_OFFSET: i64 = 200;
 /// and php-src calls them `tcp_socket/ssl`, `udp_socket`, `unix_socket` and `generic_socket`.
 pub(crate) const STREAM_TRANSPORT_OFFSET: i64 = 208;
 
+/// Byte offset of the bytes `O_APPEND` has moved the descriptor past, for an append stream.
+///
+/// PHP reports a position it maintains itself: `fopen($f, 'a')` on a four-byte file answers `1`
+/// after writing one byte, not `5`. The descriptor really is at 5, because `O_APPEND` puts every
+/// write at the end, so `ftell()` answers `lseek(SEEK_CUR) - this`. Accumulating what was jumped
+/// over — rather than tracking the position itself — is what keeps reads out of it: a read moves
+/// the descriptor and PHP's position by the same amount, so it leaves this untouched. `fseek()`
+/// clears it, since a seek puts both back in agreement.
+pub(crate) const STREAM_APPEND_SKIP_OFFSET: i64 = 216;
+
 /// Transport value for a TCP endpoint, which php-src names after the ssl-capable transport.
 pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1;
 
@@ -319,6 +329,8 @@ const _: () = {
     assert!(STREAM_MODE_LEN_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(STREAM_TRANSPORT_OFFSET > STREAM_MODE_LEN_OFFSET);
     assert!(STREAM_TRANSPORT_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    assert!(STREAM_APPEND_SKIP_OFFSET == STREAM_TRANSPORT_OFFSET + 8);
+    assert!(STREAM_APPEND_SKIP_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

@@ -14,8 +14,8 @@
 //!   filters target the common small-write case.
 
 use crate::codegen_support::runtime::resources::layout::{
-    STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER, STREAM_MODE_LEN_OFFSET,
-    STREAM_MODE_PTR_OFFSET,
+    STREAM_APPEND_SKIP_OFFSET, STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER,
+    STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
@@ -35,8 +35,13 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
 
-    // Frame (64 bytes): [0]=fd [8]=pointer [16]=length [24]=handle [32]=session
-    //                   [48]=x29 [56]=x30.
+    // Frame (80 bytes): [0]=fd [8]=pointer [16]=length [24]=handle [32]=session
+    //                   [40]=append cursor [48]=byte count [64]=x29 [72]=x30.
+    //
+    // [40] holds -1 for every stream but an append one. For an append stream it holds where the
+    // logical cursor was before the write, because `O_APPEND` is about to move the descriptor to
+    // the end and `ftell()` must not report that. [48] holds the byte count across the two calls
+    // the accounting makes afterwards.
     //
     // The frame is established before the synthetic-descriptor range checks
     // because x0 arrives as an opaque stream handle, not as a descriptor. The
@@ -47,12 +52,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     // non-handle through untouched and `__rt_stream_tls_session` reports no
     // session for it, which is exactly the plain-write path the internal
     // callers want.
-    emitter.instruction("sub sp, sp, #64");                                     // frame for the saved write state
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // frame for the saved write state
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #24]");                                   // save the incoming handle or raw descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+    emitter.instruction("mov x9, #-1");                                         // no append accounting unless the mode says otherwise
+    emitter.instruction("str x9, [sp, #40]");
 
     // -- a read-only stream refuses the write, before anything is attempted --
     emitter.instruction("bl __rt_stream_state");                                // x0 = the owning state, zero for a raw descriptor
@@ -65,8 +72,10 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_fwrite_mode_ok");                         // no mode recorded: nothing to refuse on
     emitter.instruction("cbz x10, __rt_fwrite_mode_ok");
     emitter.instruction("ldrb w11, [x9]");                                      // the access letter
+    emitter.instruction("cmp w11, #97");                                        // 'a' — the append opener
+    emitter.instruction("b.eq __rt_fwrite_mode_append");                        // its position is PHP's, not the descriptor's
     emitter.instruction("cmp w11, #114");                                       // 'r' — the only read-only opener
-    emitter.instruction("b.ne __rt_fwrite_mode_ok");                            // 'w'/'a'/'x'/'c' all write
+    emitter.instruction("b.ne __rt_fwrite_mode_ok");                            // 'w'/'x'/'c' all write
     emitter.instruction("mov x12, #0");
     emitter.label("__rt_fwrite_mode_scan");
     emitter.instruction("cmp x12, x10");
@@ -78,9 +87,12 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fwrite_mode_scan");
     emitter.label("__rt_fwrite_mode_refuse");
     emitter.instruction("mov x0, #-1");                                         // negative: the caller boxes PHP false
-    emitter.instruction("ldp x29, x30, [sp, #48]");
-    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
     emitter.instruction("ret");
+    emitter.label("__rt_fwrite_mode_append");
+    emitter.instruction("str xzr, [sp, #40]");                                  // the slot now carries a position, not the -1 sentinel
+    emitter.instruction("b __rt_fwrite_mode_ok");
     emitter.label("__rt_fwrite_mode_ok");
     emitter.instruction("ldr x0, [sp, #24]");                                   // the session lookup below still needs the handle
 
@@ -100,8 +112,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_fwrite_not_phar");                           // above the phar-write range: use normal stream dispatch
     emitter.instruction("ldr x1, [sp, #8]");                                    // restore the payload pointer for the tail call
     emitter.instruction("ldr x2, [sp, #16]");                                   // restore the payload length for the tail call
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame before the tail call
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame before the tail call
     emitter.instruction("b __rt_phar_write_append");                            // in range: append to the phar buffer (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_not_phar");
 
@@ -112,8 +124,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_fwrite_real_fd");                            // not a wrapper fd → issue the real write syscall path
     emitter.instruction("ldr x1, [sp, #8]");                                    // restore the payload pointer for the tail call
     emitter.instruction("ldr x2, [sp, #16]");                                   // restore the payload length for the tail call
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame before the tail call
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame before the tail call
     emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_real_fd");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the payload pointer clobbered by resolution
@@ -162,8 +174,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_zlib_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the deflate fwrite helper pointer
     emitter.instruction("blr x9");                                              // deflate-compress the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- bzip2.compress filter: bzip2-compress the payload into the stream --
@@ -174,8 +186,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_bz2_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the bzip2 compress fwrite helper pointer
     emitter.instruction("blr x9");                                              // bzip2-compress the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- convert.iconv write filter: transcode the payload into the stream --
@@ -186,8 +198,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_iconv_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the iconv write helper pointer
     emitter.instruction("blr x9");                                              // transcode the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- user filter: dispatch through filter(string), then write the result --
@@ -215,19 +227,73 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("blr x9");                                              // x0 = bytes written or -1
     emitter.instruction("b __rt_fwrite_return");                                // continue at target label
     emitter.label("__rt_fwrite_syscall");
+    // -- an append stream records where its logical cursor was, before O_APPEND moves the
+    //    descriptor to the end of the file --
+    emitter.instruction("ldr x9, [sp, #40]");                                   // -1 for every other stream
+    emitter.instruction("cmn x9, #1");
+    emitter.instruction("b.eq __rt_fwrite_write_now");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the descriptor
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #1");                                          // SEEK_CUR
+    emitter.syscall(199);
+    emitter.instruction("str x0, [sp, #40]");                                   // where PHP's position stood
+    emitter.label("__rt_fwrite_write_now");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the write arguments: the probe clobbered them
+    emitter.instruction("ldr x1, [sp, #8]");
+    emitter.instruction("ldr x2, [sp, #16]");
     emitter.syscall(4);
     // macOS reports a failed write by setting the carry flag and leaving the POSITIVE
     // errno in x0, which is indistinguishable from a byte count to every caller: writing
     // to a read-only stream answered 9 (EBADF) instead of false. Linux already returns a
     // negative, so normalise macOS onto the same shape.
     if emitter.platform == Platform::MacOS {
-        emitter.instruction("b.cc __rt_fwrite_return");                         // carry clear: x0 really is a byte count
+        emitter.instruction("b.cc __rt_fwrite_wrote");                          // carry clear: x0 really is a byte count
         emitter.instruction("mov x0, #-1");                                     // a failed write reports failure, not its errno
+        emitter.instruction("b __rt_fwrite_return");                            // a failed write moved nothing to account for
+    } else {
+        emitter.instruction("cmp x0, #0");
+        emitter.instruction("b.lt __rt_fwrite_return");                         // a failed write moved nothing to account for
     }
+    emitter.label("__rt_fwrite_wrote");
+    emit_append_skip_update_aarch64(emitter);
     emitter.label("__rt_fwrite_return");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the byte count from write
+}
+
+/// Adds what `O_APPEND` jumped over to the stream's running total, so `ftell()` can subtract it.
+///
+/// PHP's position for an append stream advances by the bytes written, wherever they land. The
+/// descriptor's does not: it is at the end of the file afterwards. The difference between the two
+/// is `(position after the write) - (bytes written) - (position before it)`, which is the number
+/// of bytes that were already past the cursor when the write happened.
+///
+/// Reads deliberately have no counterpart: a read moves the descriptor and PHP's position by the
+/// same amount, so it leaves this total alone and `ftell()` stays right through an `a+` read.
+fn emit_append_skip_update_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [sp, #40]");                                   // -1 unless this is an append stream
+    emitter.instruction("cmn x9, #1");
+    emitter.instruction("b.eq __rt_fwrite_return");
+    emitter.instruction("str x0, [sp, #48]");                                   // hold the byte count across the calls below
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the descriptor
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #1");                                          // SEEK_CUR
+    emitter.syscall(199);
+    emitter.instruction("ldr x9, [sp, #48]");                                   // the bytes just written
+    emitter.instruction("sub x0, x0, x9");                                      // where the file ended before them
+    emitter.instruction("ldr x9, [sp, #40]");                                   // where PHP's position stood
+    emitter.instruction("sub x0, x0, x9");                                      // the bytes O_APPEND jumped over
+    emitter.instruction("str x0, [sp, #40]");                                   // hold the delta across the state lookup
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the handle the caller passed
+    emitter.instruction("bl __rt_stream_state");                                // x0 = the owning state, zero for a raw descriptor
+    emitter.instruction("cbz x0, __rt_fwrite_skip_done");
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_APPEND_SKIP_OFFSET}]"));
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("add x9, x9, x10");                                     // accumulate: several writes each jump their own gap
+    emitter.instruction(&format!("str x9, [x0, #{STREAM_APPEND_SKIP_OFFSET}]"));
+    emitter.label("__rt_fwrite_skip_done");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the byte count the caller is owed
 }
 
 /// Emits the Linux x86_64 stream runtime helper for fwrite.
@@ -237,7 +303,10 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fwrite");
 
     // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length [-32]=handle
-    //                        [-40]=session.
+    //                        [-40]=session [-48]=append cursor [-56]=byte count.
+    //
+    // See the AArch64 counterpart on the last two: [-48] holds -1 for every stream but an append
+    // one, and where its logical cursor stood otherwise.
     //
     // The frame is established before the synthetic-descriptor range checks
     // because rdi arrives as an opaque stream handle, not as a descriptor. The
@@ -250,10 +319,11 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // callers want.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 48");                                         // frame for the saved write state
+    emitter.instruction("sub rsp, 64");                                         // frame for the saved write state
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the incoming handle or raw descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+    emitter.instruction("mov QWORD PTR [rbp - 48], -1");                        // no append accounting unless the mode says otherwise
 
     // -- a read-only stream refuses the write, before anything is attempted --
     emitter.instruction("call __rt_stream_state");                              // rax = the owning state, zero for a raw descriptor
@@ -269,8 +339,10 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r10, r10");
     emitter.instruction("jz __rt_fwrite_mode_ok_x86");
     emitter.instruction("movzx r11d, BYTE PTR [r9]");                           // the access letter
+    emitter.instruction("cmp r11d, 97");                                        // 'a' — the append opener
+    emitter.instruction("je __rt_fwrite_mode_append_x86");                      // its position is PHP's, not the descriptor's
     emitter.instruction("cmp r11d, 114");                                       // 'r' — the only read-only opener
-    emitter.instruction("jne __rt_fwrite_mode_ok_x86");                         // 'w'/'a'/'x'/'c' all write
+    emitter.instruction("jne __rt_fwrite_mode_ok_x86");                         // 'w'/'x'/'c' all write
     emitter.instruction("xor r11, r11");
     emitter.label("__rt_fwrite_mode_scan_x86");
     emitter.instruction("cmp r11, r10");
@@ -285,6 +357,9 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
+    emitter.label("__rt_fwrite_mode_append_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the slot now carries a position, not the -1 sentinel
+    emitter.instruction("jmp __rt_fwrite_mode_ok_x86");
     emitter.label("__rt_fwrite_mode_ok_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the session lookup below still needs the handle
 
@@ -414,9 +489,49 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call r9");                                             // rax = bytes written or -1
     emitter.instruction("jmp __rt_fwrite_return_x86");                          // continue at target label
     emitter.label("__rt_fwrite_syscall_x86");
+    // -- an append stream records where its logical cursor was, before O_APPEND moves the
+    //    descriptor to the end of the file --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // -1 for every other stream
+    emitter.instruction("cmp r10, -1");
+    emitter.instruction("je __rt_fwrite_write_now_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the descriptor
+    emitter.instruction("xor esi, esi");
+    emitter.instruction("mov edx, 1");                                          // SEEK_CUR
+    emitter.instruction("call lseek");                                          // rax = where PHP's position stood
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");
+    emitter.label("__rt_fwrite_write_now_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the write arguments: the probe clobbered them
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
     emitter.instruction("call write");                                          // write the payload through libc write()
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_fwrite_return_x86");                           // a failed write moved nothing to account for
+    emit_append_skip_update_x86_64(emitter);
     emitter.label("__rt_fwrite_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write
+}
+
+/// The x86_64 counterpart of [`emit_append_skip_update_aarch64`].
+fn emit_append_skip_update_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // -1 unless this is an append stream
+    emitter.instruction("cmp r10, -1");
+    emitter.instruction("je __rt_fwrite_return_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // hold the byte count across the calls below
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the descriptor
+    emitter.instruction("xor esi, esi");
+    emitter.instruction("mov edx, 1");                                          // SEEK_CUR
+    emitter.instruction("call lseek");                                          // rax = where the descriptor ended up
+    emitter.instruction("sub rax, QWORD PTR [rbp - 56]");                       // where the file ended before the write
+    emitter.instruction("sub rax, QWORD PTR [rbp - 48]");                       // the bytes O_APPEND jumped over
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // hold the delta across the state lookup
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the handle the caller passed
+    emitter.instruction("call __rt_stream_state");                              // rax = the owning state, zero for a raw descriptor
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fwrite_skip_done_x86");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");
+    emitter.instruction(&format!("add QWORD PTR [rax + {STREAM_APPEND_SKIP_OFFSET}], r10")); // accumulate across writes
+    emitter.label("__rt_fwrite_skip_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // the byte count the caller is owed
 }
