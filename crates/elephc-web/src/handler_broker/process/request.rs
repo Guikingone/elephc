@@ -204,4 +204,3 @@ unsafe fn terminate_request_children(active: &HashMap<u64, libc::pid_t>) {
         reap_exact(*pid);
     }
 }
-

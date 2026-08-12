@@ -485,4 +485,3 @@ unsafe fn terminate_pool(slots: &[PoolSlot]) {
         reap_exact(slot.pid);
     }
 }
-

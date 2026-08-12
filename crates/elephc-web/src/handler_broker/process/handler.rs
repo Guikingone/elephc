@@ -78,4 +78,3 @@ pub(super) unsafe fn write_failure_response(fd: RawFd) {
         && handler_ipc::write_response_chunks(fd, body)
         && handler_ipc::write_response_end(fd);
 }
-
