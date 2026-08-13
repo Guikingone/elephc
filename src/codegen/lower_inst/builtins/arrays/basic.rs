@@ -320,8 +320,14 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
     if preserve_keys {
         return lower_array_reverse_preserve_keys(ctx, inst, array);
     }
-    let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
+    // String arrays carry 16-byte (ptr, len) slots the shared 8-byte gate refuses; the string
+    // reverse helper re-persists each element, so `array_reverse(scandir($d))` — refused since
+    // the gate existed — finally compiles. The gate stays authoritative for everything else.
+    let operand_ty = ctx.value_php_type(array)?;
+    let elem_ty = match operand_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => PhpType::Str,
+        _ => eight_byte_indexed_array_element_type(operand_ty, "array_reverse")?,
+    };
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the reverse helper argument

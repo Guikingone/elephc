@@ -344,6 +344,28 @@ echo "alive\n";
     );
 }
 
+/// Verifies `array_reverse()` on a STRING array — literal and through the scandir union.
+///
+/// String slots are 16-byte (ptr, len) descriptors, and the shared 8-byte gate refused them
+/// since it existed: `array_reverse(["a","b"])` failed to compile on plain literals. The
+/// string variant re-persists each element into the new array, so the result owns its bytes
+/// and the source's lifetime asks no aliasing questions.
+#[test]
+fn test_array_reverse_on_a_string_array_matches_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo implode(",", array_reverse(["a", "b", "c"])), "|";
+mkdir("rvd");
+file_put_contents("rvd/a.txt", "1");
+file_put_contents("rvd/z.txt", "2");
+echo implode(",", array_reverse(scandir("rvd")));
+unlink("rvd/a.txt"); unlink("rvd/z.txt"); rmdir("rvd");
+"#,
+    );
+    assert_eq!(out, "c,b,a|z.txt,a.txt,..,.");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

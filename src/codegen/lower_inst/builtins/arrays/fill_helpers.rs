@@ -290,7 +290,11 @@ pub(super) fn eight_byte_indexed_array_element_type(ty: PhpType, name: &str) -> 
 
 /// Returns the runtime helper for `array_reverse()` based on element ownership.
 pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.is_refcounted() {
+    if *elem_ty == PhpType::Str {
+        // 16-byte (ptr, len) slots: the generic 8-byte copier would read a descriptor as two
+        // unrelated words. The string variant re-persists each element into the new array.
+        "__rt_array_reverse_str"
+    } else if elem_ty.is_refcounted() {
         "__rt_array_reverse_refcounted"
     } else {
         "__rt_array_reverse"

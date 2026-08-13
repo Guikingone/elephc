@@ -321,6 +321,7 @@ pub use array_replace::emit_array_replace;
 pub use array_replace_recursive::emit_array_replace_recursive;
 /// Emit recursive array replace helper.
 pub use array_reverse::emit_array_reverse;
+pub use array_reverse::emit_array_reverse_str;
 /// Emit array reverse helper.
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
 /// Emit refcounted array reverse helper.
