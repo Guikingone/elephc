@@ -18,13 +18,8 @@
 //!   slot holding the in-band null sentinel all box canonical PHP `null`.
 
 builtin! {
-    name: "__elephc_object_prop_value",
-    area: Callables,
-    params: [value: Mixed, index: Int],
-    returns: Mixed,
+    contract: "__elephc_object_prop_value",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcObjectPropValue,
     ),
-    summary: "Internal: value of an object's Nth renderable property.",
-    internal: true,
 }

@@ -9,15 +9,9 @@
 
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "localtime",
+    contract: "localtime",
     area: Time,
-    params: [
-        timestamp = EvalBuiltinDefaultValue::Null,
-        associative = EvalBuiltinDefaultValue::Bool(false),
-    ],
     direct: Time,
     values: Time,
 }

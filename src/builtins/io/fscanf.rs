@@ -18,17 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fscanf",
-    area: Io,
-    params: [stream: Mixed, format: Str],
-    variadic: "vars",
-    returns: Mixed,
+    contract: "fscanf",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fscanf,
     ),
-    summary: "Parses input from a file according to a format.",
-    php_manual: "function.fscanf",
 }
 
 /// Validates the stream argument and returns `Array<Str>` for the matched-fields result.

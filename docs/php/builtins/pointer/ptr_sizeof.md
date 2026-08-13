@@ -26,12 +26,6 @@ Returns the byte size of the named pointer target type.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr_sizeof` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_sizeof.md).

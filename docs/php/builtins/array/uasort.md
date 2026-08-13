@@ -26,12 +26,6 @@ Sorts an array with a user-defined comparison function and maintains index assoc
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `uasort` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/uasort.md).

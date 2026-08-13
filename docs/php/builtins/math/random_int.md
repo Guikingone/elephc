@@ -26,12 +26,6 @@ Get a cryptographically secure, uniformly selected integer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `random_int` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/random_int.md).

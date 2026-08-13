@@ -27,12 +27,6 @@ Writes one 16-bit word through a raw pointer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr_write16` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_write16.md).

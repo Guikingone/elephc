@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory resource read helper.
 
 eval_builtin! {
-    name: "readdir",
+    contract: "readdir",
     area: Filesystem,
-    params: [dir_handle],
     direct: Filesystem,
     values: Filesystem,
 }

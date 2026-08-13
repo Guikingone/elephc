@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the local glob helper.
 
 eval_builtin! {
-    name: "glob",
+    contract: "glob",
     area: Filesystem,
-    params: [pattern],
     direct: Filesystem,
     values: Filesystem,
 }

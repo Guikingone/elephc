@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "vsprintf",
-    area: String,
-    params: [format: Str, values: Mixed],
-    returns: Str,
+    contract: "vsprintf",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Vsprintf,
     ),
-    summary: "Returns a formatted string using an array of values.",
-    php_manual: "https://www.php.net/manual/en/function.vsprintf.php",
 }

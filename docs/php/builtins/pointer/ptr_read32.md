@@ -26,12 +26,6 @@ Reads one unsigned 32-bit word through a raw pointer and returns it as an intege
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr_read32` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_read32.md).

@@ -10,22 +10,17 @@
 //! - The `returns: Mixed` macro field is a conservative fallback; the check hook always
 //!   returns the precise array type.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 use crate::types::checker::builtins::spl as checker_spl;
 
 builtin! {
-    name: "iterator_to_array",
-    area: Spl,
-    params: [iterator: Mixed, preserve_keys: Bool = DefaultSpec::Bool(true)],
-    returns: Mixed,
+    contract: "iterator_to_array",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IteratorToArray,
     ),
-    summary: "Copy the iterator into an array.",
-    php_manual: "https://www.php.net/manual/en/function.iterator-to-array.php",
 }
 
 /// Validates the source and computes the precise array return type based on `preserve_keys`.

@@ -8,13 +8,8 @@
 //! - Uses the shared typed EIR predicate; dynamic values are inspected by target-aware codegen.
 
 builtin! {
-    name: "is_float",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_float",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Float,
     ),
-    summary: "Checks whether a variable is a floating-point number.",
-    php_manual: "function.is-float",
 }

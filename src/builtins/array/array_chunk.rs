@@ -16,22 +16,17 @@
 //!   inputs are rejected too. A check hook is required because the return type depends on the
 //!   inferred argument type and on that literal flag.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_chunk",
-    area: Array,
-    params: [array: Mixed, length: Mixed, preserve_keys: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "array_chunk",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayChunk,
     ),
-    summary: "Splits an array into chunks of the given size.",
-    php_manual: "https://www.php.net/manual/en/function.array-chunk.php",
 }
 
 /// Reads a literal `preserve_keys` flag, returning `None` when the argument is not a literal.

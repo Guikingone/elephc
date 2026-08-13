@@ -12,6 +12,7 @@
 use super::externs::*;
 use super::tags::{bitwise_op_tag, compare_op_tag};
 use super::ElephcRuntimeOps;
+use elephc_builtin_contract::{RuntimeBuiltinId, RuntimeBuiltinStatus};
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::interpreter::RuntimeValueOps;
@@ -32,6 +33,34 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Dispatches a shareable builtin through the versioned generated-runtime C ABI.
+    fn runtime_builtin_call(
+        &mut self,
+        id: RuntimeBuiltinId,
+        args: &[RuntimeCellHandle],
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        if !id.supports_arity(args.len()) {
+            return Ok(None);
+        }
+        let raw_args = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+        let mut result = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_runtime_builtin_call_v1(
+                id.as_u32(),
+                raw_args.as_ptr(),
+                raw_args.len() as u64,
+                self.context.cast(),
+                &mut result,
+            )
+        };
+        match RuntimeBuiltinStatus::from_i32(status) {
+            Some(RuntimeBuiltinStatus::Success) => Self::handle(result).map(Some),
+            Some(RuntimeBuiltinStatus::Unsupported) => Ok(None),
+            Some(RuntimeBuiltinStatus::PendingThrowable) => Err(EvalStatus::UncaughtThrowable),
+            Some(RuntimeBuiltinStatus::RuntimeFatal) | None => Err(EvalStatus::RuntimeFatal),
+        }
+    }
+
     impl_collection_call_ops!();
     impl_reflection_ops!();
     impl_construction_raw_ops!();

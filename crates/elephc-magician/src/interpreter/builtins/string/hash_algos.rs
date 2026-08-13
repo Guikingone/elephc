@@ -9,9 +9,8 @@
 //! - The static string-array helper is shared by list-returning string builtins.
 
 eval_builtin! {
-    name: "hash_algos",
+    contract: "hash_algos",
     area: String,
-    params: [],
     direct: HashAlgos,
     values: HashAlgos,
 }

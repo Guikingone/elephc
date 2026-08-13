@@ -26,12 +26,6 @@ Determines if a string contains a given substring.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `str_contains` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_contains.md).

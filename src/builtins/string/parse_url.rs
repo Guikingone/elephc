@@ -9,22 +9,17 @@
 //!   array-or-false, component-or-null-or-false, and dynamic component shapes.
 //! - Any negative static component selects the full array, matching PHP 8.4.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
-    name: "parse_url",
-    area: String,
-    params: [url: Str, component: Int = DefaultSpec::Int(-1)],
-    returns: Mixed,
+    contract: "parse_url",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ParseUrl,
     ),
-    summary: "Parses a URL and returns its components.",
-    php_manual: "function.parse-url",
 }
 
 /// Validates the optional component type and returns the corresponding PHP result union.

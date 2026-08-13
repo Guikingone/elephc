@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_pad",
-    area: Array,
-    params: [array: Mixed, length: Mixed, value: Mixed],
-    returns: Mixed,
+    contract: "array_pad",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayPad,
     ),
-    summary: "Pads an array to the specified length with a value.",
-    php_manual: "https://www.php.net/manual/en/function.array-pad.php",
 }
 
 /// Returns the (shape-preserving) array type for an `array_pad` call.

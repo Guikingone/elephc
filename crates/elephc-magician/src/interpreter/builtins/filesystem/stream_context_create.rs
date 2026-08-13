@@ -7,15 +7,9 @@
 //! Key details:
 //! - Owns context resource creation and validates optional options arrays before storage.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_context_create",
+    contract: "stream_context_create",
     area: Filesystem,
-    params: [
-        options = EvalBuiltinDefaultValue::Null,
-        params = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

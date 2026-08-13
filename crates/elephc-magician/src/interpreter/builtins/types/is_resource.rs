@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_resource",
+    contract: "is_resource",
     area: Types,
-    params: [value],
     direct: IsResource,
     values: IsResource,
 }

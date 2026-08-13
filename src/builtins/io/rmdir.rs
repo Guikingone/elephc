@@ -14,13 +14,8 @@
 
 
 builtin! {
-    name: "rmdir",
-    area: Io,
-    params: [directory: Str],
-    returns: Bool,
+    contract: "rmdir",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rmdir,
     ),
-    summary: "Removes a directory.",
-    php_manual: "function.rmdir",
 }

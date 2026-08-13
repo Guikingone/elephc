@@ -13,9 +13,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_read_string",
+    contract: "ptr_read_string",
     area: RawMemory,
-    params: [pointer, length],
     direct: PtrReadString,
     values: PtrReadString,
 }

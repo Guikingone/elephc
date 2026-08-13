@@ -8,10 +8,8 @@
 //! - Variadic values are formatted by the existing printf-family helper.
 
 eval_builtin! {
-    name: "fprintf",
+    contract: "fprintf",
     area: Filesystem,
-    params: [stream, format],
-    variadic: values,
     direct: Filesystem,
     values: Filesystem,
 }

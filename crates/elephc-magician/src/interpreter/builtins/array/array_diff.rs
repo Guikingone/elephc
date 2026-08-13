@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_diff",
+    contract: "array_diff",
     area: Array,
-    params: [array],
-    variadic: arrays,
     direct: Array,
     values: Array,
 }

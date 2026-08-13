@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the static stream-transport list helper.
 
 eval_builtin! {
-    name: "stream_get_transports",
+    contract: "stream_get_transports",
     area: String,
-    params: [],
     direct: StreamIntrospection,
     values: StreamIntrospection,
 }

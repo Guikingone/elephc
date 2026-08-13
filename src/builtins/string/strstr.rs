@@ -21,21 +21,16 @@
 //! - No `$before_needle` type check is needed: PHP takes any truthy value there, and the lowering
 //!   materializes it through the shared truthiness helper.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "strstr",
-    area: String,
-    params: [haystack: Str, needle: Str, before_needle: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "strstr",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strstr,
     ),
-    summary: "Returns the portion of a string starting at the first occurrence of a substring, or false.",
-    php_manual: "https://www.php.net/manual/en/function.strstr.php",
 }
 
 /// Returns `string|false` for every `strstr()` call.

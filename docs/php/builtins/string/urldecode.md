@@ -25,12 +25,6 @@ Decodes a URL-encoded string, including '+' as a space.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `urldecode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/urldecode.md).

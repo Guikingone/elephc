@@ -25,12 +25,6 @@ Converts an integer to its hexadecimal string representation.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `dechex` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/dechex.md).

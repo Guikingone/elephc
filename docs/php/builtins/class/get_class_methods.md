@@ -1,6 +1,6 @@
 ---
 title: "get_class_methods()"
-description: "get_class_methods() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
+description: "Returns method names visible on an object or class."
 sidebar:
   order: 85
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_class_methods(mixed $object_or_class): mixed
 ```
 
-get_class_methods() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.
+Returns method names visible on an object or class.
 
 **Parameters**:
 - `$object_or_class` (`mixed`)
@@ -20,7 +20,7 @@ get_class_methods() is available inside eval'd code via the magician interpreter
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_methods.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

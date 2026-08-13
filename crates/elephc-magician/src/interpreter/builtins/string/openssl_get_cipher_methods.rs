@@ -7,12 +7,9 @@
 //! Key details:
 //! - The bridge owns the canonical 12-method list and aliases currently return that same list.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "openssl_get_cipher_methods",
+    contract: "openssl_get_cipher_methods",
     area: String,
-    params: [aliases = EvalBuiltinDefaultValue::Bool(false)],
     direct: Openssl,
     values: Openssl,
 }

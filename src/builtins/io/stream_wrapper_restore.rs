@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "stream_wrapper_restore",
-    area: Io,
-    params: [protocol: Str],
-    returns: Bool,
+    contract: "stream_wrapper_restore",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamWrapperRestore,
     ),
-    summary: "Restores a previously unregistered built-in wrapper.",
-    php_manual: "function.stream-wrapper-restore",
 }

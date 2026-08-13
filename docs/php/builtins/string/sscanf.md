@@ -27,12 +27,6 @@ Parses a string according to a format.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `sscanf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/sscanf.md).

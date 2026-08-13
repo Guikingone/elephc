@@ -25,12 +25,6 @@ Converts a binary string to its decimal number.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bindec` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bindec.md).

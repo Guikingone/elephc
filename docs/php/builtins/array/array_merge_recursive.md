@@ -25,12 +25,6 @@ Recursively merges two arrays, combining scalar collisions into lists.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_merge_recursive` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_merge_recursive.md).

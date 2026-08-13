@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_is_list",
-    area: Array,
-    params: [array: Mixed],
-    returns: Bool,
+    contract: "array_is_list",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayIsList,
     ),
-    summary: "Checks whether an array is a list (sequential 0-based integer keys).",
-    php_manual: "https://www.php.net/manual/en/function.array-is-list.php",
 }
 
 /// Returns `PhpType::Bool` for an `array_is_list` call, rejecting non-array arguments.

@@ -11,12 +11,9 @@
 //! - Any negative component selects the full array, as PHP 8.4 does; values above 7
 //!   raise a catchable `ValueError` with PHP's exact message.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "parse_url",
+    contract: "parse_url",
     area: String,
-    params: [url, component = EvalBuiltinDefaultValue::Int(-1)],
     direct: ParseUrl,
     values: ParseUrl,
 }

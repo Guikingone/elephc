@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fileatime",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "fileatime",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fileatime,
     ),
-    summary: "Gets last access time of file.",
-    php_manual: "function.fileatime",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `fileatime` can return a timestamp or `false`.

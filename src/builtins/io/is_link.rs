@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "is_link",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "is_link",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsLink,
     ),
-    summary: "Tells whether the filename is a symbolic link.",
-    php_manual: "function.is-link",
 }

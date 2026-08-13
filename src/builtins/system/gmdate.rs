@@ -10,15 +10,10 @@
 //!   (`Str`) is fully determined by its declaration. The `timestamp` parameter
 //!   is optional and defaults to `null` (current time).
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "gmdate",
-    area: System,
-    params: [format: Str, timestamp: Int = DefaultSpec::Null],
-    returns: Str,
+    contract: "gmdate",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gmdate,
     ),
-    summary: "Formats a GMT/UTC date and time.",
 }

@@ -14,7 +14,7 @@
 //! - All accepted representations lower through typed `runtime.count` so a typed array
 //!   value carrying the runtime null-container sentinel still raises PHP's catchable TypeError.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
     runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinEffects,
     BuiltinSemanticInput, BuiltinSemantics,
@@ -24,14 +24,9 @@ use crate::types::checker::builtins::arrays::union_member_is_countable_array;
 use crate::types::PhpType;
 
 builtin! {
-    name: "count",
-    area: Array,
-    params: [value: Mixed, mode: Int = DefaultSpec::Int(0)],
-    returns: Int,
+    contract: "count",
     check: check,
     semantics: count_semantics(),
-    summary: "Counts all elements in an array or Countable object.",
-    php_manual: "https://www.php.net/manual/en/function.count.php",
 }
 
 /// Builds typed runtime semantics while retaining count's one-visible-argument lowering rule.

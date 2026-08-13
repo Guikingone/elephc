@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_fill_keys",
-    area: Array,
-    params: [keys: Mixed, value: Mixed],
-    returns: Mixed,
+    contract: "array_fill_keys",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFillKeys,
     ),
-    summary: "Fill an array with values, specifying keys.",
-    php_manual: "https://www.php.net/manual/en/function.array-fill-keys.php",
 }
 
 /// Validates `keys` is an indexed array and returns the resulting assoc-array type.

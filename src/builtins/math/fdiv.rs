@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "fdiv",
-    area: Math,
-    params: [num1: Float, num2: Float],
-    returns: Float,
+    contract: "fdiv",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fdiv,
     ),
-    summary: "Divides two numbers, according to IEEE 754.",
-    php_manual: "https://www.php.net/manual/en/function.fdiv.php",
 }

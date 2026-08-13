@@ -18,17 +18,10 @@
 //! - Unlike `implode`, no `check` hook narrows the arity: the one-argument form is the
 //!   whole reason this alias carries its own declaration.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "join",
-    area: String,
-    params: [separator: Mixed, array: Mixed = DefaultSpec::Null],
-    max_args: 2,
-    returns: Str,
+    contract: "join",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Implode,
     ),
-    summary: "Joins array elements into a single string using a separator (alias of implode).",
-    php_manual: "https://www.php.net/manual/en/function.join.php",
 }

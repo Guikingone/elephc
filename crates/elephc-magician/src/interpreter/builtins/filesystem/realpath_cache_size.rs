@@ -8,9 +8,8 @@
 //! - Eval does not maintain a PHP realpath cache, so this returns zero.
 
 eval_builtin! {
-    name: "realpath_cache_size",
+    contract: "realpath_cache_size",
     area: Filesystem,
-    params: [],
     direct: Filesystem,
     values: Filesystem,
 }

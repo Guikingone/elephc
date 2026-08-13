@@ -26,12 +26,6 @@ Returns byte-frequency information about a string as a tally or a byte list.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `count_chars` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/count_chars.md).

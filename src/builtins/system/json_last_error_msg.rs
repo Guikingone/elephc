@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "json_last_error_msg",
-    area: System,
-    params: [],
-    returns: Str,
+    contract: "json_last_error_msg",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::JsonLastErrorMsg,
     ),
-    summary: "Returns the error string of the last json_encode() or json_decode() call.",
 }

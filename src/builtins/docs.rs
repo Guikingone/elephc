@@ -179,14 +179,6 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
     })
 }
 
-/// Returns true when a PHP-visible builtin exists in the static AOT surface:
-/// `builtin!` registry entries plus compiler-resident constructs (`isset`,
-/// `unset`, `empty`, `exit`, `die`, and dedicated `buffer_new`). Documentation tooling uses this to tell
-/// resident names apart from genuinely eval-only builtins.
-pub fn aot_php_visible_builtin_exists(name: &str) -> bool {
-    crate::types::checker::builtins::is_php_visible_builtin_function(name)
-}
-
 /// Builds the documentation JSON array for every PHP-visible registered builtin.
 ///
 /// Iterates the registry in sorted name order, skips `internal` builtins, and emits one object per

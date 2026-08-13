@@ -8,9 +8,8 @@
 //! - Eval models an empty autoload function table.
 
 eval_builtin! {
-    name: "spl_autoload_functions",
+    contract: "spl_autoload_functions",
     area: Symbols,
-    params: [],
     direct: Symbols,
     values: Symbols,
 }

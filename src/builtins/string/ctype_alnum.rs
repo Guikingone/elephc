@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ctype_alnum",
-    area: String,
-    params: [text: Str],
-    returns: Bool,
+    contract: "ctype_alnum",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CtypeAlnum,
     ),
-    summary: "Checks if all characters in the string are alphanumeric.",
-    php_manual: "https://www.php.net/manual/en/function.ctype-alnum.php",
 }

@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "natcasesort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "natcasesort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Natcasesort,
     ),
-    summary: "Sorts an array using a case-insensitive natural order algorithm.",
-    php_manual: "https://www.php.net/manual/en/function.natcasesort.php",
 }
 
 /// Validates the argument type for a `natcasesort` call.

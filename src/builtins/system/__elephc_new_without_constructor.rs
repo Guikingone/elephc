@@ -15,17 +15,12 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_new_without_constructor",
-    area: System,
-    params: [class: Str],
-    returns: Mixed,
+    contract: "__elephc_new_without_constructor",
     semantics: internal_eir_semantics(
         lower,
         Effects::READS_HEAP.union(Effects::ALLOC_HEAP).union(Effects::MAY_DEOPT),
         BuiltinResultOwnership::Fresh,
     ),
-    summary: "Allocates a dynamically named object without invoking its constructor.",
-    internal: true
 }
 
 /// Lowers constructorless allocation to the dedicated dynamic-object EIR primitive.

@@ -14,22 +14,17 @@
 //!   indexed representation cannot express.
 //! - `check` is required both to reject non-array arguments and to compute that shape.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_reverse",
-    area: Array,
-    params: [array: Mixed, preserve_keys: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "array_reverse",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayReverse,
     ),
-    summary: "Returns an array with the elements in reverse order.",
-    php_manual: "https://www.php.net/manual/en/function.array-reverse.php",
 }
 
 /// Returns the reversed array's type, which depends on the literal `preserve_keys` flag.

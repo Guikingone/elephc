@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "acos",
+    contract: "acos",
     area: Math,
-    params: [num],
     direct: Acos,
     values: Acos,
 }

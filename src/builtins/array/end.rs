@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "end",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Mixed,
+    contract: "end",
     check: check,
     semantics: crate::builtins::semantics::array_pointer_semantics(
         crate::builtins::semantics::ArrayPointerOp::End,
         crate::ir::RuntimeFnId::ArrayPtrSeek,
     ),
-    summary: "Moves the array's internal pointer to the last element and returns it.",
-    php_manual: "https://www.php.net/manual/en/function.end.php",
 }
 
 /// Validates the receiver shape and type for `end()` and returns `Mixed`.

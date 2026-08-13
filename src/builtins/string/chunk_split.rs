@@ -11,20 +11,10 @@
 //! - `$length < 1` raises php-src's `ValueError`, so the runtime function is declared
 //!   `MAY_THROW` rather than pure and cannot be eliminated as dead code.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "chunk_split",
-    area: String,
-    params: [
-        string: Str,
-        length: Int = DefaultSpec::Int(76),
-        separator: Str = DefaultSpec::Str("\r\n")
-    ],
-    returns: Str,
+    contract: "chunk_split",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ChunkSplit,
     ),
-    summary: "Splits a string into fixed-length chunks separated by a given string.",
-    php_manual: "https://www.php.net/manual/en/function.chunk-split.php",
 }

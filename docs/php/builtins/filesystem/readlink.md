@@ -25,12 +25,6 @@ Returns the target of a symbolic link.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `readlink` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/readlink.md).

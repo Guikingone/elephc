@@ -11,10 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "end",
+    contract: "end",
     area: Array,
-    params: [array: by_ref],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

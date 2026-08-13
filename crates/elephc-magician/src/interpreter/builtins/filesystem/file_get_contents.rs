@@ -19,18 +19,9 @@
 //!   current directory only, which is what an include path of `"."` would do anyway.
 //! - A non-null `$context` is refused rather than ignored, matching the compiler backend.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "file_get_contents",
+    contract: "file_get_contents",
     area: Filesystem,
-    params: [
-        filename,
-        use_include_path = EvalBuiltinDefaultValue::Bool(false),
-        context = EvalBuiltinDefaultValue::Null,
-        offset = EvalBuiltinDefaultValue::Int(0),
-        length = EvalBuiltinDefaultValue::Null,
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -27,12 +27,6 @@ Converts all applicable characters in a string into their HTML entities.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `htmlentities` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/htmlentities.md).

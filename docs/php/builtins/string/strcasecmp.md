@@ -26,12 +26,6 @@ Binary safe case-insensitive string comparison. Returns negative, zero, or posit
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strcasecmp` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strcasecmp.md).

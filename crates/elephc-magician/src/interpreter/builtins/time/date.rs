@@ -13,12 +13,9 @@ use std::sync::Mutex;
 use super::super::*;
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "date",
+    contract: "date",
     area: Time,
-    params: [format, timestamp = EvalBuiltinDefaultValue::Null],
     direct: Time,
     values: Time,
 }

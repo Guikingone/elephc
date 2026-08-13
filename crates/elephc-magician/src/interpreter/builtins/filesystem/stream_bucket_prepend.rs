@@ -8,9 +8,8 @@
 //! - Prepends bucket objects to the brigade `_buckets` array used by eval filters.
 
 eval_builtin! {
-    name: "stream_bucket_prepend",
+    contract: "stream_bucket_prepend",
     area: Filesystem,
-    params: [brigade, bucket],
     direct: Filesystem,
     values: Filesystem,
 }

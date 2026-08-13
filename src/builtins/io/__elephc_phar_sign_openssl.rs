@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_sign_openssl",
-    area: Io,
-    params: [path: Str, key: Str],
-    returns: Bool,
+    contract: "__elephc_phar_sign_openssl",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSignOpenssl,
     ),
-    summary: "Signs a PHAR archive using an OpenSSL private key.",
-    internal: true,
 }

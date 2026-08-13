@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "current",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "current",
     check: check,
     semantics: crate::builtins::semantics::array_pointer_semantics(
         crate::builtins::semantics::ArrayPointerOp::Current,
         crate::ir::RuntimeFnId::ArrayPtrValue,
     ),
-    summary: "Returns the element under the array's internal pointer.",
-    php_manual: "https://www.php.net/manual/en/function.current.php",
 }
 
 /// Validates the receiver shape and type for `current()` and returns `Mixed`.

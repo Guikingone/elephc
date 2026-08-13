@@ -27,27 +27,17 @@
 //!   type during EIR lowering so the boxed-`Mixed` layout above is used instead.
 //! - `check` is required both to reject non-array arguments and to compute that shape.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_slice",
-    area: Array,
-    params: [
-        array: Mixed,
-        offset: Mixed,
-        length: Mixed = DefaultSpec::Null,
-        preserve_keys: Bool = DefaultSpec::Bool(false)
-    ],
-    returns: Mixed,
+    contract: "array_slice",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArraySlice,
     ),
-    summary: "Extracts a slice of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-slice.php",
 }
 
 /// Reads a literal `preserve_keys` flag, returning `None` when the argument is not a literal.

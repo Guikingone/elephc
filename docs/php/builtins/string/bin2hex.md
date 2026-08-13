@@ -25,12 +25,6 @@ Converts binary data into its hexadecimal string representation.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bin2hex` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/bin2hex.md).

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ord",
-    area: String,
-    params: [character: Str],
-    returns: Int,
+    contract: "ord",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ord,
     ),
-    summary: "Returns the ASCII value of the first character of a string.",
-    php_manual: "https://www.php.net/manual/en/function.ord.php",
 }

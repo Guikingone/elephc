@@ -7,17 +7,9 @@
 //! Key details:
 //! - Creates eval-local filter resources without transforming stream bytes.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_filter_append",
+    contract: "stream_filter_append",
     area: Filesystem,
-    params: [
-        stream,
-        filtername,
-        read_write = EvalBuiltinDefaultValue::Int(3),
-        params = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

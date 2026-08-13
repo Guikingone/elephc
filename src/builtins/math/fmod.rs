@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "fmod",
-    area: Math,
-    params: [num1: Float, num2: Float],
-    returns: Float,
+    contract: "fmod",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fmod,
     ),
-    summary: "Returns the floating point remainder of the division of the arguments.",
-    php_manual: "https://www.php.net/manual/en/function.fmod.php",
 }

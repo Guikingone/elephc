@@ -26,12 +26,6 @@ Copy the iterator into an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `iterator_to_array` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/iterator_to_array.md).

@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "prev",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Mixed,
+    contract: "prev",
     check: check,
     semantics: crate::builtins::semantics::array_pointer_semantics(
         crate::builtins::semantics::ArrayPointerOp::Prev,
         crate::ir::RuntimeFnId::ArrayPtrSeek,
     ),
-    summary: "Rewinds the array's internal pointer and returns the new element.",
-    php_manual: "https://www.php.net/manual/en/function.prev.php",
 }
 
 /// Validates the receiver shape and type for `prev()` and returns `Mixed`.

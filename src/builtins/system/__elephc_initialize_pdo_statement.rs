@@ -15,17 +15,12 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_initialize_pdo_statement",
-    area: System,
-    params: [statement: Mixed, handle: Int, connection: Int, errorMode: Int, query: Str],
-    returns: Void,
+    contract: "__elephc_initialize_pdo_statement",
     semantics: internal_eir_semantics(
         lower,
         Effects::all().difference(Effects::REFCOUNT_OP),
         BuiltinResultOwnership::NonHeap,
     ),
-    summary: "Initializes a dynamically allocated PDOStatement subclass.",
-    internal: true
 }
 
 /// Lowers private PDOStatement initialization to its direct-method EIR primitive.

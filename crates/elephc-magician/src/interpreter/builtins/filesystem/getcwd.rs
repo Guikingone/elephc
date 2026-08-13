@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the current-working-directory helper.
 
 eval_builtin! {
-    name: "getcwd",
+    contract: "getcwd",
     area: Filesystem,
-    params: [],
     direct: Filesystem,
     values: Filesystem,
 }

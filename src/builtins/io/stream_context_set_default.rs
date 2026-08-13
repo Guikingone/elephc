@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_context_set_default",
-    area: Io,
-    params: [options: Mixed],
-    returns: Mixed,
+    contract: "stream_context_set_default",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamContextSetDefault,
     ),
-    summary: "Sets the default stream context.",
-    php_manual: "function.stream-context-set-default",
 }
 
 /// Returns `stream_resource()` as the precise return type for `stream_context_set_default`.

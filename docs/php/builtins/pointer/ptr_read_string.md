@@ -27,12 +27,6 @@ Copies raw bytes from a pointer into a PHP string of the given length.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr_read_string` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_read_string.md).

@@ -9,23 +9,27 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs)
-- **Lowering**: [`(not lowered)`:0]()
-- **Function symbol**: `(none — type-checker only)()`
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
+- **Lowering**: [`src/hash_prelude.rs`:93](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L93) (`hash_update`)
+- **Function symbol**: `hash_update()`
 
+
+### Lowering notes
+
+- Implemented by the compiler-injected hash prelude.
 
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract implemented by an injected elephc-PHP prelude.
 
 ## EIR and runtime boundary
 
-_Compiler-resident lowering; no registry-backed typed runtime target applies._
+_Implemented by an injected elephc-PHP prelude._
 
 ## Signature summary
 
 ```php
-function hash_update(mixed $context, mixed $data): mixed
+function hash_update(HashContext $context, string $data): bool
 ```
 
 ## What the type checker enforces
@@ -35,6 +39,8 @@ function hash_update(mixed $context, mixed $data): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

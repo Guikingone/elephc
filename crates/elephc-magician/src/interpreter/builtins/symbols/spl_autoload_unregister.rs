@@ -8,9 +8,8 @@
 //! - Registration stub behavior is shared with `spl_autoload_register()`.
 
 eval_builtin! {
-    name: "spl_autoload_unregister",
+    contract: "spl_autoload_unregister",
     area: Symbols,
-    params: [callback],
     direct: Symbols,
     values: Symbols,
 }

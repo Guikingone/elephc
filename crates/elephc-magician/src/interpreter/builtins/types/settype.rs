@@ -11,10 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "settype",
+    contract: "settype",
     area: Types,
-    params: [var: by_ref, r#type],
-    by_ref: [var],
     direct: none,
     values: Settype,
 }

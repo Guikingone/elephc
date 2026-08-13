@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_sign_hash",
-    area: Io,
-    params: [path: Str, algo: Str],
-    returns: Bool,
+    contract: "__elephc_phar_sign_hash",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSignHash,
     ),
-    summary: "Signs a PHAR archive with the given hash algorithm.",
-    internal: true,
 }

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing slash escaping hook.
 
 eval_builtin! {
-    name: "addslashes",
+    contract: "addslashes",
     area: String,
-    params: [string],
     direct: Slashes,
     values: Slashes,
 }

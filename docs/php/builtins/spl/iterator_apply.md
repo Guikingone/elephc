@@ -27,12 +27,6 @@ Call a function for every element in an iterator.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `iterator_apply` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/iterator_apply.md).

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "linkinfo",
-    area: Io,
-    params: [path: Str],
-    returns: Int,
+    contract: "linkinfo",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Linkinfo,
     ),
-    summary: "Gets information about a link.",
-    php_manual: "function.linkinfo",
 }

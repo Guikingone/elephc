@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ctype_digit",
-    area: String,
-    params: [text: Str],
-    returns: Bool,
+    contract: "ctype_digit",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CtypeDigit,
     ),
-    summary: "Checks if all characters in the string are digits.",
-    php_manual: "https://www.php.net/manual/en/function.ctype-digit.php",
 }

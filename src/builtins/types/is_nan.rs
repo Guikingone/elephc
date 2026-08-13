@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "is_nan",
-    area: Types,
-    params: [num: Float],
-    returns: Bool,
+    contract: "is_nan",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsNan,
     ),
-    summary: "Checks whether a float is NAN.",
-    php_manual: "function.is-nan",
 }

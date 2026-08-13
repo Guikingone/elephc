@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "is_dir",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "is_dir",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsDir,
     ),
-    summary: "Tells whether the filename is a directory.",
-    php_manual: "function.is-dir",
 }

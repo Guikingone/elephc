@@ -8,13 +8,8 @@
 //! - Uses the shared typed EIR predicate; dynamic values are inspected by target-aware codegen.
 
 builtin! {
-    name: "is_bool",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_bool",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Bool,
     ),
-    summary: "Checks whether a variable is a boolean.",
-    php_manual: "function.is-bool",
 }

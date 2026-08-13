@@ -25,12 +25,6 @@ Converts an integer to its binary string representation.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `decbin` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/decbin.md).

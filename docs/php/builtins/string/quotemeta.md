@@ -25,12 +25,6 @@ Prefixes each regular-expression metacharacter in a string with a backslash.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `quotemeta` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/quotemeta.md).

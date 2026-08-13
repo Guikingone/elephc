@@ -26,12 +26,6 @@ Returns the trailing name component of a path.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `basename` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/basename.md).

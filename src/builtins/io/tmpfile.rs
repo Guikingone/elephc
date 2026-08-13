@@ -22,18 +22,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "tmpfile",
-    area: Io,
-    params: [],
-    max_args: 1,
-    arity_error: "tmpfile() takes no arguments",
-    returns: Mixed,
+    contract: "tmpfile",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Tmpfile,
     ),
-    summary: "Creates a temporary file.",
-    php_manual: "function.tmpfile",
 }
 
 /// Accepts `tmpfile()` and `tmpfile(...[])` (empty static-array spread) but rejects

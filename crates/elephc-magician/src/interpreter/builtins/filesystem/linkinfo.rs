@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the symbolic-link metadata helper.
 
 eval_builtin! {
-    name: "linkinfo",
+    contract: "linkinfo",
     area: Filesystem,
-    params: [path],
     direct: Filesystem,
     values: Filesystem,
 }

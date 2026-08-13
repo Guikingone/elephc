@@ -26,12 +26,6 @@ Converts a string into an array of chunks of the given length.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `str_split` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_split.md).

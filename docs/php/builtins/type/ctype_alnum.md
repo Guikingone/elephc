@@ -25,12 +25,6 @@ Checks if all characters in the string are alphanumeric.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ctype_alnum` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/ctype_alnum.md).

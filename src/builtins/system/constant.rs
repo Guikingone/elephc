@@ -31,10 +31,7 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "constant",
-    area: System,
-    params: [name: Str],
-    returns: Mixed,
+    contract: "constant",
     check: check,
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
@@ -51,8 +48,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the value of a constant given its name.",
-    php_manual: "https://www.php.net/manual/en/function.constant.php",
 }
 
 /// Validates the literal name and returns the referenced constant's own PHP type.

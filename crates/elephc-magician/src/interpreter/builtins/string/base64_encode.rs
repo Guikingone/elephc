@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing Base64 encode hook.
 
 eval_builtin! {
-    name: "base64_encode",
+    contract: "base64_encode",
     area: String,
-    params: [string],
     direct: Base64Encode,
     values: Base64Encode,
 }

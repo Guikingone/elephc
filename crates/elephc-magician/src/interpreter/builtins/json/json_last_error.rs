@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "json_last_error",
+    contract: "json_last_error",
     area: Json,
-    params: [],
     direct: JsonLastError,
     values: JsonLastError,
 }

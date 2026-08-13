@@ -9,16 +9,9 @@
 //!   still evaluate arguments in source order.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "round",
+    contract: "round",
     area: Math,
-    params: [
-        num,
-        precision = EvalBuiltinDefaultValue::Int(0),
-        mode = EvalBuiltinDefaultValue::Int(EVAL_PHP_ROUND_HALF_UP)
-    ],
     direct: Round,
     values: Round,
 }
