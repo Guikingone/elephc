@@ -233,7 +233,7 @@ fn render_linux_command(
         args.push(OsString::from("-ldl"));
     }
     append_search_paths(&mut args, plan);
-    if whole_bridge_count(plan) >= 2 {
+    if bridge_archive_count(plan) >= 2 {
         args.push(OsString::from("-Wl,--allow-multiple-definition"));
     }
     append_link_inputs(&mut args, plan, Platform::Linux);
@@ -311,15 +311,23 @@ fn has_link_inputs(plan: &LinkPlan) -> bool {
     })
 }
 
-/// Counts whole-archived bridge items that can duplicate Rust runtime members.
-fn whole_bridge_count(plan: &LinkPlan) -> usize {
+/// Counts bridge staticlib archives that can duplicate Rust runtime members.
+///
+/// Every Rust `staticlib` bundles the allocator shims, std rcgu objects, and any
+/// shared dependency (e.g. rustls in both `elephc_pdo` and `elephc_tls`), so as
+/// soon as TWO bridge archives each contribute at least one member, GNU ld sees
+/// multiple definitions — with or without `--whole-archive`. A program that
+/// auto-detects several bridges (PDO's prelude alone plans pdo+tls+phar+crypto)
+/// therefore needs `--allow-multiple-definition` exactly like a forced
+/// whole-archive pair; the duplicates are identical objects from one workspace
+/// build, so first-definition-wins is sound.
+fn bridge_archive_count(plan: &LinkPlan) -> usize {
     plan.items()
         .iter()
         .filter(|item| {
             matches!(
                 item,
                 LinkItem::StaticArchive {
-                    whole_archive: true,
                     origin: LinkOrigin::Bridge { .. },
                     ..
                 }
@@ -478,6 +486,32 @@ mod tests {
             .unwrap();
         assert_eq!((archive, close), (open + 1, open + 2));
         assert!(close < managed);
+    }
+
+    /// Verifies two bridge archives enable `--allow-multiple-definition` even
+    /// without whole-archiving: every Rust staticlib duplicates the allocator
+    /// shims and shared dependency rcgu objects, so an auto-detected
+    /// multi-bridge link (e.g. PDO's pdo+tls+phar+crypto plan) collides on GNU
+    /// ld exactly like a forced whole-archive pair.
+    #[test]
+    fn linux_two_bridge_archives_allow_multiple_definition() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::bridge_archive("tls.a", "elephc_tls", false),
+        ]);
+        let args = render_linux(&plan);
+        assert!(args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
+    }
+
+    /// Verifies a single bridge archive does not relax linker duplicate checks.
+    #[test]
+    fn linux_single_bridge_archive_keeps_strict_definitions() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::bridge_archive("pdo.a", "elephc_pdo", false),
+            LinkItem::managed_archive("pcre2.a", "pcre2"),
+        ]);
+        let args = render_linux(&plan);
+        assert!(!args.iter().any(|argument| argument == "-Wl,--allow-multiple-definition"));
     }
 
     /// Verifies exact macOS archives do not trigger implicit Homebrew search paths.
