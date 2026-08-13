@@ -6505,6 +6505,30 @@ unlink("rfl.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a NESTED literal filter URL recurses, as php does.
+///
+/// The inner level sits closest to the bytes, so its chain applies FIRST and the outer chain
+/// sees what the inner produced: toupper-then-rot13 for the double, and the triple proves the
+/// order is depth-driven rather than a two-level accident. The ASSEMBLED spelling still pins
+/// the loud refusal in `test_run_time_filter_url_edge_cases` — the run-time parse does not
+/// recurse yet, and that divergence stays recorded there.
+#[test]
+fn test_a_nested_literal_filter_url_recurses_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("nf.txt", "Hello World");
+echo file_get_contents("php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt"), "|";
+$h = fopen("php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt", "r");
+echo stream_get_contents($h), "|";
+fclose($h);
+echo file_get_contents("php://filter/read=string.tolower/resource=php://filter/read=string.rot13/resource=php://filter/read=string.toupper/resource=nf.txt");
+unlink("nf.txt");
+"#,
+    );
+    assert_eq!(out, "URYYB JBEYQ|URYYB JBEYQ|uryyb jbeyq");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
 ///
 /// The direction is published from the resolved count, so this is the case that distinguishes

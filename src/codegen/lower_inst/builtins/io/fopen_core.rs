@@ -694,7 +694,7 @@ pub(super) fn literal_filter_url_names_no_resource(path: &str) -> bool {
 pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> {
     let spec = path.strip_prefix("php://filter/")?;
     let (filter_part, resource) = spec.split_once("/resource=")?;
-    if resource.is_empty() || resource.starts_with("php://filter") {
+    if resource.is_empty() {
         return None;
     }
     let (mode_bits, filters) = if let Some(filters) = filter_part.strip_prefix("read=") {
@@ -709,6 +709,22 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> 
     // uppercased bytes. Measured, because the opposite reading is just as plausible.
     let filter_ids: Vec<u8> = filters.split('|').filter_map(stream_filter_id).collect();
     let mode_bits = if filter_ids.is_empty() { 0 } else { mode_bits };
+    // A NESTED resource recurses, as php does: the inner level sits closest to the bytes, so
+    // its chain applies FIRST and the outer chain sees what the inner one produced —
+    // `read=string.rot13/resource=php://filter/read=string.toupper/resource=x` uppercases and
+    // THEN rot13s, measured. Levels with conflicting explicit directions stay refused (the
+    // pending hand-off carries one direction), which keeps that exotic spelling loudly failing
+    // rather than half-filtered.
+    if resource.starts_with("php://filter/") {
+        let (inner_bits, inner_ids, innermost) = parse_php_filter_url(resource)?;
+        if inner_bits != 0 && mode_bits != 0 && inner_bits != mode_bits {
+            return None;
+        }
+        let bits = if mode_bits == 0 { inner_bits } else { mode_bits };
+        let mut ids = inner_ids;
+        ids.extend(filter_ids);
+        return Some((bits, ids, innermost));
+    }
     Some((mode_bits, filter_ids, resource.to_string()))
 }
 
