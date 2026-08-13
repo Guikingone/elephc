@@ -86,6 +86,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::MixedBox => &["boxing a concrete PHP value into Mixed"],
         Op::MixedTagOf => &["runtime type inspection of a Mixed value"],
         Op::StrConcat => &["string concatenation (`.`)"],
+        Op::StrIncDec => &["`$value++` / `$value--` on a string-capable operand"],
         Op::StrLen => &["`strlen()`"],
         Op::StrPersist => &["returning a string from a function", "storing a computed string"],
         Op::ConcatReset => &["reset of a compiler-managed concatenation chain"],
@@ -222,6 +223,7 @@ fn op_tests(op: Op) -> &'static [&'static str] {
             &["codegen_wasm::tests::checked_integer_arithmetic_promotes_overflow_to_float"]
         }
         Op::StrConcat => &["codegen_wasm::tests::chained_concat_echoes_correctly"],
+        Op::StrIncDec => &["codegen_wasm::tests::str_inc_dec_carries_and_wraps_like_php"],
         Op::StrLen => &["codegen_wasm::tests::strlen_of_literal_invokes_correctly"],
         Op::StrPersist => &[
             "codegen_wasm::tests::str_persist_copies_a_literal_into_owned_heap_bytes",
@@ -316,6 +318,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ConstBool => "codegen_wasm::inst::lower_const_bool",
         Op::ConstNull => "codegen_wasm::inst::lower_const_null",
         Op::ConstStr => "codegen_wasm::inst::lower_const_str",
+        Op::StrIncDec => "codegen_wasm::inst::lower_str_inc_dec",
         Op::StrLen => "codegen_wasm::inst::lower_strlen",
         Op::StrPersist => "codegen_wasm::inst::lower_str_persist",
         Op::StrConcat => "codegen_wasm::inst::lower_str_concat",
@@ -484,7 +487,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::ArrayToMixed
         | Op::MixedNumericBinop
         | Op::HashToMixed => "mixed",
-        Op::StrConcat | Op::ConcatReset | Op::StrLen | Op::StrPersist => "string",
+        Op::StrConcat | Op::ConcatReset | Op::StrLen | Op::StrPersist | Op::StrIncDec => "string",
         Op::ArrayNew
         | Op::ArrayLen
         | Op::ArrayGet

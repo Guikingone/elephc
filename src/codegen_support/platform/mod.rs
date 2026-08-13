@@ -12,7 +12,11 @@ mod linux_transform;
 mod target;
 mod toolchain;
 
-pub use target::{Arch, Platform, Target, TargetKind};
+pub use target::{Arch, Platform, Target};
+// Test constructors spell the target kind explicitly; production code goes through
+// `Target::new()`/`Target::wasm()` and never names the enum.
+#[cfg(test)]
+pub use target::TargetKind;
 
 #[cfg(test)]
 mod tests {

@@ -27,7 +27,7 @@ use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
-use crate::codegen_support::platform::{Target, TargetKind};
+use crate::codegen_support::platform::Target;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
 };
@@ -1312,7 +1312,7 @@ mod tests {
             (Platform::Linux, Arch::AArch64, "8"),
             (Platform::Linux, Arch::X86_64, "8"),
         ] {
-            let target = Target { platform, arch, kind: TargetKind::Native };
+            let target = Target { platform, arch, kind: crate::codegen_support::platform::TargetKind::Native };
             let asm = emit_runtime_data_fixed(8_388_608, target);
 
             let mut seen = 0usize;
@@ -1343,7 +1343,7 @@ mod tests {
             Target {
                 platform: Platform::Linux,
                 arch: Arch::AArch64,
-                kind: TargetKind::Native,
+                kind: crate::codegen_support::platform::TargetKind::Native,
             },
         );
 

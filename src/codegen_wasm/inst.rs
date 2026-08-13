@@ -48,6 +48,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => lower_const_str(ctx, &inst),
         Op::StrLen => lower_strlen(ctx, &inst),
+        Op::StrIncDec => lower_str_inc_dec(ctx, &inst),
         Op::StrPersist => lower_str_persist(ctx, &inst),
         Op::ArrayToMixed => lower_array_to_mixed(ctx, &inst),
         Op::LooseEq | Op::LooseNotEq => lower_loose_eq(ctx, &inst),
@@ -1352,6 +1353,50 @@ fn lower_strlen(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins(&format!("local.get {}", len), "string length");
         }
         other => return Err(WasmError::Unsupported(format!("strlen of {:?}", other))),
+    }
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::StrIncDec`: PHP's `++`/`--` whose operand may hold a string.
+///
+/// The operand is BORROWED by the runtime helper and stays owned by its EIR value —
+/// the EIR schedules its own release. A concrete `Str` operand is boxed for the call
+/// and that temporary released right after, since the helper answers a fresh cell
+/// either way. The `i64` immediate is the delta (`+1` or `-1`).
+fn lower_str_inc_dec(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let source = operand(inst, 0)?;
+    let delta = match inst.immediate {
+        Some(Immediate::I64(delta)) => delta,
+        _ => {
+            return Err(WasmError::Unsupported(
+                "str_inc_dec without a delta immediate".to_string(),
+            ))
+        }
+    };
+    let source_repr = ctx.value_repr(source)?.clone();
+    let boxed_temp = if matches!(source_repr, WasmRepr::Str { .. }) {
+        let cell = box_value_into_mixed_cell(ctx, source, &source_repr)?;
+        ctx.fb
+            .ins(&format!("local.get {}", cell), "boxed string operand");
+        Some(cell)
+    } else {
+        ctx.emit_load_value(source)?;
+        None
+    };
+    ctx.fb.ins(
+        &format!("i64.const {}", delta),
+        "the ++/-- delta the helper applies",
+    );
+    ctx.fb.ins(
+        "call $__rt_mixed_inc_dec",
+        "PHP's ++/-- across every scalar tag",
+    );
+    if let Some(cell) = boxed_temp {
+        // The helper borrowed it and answered a fresh cell; nothing else reads it.
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "release the boxing temporary",
+        );
     }
     store_result(ctx, inst)
 }

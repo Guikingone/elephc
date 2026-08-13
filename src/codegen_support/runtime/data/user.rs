@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
-use crate::codegen_support::platform::{Target, TargetKind};
+use crate::codegen_support::platform::Target;
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -2816,7 +2816,7 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use crate::codegen_support::platform::{Arch, Platform, Target, TargetKind};
+    use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
@@ -2934,7 +2934,7 @@ mod tests {
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,
-                kind: TargetKind::Native,
+                kind: crate::codegen_support::platform::TargetKind::Native,
             },
         );
 
@@ -2970,7 +2970,7 @@ mod tests {
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,
-                kind: TargetKind::Native,
+                kind: crate::codegen_support::platform::TargetKind::Native,
             },
         );
 
@@ -3013,7 +3013,7 @@ mod tests {
             Target {
                 platform: Platform::MacOS,
                 arch: Arch::AArch64,
-                kind: TargetKind::Native,
+                kind: crate::codegen_support::platform::TargetKind::Native,
             },
         );
 

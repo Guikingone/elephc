@@ -580,7 +580,7 @@ fn type_tag(ty: &PhpType) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codegen_support::platform::{Arch, Platform, Target, TargetKind};
+    use crate::codegen_support::platform::{Arch, Platform, Target};
     use crate::span::Span;
 
     /// Verifies that descriptor records contain signature, environment, and invocation pointers.
@@ -628,7 +628,7 @@ mod tests {
         let asm = data.emit(Target {
             platform: Platform::MacOS,
             arch: Arch::AArch64,
-            kind: TargetKind::Native,
+            kind: crate::codegen_support::platform::TargetKind::Native,
         });
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));
@@ -673,7 +673,7 @@ mod tests {
         let asm = data.emit(Target {
             platform: Platform::MacOS,
             arch: Arch::AArch64,
-            kind: TargetKind::Native,
+            kind: crate::codegen_support::platform::TargetKind::Native,
         });
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", descriptor, descriptor)));

@@ -240,6 +240,8 @@ pub(super) fn emit_mixed_numeric_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_NUMERIC_MUL);
     wm.add_raw_func(RT_THREEWAY);
     wm.add_raw_func(RT_MIXED_TRUTHY_PARTS);
+    wm.add_raw_func(&rt_mixed_inc_dec());
+    wm.add_raw_func(&rt_str_inc_dec_alpha());
     wm.add_raw_func(&rt_mixed_cmp_mixed());
     wm.add_raw_func(&rt_mixed_cmp_i64());
 }
@@ -342,6 +344,169 @@ const RT_MIXED_TRUTHY_PARTS: &str = r#"(func $__rt_mixed_truthy_parts (param $ta
       (i64.ne (i64.load (i32.wrap_i64 (local.get $lo))) (i64.const 0))))))
   (i64.extend_i32_u (i64.ne (local.get $lo) (i64.const 0))))      ;; int and bool
 "#;
+
+/// `__rt_mixed_inc_dec`: PHP's `++`/`--` on a BORROWED boxed operand, answering an OWNED cell.
+///
+/// The whole case matrix was measured on php-src 8.5.6 (`cli/incdec_oracle.php`) rather than
+/// assumed, because three of its rules are not guessable:
+///
+///   * `null++` is int 1, but `null--` WARNS and stays null — the two directions differ;
+///   * a bool keeps its value in both directions, warning each time;
+///   * the empty string is its own case in each direction: `""++` is the STRING "1" while
+///     `""--` is the INT -1, with two different deprecations.
+///
+/// Ints, floats and FULLY-numeric strings delegate to `__rt_mixed_numeric_add` with the delta
+/// boxed, which is where integer overflow already promotes to float exactly as php does. A
+/// LEADING-numeric string ("10abc") must NOT take that path — arithmetic would warn and use
+/// the prefix where `++` perl-increments the text — so the classifier separates them first.
+///
+/// An array or object operand is php-src's `TypeError: Unsupported operand types`, reported
+/// through the same failure exit every arithmetic helper uses.
+fn rt_mixed_inc_dec() -> String {
+    r#"(func $__rt_mixed_inc_dec (param $cell i32) (param $delta i64) (result i32)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (local $cls i32) (local $dbox i32) (local $res i32)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null: the directions differ
+    (then
+      (if (i64.gt_s (local.get $delta) (i64.const 0))
+        (then (return (call $__rt_mixed_from_value (i64.const 0) (i64.const 1) (i64.const 0)))))
+      (call $__rt_warn_dec_null)
+      (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; bool: warn, keep the value
+    (then
+      (if (i64.gt_s (local.get $delta) (i64.const 0))
+        (then (call $__rt_warn_inc_bool))
+        (else (call $__rt_warn_dec_bool)))
+      (return (call $__rt_mixed_from_value (i64.const 3) (local.get $lo) (i64.const 0)))))
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; string: classify FIRST
+    (then
+      (local.set $cls (call $__rt_str_numeric_class
+        (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
+      (if (i32.eqz (i32.or (i32.eq (local.get $cls) (i32.const 1))
+                           (i32.eq (local.get $cls) (i32.const 2))))
+        (then (return (call $__rt_str_inc_dec_alpha
+          (i32.wrap_i64 (local.get $lo)) (local.get $hi) (local.get $delta)))))))
+  (if (i32.eqz (i32.or                                            ;; beyond scalars: TypeError
+        (i32.or (i64.eqz (local.get $tag)) (i64.eq (local.get $tag) (i64.const 2)))
+        (i64.eq (local.get $tag) (i64.const 1))))
+    (then
+      (call $__rt_fail (i32.const 9))                             ;; array/object: not modelled here
+      (unreachable) ;; elephc-trap:post-noreturn:inc-dec-heap-operand
+      ))
+  ;; int, float, or fully-numeric string: the numeric add carries php's overflow promotion.
+  (local.set $dbox (call $__rt_mixed_from_value (i64.const 0) (local.get $delta) (i64.const 0)))
+  (local.set $res (call $__rt_mixed_numeric_add (local.get $cell) (local.get $dbox)))
+  (call $__rt_decref_any (local.get $dbox))
+  (local.get $res))
+"#
+    .to_string()
+}
+
+/// `__rt_str_inc_dec_alpha`: `++`/`--` on a NON-numeric string, php's perl-style rules.
+///
+/// Measured rules, each of which the obvious implementation gets wrong:
+///
+///   * the walk runs from the END and stops at the first non-alphanumeric byte, KEEPING the
+///     wraps already made and DROPPING the carry: `"a!z"++` is `"a!a"`, never `"a!aa"` — and a
+///     string whose LAST byte is non-alphanumeric is simply unchanged (`"ab!"++`);
+///   * a carry that survives past the start PREPENDS by the class of the last wrapped byte:
+///     `"Zz9"++` is `"AAa0"` ('A' because the leftmost wrapped byte was 'Z');
+///   * `--` never edits a non-numeric string — `"a"--` stays `"a"` — but still deprecates;
+///   * the EMPTY string: `""++` is the STRING "1", `""--` is the INT -1.
+///
+/// The result bytes are built in a scratch heap block, PERSISTED to an owned copy, and the
+/// scratch freed: boxing the scratch directly would hand the cell a pointer one byte past its
+/// block start, which `__rt_heap_free` cannot take back.
+fn rt_str_inc_dec_alpha() -> String {
+    r#"(func $__rt_str_inc_dec_alpha (param $ptr i32) (param $len i64) (param $delta i64) (result i32)
+  (local $buf i32) (local $i i64) (local $c i32) (local $carry i32) (local $class i32)
+  (local $out_ptr i32) (local $out_len i64) (local $np i32) (local $nl i64)
+  (if (i64.le_s (local.get $delta) (i64.const 0))                 ;; -- : deprecate, never edit
+    (then
+      (if (i64.eqz (local.get $len))
+        (then
+          (call $__rt_depr_dec_empty)
+          (return (call $__rt_mixed_from_value (i64.const 0) (i64.const -1) (i64.const 0)))))
+      (call $__rt_depr_dec_str)
+      (call $__rt_str_persist (local.get $ptr) (local.get $len))
+      (local.set $nl)
+      (local.set $np)
+      (return (call $__rt_mixed_from_value (i64.const 1)
+        (i64.extend_i32_u (local.get $np)) (local.get $nl)))))
+  (call $__rt_depr_inc_str)
+  (if (i64.eqz (local.get $len))                                  ;; ""++ is the STRING "1"
+    (then
+      (i32.store8 (global.get $__float_scratch) (i32.const 49))
+      (call $__rt_str_persist (global.get $__float_scratch) (i64.const 1))
+      (local.set $nl)
+      (local.set $np)
+      (return (call $__rt_mixed_from_value (i64.const 1)
+        (i64.extend_i32_u (local.get $np)) (local.get $nl)))))
+  ;; Working copy at buf+1: byte 0 is reserved for the possible prepend.
+  (local.set $buf (call $__rt_heap_alloc (i32.add (i32.wrap_i64 (local.get $len)) (i32.const 1))))
+  (memory.copy (i32.add (local.get $buf) (i32.const 1)) (local.get $ptr) (i32.wrap_i64 (local.get $len)))
+  (local.set $i (i64.sub (local.get $len) (i64.const 1)))
+  (local.set $carry (i32.const 1))
+  (local.set $class (i32.const 0))
+  (block $done (loop $walk
+    (br_if $done (i64.lt_s (local.get $i) (i64.const 0)))
+    (local.set $c (i32.load8_u (i32.add (i32.add (local.get $buf) (i32.const 1)) (i32.wrap_i64 (local.get $i)))))
+    ;; wrap positions carry on: z->a, Z->A, 9->0
+    (if (i32.eq (local.get $c) (i32.const 122))                   ;; 'z'
+      (then
+        (i32.store8 (i32.add (i32.add (local.get $buf) (i32.const 1)) (i32.wrap_i64 (local.get $i))) (i32.const 97))
+        (local.set $class (i32.const 97))
+        (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+        (br $walk)))
+    (if (i32.eq (local.get $c) (i32.const 90))                    ;; 'Z'
+      (then
+        (i32.store8 (i32.add (i32.add (local.get $buf) (i32.const 1)) (i32.wrap_i64 (local.get $i))) (i32.const 65))
+        (local.set $class (i32.const 65))
+        (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+        (br $walk)))
+    (if (i32.eq (local.get $c) (i32.const 57))                    ;; '9'
+      (then
+        (i32.store8 (i32.add (i32.add (local.get $buf) (i32.const 1)) (i32.wrap_i64 (local.get $i))) (i32.const 48))
+        (local.set $class (i32.const 49))
+        (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+        (br $walk)))
+    ;; any other alphanumeric byte absorbs the carry
+    (if (i32.or
+          (i32.or
+            (i32.and (i32.ge_u (local.get $c) (i32.const 97)) (i32.lt_u (local.get $c) (i32.const 122)))
+            (i32.and (i32.ge_u (local.get $c) (i32.const 65)) (i32.lt_u (local.get $c) (i32.const 90))))
+          (i32.and (i32.ge_u (local.get $c) (i32.const 48)) (i32.lt_u (local.get $c) (i32.const 57))))
+      (then
+        (i32.store8 (i32.add (i32.add (local.get $buf) (i32.const 1)) (i32.wrap_i64 (local.get $i)))
+          (i32.add (local.get $c) (i32.const 1)))
+        (local.set $carry (i32.const 0))
+        (br $done)))
+    ;; non-alphanumeric: the carry is DROPPED, wraps made so far stay
+    (local.set $carry (i32.const 0))
+    (br $done)))
+  (if (result i32 i64) (i32.and (local.get $carry) (i32.ne (local.get $class) (i32.const 0)))
+    (then                                                         ;; carry past the start: prepend
+      (i32.store8 (local.get $buf) (local.get $class))
+      (local.get $buf)
+      (i64.add (local.get $len) (i64.const 1)))
+    (else
+      (i32.add (local.get $buf) (i32.const 1))
+      (local.get $len)))
+  (local.set $out_len)
+  (local.set $out_ptr)
+  (call $__rt_str_persist (local.get $out_ptr) (local.get $out_len))
+  (local.set $nl)
+  (local.set $np)
+  (call $__rt_heap_free (local.get $buf))
+  (call $__rt_mixed_from_value (i64.const 1)
+    (i64.extend_i32_u (local.get $np)) (local.get $nl)))
+"#
+    .to_string()
+}
 
 /// `__rt_mixed_cmp_mixed`: php-src's `zend_compare` between two boxed cells.
 ///

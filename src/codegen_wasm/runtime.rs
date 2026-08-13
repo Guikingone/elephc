@@ -331,7 +331,29 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_FILE_GET_CONTENTS_FAILED.len() as u32
     + WARN_CONSTANT_DEFINED_PREFIX.len() as u32
     + WARN_CONSTANT_DEFINED_SUFFIX.len() as u32
-    + WARN_CONSTANT_DEFINED_SUFFIX_PHP9.len() as u32;
+    + WARN_CONSTANT_DEFINED_SUFFIX_PHP9.len() as u32
+    + WARN_INC_BOOL.len() as u32
+    + WARN_DEC_BOOL.len() as u32
+    + WARN_DEC_NULL.len() as u32
+    + DEPRECATED_INC_STR.len() as u32
+    + DEPRECATED_DEC_STR.len() as u32
+    + DEPRECATED_DEC_EMPTY.len() as u32;
+
+/// PHP's `++`/`--` diagnostics, measured on php-src 8.5.6. A bool or null operand
+/// keeps its value and WARNS; a non-numeric string keeps (or perl-increments) its
+/// value and DEPRECATES. The empty string is its own case in each direction.
+const WARN_INC_BOOL: &[u8] =
+    b"Warning: Increment on type bool has no effect, this will change in the next major version of PHP\n";
+const WARN_DEC_BOOL: &[u8] =
+    b"Warning: Decrement on type bool has no effect, this will change in the next major version of PHP\n";
+const WARN_DEC_NULL: &[u8] =
+    b"Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n";
+const DEPRECATED_INC_STR: &[u8] =
+    b"Deprecated: Increment on non-numeric string is deprecated, use str_increment() instead\n";
+const DEPRECATED_DEC_STR: &[u8] =
+    b"Deprecated: Decrement on non-numeric string has no effect and is deprecated\n";
+const DEPRECATED_DEC_EMPTY: &[u8] =
+    b"Deprecated: Decrement on empty string is deprecated as non-numeric\n";
 
 /// Name of the mutable global holding the `@` suppression DEPTH.
 pub(super) const DIAG_SUPPRESS_GLOBAL: &str = "__diag_suppress";
@@ -687,6 +709,13 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_CONSTANT_DEFINED_PREFIX,
         WARN_CONSTANT_DEFINED_SUFFIX,
         WARN_CONSTANT_DEFINED_SUFFIX_PHP9,
+        // Appended LAST for the same reason as every group above it.
+        WARN_INC_BOOL,
+        WARN_DEC_BOOL,
+        WARN_DEC_NULL,
+        DEPRECATED_INC_STR,
+        DEPRECATED_DEC_STR,
+        DEPRECATED_DEC_EMPTY,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -749,12 +778,38 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     );
     emit_foreach_warning_runtime(wm, &warning_offsets[53..55]);
     emit_constant_redefinition_warning(wm, &warning_offsets[57..60]);
+    emit_inc_dec_diag_runtime(wm, &warning_offsets[60..66]);
     emit_arithmetic_coercion_runtime(
         wm,
         &warning_offsets[55..57],
         &warning_offsets[5..7],
         warning_offsets[33],
     );
+}
+
+/// Emits the six `++`/`--` diagnostic helpers, one per measured PHP message.
+///
+/// Value semantics live in `__rt_mixed_inc_dec`; these only write the fixed text,
+/// each behind the shared `@` suppression guard.
+fn emit_inc_dec_diag_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 6);
+    for (name, (ptr, len)) in [
+        "__rt_warn_inc_bool",
+        "__rt_warn_dec_bool",
+        "__rt_warn_dec_null",
+        "__rt_depr_inc_str",
+        "__rt_depr_dec_str",
+        "__rt_depr_dec_empty",
+    ]
+    .into_iter()
+    .zip(offsets)
+    {
+        wm.add_raw_func(&format!(
+            r#"(func ${name}
+  (if (global.get $__diag_suppress) (then (return)))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {ptr}) (i32.const {len})))"#
+        ));
+    }
 }
 
 /// Emits the warning `foreach` produces for a value that is neither an array nor an object.

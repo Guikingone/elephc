@@ -3832,6 +3832,71 @@ mod tests {
         }
     }
 
+    /// Verifies `++` on strings carries and wraps the way php does: `"z"` wraps to a
+    /// prepended `"aa"`, `"9"` converts numerically to int 10, and `"Zz9"` carries
+    /// through all three character classes to `"AAa0"`.
+    #[test]
+    fn str_inc_dec_carries_and_wraps_like_php() {
+        let mut module = Module::new(Target::wasm());
+        let cases = [("z", "aa"), ("9", "10"), ("Zz9", "AAa0")];
+        let ids: Vec<_> = cases
+            .iter()
+            .map(|(seed, _)| module.data.intern_string(seed))
+            .collect();
+        let sep = module.data.intern_string("|");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            for id in ids {
+                let seed = b.emit_const_str(id);
+                let bumped = b
+                    .emit(
+                        Op::StrIncDec,
+                        vec![seed],
+                        Some(Immediate::I64(1)),
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![bumped],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = b.emit(
+                    Op::Release,
+                    vec![bumped],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let s = b.emit_const_str(sep);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![s],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "aa|10|AAa0|");
+        }
+    }
+
     /// Verifies `strlen` of a string literal returns the byte length (the literal's
     /// data-segment length), checked via `wasmer --invoke`.
     #[test]

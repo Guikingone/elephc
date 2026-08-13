@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use crate::codegen_support::platform::{Platform, Target, TargetKind};
+use crate::codegen_support::platform::{Platform, Target};
 use crate::types::PhpType;
 
 /// Alignment every common symbol is emitted with: 8 bytes, i.e. `2^3`.
@@ -246,14 +246,14 @@ impl DataSection {
 #[cfg(test)]
 mod tests {
     use super::DataSection;
-    use crate::codegen_support::platform::{Arch, Platform, Target, TargetKind};
+    use crate::codegen_support::platform::{Arch, Platform, Target};
 
     /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
     fn macos() -> Target {
         Target {
             platform: Platform::MacOS,
             arch: Arch::AArch64,
-            kind: TargetKind::Native,
+            kind: crate::codegen_support::platform::TargetKind::Native,
         }
     }
 
@@ -262,7 +262,7 @@ mod tests {
         Target {
             platform: Platform::Linux,
             arch,
-            kind: TargetKind::Native,
+            kind: crate::codegen_support::platform::TargetKind::Native,
         }
     }
 

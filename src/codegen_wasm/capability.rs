@@ -458,6 +458,7 @@ fn check_instruction_shape(
         Op::IToStr => int_like_to_string_shape_issue(function, inst),
         Op::StrictEq | Op::StrictNotEq => strict_compare_shape_issue(function, inst),
         Op::IsTruthy => truthiness_shape_issue(module, function, inst),
+        Op::StrIncDec => str_inc_dec_shape_issue(function, inst),
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
@@ -2269,6 +2270,43 @@ fn exact_scalar_cast_pair(
 /// `"0.0"` being TRUE and `-0.0` FALSE included. What was missing is the warning a NaN raises on
 /// the way to `true`, and that goes through WASI: a reactor module has no stderr to write it to,
 /// so it keeps the refusal rather than answering silently where php-src speaks.
+/// Validates `Op::StrIncDec`: the operand is a BOXED cell or a concrete string, and the
+/// result is always a boxed cell — `"9"++` is int(10), so no concrete slot can hold both
+/// outcomes. Anything else reaching the helper would be read as a cell POINTER.
+fn str_inc_dec_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [source] = inst.operands.as_slice() else {
+        return Some(format!(
+            "str_inc_dec takes one operand, got {}",
+            inst.operands.len()
+        ));
+    };
+    let value = function.value(*source)?;
+    let operand_ok = matches!(
+        (value.ir_type, value.php_type.codegen_repr()),
+        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed) | (IrType::Str, PhpType::Str)
+    );
+    if !operand_ok {
+        return Some(format!(
+            "str_inc_dec operand is {:?}/{:?}, expected a boxed cell or a string",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || inst.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "str_inc_dec result is {:?}/{:?}, expected a boxed cell",
+            inst.result_type,
+            inst.result_php_type.codegen_repr()
+        ));
+    }
+    if !matches!(inst.immediate, Some(Immediate::I64(1 | -1))) {
+        return Some("str_inc_dec delta must be +1 or -1".to_string());
+    }
+    None
+}
+
 fn truthiness_shape_issue(
     module: &Module,
     function: &Function,
@@ -7961,6 +7999,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::MixedBox
         | Op::MixedTagOf
         | Op::StrConcat
+        | Op::StrIncDec
         | Op::StrLen
         | Op::StrPersist
         | Op::ArrayToMixed
@@ -8157,7 +8196,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ICheckedSubToInt
         | Op::ICheckedMulToInt
         | Op::ICheckedPow
-        | Op::StrIncDec
         | Op::MixedClone
         | Op::ArrayGetForWrite
         | Op::HashGetForWrite
