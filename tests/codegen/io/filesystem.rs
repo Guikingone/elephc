@@ -185,6 +185,50 @@ echo "survived:", count($entries);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `scandir()` reports an unopenable directory the way php does — and stays SILENT
+/// when the directory opens.
+///
+/// php-src writes TWO lines for one failure, the second naming the error number, and elephc
+/// wrote neither: the failure was completely mute, so a typo'd path produced an empty listing
+/// and no clue. Neither line needed a composer of its own, because `__rt_errno_warning` already
+/// appends `strerror` and the newline and so serves as the tail of both.
+///
+/// The successful call at the end is not padding. The failure block was first placed after the
+/// `closedir` that ends the read loop, so the SUCCESS path fell straight into it and every
+/// working `scandir()` printed a warning carrying a stale errno. Only a probe that exercised a
+/// directory which opens could catch that, and the first one did.
+///
+/// `@` suppression and the 3000-iteration loop are asserted together: the error number is
+/// rendered by `__rt_itoa`, which formats into the shared 64 KiB concat arena and advances its
+/// cursor, so a loop over unreadable paths would eat the buffer if the diagnostic did not hand
+/// its scratch back.
+#[test]
+fn test_scandir_reports_an_unopenable_directory_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+scandir("/pas/la");
+scandir("/etc/hosts");
+@scandir("/pas/la");
+for ($i = 0; $i < 3000; $i++) {
+    @scandir("/pas/la/deep/path/number/$i");
+}
+$here = scandir(".");
+echo "opened=", (count($here) > 0 ? "yes" : "no"), "\n";
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(out.stdout, "opened=yes\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: scandir(/pas/la): Failed to open directory: No such file or directory\n\
+         Warning: scandir(): (errno 2): No such file or directory\n\
+         Warning: scandir(/etc/hosts): Failed to open directory: Not a directory\n\
+         Warning: scandir(): (errno 20): Not a directory\n",
+        "both lines, both error numbers, nothing from the suppressed calls, \
+         and nothing at all from the directory that opened"
+    );
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

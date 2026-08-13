@@ -8,7 +8,11 @@
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::{
+    SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE, SCANDIR_OPEN_WARNING_HEAD,
+    SCANDIR_OPEN_WARNING_MIDDLE,
+};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_scandir` runtime helper for listing directory entries.
 ///
@@ -26,15 +30,24 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     }
 
     let name_off = emitter.platform.dirent_name_offset();
+    // libc `opendir` reports failure through errno, and the thread-local accessor is spelled
+    // differently per platform — the same split `mb_strlen` and the flock helpers already carry.
+    let errno_function = match emitter.platform {
+        crate::codegen_support::platform::Platform::MacOS => "__error",
+        crate::codegen_support::platform::Platform::Linux => "__errno_location",
+        crate::codegen_support::platform::Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)")
+        }
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
     emitter.label_global("__rt_scandir");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #48");                                     // allocate 48 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate the frame, with two slots for the failure diagnostic
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
 
     // -- null-terminate path --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
@@ -52,7 +65,7 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     // A directory that cannot be opened returns NULL, and the loop below fed that straight to
     // readdir(): scandir() on a missing path took the process down with it. x86_64 already
     // guarded this, so the crash only ever happened on AArch64.
-    emitter.instruction("cbz x0, __rt_scandir_ret");                            // opendir() failed: return the empty listing
+    emitter.instruction("cbz x0, __rt_scandir_open_failed");                    // opendir() failed: say so the way php does
     emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
 
     // -- read directory entries in a loop --
@@ -85,12 +98,65 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
     emitter.bl_c("closedir");                                        // closedir(DIR*)
+    emitter.instruction("b __rt_scandir_ret");                                  // a directory that opened has nothing to warn about
+
+    // -- the two lines php prints for a directory it cannot open --
+    // Neither needs a composer of its own. `__rt_errno_warning` already appends `strerror` and
+    // the newline, so it serves as the TAIL of both and only the beginning differs. Falls
+    // through to the ordinary return, which still answers the empty listing.
+    emitter.label("__rt_scandir_open_failed");
+    emitter.bl_c(errno_function);                                               // x0 = &errno for this thread
+    emitter.instruction("ldrsw x9, [x0]");                                      // the errno libc opendir() set
+    emitter.instruction("str x9, [sp, #32]");                                   // hold it across every fragment
+
+    // -- "Warning: scandir(" --
+    abi::emit_symbol_address(emitter, "x1", "_scandir_open_warn_head");
+    emitter.instruction(&format!("mov x2, #{}", SCANDIR_OPEN_WARNING_HEAD.len()));
+    emitter.instruction("bl __rt_diag_warning");                                // warnings honour the @ suppression depth
+    // -- the path, measured to its terminator --
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the NUL-terminated C path
+    emitter.instruction("mov x9, #0");                                          // measured length
+    emitter.label("__rt_scandir_path_scan");
+    emitter.instruction("ldrb w10, [x1, x9]");                                  // load the next path byte
+    emitter.instruction("cbz w10, __rt_scandir_path_scanned");                  // reached the terminator
+    emitter.instruction("add x9, x9, #1");                                      // keep measuring
+    emitter.instruction("b __rt_scandir_path_scan");
+    emitter.label("__rt_scandir_path_scanned");
+    emitter.instruction("mov x2, x9");                                          // the measured byte length
+    emitter.instruction("bl __rt_diag_warning");
+    // -- "): Failed to open directory: " + strerror + newline --
+    abi::emit_symbol_address(emitter, "x0", "_scandir_open_warn_mid");
+    emitter.instruction(&format!("mov x1, #{}", SCANDIR_OPEN_WARNING_MIDDLE.len()));
+    emitter.instruction("ldr x2, [sp, #32]");                                   // the errno to describe
+    emitter.instruction("bl __rt_errno_warning");
+
+    // -- "Warning: scandir(): (errno " --
+    abi::emit_symbol_address(emitter, "x1", "_scandir_errno_warn_head");
+    emitter.instruction(&format!("mov x2, #{}", SCANDIR_ERRNO_WARNING_HEAD.len()));
+    emitter.instruction("bl __rt_diag_warning");
+    // -- the number itself. `__rt_itoa` formats into the shared concat arena and ADVANCES its
+    //    cursor, so the entry value is restored afterwards: a loop over unreadable directories
+    //    would otherwise eat the 64 KiB buffer a few bytes at a time.
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // the caller's concat write offset
+    emitter.instruction("str x10, [sp, #40]");                                  // hold it across the conversion
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the errno to render
+    emitter.instruction("bl __rt_itoa");                                        // x1/x2 = its decimal text
+    emitter.instruction("bl __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #40]");
+    emitter.instruction("str x10, [x9]");                                       // reclaim the diagnostic's scratch
+    // -- "): " + strerror + newline --
+    abi::emit_symbol_address(emitter, "x0", "_scandir_errno_warn_mid");
+    emitter.instruction(&format!("mov x1, #{}", SCANDIR_ERRNO_WARNING_MIDDLE.len()));
+    emitter.instruction("ldr x2, [sp, #32]");
+    emitter.instruction("bl __rt_errno_warning");
 
     // -- restore frame and return --
     emitter.label("__rt_scandir_ret");
     emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -102,6 +168,14 @@ pub fn emit_scandir(emitter: &mut Emitter) {
  /// before the next `readdir` call clobbers the `dirent` buffer.
 fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     let name_off = emitter.platform.dirent_name_offset();
+    // See the AArch64 counterpart: the thread-local errno accessor is spelled per platform.
+    let errno_function = match emitter.platform {
+        crate::codegen_support::platform::Platform::MacOS => "__error",
+        crate::codegen_support::platform::Platform::Linux => "__errno_location",
+        crate::codegen_support::platform::Platform::Windows => {
+            panic!("Windows target is not yet supported (see issue #379)")
+        }
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: scandir ---");
@@ -109,7 +183,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the C path pointer, result array pointer, DIR* handle, and loop scratch
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, and the failure diagnostic
     emitter.instruction("call __rt_cstr");                                      // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
@@ -120,7 +194,7 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call opendir");                                        // open the directory stream through libc opendir()
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the DIR* handle across the readdir() loop and the final closedir() call
     emitter.instruction("test rax, rax");                                       // detect opendir() failure before entering the directory iteration loop
-    emitter.instruction("jz __rt_scandir_ret");                                 // return the empty result array when the directory stream cannot be opened
+    emitter.instruction("jz __rt_scandir_open_failed_x");                       // say why the directory stream could not be opened, the way php does
 
     emitter.label("__rt_scandir_loop");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before asking libc for the next directory entry
@@ -145,6 +219,59 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
     emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
+    emitter.instruction("jmp __rt_scandir_ret");                                // a directory that opened has nothing to warn about
+
+    // -- the two lines php prints for a directory it cannot open; see the AArch64 counterpart --
+    emitter.label("__rt_scandir_open_failed_x");
+    emitter.instruction(&format!("call {errno_function}"));                     // rax = &errno for this thread
+    emitter.instruction("movsxd rax, DWORD PTR [rax]");                         // the errno libc opendir() set
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // hold it across every fragment
+
+    // -- "Warning: scandir(" --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_open_warn_head");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_OPEN_WARNING_HEAD.len()));
+    emitter.instruction("call __rt_diag_warning");                              // warnings honour the @ suppression depth
+    // -- the path, measured to its terminator --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the NUL-terminated C path
+    emitter.instruction("xor ecx, ecx");                                        // measured length
+    emitter.label("__rt_scandir_path_scan_x");
+    emitter.instruction("movzx eax, BYTE PTR [rdi + rcx]");                     // load the next path byte
+    emitter.instruction("test al, al");
+    emitter.instruction("jz __rt_scandir_path_scanned_x");                      // reached the terminator
+    emitter.instruction("add rcx, 1");                                          // keep measuring
+    emitter.instruction("jmp __rt_scandir_path_scan_x");
+    emitter.label("__rt_scandir_path_scanned_x");
+    emitter.instruction("mov rsi, rcx");                                        // the measured byte length
+    emitter.instruction("call __rt_diag_warning");
+    // -- "): Failed to open directory: " + strerror + newline --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_open_warn_mid");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_OPEN_WARNING_MIDDLE.len()));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // the errno to describe
+    emitter.instruction("call __rt_errno_warning");
+
+    // -- "Warning: scandir(): (errno " --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_errno_warn_head");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_ERRNO_WARNING_HEAD.len()));
+    emitter.instruction("call __rt_diag_warning");
+    // -- the number itself, with the concat cursor reclaimed afterwards --
+    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // the caller's concat write offset
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // hold it across the conversion
+    // `__rt_itoa` reads `rax`, not the SysV first-argument register: the runtime's formatting
+    // helpers are the rax-first family, as `__rt_mixed_cast_string` and `__rt_heap_free` are.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the errno to render
+    emitter.instruction("call __rt_itoa");                                      // rax/rdx = its decimal text
+    emitter.instruction("mov rdi, rax");                                        // the diagnostic helper takes rdi/rsi
+    emitter.instruction("mov rsi, rdx");
+    emitter.instruction("call __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // reclaim the diagnostic's scratch
+    // -- "): " + strerror + newline --
+    abi::emit_symbol_address(emitter, "rdi", "_scandir_errno_warn_mid");
+    emitter.instruction(&format!("mov rsi, {}", SCANDIR_ERRNO_WARNING_MIDDLE.len()));
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_errno_warning");
 
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register

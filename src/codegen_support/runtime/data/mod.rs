@@ -132,6 +132,24 @@ pub(crate) const DISK_FREE_SPACE_WARNING: &str = "Warning: disk_free_space(): ";
 /// The `disk_total_space()` form of [`DISK_FREE_SPACE_WARNING`].
 pub(crate) const DISK_TOTAL_SPACE_WARNING: &str = "Warning: disk_total_space(): ";
 
+/// Head of the first warning `scandir()` prints for a directory it cannot open.
+///
+/// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No
+/// such file or directory` then `scandir(): (errno 2): No such file or directory` — and elephc
+/// wrote neither, answering an empty listing in complete silence. Neither line needs a composer
+/// of its own: `__rt_errno_warning` already appends `strerror` and the newline, so it serves as
+/// the TAIL of both and only the beginning differs.
+pub(crate) const SCANDIR_OPEN_WARNING_HEAD: &str = "Warning: scandir(";
+
+/// The text between the path and the reason in [`SCANDIR_OPEN_WARNING_HEAD`]'s line.
+pub(crate) const SCANDIR_OPEN_WARNING_MIDDLE: &str = "): Failed to open directory: ";
+
+/// Head of the second warning, which names the error NUMBER rather than the path.
+pub(crate) const SCANDIR_ERRNO_WARNING_HEAD: &str = "Warning: scandir(): (errno ";
+
+/// The text between the error number and the reason.
+pub(crate) const SCANDIR_ERRNO_WARNING_MIDDLE: &str = "): ";
+
 /// The text between the caller's name and the scheme in PHP's unknown-wrapper warning.
 ///
 /// PHP emits TWO warnings for `fopen("bogus://x", "r")`: this one naming the scheme, then the
