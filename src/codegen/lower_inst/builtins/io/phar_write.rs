@@ -84,6 +84,20 @@ fn emit_file_put_contents_filter_route(
     let boxed = ctx.next_label("fpc_filter_boxed");
     let failed = ctx.next_label("fpc_filter_failed");
     load_string_to_result(ctx, path, "file_put_contents filename")?;
+    // `w` and `a` both name the write direction and nothing else, so a prefix-less filter list
+    // is applied exactly once here — which is how many times php warns for a name it cannot
+    // resolve. Published before the parse, which is what reads it back for the report.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, #2");                              // file_put_contents writes
+            abi::emit_symbol_address(ctx.emitter, "x10", "_php_filter_open_dirs");
+            ctx.emitter.instruction("str x9, [x10]");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", "_php_filter_open_dirs");
+            ctx.emitter.instruction("mov QWORD PTR [r10], 2");                  // file_put_contents writes
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the URL, for the failure warning
@@ -130,6 +144,7 @@ fn emit_file_put_contents_filter_route(
             box_stream_fd_or_false_result(ctx, "fpc_filter");
             abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: x9/x10 only
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+            super::fopen_core::emit_php_filter_unknown_report(ctx, "file_put_contents");
             ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
             ctx.emitter.instruction("cmp x9, #9");
             ctx.emitter.instruction(&format!("b.ne {}", failed));
@@ -215,6 +230,7 @@ fn emit_file_put_contents_filter_route(
             box_stream_fd_or_false_result(ctx, "fpc_filter");
             abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: r10 only
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+            super::fopen_core::emit_php_filter_unknown_report(ctx, "file_put_contents");
             ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
             ctx.emitter.instruction("cmp r9, 9");
             ctx.emitter.instruction(&format!("jne {}", failed));

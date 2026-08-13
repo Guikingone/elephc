@@ -271,7 +271,9 @@ pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use socket_errno::emit_socket_strerror;
 pub(crate) use php_wrapper_open::emit_php_wrapper_open;
-pub(crate) use php_filter_dynamic::{PHP_FILTER_PENDING_MAX, emit_php_filter_dynamic};
+pub(crate) use php_filter_dynamic::{
+    PHP_FILTER_OPEN_DEPTH_MAX, PHP_FILTER_PENDING_MAX, emit_php_filter_dynamic,
+};
 pub(crate) use data_stream_dynamic::emit_data_stream_dynamic;
 pub(crate) use pclose::emit_pclose;
 pub(crate) use popen::emit_popen;

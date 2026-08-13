@@ -471,6 +471,7 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         ctx,
         "_diag_open_failed_file_prefix",
         "Warning: file(",
+        "file",
     )?;
     emit_file_flags_then_call(ctx, flags, "__rt_file")?;
     abi::emit_jump(ctx.emitter, &after);

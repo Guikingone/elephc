@@ -22,6 +22,7 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) -> R
         ctx,
         "_diag_open_failed_readfile_prefix",
         "Warning: readfile(",
+        "readfile",
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

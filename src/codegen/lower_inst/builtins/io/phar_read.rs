@@ -106,6 +106,7 @@ fn emit_file_get_contents_bytes(
             ctx,
             "_diag_open_failed_fgc_prefix",
             "Warning: file_get_contents(",
+            "file_get_contents",
         )?)
     } else {
         None

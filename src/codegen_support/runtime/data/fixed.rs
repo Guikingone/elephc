@@ -23,6 +23,8 @@ use super::{
     GAI_MSG_MIDDLE, GAI_MSG_PREFIX, SOCKET_GAI_MSG_CAPACITY,
     DIAG_NEWLINE, DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING,
     FGC_FILTER_FAIL_TAIL,
+    PF_WARN_CREATE_END, PF_WARN_CREATE_MID, PF_WARN_HEAD, PF_WARN_LOCATE_END,
+    PF_WARN_LOCATE_MID, PF_WARN_OPEN_MID,
     SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE,
     SCANDIR_OPEN_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE,
     DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
@@ -160,6 +162,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_fpc_mode_w", "w"),
         ("_fpc_mode_a", "a"),
         ("_fgc_filter_fail_tail", FGC_FILTER_FAIL_TAIL),
+        ("_pf_w_head", PF_WARN_HEAD),
+        ("_pf_w_locate_mid", PF_WARN_LOCATE_MID),
+        ("_pf_w_locate_end", PF_WARN_LOCATE_END),
+        ("_pf_w_create_mid", PF_WARN_CREATE_MID),
+        ("_pf_w_create_end", PF_WARN_CREATE_END),
+        ("_pf_w_open_mid", PF_WARN_OPEN_MID),
         ("_scandir_open_warn_head", SCANDIR_OPEN_WARNING_HEAD),
         ("_scandir_open_warn_mid", SCANDIR_OPEN_WARNING_MIDDLE),
         ("_scandir_errno_warn_head", SCANDIR_ERRNO_WARNING_HEAD),
@@ -1258,6 +1266,45 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_php_filter_pending_mode", 8, target));
     out.push_str(&comm_directive("_php_filter_res_ptr", 8, target));
     out.push_str(&comm_directive("_php_filter_res_len", 8, target));
+    // The ORIGINAL URL, kept because the swap replaces the caller's filename with the resource
+    // and php names the WHOLE URL when the open fails. A non-null pointer is also the only
+    // honest "the last parse saw a filter URL" flag: `_php_filter_pending_mode` reads 0 exactly
+    // when every name in the chain failed to resolve, which is a filter URL, not a plain path.
+    out.push_str(&comm_directive("_php_filter_url_ptr", 8, target));
+    out.push_str(&comm_directive("_php_filter_url_len", 8, target));
+    // The names that resolved to NO filter, as spans into the URL. php warns twice for each,
+    // and the run-time parse used to drop them where the literal parse now reports them.
+    out.push_str(&comm_directive(
+        "_php_filter_unknown_ptr",
+        crate::codegen_support::runtime::io::PHP_FILTER_PENDING_MAX * 8,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_php_filter_unknown_len",
+        crate::codegen_support::runtime::io::PHP_FILTER_PENDING_MAX * 8,
+        target,
+    ));
+    out.push_str(&comm_directive("_php_filter_unknown_count", 8, target));
+    // The direction the URL's OWN prefix named: 1 = `read=`, 2 = `write=`, 3 = no prefix.
+    // Kept apart from `_php_filter_pending_mode`, which is zeroed when nothing resolved.
+    out.push_str(&comm_directive("_php_filter_url_dir", 8, target));
+    // The directions the OPEN MODE selects: bit 0 = read, bit 1 = write. php applies a
+    // prefix-less filter list once per direction it applies, so `r+` warns twice per unknown
+    // name and `x` — a mode naming neither — warns not at all.
+    out.push_str(&comm_directive("_php_filter_open_dirs", 8, target));
+    // One frame per filtered open IN FLIGHT. A user wrapper's `stream_open` is PHP and may open
+    // something itself, and that inner open republishes the single-slot hand-off above; each
+    // open therefore saves the URL it must name — and, by saving a null for a non-filter open,
+    // whether it opened a suppression scope at all — and reads its OWN frame back on the way
+    // out, instead of a global another open has since overwritten.
+    for symbol in ["_php_filter_open_url_ptr", "_php_filter_open_url_len"] {
+        out.push_str(&comm_directive(
+            symbol,
+            crate::codegen_support::runtime::io::PHP_FILTER_OPEN_DEPTH_MAX * 8,
+            target,
+        ));
+    }
+    out.push_str(&comm_directive("_php_filter_open_depth", 8, target));
     // Needles the parse matches, kept as data so one spelling serves both assembly emitters.
     out.push_str(".globl _pf_n_prefix\n_pf_n_prefix:\n    .ascii \"php://filter/\"\n");
     out.push_str(".globl _pf_n_read\n_pf_n_read:\n    .ascii \"read=\"\n");

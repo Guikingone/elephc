@@ -140,6 +140,26 @@ pub(crate) const DISK_TOTAL_SPACE_WARNING: &str = "Warning: disk_total_space(): 
 /// open.
 pub(crate) const FGC_FILTER_FAIL_TAIL: &str = "): Failed to open stream: operation failed\n";
 
+/// The fragments a run-time `php://filter` diagnostic is composed from.
+///
+/// php names the CALLING function in every one of these — `fopen(): Unable to locate filter
+/// "x"`, `file_get_contents(): Unable to create filter (x)` — and the name is the only part
+/// that varies, so the surrounding text is interned once and the caller supplies the middle.
+/// Both lines exist because php-src prints one from `php_stream_filter_create`
+/// (main/streams/filter.c) and the next from `php_stream_apply_filter_list`, and neither
+/// cancels the open.
+pub(crate) const PF_WARN_HEAD: &str = "Warning: ";
+/// Between the callee name and the name php could not resolve.
+pub(crate) const PF_WARN_LOCATE_MID: &str = "(): Unable to locate filter \"";
+/// Closes the `locate` line.
+pub(crate) const PF_WARN_LOCATE_END: &str = "\"\n";
+/// Between the callee name and the name php could not create a filter from.
+pub(crate) const PF_WARN_CREATE_MID: &str = "(): Unable to create filter (";
+/// Closes the `create` line.
+pub(crate) const PF_WARN_CREATE_END: &str = ")\n";
+/// Opens the failed-open line, between the callee name and the URL it names.
+pub(crate) const PF_WARN_OPEN_MID: &str = "(";
+
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///
 /// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No

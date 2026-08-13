@@ -6514,6 +6514,12 @@ unlink("rtchain.txt");
 /// URL with the wrapper's generic `operation failed`, not the inner opener and the bare
 /// resource path — the inner warning is suppressed through the same depth counter `@` uses,
 /// so the `@`-suppressed probe must print nothing at all.
+///
+/// The `no.such|missing.too` read once expected NO output at all, which was this test reading
+/// the implementation back to itself: the run-time parse dropped a name it could not resolve
+/// without a word. `php -n` 8.5.6 on this exact script prints four lines for it — two per name,
+/// `Unable to locate filter` then `Unable to create filter`, in chain order — and still returns
+/// the file's bytes, so the expectation below is php's, not elephc's.
 #[test]
 fn test_file_get_contents_reads_a_run_time_filter_url() {
     let out = compile_and_run_capture(
@@ -6535,9 +6541,13 @@ unlink("fgcrt.txt");
     );
     assert_eq!(
         out.stderr,
-        "Warning: file_get_contents(php://filter/read=string.toupper/resource=absent.txt): \
+        "Warning: file_get_contents(): Unable to locate filter \"no.such\"\n\
+         Warning: file_get_contents(): Unable to create filter (no.such)\n\
+         Warning: file_get_contents(): Unable to locate filter \"missing.too\"\n\
+         Warning: file_get_contents(): Unable to create filter (missing.too)\n\
+         Warning: file_get_contents(php://filter/read=string.toupper/resource=absent.txt): \
          Failed to open stream: operation failed\n",
-        "one warning, php's wording, from the unsuppressed failure only"
+        "php's wording throughout: two lines per unresolvable name, then the unsuppressed failure"
     );
 }
 
@@ -10289,4 +10299,292 @@ echo ($c === false ? "false" : "resource");
         "expected PHP's connect warning, got stderr={}",
         out.stderr
     );
+}
+
+/// Verifies a FAILED open of a RUN-TIME `php://filter` URL names the URL, not the resource.
+///
+/// The literal spelling was fixed first; a URL assembled at run time still named the swapped
+/// RESOURCE with the inner opener's errno, because the swap replaces the filename before any
+/// opener runs and nothing downstream remembered what the program had written:
+/// `Warning: fopen(absent_dyn.txt): Failed to open stream: No such file or directory`.
+/// `php -n` 8.5.6 prints, for the same call, `Warning:
+/// fopen(php://filter/read=string.toupper/resource=absent_dyn.txt): Failed to open stream:
+/// operation failed` — php-src's `php_stream_url_wrap_php` returns NULL the moment the inner
+/// open fails, BEFORE a single filter is created, and the generic caller composes one fixed
+/// line from the URL it was handed.
+///
+/// `_php_filter_pending_mode` cannot gate this: it reads 0 exactly when the URL IS a filter URL
+/// whose every name failed to resolve, which is the second probe here. The parse publishes the
+/// URL itself and that pointer is the flag. The third probe pins that a PLAIN dynamic open still
+/// names itself with its own errno — the suppression the filter path opens must not leak.
+#[test]
+fn test_failed_run_time_filter_open_names_the_url_not_the_wrapped_resource() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$u = "php://filter/read=string.toupper/resource=" . "absent_dyn.txt";
+var_dump(fopen($u, "r"));
+$v = "php://filter/read=no.such/resource=" . "absent_dyn2.txt";
+var_dump(fopen($v, "r"));
+$p = "no_such_plain" . ".txt";
+var_dump(fopen($p, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(php://filter/read=string.toupper/resource=absent_dyn.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(php://filter/read=no.such/resource=absent_dyn2.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(no_such_plain.txt): Failed to open stream: No such file or directory\n",
+        "the URL for both filter URLs; the plain path keeps its own name and errno"
+    );
+}
+
+/// Verifies an unknown name in a RUN-TIME `php://filter` URL warns TWICE and keeps the stream.
+///
+/// The run-time parse published only the ids it HAD resolved, so a name it could not resolve was
+/// dropped in complete silence and nothing downstream could report it — a typo in a filter name
+/// became a silently unfiltered read. `php -n` 8.5.6 prints two lines per failed creation, one
+/// from `php_stream_filter_create` (main/streams/filter.c) and one from
+/// `php_stream_apply_filter_list`, and neither cancels the open:
+///
+/// ```text
+/// Warning: fopen(): Unable to locate filter "no.such.filter"
+/// Warning: fopen(): Unable to create filter (no.such.filter)
+/// bool(true)
+/// hello
+/// ```
+///
+/// The chain CONTINUES past a failure, which the second probe pins: it still uppercases while
+/// warning for both unknown names, in chain order.
+#[test]
+fn test_run_time_filter_unknown_name_warns_twice_and_keeps_the_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtu.txt", "hello");
+$res = "rtu" . ".txt";
+$u = "php://filter/read=no.such.filter/resource=" . $res;
+$h = fopen($u, "r");
+var_dump(is_resource($h));
+echo fread($h, 100), "|";
+$c = "php://filter/read=one.bad|string.toupper|two.bad/resource=" . $res;
+$g = fopen($c, "r");
+echo fread($g, 100), "\n";
+unlink("rtu.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nhello|HELLO\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
+         Warning: fopen(): Unable to create filter (no.such.filter)\n\
+         Warning: fopen(): Unable to locate filter \"one.bad\"\n\
+         Warning: fopen(): Unable to create filter (one.bad)\n\
+         Warning: fopen(): Unable to locate filter \"two.bad\"\n\
+         Warning: fopen(): Unable to create filter (two.bad)\n",
+        "two lines per unresolvable name, in chain order, with the known filter still applied"
+    );
+}
+
+/// Verifies the run-time report counts the DIRECTIONS php applies, not the names.
+///
+/// php-src walks the filter list once per direction it applies and reaches
+/// `php_stream_filter_create` again on the second walk, so the count is not one pair per name.
+/// Measured on `php -n` 8.5.6 with a prefix-less chain: `"r"` warns once per name, `"r+"` twice,
+/// and `"x"` — a mode naming neither direction — not at all, while the open still succeeds. An
+/// explicit `read=` list is applied exactly once whatever the mode, so the same name opened
+/// `"r+"` behind a `read=` prefix warns once. Six pairs in total.
+///
+/// The mode is read at RUN TIME, which the `$m = "r" . "+"` probe is here to force: `fopen($url,
+/// $mode)` reaches the dynamic path with BOTH assembled at run time, so a rule that only ever
+/// looked at a compile-time-literal mode would answer that line with half the warnings php
+/// prints and no test would notice.
+#[test]
+fn test_run_time_filter_warning_count_follows_the_open_mode_directions() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtd.txt", "x");
+$res = "rtd" . ".txt";
+$plain = "php://filter/no.such/resource=" . $res;
+fclose(fopen($plain, "r"));
+echo "-r\n";
+fclose(fopen($plain, "r+"));
+echo "-rplus\n";
+$fresh = "php://filter/no.such/resource=" . "rtdx.txt";
+fclose(fopen($fresh, "x"));
+echo "-x\n";
+$m = "r" . "+";
+fclose(fopen($plain, $m));
+echo "-dynmode\n";
+$explicit = "php://filter/read=no.such/resource=" . $res;
+fclose(fopen($explicit, "r+"));
+echo "-explicit\n";
+unlink("rtd.txt");
+unlink("rtdx.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "-r\n-rplus\n-x\n-dynmode\n-explicit\n");
+    let pair = "Warning: fopen(): Unable to locate filter \"no.such\"\n\
+                Warning: fopen(): Unable to create filter (no.such)\n";
+    assert_eq!(
+        out.stderr,
+        pair.repeat(6),
+        "one pair for `r`, two for `r+`, NONE for `x`, two for the run-time `r+`, one for `read=`"
+    );
+}
+
+/// Verifies a failed run-time filtered open prints its line ALONE, and `@` silences everything.
+///
+/// php never reaches the filters when the inner open fails — `php_stream_url_wrap_php` returns
+/// before creating any — so `php -n` 8.5.6 answers a URL that is BOTH unopenable and names an
+/// unresolvable filter with the failed-open line and nothing else. An empty segment names
+/// nothing and is skipped in silence on the success path, as `php_strtok_r` does, and `@`
+/// suppresses every one of these through the shared depth counter rather than a rule of its own.
+#[test]
+fn test_run_time_filter_failed_open_warns_alone_and_at_suppresses_everything() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rta.txt", "ok");
+$res = "rta" . ".txt";
+$bad = "php://filter/read=no.such/resource=" . "absent_rta.txt";
+var_dump(fopen($bad, "r"));
+var_dump(@fopen($bad, "r"));
+$u = "php://filter/read=no.such/resource=" . $res;
+var_dump(is_resource(@fopen($u, "r")));
+$empty = "php://filter/read=/resource=" . $res;
+$h = fopen($empty, "r");
+echo fread($h, 10), "\n";
+unlink("rta.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(true)\nok\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(php://filter/read=no.such/resource=absent_rta.txt): \
+         Failed to open stream: operation failed\n",
+        "the failed open speaks alone; `@` and an empty segment say nothing at all"
+    );
+}
+
+/// Verifies the path readers NAME THEMSELVES in the unresolvable-filter warnings.
+///
+/// php words these with the CALLING function — `file_get_contents(): Unable to locate filter`,
+/// `readfile(): Unable to create filter` — and every one of these routes said nothing at all.
+/// The literal `file_get_contents` route wrapped the shared emitter in diagnostic suppression,
+/// which silenced the unresolvable-name warnings along with the inner opener's it was aimed at;
+/// the run-time routes had no channel for the names the parse dropped. All five verdicts
+/// measured on `php -n` 8.5.6, and the first two lines pin that the LITERAL and the assembled
+/// spelling of the same URL now answer alike.
+#[test]
+fn test_path_readers_name_themselves_in_unresolvable_filter_warnings() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtc.txt", "hi\n");
+$res = "rtc" . ".txt";
+echo file_get_contents("php://filter/read=no.such/resource=rtc.txt");
+echo file_get_contents("php://filter/read=no.such/resource=" . $res);
+readfile("php://filter/read=no.such/resource=" . $res);
+var_dump(count(file("php://filter/read=no.such/resource=" . $res)));
+var_dump(file_put_contents("php://filter/write=no.such/resource=" . "rtw.txt", "abc"));
+unlink("rtc.txt");
+unlink("rtw.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "hi\nhi\nhi\nint(1)\nint(3)\n");
+    let lines = |callee: &str| {
+        format!(
+            "Warning: {callee}(): Unable to locate filter \"no.such\"\n\
+             Warning: {callee}(): Unable to create filter (no.such)\n"
+        )
+    };
+    assert_eq!(
+        out.stderr,
+        format!(
+            "{}{}{}{}{}",
+            lines("file_get_contents"),
+            lines("file_get_contents"),
+            lines("readfile"),
+            lines("file"),
+            lines("file_put_contents"),
+        ),
+        "each route names itself, for the literal URL and the assembled one alike"
+    );
+}
+
+/// Verifies a filtered open NESTED inside another open does not swallow later warnings.
+///
+/// Silencing the inner opener needs a suppression scope, and gating that scope on "did the parse
+/// see a filter URL" makes the pop depend on a global the resource's own open can republish: a
+/// user wrapper's `stream_open` is PHP and may `fopen()` something itself, and a non-literal
+/// inner path runs the parse, which clears that flag. The outer open then never popped what it
+/// had pushed, and EVERY later warning in the program vanished — the two below among them. Each
+/// open now saves what it needs on the way in and reads its own frame on the way out, so the pop
+/// can never disagree with the push.
+///
+/// Both remaining lines are `php -n` 8.5.6's, and the empty filter segment is deliberate: the
+/// outer chain has nothing to lose to the inner open's parse, which keeps this test about the
+/// suppression pairing rather than the single-slot hand-off it shares with the pending ids.
+#[test]
+fn test_a_nested_open_does_not_leak_the_filter_suppression_scope() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $p = "definitely_absent" . "_inner8.txt";
+        $inner = @fopen($p, "r");
+        return true;
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w8", "W");
+$u = "php://filter/read=/resource=w8://x";
+var_dump(is_resource(fopen($u, "r")));
+$q = "absent_after" . "_t8.txt";
+var_dump(fopen($q, "r"));
+$b = "php://filter/read=string.toupper/resource=" . "absent_t8.txt";
+var_dump(fopen($b, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(absent_after_t8.txt): Failed to open stream: No such file or directory\n\
+         Warning: fopen(php://filter/read=string.toupper/resource=absent_t8.txt): \
+         Failed to open stream: operation failed\n",
+        "the nested open must leave the suppression depth exactly as it found it"
+    );
+}
+
+/// Verifies a literal `file_get_contents()` filter URL resolving NO filter still returns bytes.
+///
+/// `emit_open_read_close_tail` called `__rt_stream_get_contents` without staging its second
+/// argument, the read-loop chunk size, so the loop ran with whatever the preceding code happened
+/// to leave in that register. A URL naming a KNOWN filter left the stamp sequence's value there
+/// and read correctly; a URL whose chain resolved to nothing left a rodata address, and the read
+/// died with `Fatal error: Possible integer overflow in memory allocation`. Both spellings below
+/// reached that, so a single typo in a filter name was a fatal. `php -n` 8.5.6 returns the
+/// file's bytes for both, and says nothing about an empty segment.
+#[test]
+fn test_literal_filter_read_with_no_resolvable_filter_still_returns_the_bytes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("rtn.txt", "bytes");
+var_dump(file_get_contents("php://filter/read=/resource=rtn.txt"));
+var_dump(file_get_contents("php://filter/read=string.toupper/resource=rtn.txt"));
+unlink("rtn.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(5) \"bytes\"\nstring(5) \"BYTES\"\n");
+    assert_eq!(out.stderr, "", "an empty segment is skipped in silence");
 }

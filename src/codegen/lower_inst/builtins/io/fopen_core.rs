@@ -19,7 +19,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     if let Some(path) = filename_literal.as_deref() {
         let open_mode = LiteralOpenMode::Operand(mode);
         if path.starts_with("php://filter/") {
-            emit_literal_php_filter_fopen_result(ctx, open_mode, path)?;
+            emit_literal_php_filter_fopen_result(ctx, open_mode, path, "fopen")?;
         } else if let Some(underlying) = path.strip_prefix("compress.zlib://") {
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
@@ -72,15 +72,34 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     emit_dynamic_fopen_result(ctx, inst)
 }
 
+/// Where the open mode a `php://filter` URL is opened with comes from.
+///
+/// It decides how many times php walks a prefix-less filter list — once per direction the mode
+/// selects — so it has to reach the run-time report, and only `fopen()` has a `$mode` argument
+/// to read it from.
+#[derive(Clone, Copy)]
+pub(super) enum DynamicFilterMode {
+    /// The mode sits in the staged mode registers, as `fopen()` leaves it: `x3`/`x4` on
+    /// AArch64, `rdi`/`rsi` on x86_64. It is read at run time, because `fopen($url, $mode)`
+    /// reaches here with BOTH assembled at run time.
+    Staged,
+    /// A caller with no `$mode` argument fixes the directions: bit 0 read, bit 1 write.
+    Fixed(u8),
+}
+
 /// Replaces a run-time `php://filter/...` filename with the RESOURCE it wraps.
 ///
 /// A filter URL is "open this, then filter it", so the open that follows is the ordinary one for
 /// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is
 /// parked by the parse and attached after boxing, which is why nothing here needs to know how to
 /// open the resource itself.
-pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_dynamic_php_filter_swap(
+    ctx: &mut FunctionContext<'_>,
+    mode: DynamicFilterMode,
+) {
     let unchanged = ctx.next_label("fopen_dynamic_not_filter");
     let no_resource = ctx.next_label("fopen_dynamic_filter_no_resource");
+    emit_publish_php_filter_open_dirs(ctx, mode);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // Both pairs must be saved, not just the mode: the parse takes its argument in x0/x1
@@ -132,6 +151,78 @@ pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.label(&unchanged);
 }
 
+/// Publishes the directions the open mode selects, for the run-time unknown-name report.
+fn emit_publish_php_filter_open_dirs(ctx: &mut FunctionContext<'_>, mode: DynamicFilterMode) {
+    match mode {
+        DynamicFilterMode::Staged => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");               // the filename: the probe takes x0/x1
+                ctx.emitter.instruction("mov x0, x3");                          // the fopen mode, whose letters pick the directions
+                ctx.emitter.instruction("mov x1, x4");
+                abi::emit_call_label(ctx.emitter, "__rt_php_filter_mode_dirs"); // preserves x3/x4: it reads x0/x1 only
+                abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");             // the filename: the probe takes rdi/rsi
+                abi::emit_call_label(ctx.emitter, "__rt_php_filter_mode_dirs"); // the mode is already staged in rdi/rsi
+                abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            }
+        },
+        DynamicFilterMode::Fixed(bits) => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("mov x9, #{bits}"));           // this caller's fixed direction
+                abi::emit_symbol_address(ctx.emitter, "x10", "_php_filter_open_dirs");
+                ctx.emitter.instruction("str x9, [x10]");
+            }
+            Arch::X86_64 => {
+                abi::emit_symbol_address(ctx.emitter, "r10", "_php_filter_open_dirs");
+                ctx.emitter.instruction(&format!("mov QWORD PTR [r10], {bits}")); // this caller's fixed direction
+            }
+        },
+    }
+}
+
+/// Finishes a run-time `php://filter` open: the failed-open line, the chain, the skipped names.
+///
+/// One call site's worth of order, in one place, because all four dynamic `fopen()` exits and
+/// every path-reader route need exactly the same three steps and the same `callee` in the two
+/// diagnostics php words with it.
+pub(super) fn emit_dynamic_php_filter_finish(ctx: &mut FunctionContext<'_>, callee: &str) {
+    // First, because it ends the suppression the open ran under and a failed open must print
+    // its line ALONE — it drops the skipped names the report below would otherwise warn for.
+    emit_php_filter_callee_call(ctx, callee, "__rt_php_filter_open_failed");
+    emit_dynamic_php_filter_attach(ctx);
+    emit_php_filter_unknown_report(ctx, callee);
+}
+
+/// Warns, in `callee`'s words, for every run-time `php://filter` name that named no filter.
+///
+/// Separate from [`emit_dynamic_php_filter_finish`] because the path readers compose their own
+/// failed-open line from a URL they saved themselves, and only need this half.
+pub(super) fn emit_php_filter_unknown_report(ctx: &mut FunctionContext<'_>, callee: &str) {
+    emit_php_filter_callee_call(ctx, callee, "__rt_php_filter_unknown_report");
+}
+
+/// Calls a run-time `php://filter` reporter with the CALLING function's name staged.
+///
+/// php names the caller in every one of these diagnostics — `fopen(): Unable to locate filter`,
+/// `file_get_contents(): Unable to create filter` — so the name travels as an ordinary string
+/// pair rather than each route owning a copy of the composition.
+fn emit_php_filter_callee_call(ctx: &mut FunctionContext<'_>, callee: &str, helper: &str) {
+    let (label, len) = ctx.data.add_string(callee.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);                // the boxed result stays in x0
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);               // the boxed result stays in rax
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+}
+
 /// Attaches the filter a run-time `php://filter` URL named, once the resource is open and boxed.
 ///
 /// A no-op when nothing is pending, which is every open that did not come from a filter URL.
@@ -177,7 +268,7 @@ fn emit_dynamic_data_branch(
     }
     abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");
     box_stream_fd_or_false_result(ctx, "fopen_data_dynamic");
-    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL may wrap a data:// resource
+    emit_dynamic_php_filter_finish(ctx, "fopen");                               // a php://filter URL may wrap a data:// resource
     emit_record_stream_meta_after_boxed_stashed(ctx, 2);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -228,7 +319,7 @@ fn emit_dynamic_php_wrapper_branch(
     }
     abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
-    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
+    emit_dynamic_php_filter_finish(ctx, "fopen");                               // the parked chain, and what php says about the names it could not resolve
     emit_record_stream_meta_after_boxed_stashed(ctx, 6);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -246,7 +337,14 @@ fn emit_dynamic_fopen_result(
 ) -> Result<()> {
     let plain = ctx.next_label("fopen_dynamic_plain");
     let done = ctx.next_label("fopen_dynamic_done");
-    emit_dynamic_php_filter_swap(ctx);
+    emit_dynamic_php_filter_swap(ctx, DynamicFilterMode::Staged);
+    // php-src's `php_stream_url_wrap_php` returns NULL the moment the INNER resource fails to
+    // open, BEFORE a single filter is created, and the generic caller composes one fixed line
+    // naming the WHOLE URL with the wrapper's own reason. The swap has just replaced the
+    // filename with that resource, so every opener below would otherwise name a path the
+    // program never wrote, with an errno php never shows. This silences them for a filter URL
+    // only; `__rt_php_filter_open_failed` at each exit is the pop, and composes php's line.
+    abi::emit_call_label(ctx.emitter, "__rt_php_filter_suppress_begin");
     emit_dynamic_php_wrapper_branch(ctx, inst, &done)?;
     emit_dynamic_data_branch(ctx, inst, &done)?;
     match ctx.emitter.target.arch {
@@ -273,7 +371,7 @@ fn emit_dynamic_fopen_result(
         }
     }
     box_stream_fd_or_false_result(ctx, "fopen_http_dynamic");
-    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
+    emit_dynamic_php_filter_finish(ctx, "fopen");                               // the parked chain, and what php says about the names it could not resolve
     emit_record_stream_meta_after_boxed_stashed(ctx, 1);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -285,7 +383,7 @@ fn emit_dynamic_fopen_result(
     ctx.emitter.label(&plain);
     abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
     box_stream_fd_or_false_result(ctx, "fopen");
-    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
+    emit_dynamic_php_filter_finish(ctx, "fopen");                               // the parked chain, and what php says about the names it could not resolve
     emit_record_stream_meta_after_boxed_stashed(ctx, 0);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -668,10 +766,14 @@ pub(super) fn emit_runtime_fopen_literal_result(
 }
 
 /// Emits a literal `fopen("php://filter/...", ...)` result without storing it.
+/// `callee` is the function php NAMES in the two diagnostics this can print. Every route that
+/// reaches a literal filter URL owns one — `fopen`, `file_get_contents` — and php words both the
+/// failed-open line and the unresolved-name warnings with it, so it cannot be hardcoded here.
 pub(super) fn emit_literal_php_filter_fopen_result(
     ctx: &mut FunctionContext<'_>,
     mode: LiteralOpenMode,
     path: &str,
+    callee: &str,
 ) -> Result<()> {
     let Some(parsed) = parse_php_filter_url(path) else {
         // php THROWS for a filter URL that names no resource — `Error: No URL resource
@@ -703,14 +805,16 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     let opened = ctx.next_label("fopen_filter_lit_opened");
     let done = ctx.next_label("fopen_filter_lit_done");
     let (url_label, url_len) = ctx.data.add_string(path.as_bytes());
+    let fail_prefix = format!("Warning: {callee}(");
+    let (prefix_label, prefix_len) = ctx.data.add_string(fail_prefix.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
             ctx.emitter.instruction("cmp x9, #9");                              // a resource has nothing to warn about
             ctx.emitter.instruction(&format!("b.eq {}", opened));
             abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed false across the fragments
-            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fopen_prefix");
-            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: fopen(".len()));
+            abi::emit_symbol_address(ctx.emitter, "x1", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", prefix_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
             abi::emit_symbol_address(ctx.emitter, "x1", &url_label);            // the literal URL, not the resource
             abi::emit_load_int_immediate(ctx.emitter, "x2", url_len as i64);
@@ -728,8 +832,8 @@ pub(super) fn emit_literal_php_filter_fopen_result(
             ctx.emitter.instruction("cmp r9, 9");                               // a resource has nothing to warn about
             ctx.emitter.instruction(&format!("je {}", opened));
             abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed false across the fragments
-            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fopen_prefix");
-            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: fopen(".len()));
+            abi::emit_symbol_address(ctx.emitter, "rdi", &prefix_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", prefix_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
             abi::emit_symbol_address(ctx.emitter, "rdi", &url_label);           // the literal URL, not the resource
             abi::emit_load_int_immediate(ctx.emitter, "rsi", url_len as i64);
@@ -751,7 +855,7 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     if parsed.mode_bits != 0 {
         emit_php_filter_table_stamps(ctx, parsed.mode_bits, &parsed.filter_ids);
     }
-    emit_unknown_filter_warnings(ctx, &parsed.unknown, mode_read, mode_write);
+    emit_unknown_filter_warnings(ctx, &parsed.unknown, mode_read, mode_write, callee);
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -774,6 +878,7 @@ fn emit_unknown_filter_warnings(
     unknown: &[UnknownFilterName],
     mode_read: bool,
     mode_write: bool,
+    callee: &str,
 ) {
     if unknown.is_empty() {
         return;
@@ -790,8 +895,10 @@ fn emit_unknown_filter_warnings(
         };
         // Every fragment is fully known here, so each warning is ONE interned string and one
         // call — nothing is assembled at run time.
-        let locate = format!("Warning: fopen(): Unable to locate filter \"{}\"\n", entry.name);
-        let create = format!("Warning: fopen(): Unable to create filter ({})\n", entry.name);
+        let locate =
+            format!("Warning: {callee}(): Unable to locate filter \"{}\"\n", entry.name);
+        let create =
+            format!("Warning: {callee}(): Unable to create filter ({})\n", entry.name);
         for _ in 0..attempts {
             emit_static_diag_warning(ctx, &locate);
             emit_static_diag_warning(ctx, &create);
