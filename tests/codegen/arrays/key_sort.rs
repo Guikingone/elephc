@@ -1,6 +1,7 @@
 //! Purpose:
 //! Regression tests for the associative-array sorts that reorder a hash table's
-//! insertion-order chain: `ksort()`, `krsort()`, `asort()` and `arsort()`.
+//! insertion-order chain: `ksort()`, `krsort()`, `asort()`, `arsort()`, `natsort()`
+//! and `natcasesort()`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -302,6 +303,245 @@ foreach ($b as $k => $v) { echo $k, $v; }
     );
     assert_eq!(
         out.stdout, "cconeaathreebbtwobbtwoaathreeccone",
+        "stderr: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// `natsort()`/`natcasesort()` over a string-keyed hash must keep every key attached to its
+/// own value while only the iteration order moves.
+///
+/// php sorts naturally with `zend_array_sort(Z_ARRVAL_P(array), php_array_natural_compare, 0)`
+/// (ext/standard/array.c): the trailing `0` is `renumber`, the same argument `asort()` passes
+/// and `sort()` passes as `1`. Before this fixture the backend refused a hash receiver
+/// outright — "unsupported EIR backend feature: natsort for PHP type AssocArray" — even
+/// though the checker accepted it.
+#[test]
+fn test_natsort_natcasesort_preserve_string_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["first" => "img12", "second" => "img10", "third" => "img2", "fourth" => "img1"];
+natsort($a);
+foreach ($a as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$b = ["w" => "IMG12", "x" => "img10", "y" => "Img2", "z" => "IMG1"];
+natcasesort($b);
+foreach ($b as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "fourth=img1;third=img2;second=img10;first=img12;|z=IMG1;y=Img2;x=img10;w=IMG12;"
+    );
+}
+
+/// Integer keys are preserved verbatim, never renumbered: php reports `9,2,0,5` after the
+/// sort, which is exactly the permutation `renumber = 0` leaves behind.
+#[test]
+fn test_natsort_integer_keys_are_preserved_not_renumbered() {
+    let out = compile_and_run(
+        r#"<?php
+$c = [5 => "img12", 2 => "img2", 9 => "img1", 0 => "img10"];
+natsort($c);
+foreach ($c as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+echo implode(",", array_keys($c));
+"#,
+    );
+    assert_eq!(out, "9=img1;2=img2;0=img10;5=img12;|9,2,0,5");
+}
+
+/// PHP 8 sorts are stable, and the natural comparator returns 0 for genuinely equal fields,
+/// so `p`, `r` and `s` all hold `img2` and keep their original relative order. The
+/// case-insensitive spelling ties `A1` with `a1` the same way.
+#[test]
+fn test_natsort_duplicate_values_are_stable() {
+    let out = compile_and_run(
+        r#"<?php
+$d = ["p" => "img2", "q" => "img1", "r" => "img2", "s" => "img2"];
+natsort($d);
+foreach ($d as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$e = ["p" => "A1", "q" => "a1", "r" => "B1"];
+natcasesort($e);
+foreach ($e as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "q=img1;p=img2;r=img2;s=img2;|p=A1;q=a1;r=B1;");
+}
+
+/// Copy-on-write: a copy taken before the sort keeps the original iteration order, so the
+/// receiver has to be split with `__rt_hash_ensure_unique` before the chain is relinked.
+#[test]
+fn test_natsort_does_not_mutate_aliased_copy() {
+    let out = compile_and_run(
+        r#"<?php
+$f = ["b" => "img10", "a" => "img2", "c" => "img1"];
+$copy = $f;
+natsort($f);
+foreach ($f as $k => $v) { echo $k; }
+echo "|";
+foreach ($copy as $k => $v) { echo $k; }
+"#,
+    );
+    assert_eq!(out, "cab|bac");
+}
+
+/// Relinking must not disturb the hash's probe layout: key lookups, a later insert and the
+/// live count all still work on the reordered table.
+#[test]
+fn test_natsort_preserves_lookup_and_later_inserts() {
+    let out = compile_and_run(
+        r#"<?php
+$g = ["b" => "img10", "a" => "img2", "c" => "img1"];
+natsort($g);
+$g["d"] = "img3";
+echo $g["b"], ":", $g["a"], ":", count($g), ":", implode(",", array_keys($g));
+"#,
+    );
+    assert_eq!(out, "img10:img2:4:c,a,b,d");
+}
+
+/// Already-ordered input, a single entry, and the natural-order edge cases the comparator
+/// owns — a leading zero making a field fractional (`a002` < `a01` < `a1`) and whitespace
+/// skipped before a field (`a 3` between `a2` and `a10`) — all measured on a hash receiver.
+#[test]
+fn test_natsort_on_hash_edge_cases() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ["k1" => "img1", "k2" => "img2", "k3" => "img10"];
+natsort($h);
+foreach ($h as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$i = ["solo" => "only"];
+natsort($i);
+foreach ($i as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$j = ["a" => "a01", "b" => "a1", "c" => "a2", "d" => "a002", "e" => "a 3", "f" => "a10"];
+natsort($j);
+foreach ($j as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "k1=img1;k2=img2;k3=img10;|solo=only;|d=a002;a=a01;b=a1;c=a2;e=a 3;f=a10;"
+    );
+}
+
+/// Pins the natural-order hash sorters inside the REAL generated runtime, on BOTH targets.
+///
+/// Generating the runtime text directly is the only mechanism that covers the hand-written
+/// x86_64 bodies from an aarch64 host, and it proves something an emitter unit test cannot:
+/// that each helper is actually REGISTERED in `emit_runtime`.
+///
+/// The needles are the load-bearing pieces of the story. Each entry point must name its OWN
+/// comparator — that is both how `natsort` gets php's natural order and why a `ksort`-only
+/// program can still dead-strip the ~1.4 KB comparator pair — and the shared engine must
+/// call through the frame slot rather than any fixed comparator symbol, or the selection
+/// would be inert.
+#[test]
+fn the_runtime_defines_the_natural_hash_sorts_on_both_targets() {
+    for (target_name, indirect_call, tail) in [
+        ("macos-aarch64", "blr x9", "b __rt_natcmp"),
+        ("linux-x86_64", "call QWORD PTR [rbp - 96]", "jmp __rt_natcmp"),
+    ] {
+        let target = elephc::codegen::platform::Target::parse(target_name).expect("valid target");
+        let runtime_asm = elephc::codegen::generate_runtime_with_features(
+            8_388_608,
+            target,
+            elephc::codegen::RuntimeFeatures::none(),
+        );
+        // Slices one helper's text: from its own header comment to the next helper's. The
+        // headers come in two spellings — `--- runtime: name ---` and
+        // `--- runtime: name (description) ---` — so the name is matched without either tail.
+        let body_of = |helper: &str| -> String {
+            let header = format!("--- runtime: {}", helper);
+            let start = runtime_asm.find(&header).unwrap_or_else(|| {
+                panic!("{helper} is not registered in the {target_name} runtime")
+            });
+            let rest = &runtime_asm[start + header.len()..];
+            let end = rest
+                .find("--- runtime: ")
+                .map(|offset| start + header.len() + offset)
+                .unwrap_or(runtime_asm.len());
+            runtime_asm[start..end].to_string()
+        };
+
+        // Each entry point names its own comparator, and ONLY its own: that per-atom
+        // reference is what lets the linker drop the natural comparators from a program
+        // that never natsorts.
+        for (entry, wanted, unwanted) in [
+            ("__rt_hash_natsort", "__rt_hash_natcmp", "__rt_php_compare"),
+            ("__rt_hash_natcasesort", "__rt_hash_natcasecmp", "__rt_php_compare"),
+            ("__rt_hash_ksort", "__rt_php_compare", "__rt_hash_natcmp"),
+            ("__rt_hash_asort", "__rt_php_compare", "__rt_hash_natcmp"),
+        ] {
+            let body = body_of(entry);
+            assert!(
+                body.contains(wanted),
+                "{entry} on {target_name} must select {wanted}"
+            );
+            assert!(
+                !body.contains(unwanted),
+                "{entry} on {target_name} must NOT reference {unwanted}: that reference is \
+                 what keeps the linker from dead-stripping the unused comparator"
+            );
+        }
+
+        // Both adapters tail-branch into php's natural comparator, and guard on the string
+        // tag so a non-string payload can never be dereferenced as a pointer.
+        let natcmp = body_of("__rt_hash_natcmp");
+        assert!(
+            natcmp.contains(tail),
+            "__rt_hash_natcmp on {target_name} must tail-branch into __rt_natcmp"
+        );
+        assert!(
+            natcmp.contains("__rt_php_compare"),
+            "__rt_hash_natcmp on {target_name} must keep the non-string fallback"
+        );
+        assert!(
+            body_of("__rt_hash_natcasecmp").contains(&tail.replace("natcmp", "natcasecmp")),
+            "__rt_hash_natcasecmp on {target_name} must tail-branch into __rt_natcasecmp"
+        );
+
+        // The engine calls whatever the entry point selected; naming a comparator here
+        // would re-attach every sort to it and defeat the split above.
+        let engine = body_of("hash_sort_links");
+        assert!(
+            engine.contains(indirect_call),
+            "the {target_name} hash sort engine must call the selected comparator indirectly"
+        );
+        for fixed in ["__rt_php_compare", "__rt_hash_natcmp"] {
+            assert!(
+                !engine.contains(fixed),
+                "the {target_name} hash sort engine must not name {fixed} directly"
+            );
+        }
+    }
+}
+
+/// The natural-order sorters reuse the same relinking engine, so they must be just as
+/// heap-neutral as `ksort`/`asort`: no key or value changes ownership, and the copy-on-write
+/// split the receiver asks for is the only allocation involved.
+#[test]
+fn test_natural_hash_sorts_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = ["bb" => "img10", "aa" => "img2", "cc" => "img1"];
+$n = $m;
+natsort($m);
+natcasesort($n);
+foreach ($m as $k => $v) { echo $k, $v; }
+foreach ($n as $k => $v) { echo $k, $v; }
+"#,
+    );
+    assert_eq!(
+        out.stdout, "ccimg1aaimg2bbimg10ccimg1aaimg2bbimg10",
         "stderr: {}",
         out.stderr
     );

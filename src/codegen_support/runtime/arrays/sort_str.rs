@@ -23,8 +23,12 @@ pub fn emit_sort_str(emitter: &mut Emitter, reverse: bool) {
 
 /// natsort_str / natcasesort_str: the same insertion sort ordered by php's natural
 /// comparison (`__rt_natcmp` / `__rt_natcasecmp`) instead of plain byte order.
-/// Like the integer `natsort`, the result is reindexed where php preserves keys — the
-/// sort family's tracked divergence.
+///
+/// These permute the slots of an INDEXED array, whose keys are the slot positions
+/// `0..n-1` themselves, so the result is reindexed where php preserves keys — the sort
+/// family's tracked divergence. A hash receiver has separate key storage and is routed
+/// to `__rt_hash_natsort` / `__rt_hash_natcasesort` instead, which relink the iteration
+/// chain and reproduce php's `renumber = 0` exactly.
 pub fn emit_natsort_str(emitter: &mut Emitter) {
     emit_sort_str_with(emitter, "__rt_natsort_str", "__rt_natcmp", false);
     emit_sort_str_with(emitter, "__rt_natcasesort_str", "__rt_natcasecmp", false);

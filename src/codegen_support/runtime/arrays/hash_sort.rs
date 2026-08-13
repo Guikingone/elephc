@@ -1,7 +1,9 @@
 //! Purpose:
-//! Emits `__rt_hash_ksort`, `__rt_hash_krsort`, `__rt_hash_asort` and `__rt_hash_arsort`,
-//! the runtime sorters behind PHP's order-preserving associative-array sorts, plus the
-//! shared `__rt_hash_sort_links` engine and its `__rt_hash_sort_triple` operand reader.
+//! Emits `__rt_hash_ksort`, `__rt_hash_krsort`, `__rt_hash_asort`, `__rt_hash_arsort`,
+//! `__rt_hash_natsort` and `__rt_hash_natcasesort`, the runtime sorters behind PHP's
+//! order-preserving associative-array sorts, plus the shared `__rt_hash_sort_links`
+//! engine, its `__rt_hash_sort_triple` operand reader, and the `__rt_hash_natcmp` /
+//! `__rt_hash_natcasecmp` adapters that give the engine php's natural order.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -20,8 +22,14 @@
 //!   backwards from its tail. That makes it stable — PHP 8 sorts are stable, and ties are
 //!   observable for keys such as `'01'` and `' 1'`, which PHP compares equal — and linear
 //!   on input that is already ordered.
-//! - Ordering is delegated to `__rt_php_compare`, so keys and values follow PHP 8's own
-//!   comparison table (`10 < 'Banana'`, `'0.5' < 2`, …) instead of a byte-wise order.
+//! - Ordering is a parameter, not a branch: each entry point hands the engine the address
+//!   of its comparator, so `ksort`/`asort` follow PHP 8's own comparison table through
+//!   `__rt_php_compare` (`10 < 'Banana'`, `'0.5' < 2`, …) while `natsort`/`natcasesort`
+//!   follow php's `strnatcmp_ex`. Nothing else differs between them, which is what makes
+//!   `natsort` key-preserving here: php's
+//!   `zend_array_sort(..., php_array_natural_compare, 0)` passes `renumber = 0`, exactly
+//!   like `asort`, so only the iteration order moves. Selecting per entry point also keeps
+//!   the linker able to drop the natural comparators from a program that never natsorts.
 //! - Callers must split shared tables with `__rt_hash_ensure_unique` first: these helpers
 //!   mutate the table they are handed.
 
@@ -42,11 +50,21 @@ const MODE_VALUE_ASCENDING: i64 = 2;
 /// Mode word selecting a descending value sort (`arsort`).
 const MODE_VALUE_DESCENDING: i64 = 3;
 
+/// The comparator behind every non-natural sort: PHP 8's own comparison table.
+const CMP_PHP: &str = "__rt_php_compare";
+
+/// The comparator behind `natsort`: php's `strnatcmp_ex` over two string payloads.
+const CMP_NATURAL: &str = "__rt_hash_natcmp";
+
+/// The comparator behind `natcasesort`: the same, folding case.
+const CMP_NATURAL_CASE: &str = "__rt_hash_natcasecmp";
+
 /// Emits every hash link-order sort helper for the active target.
 ///
-/// Publishes the four PHP-facing entry points (`__rt_hash_ksort`, `__rt_hash_krsort`,
-/// `__rt_hash_asort`, `__rt_hash_arsort`), the shared `__rt_hash_sort_links` engine and
-/// the `__rt_hash_sort_triple` operand reader. Every entry point takes the hash-table
+/// Publishes the six PHP-facing entry points (`__rt_hash_ksort`, `__rt_hash_krsort`,
+/// `__rt_hash_asort`, `__rt_hash_arsort`, `__rt_hash_natsort`, `__rt_hash_natcasesort`),
+/// the shared `__rt_hash_sort_links` engine, the `__rt_hash_sort_triple` operand reader
+/// and the two natural-order comparator adapters. Every entry point takes the hash-table
 /// pointer in the first integer argument register and returns nothing; the table is
 /// mutated in place by relinking its insertion-order chain.
 pub fn emit_hash_sort(emitter: &mut Emitter) {
@@ -54,63 +72,146 @@ pub fn emit_hash_sort(emitter: &mut Emitter) {
         emit_hash_sort_entry_points_x86_64(emitter);
         emit_hash_sort_links_x86_64(emitter);
         emit_hash_sort_triple_x86_64(emitter);
+        emit_hash_natcmp_x86_64(emitter, "__rt_hash_natcmp", "__rt_natcmp");
+        emit_hash_natcmp_x86_64(emitter, "__rt_hash_natcasecmp", "__rt_natcasecmp");
         return;
     }
     emit_hash_sort_entry_points_aarch64(emitter);
     emit_hash_sort_links_aarch64(emitter);
     emit_hash_sort_triple_aarch64(emitter);
+    emit_hash_natcmp_aarch64(emitter, "__rt_hash_natcmp", "__rt_natcmp");
+    emit_hash_natcmp_aarch64(emitter, "__rt_hash_natcasecmp", "__rt_natcasecmp");
 }
 
-/// Emits the four AArch64 entry stubs that select a mode and enter the shared engine.
+/// Emits the AArch64 natural-order adapter bridging `__rt_php_compare`'s triple ABI to
+/// `__rt_natcmp`'s `(ptr, len, ptr, len)` ABI.
 ///
-/// Each stub loads its mode word into `x1` and tail-branches to `__rt_hash_sort_links`,
-/// so the engine's stack frame and return address belong to the original caller.
+/// In: `x0`/`x3` = the two runtime tags, `x1`/`x4` = low payload words, `x2`/`x5` = high
+/// payload words — exactly what the sort engine already staged for `__rt_php_compare`.
+/// A string operand carries its pointer in the low word and its length in the high word,
+/// so runtime tag 1 on BOTH sides is what makes the reinterpretation legal.
+///
+/// php's `natsort` compares through `zval_get_tmp_string()`, so it orders every value as a
+/// string. This backend only routes string-valued hashes here, which is why the non-string
+/// path is a guard rather than a conversion: it exists so a tag that is not a string can
+/// never be dereferenced as a pointer, not to define an ordering the lowering can reach.
+fn emit_hash_natcmp_aarch64(emitter: &mut Emitter, label: &str, target: &str) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} (triple ABI -> {}) ---", label, target));
+    emitter.label_global(label);
+
+    emitter.instruction("cmp x0, #1");                                          // runtime tag 1 = string on the left operand
+    emitter.instruction(&format!("b.ne {}_fallback", label));
+    emitter.instruction("cmp x3, #1");                                          // runtime tag 1 = string on the right operand
+    emitter.instruction(&format!("b.ne {}_fallback", label));
+    emitter.instruction("mov x3, x4");                                          // the right operand's pointer becomes natcmp's third argument
+    emitter.instruction("mov x4, x5");                                          // the right operand's length becomes natcmp's fourth argument
+    emitter.instruction(&format!("b {}", target));                              // tail-branch: x1/x2 already hold the left pointer and length
+
+    emitter.label(&format!("{}_fallback", label));
+    emitter.instruction("b __rt_php_compare");                                  // a non-string operand keeps PHP 8's ordering table
+}
+
+/// Emits the x86_64 System V form of [`emit_hash_natcmp_aarch64`].
+///
+/// In: `rdi`/`rcx` = the two runtime tags, `rsi`/`r8` = low payload words, `rdx`/`r9` =
+/// high payload words. `__rt_natcmp` wants `rdi` = a ptr, `rsi` = a len, `rdx` = b ptr,
+/// `rcx` = b len, so the four moves run in an order that never overwrites a word still
+/// needed by a later one.
+fn emit_hash_natcmp_x86_64(emitter: &mut Emitter, label: &str, target: &str) {
+    emitter.blank();
+    emitter.comment(&format!("--- runtime: {} (triple ABI -> {}) ---", label, target));
+    emitter.label_global(label);
+
+    emitter.instruction("cmp rdi, 1");                                          // runtime tag 1 = string on the left operand
+    emitter.instruction(&format!("jne {}_fallback", label));
+    emitter.instruction("cmp rcx, 1");                                          // runtime tag 1 = string on the right operand
+    emitter.instruction(&format!("jne {}_fallback", label));
+    emitter.instruction("mov rdi, rsi");                                        // left pointer into natcmp's first argument
+    emitter.instruction("mov rsi, rdx");                                        // left length into natcmp's second argument
+    emitter.instruction("mov rdx, r8");                                         // right pointer into natcmp's third argument
+    emitter.instruction("mov rcx, r9");                                         // right length into natcmp's fourth argument
+    emitter.instruction(&format!("jmp {}", target));                            // tail-jump so the comparison returns to the sort engine
+
+    emitter.label(&format!("{}_fallback", label));
+    emitter.instruction("jmp __rt_php_compare");                                // a non-string operand keeps PHP 8's ordering table
+}
+
+/// Emits the six AArch64 entry stubs that select a mode plus a comparator and enter the
+/// shared engine.
+///
+/// Each stub loads its mode word into `x1` and its comparator's address into `x2`, then
+/// tail-branches to `__rt_hash_sort_links`, so the engine's stack frame and return address
+/// belong to the original caller.
 fn emit_hash_sort_entry_points_aarch64(emitter: &mut Emitter) {
-    for (label, mode, description) in hash_sort_entry_points() {
+    for (label, mode, comparator, description) in hash_sort_entry_points() {
         emitter.blank();
         emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
         emitter.label_global(label);
         emitter.instruction(&format!("mov x1, #{}", mode));                     // select the key/value and ascending/descending sort mode
+        abi::emit_symbol_address(emitter, "x2", comparator);                    // select this sort's ordering function
         emitter.instruction("b __rt_hash_sort_links");                          // enter the shared insertion-order relinking engine
     }
 }
 
-/// Emits the four x86_64 entry stubs that select a mode and enter the shared engine.
+/// Emits the six x86_64 entry stubs that select a mode plus a comparator and enter the
+/// shared engine.
 ///
-/// Each stub loads its mode word into `rsi` and tail-jumps to `__rt_hash_sort_links`,
-/// mirroring the AArch64 stubs one-for-one.
+/// Each stub loads its mode word into `rsi` and its comparator's address into `rdx`, then
+/// tail-jumps to `__rt_hash_sort_links`, mirroring the AArch64 stubs one-for-one.
 fn emit_hash_sort_entry_points_x86_64(emitter: &mut Emitter) {
-    for (label, mode, description) in hash_sort_entry_points() {
+    for (label, mode, comparator, description) in hash_sort_entry_points() {
         emitter.blank();
         emitter.comment(&format!("--- runtime: {} ({}) ---", label, description));
         emitter.label_global(label);
         emitter.instruction(&format!("mov esi, {}", mode));                     // select the key/value and ascending/descending sort mode
+        abi::emit_symbol_address(emitter, "rdx", comparator);                   // select this sort's ordering function
         emitter.instruction("jmp __rt_hash_sort_links");                        // enter the shared insertion-order relinking engine
     }
 }
 
-/// Returns the PHP-facing hash sort entry points with their mode words and descriptions.
-fn hash_sort_entry_points() -> [(&'static str, i64, &'static str); 4] {
+/// Returns the PHP-facing hash sort entry points with their mode words, comparators and
+/// descriptions.
+///
+/// The comparator is chosen HERE, per entry point, rather than branched on inside the shared
+/// engine. That keeps each sort's dependency on its own atom: a program that only calls
+/// `ksort()` never references `__rt_hash_natcmp`, so macOS `-dead_strip` and Linux
+/// `--gc-sections` still drop php's ~1.4 KB natural comparator pair from the binary.
+fn hash_sort_entry_points() -> [(&'static str, i64, &'static str, &'static str); 6] {
     [
-        ("__rt_hash_ksort", MODE_KEY_ASCENDING, "sort a hash by key ascending"),
-        ("__rt_hash_krsort", MODE_KEY_DESCENDING, "sort a hash by key descending"),
-        ("__rt_hash_asort", MODE_VALUE_ASCENDING, "sort a hash by value ascending"),
-        ("__rt_hash_arsort", MODE_VALUE_DESCENDING, "sort a hash by value descending"),
+        ("__rt_hash_ksort", MODE_KEY_ASCENDING, CMP_PHP, "sort a hash by key ascending"),
+        ("__rt_hash_krsort", MODE_KEY_DESCENDING, CMP_PHP, "sort a hash by key descending"),
+        ("__rt_hash_asort", MODE_VALUE_ASCENDING, CMP_PHP, "sort a hash by value ascending"),
+        ("__rt_hash_arsort", MODE_VALUE_DESCENDING, CMP_PHP, "sort a hash by value descending"),
+        (
+            "__rt_hash_natsort",
+            MODE_VALUE_ASCENDING,
+            CMP_NATURAL,
+            "sort a hash by value in natural order",
+        ),
+        (
+            "__rt_hash_natcasesort",
+            MODE_VALUE_ASCENDING,
+            CMP_NATURAL_CASE,
+            "sort a hash by value in case-insensitive natural order",
+        ),
     ]
 }
 
 /// Emits the AArch64 `__rt_hash_sort_links` engine.
 ///
 /// Input `x0` = hash-table pointer, `x1` = mode word (bit 0 = descending, bit 1 = sort by
-/// value). The routine detaches entries from the insertion-order chain one at a time and
-/// reinserts each into a growing sorted chain, scanning that chain backwards from its tail
-/// so equal operands keep their original relative order. Null pointers, the in-band
-/// null-container sentinel, and tables with fewer than two live entries return untouched.
+/// value), `x2` = comparator address. The routine detaches entries from the insertion-order
+/// chain one at a time and reinserts each into a growing sorted chain, scanning that chain
+/// backwards from its tail so equal operands keep their original relative order. Null
+/// pointers, the in-band null-container sentinel, and tables with fewer than two live
+/// entries return untouched.
 ///
 /// Frame (112 bytes): `[sp,#0]` table, `[sp,#8]` entries base, `[sp,#16]` mode,
 /// `[sp,#24]` sorted head, `[sp,#32]` sorted tail, `[sp,#40]` current slot,
 /// `[sp,#48]` next source slot, `[sp,#56]` backward scan cursor,
-/// `[sp,#64..#80]` the current entry's comparison triple, `[sp,#96]` saved `x29`/`x30`.
+/// `[sp,#64..#80]` the current entry's comparison triple, `[sp,#88]` comparator,
+/// `[sp,#96]` saved `x29`/`x30`.
 fn emit_hash_sort_links_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_sort_links ---");
@@ -137,6 +238,7 @@ fn emit_hash_sort_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x0, #40");                                     // compute the entries region base past the 40-byte header
     emitter.instruction("str x9, [sp, #8]");                                    // save the entries base used by every slot address computation
     emitter.instruction("str x1, [sp, #16]");                                   // save the key/value and direction mode word
+    emitter.instruction("str x2, [sp, #88]");                                   // save this sort's comparator for the whole run
     emitter.instruction("mov x9, #-1");                                         // the destination chain starts empty
     emitter.instruction("str x9, [sp, #24]");                                   // sorted head = none
     emitter.instruction("str x9, [sp, #32]");                                   // sorted tail = none
@@ -173,7 +275,8 @@ fn emit_hash_sort_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #64]");                                   // pass the placed entry's tag as the right operand
     emitter.instruction("ldr x4, [sp, #72]");                                   // pass the placed entry's low payload word
     emitter.instruction("ldr x5, [sp, #80]");                                   // pass the placed entry's high payload word
-    emitter.instruction("bl __rt_php_compare");                                 // apply PHP 8's ordering table to scanned versus placed
+    emitter.instruction("ldr x9, [sp, #88]");                                   // reload this sort's comparator
+    emitter.instruction("blr x9");                                              // apply the selected ordering to scanned versus placed
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the mode word to pick the direction test
     emitter.instruction("tbnz x9, #0, __rt_hsort_scan_desc");                   // descending sorts invert the stop condition
     emitter.instruction("cmp x0, #0");                                          // does the scanned entry already sort at or before the placed one?
@@ -292,13 +395,13 @@ fn emit_hash_sort_triple_aarch64(emitter: &mut Emitter) {
 /// Emits the x86_64 System V `__rt_hash_sort_links` engine.
 ///
 /// Input `rdi` = hash-table pointer, `rsi` = mode word (bit 0 = descending, bit 1 = sort
-/// by value). Semantics are identical to the AArch64 engine, including the stable backward
-/// scan and the untouched-on-empty early exits.
+/// by value), `rdx` = comparator address. Semantics are identical to the AArch64 engine,
+/// including the stable backward scan and the untouched-on-empty early exits.
 ///
 /// Frame (96 bytes below `rbp`): `[rbp-8]` table, `[rbp-16]` entries base, `[rbp-24]` mode,
 /// `[rbp-32]` sorted head, `[rbp-40]` sorted tail, `[rbp-48]` current slot,
 /// `[rbp-56]` next source slot, `[rbp-64]` backward scan cursor,
-/// `[rbp-72..-88]` the current entry's comparison triple.
+/// `[rbp-72..-88]` the current entry's comparison triple, `[rbp-96]` comparator.
 fn emit_hash_sort_links_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_sort_links ---");
@@ -326,6 +429,7 @@ fn emit_hash_sort_links_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea r10, [rdi + 40]");                                 // compute the entries region base past the 40-byte header
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the entries base used by every slot address computation
     emitter.instruction("mov QWORD PTR [rbp - 24], rsi");                       // save the key/value and direction mode word
+    emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save this sort's comparator for the whole run
     emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // sorted head = none
     emitter.instruction("mov QWORD PTR [rbp - 40], -1");                        // sorted tail = none
     emitter.instruction("mov r10, QWORD PTR [rdi + 24]");                       // r10 = current insertion-order head slot
@@ -366,7 +470,7 @@ fn emit_hash_sort_links_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // pass the placed entry's tag as the right operand
     emitter.instruction("mov r8, QWORD PTR [rbp - 80]");                        // pass the placed entry's low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 88]");                        // pass the placed entry's high payload word
-    emitter.instruction("call __rt_php_compare");                               // apply PHP 8's ordering table to scanned versus placed
+    emitter.instruction("call QWORD PTR [rbp - 96]");                           // apply the selected ordering to scanned versus placed
     emitter.instruction("test QWORD PTR [rbp - 24], 1");                        // reload the mode word to pick the direction test
     emitter.instruction("jnz __rt_hsort_scan_desc");                            // descending sorts invert the stop condition
     emitter.instruction("cmp rax, 0");                                          // does the scanned entry already sort at or before the placed one?

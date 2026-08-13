@@ -666,6 +666,26 @@ fn sort_receiver_is_hash(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     ))
 }
 
+/// Reports whether a natural-order sort's receiver is a hash whose values are strings.
+///
+/// php's `natsort` orders every value through `zval_get_tmp_string()`, so a faithful sort of
+/// non-string values would have to materialize those strings first. The relinking helpers
+/// compare the payloads the table already holds, which is exact for string values and only
+/// for those — measured: `natsort` puts `-5` before `-10` (it compares `"-5"` against
+/// `"-10"`) where `asort` puts `-10` first, so borrowing the numeric comparator for an
+/// integer-valued hash would silently produce php's asort order under natsort's name.
+/// Every other hash therefore keeps reporting the unsupported-feature error it reports today.
+fn natural_sort_receiver_is_string_hash(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<bool> {
+    let array = expect_operand(inst, 0)?;
+    let PhpType::AssocArray { value, .. } = ctx.value_php_type(array)?.codegen_repr() else {
+        return Ok(false);
+    };
+    Ok(value.codegen_repr() == PhpType::Str)
+}
+
 /// The `__rt_array_splice_insert*` argument registers: destination, index, replacement.
 fn splice_insert_arg_regs(
     ctx: &FunctionContext<'_>,
