@@ -229,6 +229,38 @@ echo "opened=", (count($here) > 0 ? "yes" : "no"), "\n";
     );
 }
 
+/// Verifies `file_put_contents()` on an unopenable path warns and answers false — and writes
+/// the payload NOWHERE.
+///
+/// The open result was never checked. On macOS a failed open answers the ERRNO with the carry
+/// set, so the payload was written through descriptor 2 — the caller's own stderr — and the
+/// byte count reported SUCCESS: `file_put_contents("/no/such/dir/x", $secret)` leaked the
+/// secret to the terminal and returned int(7). php warns and answers false, which is also why
+/// the declaration is now `int|false` rather than `Int`: with `Int`, the manual's own
+/// `=== false` failure test could never fire.
+///
+/// The stdout assertion is exact so a payload leaking to EITHER stream fails the test.
+#[test]
+fn test_file_put_contents_on_an_unopenable_path_answers_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = file_put_contents("/no/such/dir/leak.txt", "SECRET-PAYLOAD");
+var_dump($n);
+var_dump($n === false);
+var_dump(@file_put_contents("/no/such/dir/leak.txt", "SECRET-PAYLOAD"));
+"#,
+    );
+    assert!(out.success, "a failed write is not a crash");
+    assert_eq!(out.stdout, "bool(false)\nbool(true)\nbool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: file_put_contents(/no/such/dir/leak.txt): Failed to open stream: \
+         No such file or directory\n",
+        "one warning in php's wording; the @-suppressed call prints nothing, \
+         and the payload appears on neither stream"
+    );
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

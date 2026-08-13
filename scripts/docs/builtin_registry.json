@@ -18514,7 +18514,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "file_put_contents",

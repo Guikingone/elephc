@@ -572,6 +572,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_open_failed_middle\n_diag_open_failed_middle:\n    .ascii \"): Failed to open stream: \"\n");
     out.push_str(".globl _diag_open_failed_fopen_prefix\n_diag_open_failed_fopen_prefix:\n    .ascii \"Warning: fopen(\"\n");
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
+    out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");
     // Bare callee names for the unknown-wrapper warning, which puts "Warning: " and "(): "
     // around the name itself rather than before an open parenthesis.
     out.push_str(".globl _uww_name_fopen\n_uww_name_fopen:\n    .ascii \"fopen\"\n");

@@ -34,6 +34,9 @@ pub(crate) fn lower_file_put_contents(
         Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
         Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
     }
+    // php answers `int|false`, and the runtime's -1 is the failure sentinel; the box is what
+    // lets `file_put_contents($p, $d) === false` — the manual's own failure test — fire.
+    box_negative_int_or_false_result(ctx, "fpc");
     store_if_result(ctx, inst)
 }
 
@@ -53,6 +56,7 @@ pub(super) fn lower_literal_phar_file_put_contents(
                 ctx.emitter.instruction("mov rax, -1");                         // unresolved phar write target returns failure
             }
         }
+        box_negative_int_or_false_result(ctx, "fpc_phar_unresolved");           // php reads the failure as false
         return store_if_result(ctx, inst);
     }
     match ctx.emitter.target.arch {
@@ -81,6 +85,8 @@ pub(super) fn lower_literal_phar_file_put_contents(
             abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
+    // Same `int|false` contract as the filesystem path: the -1 sentinel boxes to PHP false.
+    box_negative_int_or_false_result(ctx, "fpc_phar");
     store_if_result(ctx, inst)
 }
 

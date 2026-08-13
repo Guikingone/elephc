@@ -8,7 +8,7 @@ sidebar:
 ## file_put_contents()
 
 ```php
-function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): int
+function file_put_contents(string $filename, mixed $data, int $flags = 0, mixed $context = null): mixed
 ```
 
 Writes data to a file.
@@ -19,7 +19,7 @@ Writes data to a file.
 - `$flags` (`int`), default `0`, optional
 - `$context` (`mixed`), default `null`, optional
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
