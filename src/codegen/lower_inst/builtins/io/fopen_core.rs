@@ -550,6 +550,28 @@ impl LiteralOpenMode {
             LiteralOpenMode::ReadOnly => Ok(false),
         }
     }
+
+    /// The `(read, write)` filter directions php derives from the open mode.
+    ///
+    /// php-src searches the WHOLE mode string with `strchr`, so `rb` reads, `a` writes and
+    /// `r+` does both — and a mode naming none of them, `x`, selects NEITHER, which is why
+    /// `php://filter/no.such/resource=...` opened with `"x"` warns not at all while the same
+    /// URL opened with `"r+"` warns TWICE over. Measured on `php -n` 8.5.6.
+    ///
+    /// A mode that is not a compile-time literal answers read-only: it is the overwhelmingly
+    /// common open, and an explicit `read=`/`write=` list ignores the mode entirely anyway.
+    fn filter_directions(self, ctx: &FunctionContext<'_>) -> Result<(bool, bool)> {
+        let text = match self {
+            LiteralOpenMode::ReadOnly => "r".to_string(),
+            LiteralOpenMode::Operand(mode) => {
+                optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string())
+            }
+        };
+        Ok((
+            text.contains('r') || text.contains('+'),
+            text.contains('w') || text.contains('a') || text.contains('+'),
+        ))
+    }
 }
 
 pub(super) fn emit_literal_fopen_result(
@@ -651,7 +673,7 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     mode: LiteralOpenMode,
     path: &str,
 ) -> Result<()> {
-    let Some((mode_bits, filter_ids, resource)) = parse_php_filter_url(path) else {
+    let Some(parsed) = parse_php_filter_url(path) else {
         // php THROWS for a filter URL that names no resource — `Error: No URL resource
         // specified`, not a warning, and `@` does not soften it. A NESTED resource is the
         // other reason the parse declines; php recurses there, which is a separate,
@@ -664,11 +686,140 @@ pub(super) fn emit_literal_php_filter_fopen_result(
         box_stream_fd_or_false_result(ctx, "fopen_php_filter");
         return Ok(());
     };
-    emit_literal_fopen_result(ctx, mode, &resource)?;
-    if mode_bits != 0 {
-        emit_php_filter_table_stamps(ctx, mode_bits, &filter_ids);
+    let (mode_read, mode_write) = mode.filter_directions(ctx)?;
+    // php-src's `php_stream_url_wrap_php` returns NULL the moment the INNER resource fails to
+    // open, BEFORE a single filter is created, and the generic caller composes one fixed line
+    // naming the WHOLE URL with the wrapper's own reason:
+    //   Warning: fopen(php://filter/read=string.toupper/resource=missing.txt):
+    //            Failed to open stream: operation failed
+    // The inner opener names ITSELF and the bare resource with its own errno — this used to
+    // print `fopen(missing.txt): ... No such file or directory`, which names a path the program
+    // never wrote. Its warnings are suppressed through the same depth counter `@` uses, and the
+    // php-worded line is composed from the literal URL below, exactly as the literal
+    // `file_get_contents` route already does for the same URLs.
+    abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+    emit_literal_fopen_result(ctx, mode, &parsed.resource)?;
+    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    let opened = ctx.next_label("fopen_filter_lit_opened");
+    let done = ctx.next_label("fopen_filter_lit_done");
+    let (url_label, url_len) = ctx.data.add_string(path.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("b.eq {}", opened));
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fopen_prefix");
+            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: fopen(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", &url_label);            // the literal URL, not the resource
+            abi::emit_load_int_immediate(ctx.emitter, "x2", url_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("je {}", opened));
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fopen_prefix");
+            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: fopen(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", &url_label);           // the literal URL, not the resource
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", url_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov rsi, {}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
     }
+    // A failed open never reaches the filters, so the unknown-name warnings below belong to the
+    // SUCCESS path only — measured: `fopen("php://filter/read=no.such/resource=missing.txt")`
+    // prints the failed-open line and nothing else.
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&opened);
+    if parsed.mode_bits != 0 {
+        emit_php_filter_table_stamps(ctx, parsed.mode_bits, &parsed.filter_ids);
+    }
+    emit_unknown_filter_warnings(ctx, &parsed.unknown, mode_read, mode_write);
+    ctx.emitter.label(&done);
     Ok(())
+}
+
+/// Warns for every `php://filter` name that named no filter, and STILL keeps the stream.
+///
+/// php answers an unknown name with TWO lines — `php_stream_filter_create` reports that it
+/// cannot locate the filter, then `php_stream_apply_filter_list` reports that it cannot create
+/// it — and neither cancels the open, so the caller still receives a live stream. elephc
+/// resolved the same URL, quietly skipped the name and said nothing, which turns a typo in a
+/// filter name into a silently unfiltered read.
+///
+/// The count is not one pair per name: php walks the list once per DIRECTION it applies, so a
+/// no-prefix chain opened `r+` warns twice per name (read attempt, then write attempt) while
+/// the same chain opened `x` — a mode naming neither direction — warns not at all. An explicit
+/// `read=`/`write=` list is always applied exactly once, whatever the mode. All measured on
+/// `php -n` 8.5.6.
+fn emit_unknown_filter_warnings(
+    ctx: &mut FunctionContext<'_>,
+    unknown: &[UnknownFilterName],
+    mode_read: bool,
+    mode_write: bool,
+) {
+    if unknown.is_empty() {
+        return;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x0"),                 // hold the boxed stream across the fragments
+        Arch::X86_64 => abi::emit_push_reg(ctx.emitter, "rax"),
+    }
+    for entry in unknown {
+        let attempts = if entry.direction == 3 {
+            usize::from(mode_read) + usize::from(mode_write)
+        } else {
+            1
+        };
+        // Every fragment is fully known here, so each warning is ONE interned string and one
+        // call — nothing is assembled at run time.
+        let locate = format!("Warning: fopen(): Unable to locate filter \"{}\"\n", entry.name);
+        let create = format!("Warning: fopen(): Unable to create filter ({})\n", entry.name);
+        for _ in 0..attempts {
+            emit_static_diag_warning(ctx, &locate);
+            emit_static_diag_warning(ctx, &create);
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x0"),
+        Arch::X86_64 => abi::emit_pop_reg(ctx.emitter, "rax"),
+    }
+}
+
+/// Emits one whole warning line whose text is known at compile time.
+///
+/// Goes through `__rt_diag_warning` like every other warning, so `@` suppresses it through the
+/// shared depth counter rather than through a rule of its own.
+fn emit_static_diag_warning(ctx: &mut FunctionContext<'_>, text: &str) {
+    let (label, len) = ctx.data.add_string(text.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
 }
 
 /// Returns whether a literal `php://filter/...` URL names NO resource — missing or empty.
@@ -690,8 +841,9 @@ pub(super) fn literal_filter_url_names_no_resource(path: &str) -> bool {
 ///
 /// Every name in the `|` chain is resolved, in order: php-src runs the record through all
 /// of them. An unrecognised name is skipped and the rest still apply, which is what
-/// `php -n` does — it is not an error and it does not cancel the chain.
-pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> {
+/// `php -n` does — it is not an error and it does not cancel the chain. It is not SILENT
+/// either, which is why the unresolved names come back in [`PhpFilterUrl::unknown`].
+pub(super) fn parse_php_filter_url(path: &str) -> Option<PhpFilterUrl> {
     let spec = path.strip_prefix("php://filter/")?;
     let (filter_part, resource) = spec.split_once("/resource=")?;
     if resource.is_empty() {
@@ -708,6 +860,14 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> 
     // `php -n` 8.5.6 opens `read=string.toupper|no.such.filter` successfully and returns the
     // uppercased bytes. Measured, because the opposite reading is just as plausible.
     let filter_ids: Vec<u8> = filters.split('|').filter_map(stream_filter_id).collect();
+    // An EMPTY segment names nothing at all and php says nothing about it: `read=` on its own
+    // opens in silence, because php-src walks the list with `php_strtok_r`, which skips empty
+    // tokens rather than trying to create a filter called "".
+    let unknown: Vec<UnknownFilterName> = filters
+        .split('|')
+        .filter(|name| !name.is_empty() && stream_filter_id(name).is_none())
+        .map(|name| UnknownFilterName { name: name.to_string(), direction: mode_bits })
+        .collect();
     let mode_bits = if filter_ids.is_empty() { 0 } else { mode_bits };
     // A NESTED resource recurses, as php does: the inner level sits closest to the bytes, so
     // its chain applies FIRST and the outer chain sees what the inner one produced —
@@ -716,15 +876,49 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> 
     // pending hand-off carries one direction), which keeps that exotic spelling loudly failing
     // rather than half-filtered.
     if resource.starts_with("php://filter/") {
-        let (inner_bits, inner_ids, innermost) = parse_php_filter_url(resource)?;
-        if inner_bits != 0 && mode_bits != 0 && inner_bits != mode_bits {
+        let inner = parse_php_filter_url(resource)?;
+        if inner.mode_bits != 0 && mode_bits != 0 && inner.mode_bits != mode_bits {
             return None;
         }
-        let bits = if mode_bits == 0 { inner_bits } else { mode_bits };
-        let mut ids = inner_ids;
+        let bits = if mode_bits == 0 { inner.mode_bits } else { mode_bits };
+        let mut ids = inner.filter_ids;
         ids.extend(filter_ids);
-        return Some((bits, ids, innermost));
+        // The inner level is opened first, so php reaches its filter names first as well.
+        let mut names = inner.unknown;
+        names.extend(unknown);
+        return Some(PhpFilterUrl {
+            mode_bits: bits,
+            filter_ids: ids,
+            unknown: names,
+            resource: inner.resource,
+        });
     }
-    Some((mode_bits, filter_ids, resource.to_string()))
+    Some(PhpFilterUrl { mode_bits, filter_ids, unknown, resource: resource.to_string() })
+}
+
+/// A name from a `php://filter` chain that resolves to no built-in filter.
+///
+/// php does not drop these silently — it warns twice for every creation that fails — so the
+/// parse has to hand the names back, which is all the old `filter_map` threw away.
+pub(super) struct UnknownFilterName {
+    /// The name exactly as the URL spelled it.
+    pub(super) name: String,
+    /// The direction its OWN level named: 1 = `read=`, 2 = `write=`, 3 = no prefix.
+    ///
+    /// Kept per name because a nested URL can spell a different direction at each level, and
+    /// the no-prefix spelling is the only one whose warning count depends on the open mode.
+    pub(super) direction: u8,
+}
+
+/// Everything a literal `php://filter/...` URL resolves to at compile time.
+pub(super) struct PhpFilterUrl {
+    /// Direction bits for the resolved filters: 1 = read, 2 = write, 3 = both, 0 = none resolved.
+    pub(super) mode_bits: u8,
+    /// The built-in filter ids to stamp, innermost level first.
+    pub(super) filter_ids: Vec<u8>,
+    /// The names that resolved to nothing, in the order php tries to create them.
+    pub(super) unknown: Vec<UnknownFilterName>,
+    /// The resource the whole URL finally opens.
+    pub(super) resource: String,
 }
 

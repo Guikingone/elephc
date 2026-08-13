@@ -1392,6 +1392,104 @@ fclose($f);
     assert_eq!(out, "resource|raw bytes");
 }
 
+/// Verifies a FAILED filtered open names the whole filter URL, not the resource inside it.
+///
+/// elephc opened the resource the URL wrapped and let THAT opener warn, so the message named a
+/// path the program never wrote and a reason php never gives —
+/// `Warning: fopen(absent_abc.txt): Failed to open stream: No such file or directory`.
+/// `php -n` 8.5.6 prints, for the same call, `Warning:
+/// fopen(php://filter/read=string.toupper/resource=absent_abc.txt): Failed to open stream:
+/// operation failed`.
+/// php-src's `php_stream_url_wrap_php` returns NULL the moment the inner open fails, so the
+/// generic caller composes the line from the URL it was HANDED and the wrapper's fixed reason —
+/// the inner errno never reaches the user. The write direction is probed too because the two
+/// spellings take different openers underneath and only one of them was ever measured.
+#[test]
+fn test_failed_filter_open_names_the_url_not_the_wrapped_resource() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = fopen("php://filter/read=string.toupper/resource=absent_abc.txt", "r");
+var_dump($a);
+$b = @fopen("php://filter/read=string.toupper/resource=absent_abc.txt", "r");
+var_dump($b);
+$c = fopen("php://filter/write=string.rot13/resource=missing_dir_abc/out.txt", "w");
+var_dump($c);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(php://filter/read=string.toupper/resource=absent_abc.txt): \
+         Failed to open stream: operation failed\n\
+         Warning: fopen(php://filter/write=string.rot13/resource=missing_dir_abc/out.txt): \
+         Failed to open stream: operation failed\n",
+        "php's wording and the WHOLE URL; `@` still silences it like any other warning"
+    );
+}
+
+/// Verifies an unknown `php://filter` name warns TWICE and still hands back the stream.
+///
+/// elephc resolved the chain, quietly dropped the name it did not know and said nothing, so a
+/// typo in a filter name became a silently unfiltered read. `php -n` 8.5.6 prints two lines per
+/// failed creation — `php_stream_filter_create` cannot locate it, then
+/// `php_stream_apply_filter_list` cannot create it — and neither cancels the open:
+///
+/// ```text
+/// Warning: fopen(): Unable to locate filter "no.such.filter"
+/// Warning: fopen(): Unable to create filter (no.such.filter)
+/// resource(5) of type (stream)
+/// ```
+///
+/// Four things beyond the bare pair are pinned, each measured rather than reasoned about:
+/// - the chain CONTINUES, so `one.bad|string.toupper|two.bad` still uppercases and warns for
+///   both unknown names, in chain order;
+/// - a name with no `read=`/`write=` prefix is tried once per DIRECTION the mode names, so the
+///   same URL warns twice over on `r+` and NOT AT ALL on `x`, which names neither;
+/// - `@` silences the pair, since it goes through the same depth counter as every warning;
+/// - a FAILED open never reaches the filters, so it prints the failed-open line ALONE — php
+///   returns NULL before a single filter is created.
+#[test]
+fn test_unknown_php_filter_name_warns_twice_and_keeps_the_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = fopen("php://filter/read=no.such.filter/resource=data://text/plain,hi", "r");
+echo is_resource($a) ? "resource" : "false", "|", stream_get_contents($a), "|";
+$b = fopen("php://filter/read=one.bad|string.toupper|two.bad/resource=data://text/plain,hi", "r");
+echo stream_get_contents($b), "|";
+$c = fopen("php://filter/only.bad/resource=php://temp", "r+");
+echo is_resource($c) ? "resource" : "false", "|";
+$d = fopen("php://filter/only.bad/resource=php://temp", "x");
+echo is_resource($d) ? "resource" : "false", "|";
+$e = @fopen("php://filter/read=quiet.bad/resource=php://temp", "r");
+echo is_resource($e) ? "resource" : "false", "|";
+$f = fopen("php://filter/read=never.reached/resource=absent_abc.txt", "r");
+var_dump($f);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "resource|hi|HI|resource|resource|resource|bool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
+         Warning: fopen(): Unable to create filter (no.such.filter)\n\
+         Warning: fopen(): Unable to locate filter \"one.bad\"\n\
+         Warning: fopen(): Unable to create filter (one.bad)\n\
+         Warning: fopen(): Unable to locate filter \"two.bad\"\n\
+         Warning: fopen(): Unable to create filter (two.bad)\n\
+         Warning: fopen(): Unable to locate filter \"only.bad\"\n\
+         Warning: fopen(): Unable to create filter (only.bad)\n\
+         Warning: fopen(): Unable to locate filter \"only.bad\"\n\
+         Warning: fopen(): Unable to create filter (only.bad)\n\
+         Warning: fopen(php://filter/read=never.reached/resource=absent_abc.txt): \
+         Failed to open stream: operation failed\n",
+        "two lines per failed creation, once per applied direction, never on a failed open"
+    );
+}
+
 /// Verifies compiled PHP output for fprintf formats and writes to stream.
 #[test]
 fn test_fprintf_formats_and_writes_to_stream() {
