@@ -26,12 +26,6 @@ Checks if the enum has been defined.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `enum_exists` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/enum_exists.md).

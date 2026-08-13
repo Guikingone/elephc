@@ -2,7 +2,7 @@
 title: "rename() — internals"
 description: "Compiler internals for rename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 154
+  order: 155
 ---
 
 ## `rename()` — internals
@@ -49,6 +49,8 @@ function rename(string $from, string $to): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/rename.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/rename.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

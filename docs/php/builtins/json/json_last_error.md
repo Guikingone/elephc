@@ -2,7 +2,7 @@
 title: "json_last_error()"
 description: "Returns the last error (if any) occurred during the last JSON encoding/decoding."
 sidebar:
-  order: 257
+  order: 258
 ---
 
 ## json_last_error()
@@ -23,12 +23,6 @@ Returns the last error (if any) occurred during the last JSON encoding/decoding.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_last_error.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_last_error.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

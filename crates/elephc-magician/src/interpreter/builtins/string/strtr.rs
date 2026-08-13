@@ -18,12 +18,9 @@
 
 use std::collections::HashMap;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "strtr",
+    contract: "strtr",
     area: String,
-    params: [string, from, to = EvalBuiltinDefaultValue::Null],
     direct: Strtr,
     values: Strtr,
 }

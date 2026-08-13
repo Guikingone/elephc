@@ -14,15 +14,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "defined",
-    area: System,
-    params: [constant_name: Str],
-    returns: Bool,
+    contract: "defined",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Defined,
     ),
-    summary: "Checks whether the given named constant exists.",
 }
 
 /// Validates that the argument is a string literal.

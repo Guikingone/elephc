@@ -2,7 +2,7 @@
 title: "fflush() — internals"
 description: "Compiler internals for fflush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 169
+  order: 170
 ---
 
 ## `fflush()` — internals
@@ -49,6 +49,8 @@ function fflush(resource $stream): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fflush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fflush.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

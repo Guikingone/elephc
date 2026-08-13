@@ -10,15 +10,10 @@
 //!   (`Mixed`) is fully determined by its declaration. The `as_number` parameter
 //!   is optional and defaults to `false`.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "hrtime",
-    area: System,
-    params: [as_number: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "hrtime",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Hrtime,
     ),
-    summary: "Returns the current high-resolution time.",
 }

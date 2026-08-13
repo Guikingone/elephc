@@ -2,7 +2,7 @@
 title: "bindec()"
 description: "Converts a binary string to its decimal number."
 sidebar:
-  order: 266
+  order: 267
 ---
 
 ## bindec()
@@ -24,12 +24,6 @@ Converts a binary string to its decimal number.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

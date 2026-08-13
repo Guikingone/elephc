@@ -2,7 +2,7 @@
 title: "stream_set_timeout() — internals"
 description: "Compiler internals for stream_set_timeout(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 239
+  order: 240
 ---
 
 ## `stream_set_timeout()` — internals
@@ -49,6 +49,8 @@ function stream_set_timeout(resource $stream, int $seconds, int $microseconds = 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_timeout.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_timeout.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

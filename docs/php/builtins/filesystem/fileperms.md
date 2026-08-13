@@ -2,7 +2,7 @@
 title: "fileperms()"
 description: "Gets file permissions."
 sidebar:
-  order: 127
+  order: 128
 ---
 
 ## fileperms()
@@ -24,12 +24,6 @@ Gets file permissions.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

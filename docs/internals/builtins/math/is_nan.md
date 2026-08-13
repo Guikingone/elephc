@@ -2,7 +2,7 @@
 title: "is_nan() — internals"
 description: "Compiler internals for is_nan(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 284
+  order: 285
 ---
 
 ## `is_nan()` — internals
@@ -49,6 +49,8 @@ function is_nan(float $num): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_nan.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

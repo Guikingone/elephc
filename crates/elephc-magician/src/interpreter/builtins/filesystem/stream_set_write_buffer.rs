@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream buffer-setting helper.
 
 eval_builtin! {
-    name: "stream_set_write_buffer",
+    contract: "stream_set_write_buffer",
     area: Filesystem,
-    params: [stream, size],
     direct: Filesystem,
     values: Filesystem,
 }

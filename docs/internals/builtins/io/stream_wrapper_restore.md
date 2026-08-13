@@ -2,7 +2,7 @@
 title: "stream_wrapper_restore() — internals"
 description: "Compiler internals for stream_wrapper_restore(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 252
+  order: 253
 ---
 
 ## `stream_wrapper_restore()` — internals
@@ -49,6 +49,8 @@ function stream_wrapper_restore(string $protocol): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing byte introspection hook.
 
 eval_builtin! {
-    name: "ord",
+    contract: "ord",
     area: String,
-    params: [character],
     direct: Ord,
     values: Ord,
 }

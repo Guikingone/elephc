@@ -2,7 +2,7 @@
 title: "chown() — internals"
 description: "Compiler internals for chown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 115
 ---
 
 ## `chown()` — internals
@@ -49,6 +49,8 @@ function chown(string $filename, string $user): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/chown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chown.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

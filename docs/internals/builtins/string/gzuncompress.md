@@ -49,6 +49,8 @@ function gzuncompress(string $data, int $max_length = 0): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/gzuncompress.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -10,12 +10,9 @@
 
 use super::super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "ob_implicit_flush",
+    contract: "ob_implicit_flush",
     area: Core,
-    params: [enable = EvalBuiltinDefaultValue::Bool(true)],
     direct: Core,
     values: Core,
 }

@@ -26,12 +26,6 @@ Deflate a string using the DEFLATE data format.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `gzdeflate` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/gzdeflate.md).

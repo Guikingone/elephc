@@ -7,16 +7,10 @@
 //! Key details:
 //! - Arity (1–2 args) is validated by the registry's `check_arity` before the hook fires.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "sha1",
-    area: String,
-    params: [string: Str, binary: Bool = DefaultSpec::Bool(false)],
-    returns: Str,
+    contract: "sha1",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sha1,
     ),
-    summary: "Calculates the SHA-1 hash of a string.",
-    php_manual: "https://www.php.net/manual/en/function.sha1.php",
 }

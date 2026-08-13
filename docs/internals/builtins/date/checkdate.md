@@ -2,7 +2,7 @@
 title: "checkdate() — internals"
 description: "Compiler internals for checkdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 97
+  order: 98
 ---
 
 ## `checkdate()` — internals
@@ -49,6 +49,8 @@ function checkdate(int $month, int $day, int $year): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/checkdate.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

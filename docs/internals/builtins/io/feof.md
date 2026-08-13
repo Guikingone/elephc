@@ -2,7 +2,7 @@
 title: "feof() — internals"
 description: "Compiler internals for feof(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 168
+  order: 169
 ---
 
 ## `feof()` — internals
@@ -49,6 +49,8 @@ function feof(resource $stream): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/feof.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -14,13 +14,8 @@
 
 
 builtin! {
-    name: "chdir",
-    area: Io,
-    params: [directory: Str],
-    returns: Bool,
+    contract: "chdir",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chdir,
     ),
-    summary: "Changes the current directory.",
-    php_manual: "function.chdir",
 }

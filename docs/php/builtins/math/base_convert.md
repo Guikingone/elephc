@@ -2,7 +2,7 @@
 title: "base_convert()"
 description: "Converts a number between two arbitrary bases from 2 to 36."
 sidebar:
-  order: 265
+  order: 266
 ---
 
 ## base_convert()
@@ -26,12 +26,6 @@ Converts a number between two arbitrary bases from 2 to 36.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/base_convert.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/base_convert.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the string-search predicate hook.
 
 eval_builtin! {
-    name: "str_contains",
+    contract: "str_contains",
     area: String,
-    params: [haystack, needle],
     direct: StringSearch,
     values: StringSearch,
 }

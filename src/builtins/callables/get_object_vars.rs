@@ -14,19 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "get_object_vars",
-    area: Callables,
-    params: [object: Mixed],
-    returns: Mixed,
+    contract: "get_object_vars",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetObjectVars,
     ),
-    summary: "Returns the accessible non-static properties of an object.",
-    examples: &[
-        "// Full example: examples/get-object-vars/main.php\n$vars = get_object_vars($object);\necho $vars['name'];",
-    ],
-    php_manual: "function.get-object-vars",
 }
 
 /// Requires an object-shaped value and returns a string-keyed Mixed array.

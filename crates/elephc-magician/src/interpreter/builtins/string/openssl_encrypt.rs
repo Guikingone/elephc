@@ -8,22 +8,9 @@
 //! - The crypto bridge consumes raw bytes; this module applies PHP Base64 semantics.
 //! - Successful GCM calls write a fresh tag into the captured caller lvalue.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "openssl_encrypt",
+    contract: "openssl_encrypt",
     area: String,
-    params: [
-        data,
-        cipher_algo,
-        passphrase,
-        options = EvalBuiltinDefaultValue::Int(0),
-        iv = EvalBuiltinDefaultValue::String(""),
-        tag: by_ref = EvalBuiltinDefaultValue::Null,
-        aad = EvalBuiltinDefaultValue::String(""),
-        tag_length = EvalBuiltinDefaultValue::Int(16),
-    ],
-    by_ref: [tag],
     direct: Openssl,
     values: Openssl,
 }

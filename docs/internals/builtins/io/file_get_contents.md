@@ -2,7 +2,7 @@
 title: "file_get_contents() — internals"
 description: "Compiler internals for file_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 174
+  order: 175
 ---
 
 ## `file_get_contents()` — internals
@@ -49,6 +49,8 @@ function file_get_contents(string $filename, bool $use_include_path = false, mix
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

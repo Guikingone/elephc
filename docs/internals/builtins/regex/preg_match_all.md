@@ -49,6 +49,9 @@ function preg_match_all(string $pattern, string $subject): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
+- **Eval signature compatibility**: `additional-by-reference-output`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$matches`.
 

@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "scandir",
-    area: Io,
-    params: [directory: Str],
-    returns: Mixed,
+    contract: "scandir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Scandir,
     ),
-    summary: "Lists files and directories inside the specified path.",
-    php_manual: "function.scandir",
 }
 
 /// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.

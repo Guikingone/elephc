@@ -2,7 +2,7 @@
 title: "fileperms() — internals"
 description: "Compiler internals for fileperms(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 127
+  order: 128
 ---
 
 ## `fileperms()` — internals
@@ -49,6 +49,8 @@ function fileperms(string $filename): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileperms.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

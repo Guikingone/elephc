@@ -13,14 +13,9 @@
 //!   returning the packed-array no-op.
 
 builtin! {
-    name: "ksort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Bool,
+    contract: "ksort",
     check: super::key_sort::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ksort,
     ),
-    summary: "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.",
-    php_manual: "https://www.php.net/manual/en/function.ksort.php",
 }

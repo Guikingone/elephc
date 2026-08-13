@@ -5,9 +5,9 @@ The default report is a deterministic summary of the current architecture.
 Use ``--json`` for the complete per-builtin inventory and
 ``--enforce-target-architecture`` for the final legacy-removal gate.
 
-The inventory is derived from the live ``builtin!``/``eval_builtin!`` registries,
-their exported semantic metadata, and source references. It is deliberately not
-a hand-maintained builtin list.
+The inventory is derived from the shared builtin contract, its live
+``builtin!``/``eval_builtin!`` bindings, exported semantic metadata, and source
+references. It is deliberately not a hand-maintained builtin list.
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ sys.path.insert(0, str(DOCS_LIB))
 import extract as docs_extract  # noqa: E402
 
 SUPPORTED_TARGETS = ["macos-aarch64", "linux-aarch64", "linux-x86_64"]
-LANGUAGE_CONSTRUCTS = {"buffer_new", "die", "empty", "exit", "isset", "unset"}
 SOURCE_SUFFIXES = {".php", ".rs", ".snap"}
 
 
@@ -203,10 +202,17 @@ def build_inventory() -> dict[str, Any]:
     registry_records = [
         record
         for record in exported
-        if "eval_only" not in record and "aot_resident" not in record
+        if (record.get("aot") or {}).get("kind") == "registry"
     ]
-    resident_records = [record for record in exported if record.get("aot_resident")]
-    eval_only_records = [record for record in exported if record.get("eval_only")]
+    resident_records = [
+        record
+        for record in exported
+        if (record.get("aot") or {}).get("supported")
+        and (record.get("aot") or {}).get("kind") != "registry"
+    ]
+    eval_only_records = [
+        record for record in exported if not (record.get("aot") or {}).get("supported")
+    ]
     home_map = docs_extract.build_home_file_map(REPO)
     all_aot_names = [record["name"] for record in registry_records + resident_records]
     test_index = build_test_index(all_aot_names, source_files_with_tests())
@@ -288,13 +294,19 @@ def build_inventory() -> dict[str, Any]:
     compiler_resident = []
     for record in sorted(resident_records, key=lambda item: item["name"].lower()):
         name = record["name"]
-        is_construct = name.lower() in LANGUAGE_CONSTRUCTS
+        route = (record.get("aot") or {}).get("kind", "unknown")
+        target_category = {
+            "language-construct": 5,
+            "dedicated-syntax": 5,
+            "prelude": 4,
+        }.get(route, 0)
         compiler_resident.append(
             {
                 "name": name,
-                "kind": "language_construct" if is_construct else "ordinary_builtin_legacy",
-                "target_category": 5 if is_construct else 4,
-                "required_action": "remain compiler-resident" if is_construct else "migrate into registry",
+                "kind": route,
+                "target_category": target_category,
+                "required_action": "remain on its declared non-registry route",
+                "signature": (record.get("aot") or {}).get("params", []),
                 "eval": record.get("eval"),
                 "tests": test_index.get(name.lower(), []),
             }
@@ -314,6 +326,17 @@ def build_inventory() -> dict[str, Any]:
             "missing_home_files": sorted(record["name"] for record in records if not record["home_file"]),
             "missing_semantic_descriptors": sorted(
                 record["name"] for record in records if not record["lowering"].get("kind")
+            ),
+            "invalid_non_registry_routes": sorted(
+                record["name"]
+                for record in compiler_resident
+                if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}
+            ),
+            "inconsistent_eval_only_flags": sorted(
+                record["name"]
+                for record in exported
+                if bool(record.get("eval_only"))
+                == bool((record.get("aot") or {}).get("supported"))
             ),
         },
     }
@@ -387,8 +410,8 @@ def target_architecture_errors(inventory: dict[str, Any]) -> list[str]:
             )
 
     for record in inventory["compiler_resident"]:
-        if record["kind"] == "ordinary_builtin_legacy":
-            errors.append(f"{record['name']}: ordinary builtin remains outside the registry")
+        if record["kind"] not in {"language-construct", "dedicated-syntax", "prelude"}:
+            errors.append(f"{record['name']}: undeclared non-registry AOT route")
 
     target_source = read(REPO / "src" / "ir" / "runtime_fn.rs")
     builtin_target_variants = dict(

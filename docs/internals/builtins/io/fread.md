@@ -2,7 +2,7 @@
 title: "fread() — internals"
 description: "Compiler internals for fread(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 181
+  order: 182
 ---
 
 ## `fread()` — internals
@@ -49,6 +49,8 @@ function fread(resource $stream, int $length): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fread.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fread.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

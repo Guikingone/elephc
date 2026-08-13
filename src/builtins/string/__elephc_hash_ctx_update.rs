@@ -14,13 +14,8 @@
 //! - Arity (exactly 2 args) is validated by the registry's `check_arity` before the hook fires.
 
 builtin! {
-    name: "__elephc_hash_ctx_update",
-    area: String,
-    params: [context: Mixed, data: Str],
-    returns: Bool,
+    contract: "__elephc_hash_ctx_update",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashUpdate,
     ),
-    summary: "Pumps data into a raw incremental hashing context for the hash prelude.",
-    internal: true,
 }

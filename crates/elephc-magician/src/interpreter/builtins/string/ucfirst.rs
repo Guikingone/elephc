@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the string-case hook.
 
 eval_builtin! {
-    name: "ucfirst",
+    contract: "ucfirst",
     area: String,
-    params: [string],
     direct: StringCase,
     values: StringCase,
 }

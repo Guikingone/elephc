@@ -25,12 +25,6 @@ Executes an external program and displays the output.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `system` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/system.md).

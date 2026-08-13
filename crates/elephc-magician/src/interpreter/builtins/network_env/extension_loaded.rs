@@ -35,9 +35,8 @@ const CORE_LOADED_EXTENSIONS: &[&str] = &[
 ];
 
 eval_builtin! {
-    name: "extension_loaded",
+    contract: "extension_loaded",
     area: NetworkEnv,
-    params: [extension],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

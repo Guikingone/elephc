@@ -2,7 +2,7 @@
 title: "stream_get_contents()"
 description: "Reads remainder of a stream into a string."
 sidebar:
-  order: 226
+  order: 227
 ---
 
 ## stream_get_contents()
@@ -26,12 +26,6 @@ Reads remainder of a stream into a string.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

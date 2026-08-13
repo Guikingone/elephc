@@ -2,7 +2,7 @@
 title: "octdec()"
 description: "Converts a octal string to its decimal number."
 sidebar:
-  order: 291
+  order: 292
 ---
 
 ## octdec()
@@ -24,12 +24,6 @@ Converts a octal string to its decimal number.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

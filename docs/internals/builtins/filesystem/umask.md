@@ -2,7 +2,7 @@
 title: "umask() — internals"
 description: "Compiler internals for umask(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 163
+  order: 164
 ---
 
 ## `umask()` — internals
@@ -49,6 +49,8 @@ function umask(int $mask = null): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/umask.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/umask.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -2,7 +2,7 @@
 title: "link() — internals"
 description: "Compiler internals for link(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 143
+  order: 144
 ---
 
 ## `link()` — internals
@@ -49,6 +49,8 @@ function link(string $target, string $link): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/link.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

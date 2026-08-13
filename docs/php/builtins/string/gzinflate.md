@@ -26,12 +26,6 @@ Inflate a deflated string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `gzinflate` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/gzinflate.md).

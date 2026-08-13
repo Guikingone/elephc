@@ -2,7 +2,7 @@
 title: "mktime() — internals"
 description: "Compiler internals for mktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 107
+  order: 108
 ---
 
 ## `mktime()` — internals
@@ -49,6 +49,8 @@ function mktime(int $hour, int $minute, int $second, int $month, int $day, int $
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/mktime.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

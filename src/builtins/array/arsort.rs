@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "arsort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "arsort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Arsort,
     ),
-    summary: "Sorts an array in descending order and maintains index association.",
-    php_manual: "https://www.php.net/manual/en/function.arsort.php",
 }
 
 /// Validates the argument type for an `arsort` call.

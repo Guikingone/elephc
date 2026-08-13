@@ -23,10 +23,11 @@ use super::Checker;
 
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
-    is_php_visible_builtin_function,
     is_php_visible_builtin_function_for_profile, is_supported_builtin_function,
     strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
 };
+#[cfg(test)]
+pub(crate) use catalog::is_php_visible_builtin_function;
 pub(crate) use callables::{
     array_element_type, array_filter_callback_arg_types, array_key_type,
     array_walk_callback_arg_types, callback_supports_complex_descriptor_env,

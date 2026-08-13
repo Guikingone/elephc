@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_supports_lock",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "stream_supports_lock",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSupportsLock,
     ),
-    summary: "Tells whether the stream supports locking.",
-    php_manual: "function.stream-supports-lock",
 }
 
 /// Validates the stream resource argument and returns `Bool`.

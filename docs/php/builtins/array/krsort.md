@@ -25,12 +25,6 @@ Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not y
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `krsort` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/krsort.md).

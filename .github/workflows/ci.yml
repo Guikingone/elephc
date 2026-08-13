@@ -807,11 +807,16 @@ jobs:
             rust-builtins-docs-
 
       - name: Build the builtin docs exporter
-        # The docs generator reads the single-source `builtin!` registry plus the
-        # eval interpreter's `eval_builtin!` registry via the `gen_builtins`
-        # example (`extract.py` prefers the prebuilt binary at
-        # target/debug/examples/gen_builtins), so it must be built first.
+        # The exporter joins the shared contract to the AOT `builtin!` and
+        # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
+        # debug binary, so compile it before any documentation checks.
         run: cargo build --example gen_builtins
+
+      - name: Enforce builtin target architecture
+        run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
+
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
 
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry

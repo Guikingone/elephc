@@ -2,7 +2,7 @@
 title: "is_dir() — internals"
 description: "Compiler internals for is_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 134
+  order: 135
 ---
 
 ## `is_dir()` — internals
@@ -49,6 +49,8 @@ function is_dir(string $filename): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

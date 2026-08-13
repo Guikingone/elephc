@@ -110,7 +110,6 @@ fn eval_builtin_default_arg(
         EvalBuiltinDefaultValue::Int(value) => values.int(value),
         EvalBuiltinDefaultValue::Float(value) => values.float(value),
         EvalBuiltinDefaultValue::String(value) => values.string(value),
-        EvalBuiltinDefaultValue::Bytes(value) => values.string_bytes_value(value),
         EvalBuiltinDefaultValue::EmptyArray => values.array_new(0),
     }
 }

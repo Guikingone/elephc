@@ -16,13 +16,8 @@
 //!   an object has. A non-object value reports 0.
 
 builtin! {
-    name: "__elephc_object_prop_count",
-    area: Callables,
-    params: [value: Mixed],
-    returns: Int,
+    contract: "__elephc_object_prop_count",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcObjectPropCount,
     ),
-    summary: "Internal: number of renderable properties on an object.",
-    internal: true,
 }

@@ -2,7 +2,7 @@
 title: "json_validate() — internals"
 description: "Compiler internals for json_validate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 259
+  order: 260
 ---
 
 ## `json_validate()` — internals
@@ -49,6 +49,8 @@ function json_validate(string $json, int $depth = 512, int $flags = 0): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_validate.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

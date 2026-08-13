@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ftell",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Int,
+    contract: "ftell",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ftell,
     ),
-    summary: "Returns the current position of the file read/write pointer.",
-    php_manual: "function.ftell",
 }
 
 /// Validates the stream argument is a stream resource and returns `Int`.

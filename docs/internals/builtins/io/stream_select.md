@@ -2,7 +2,7 @@
 title: "stream_select() — internals"
 description: "Compiler internals for stream_select(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 235
+  order: 236
 ---
 
 ## `stream_select()` — internals
@@ -50,6 +50,8 @@ function stream_select(array $read, array $write, array $except, int $seconds, i
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_select.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_select.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `values`
 - **By-reference parameters**: `$read`, `$write`, `$except`.
 

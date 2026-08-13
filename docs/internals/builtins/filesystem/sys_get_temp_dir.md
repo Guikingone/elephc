@@ -2,7 +2,7 @@
 title: "sys_get_temp_dir() — internals"
 description: "Compiler internals for sys_get_temp_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 159
+  order: 160
 ---
 
 ## `sys_get_temp_dir()` — internals
@@ -49,6 +49,8 @@ function sys_get_temp_dir(): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/sys_get_temp_dir.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

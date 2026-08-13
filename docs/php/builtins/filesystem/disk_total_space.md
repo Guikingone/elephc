@@ -2,7 +2,7 @@
 title: "disk_total_space()"
 description: "Returns the total size of a filesystem or disk partition."
 sidebar:
-  order: 119
+  order: 120
 ---
 
 ## disk_total_space()
@@ -24,12 +24,6 @@ Returns the total size of a filesystem or disk partition.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

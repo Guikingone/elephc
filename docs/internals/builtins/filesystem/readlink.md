@@ -2,7 +2,7 @@
 title: "readlink() — internals"
 description: "Compiler internals for readlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 150
+  order: 151
 ---
 
 ## `readlink()` — internals
@@ -49,6 +49,8 @@ function readlink(string $path): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/readlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readlink.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

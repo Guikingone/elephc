@@ -19,18 +19,13 @@ use crate::ir::{Effects, Op};
 use crate::types::PhpType;
 
 builtin! {
-    name: "__elephc_normalize_callable",
-    area: Pointers,
-    params: [value: Mixed],
-    returns: Mixed,
+    contract: "__elephc_normalize_callable",
     check: check,
     semantics: internal_eir_semantics(
         lower,
         Effects::READS_HEAP.union(Effects::ALLOC_HEAP).union(Effects::REFCOUNT_OP),
         BuiltinResultOwnership::Fresh,
     ),
-    summary: "Normalizes a PHP callable into an owned runtime descriptor.",
-    internal: true
 }
 
 /// Infers the source expression and exposes the owned callable result type.

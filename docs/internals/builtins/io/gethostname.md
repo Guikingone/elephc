@@ -2,7 +2,7 @@
 title: "gethostname() — internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 191
+  order: 192
 ---
 
 ## `gethostname()` — internals
@@ -49,6 +49,8 @@ function gethostname(): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/gethostname.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

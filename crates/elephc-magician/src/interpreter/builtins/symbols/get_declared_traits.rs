@@ -8,9 +8,8 @@
 //! - Array construction is shared with `get_declared_classes()`.
 
 eval_builtin! {
-    name: "get_declared_traits",
+    contract: "get_declared_traits",
     area: Symbols,
-    params: [],
     direct: Symbols,
     values: Symbols,
 }

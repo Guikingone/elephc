@@ -27,12 +27,6 @@ Compares the first n bytes of two strings, ignoring ASCII case.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strncasecmp` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strncasecmp.md).

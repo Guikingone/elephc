@@ -2,7 +2,7 @@
 title: "fclose() — internals"
 description: "Compiler internals for fclose(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 166
+  order: 167
 ---
 
 ## `fclose()` — internals
@@ -49,6 +49,8 @@ function fclose(resource $stream): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fclose.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

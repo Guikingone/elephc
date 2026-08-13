@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "getenv",
+    contract: "getenv",
     area: NetworkEnv,
-    params: [name],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

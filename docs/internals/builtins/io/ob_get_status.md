@@ -2,7 +2,7 @@
 title: "ob_get_status() — internals"
 description: "Compiler internals for ob_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 206
+  order: 207
 ---
 
 ## `ob_get_status()` — internals
@@ -49,6 +49,8 @@ function ob_get_status(bool $full_status = false): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/ob_get_status.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_get_status.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

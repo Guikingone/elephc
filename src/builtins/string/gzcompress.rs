@@ -7,16 +7,10 @@
 //! Key details:
 //! - Returns a raw string; unlike the decompress variants it never fails.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "gzcompress",
-    area: String,
-    params: [data: Str, level: Int = DefaultSpec::Int(-1)],
-    returns: Str,
+    contract: "gzcompress",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gzcompress,
     ),
-    summary: "Compress a string using the ZLIB data format.",
-    php_manual: "https://www.php.net/manual/en/function.gzcompress.php",
 }

@@ -2,7 +2,7 @@
 title: "date_default_timezone_get() — internals"
 description: "Compiler internals for date_default_timezone_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 100
 ---
 
 ## `date_default_timezone_get()` — internals
@@ -49,6 +49,8 @@ function date_default_timezone_get(): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/date_default_timezone_get.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

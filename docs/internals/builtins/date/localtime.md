@@ -2,7 +2,7 @@
 title: "localtime() — internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 105
+  order: 106
 ---
 
 ## `localtime()` — internals
@@ -49,6 +49,9 @@ function localtime(int $timestamp = -1, bool $associative = false): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/localtime.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
+- **Eval signature compatibility**: `runtime-default-representation`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

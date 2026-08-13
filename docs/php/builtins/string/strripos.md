@@ -27,12 +27,6 @@ Finds the numeric position of the last case-insensitive occurrence of a substrin
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strripos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strripos.md).

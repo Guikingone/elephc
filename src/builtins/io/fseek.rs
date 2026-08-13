@@ -12,19 +12,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fseek",
-    area: Io,
-    params: [stream: Mixed, offset: Int, whence: Int = DefaultSpec::Int(0)],
-    returns: Int,
+    contract: "fseek",
     check: check,
     semantics: fseek_semantics(),
-    summary: "Seeks on a file pointer.",
-    php_manual: "function.fseek",
 }
 
 /// Builds semantics whose EIR result matches the backend's integer status sentinel.

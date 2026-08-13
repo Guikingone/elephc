@@ -8,9 +8,8 @@
 //! - No-op stub behavior is shared with `spl_autoload()`.
 
 eval_builtin! {
-    name: "spl_autoload_call",
+    contract: "spl_autoload_call",
     area: Symbols,
-    params: [class],
     direct: Symbols,
     values: Symbols,
 }

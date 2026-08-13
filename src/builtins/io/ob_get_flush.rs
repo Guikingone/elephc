@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_get_flush",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "ob_get_flush",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObGetFlush,
     ),
-    summary: "Flushes the output buffer, returns it as a string and turns off output buffering.",
-    php_manual: "function.ob-get-flush",
 }
 
 /// Returns `Union(Str, False)`: the buffered bytes on success, `false` when no

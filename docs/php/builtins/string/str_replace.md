@@ -28,12 +28,6 @@ Replaces all occurrences of a search string with a replacement string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `str_replace` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_replace.md).

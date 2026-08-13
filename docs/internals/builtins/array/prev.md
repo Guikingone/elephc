@@ -50,6 +50,8 @@ function prev(array $array): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/prev.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/prev.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 

@@ -25,12 +25,6 @@ Alias of is_float().
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `is_real` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_real.md).

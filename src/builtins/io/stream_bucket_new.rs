@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "stream_bucket_new",
-    area: Io,
-    params: [stream: Mixed, buffer: Str],
-    returns: Mixed,
+    contract: "stream_bucket_new",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamBucketNew,
     ),
-    summary: "Creates a new bucket for use in a stream filter.",
-    php_manual: "function.stream-bucket-new",
 }

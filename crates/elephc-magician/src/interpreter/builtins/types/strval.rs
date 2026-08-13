@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "strval",
+    contract: "strval",
     area: Types,
-    params: [value],
     direct: Strval,
     values: Strval,
 }

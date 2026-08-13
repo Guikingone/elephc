@@ -2,7 +2,7 @@
 title: "stream_wrapper_unregister() — internals"
 description: "Compiler internals for stream_wrapper_unregister(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 253
+  order: 254
 ---
 
 ## `stream_wrapper_unregister()` — internals
@@ -49,6 +49,8 @@ function stream_wrapper_unregister(string $protocol): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_unregister.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

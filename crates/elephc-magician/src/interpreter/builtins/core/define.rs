@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "define",
+    contract: "define",
     area: Core,
-    params: [constant_name, value],
     direct: Core,
     values: Core,
 }

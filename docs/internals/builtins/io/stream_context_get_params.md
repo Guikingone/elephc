@@ -2,7 +2,7 @@
 title: "stream_context_get_params() — internals"
 description: "Compiler internals for stream_context_get_params(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 219
+  order: 220
 ---
 
 ## `stream_context_get_params()` — internals
@@ -49,6 +49,8 @@ function stream_context_get_params(resource $context): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_params.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

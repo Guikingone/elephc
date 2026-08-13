@@ -13,15 +13,10 @@
 //!   lowering before mutation.
 
 builtin! {
-    name: "krsort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Bool,
+    contract: "krsort",
     check: super::key_sort::check,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Krsort),
         crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort,
     ),
-    summary: "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
-    php_manual: "https://www.php.net/manual/en/function.krsort.php",
 }

@@ -2,7 +2,7 @@
 title: "lstat() — internals"
 description: "Compiler internals for lstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 145
+  order: 146
 ---
 
 ## `lstat()` — internals
@@ -49,6 +49,8 @@ function lstat(string $filename): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lstat.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

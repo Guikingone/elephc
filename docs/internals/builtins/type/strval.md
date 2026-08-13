@@ -47,6 +47,8 @@ function strval(mixed $value): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/strval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/strval.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-object-coercion`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

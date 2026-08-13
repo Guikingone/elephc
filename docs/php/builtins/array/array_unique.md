@@ -25,12 +25,6 @@ Removes duplicate values from an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_unique` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_unique.md).

@@ -2,7 +2,7 @@
 title: "trait_exists() — internals"
 description: "Compiler internals for trait_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 96
+  order: 97
 ---
 
 ## `trait_exists()` — internals
@@ -49,6 +49,8 @@ function trait_exists(string $trait, bool $autoload = true): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/trait_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/trait_exists.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

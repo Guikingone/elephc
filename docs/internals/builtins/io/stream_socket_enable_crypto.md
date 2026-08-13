@@ -2,7 +2,7 @@
 title: "stream_socket_enable_crypto() — internals"
 description: "Compiler internals for stream_socket_enable_crypto(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 243
+  order: 244
 ---
 
 ## `stream_socket_enable_crypto()` — internals
@@ -49,6 +49,8 @@ function stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_enable_crypto.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

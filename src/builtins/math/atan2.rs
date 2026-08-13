@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "atan2",
-    area: Math,
-    params: [y: Float, x: Float],
-    returns: Float,
+    contract: "atan2",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Atan2,
     ),
-    summary: "Returns the arc tangent of two variables.",
-    php_manual: "https://www.php.net/manual/en/function.atan2.php",
 }

@@ -51,6 +51,8 @@ function array_unshift(array $array, ...$values): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_unshift.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `values`
 - **By-reference parameters**: `$array`.
 - **Variadic**: collects excess arguments into `$values`.

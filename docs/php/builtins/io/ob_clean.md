@@ -2,7 +2,7 @@
 title: "ob_clean()"
 description: "Cleans (erases) the contents of the active output buffer."
 sidebar:
-  order: 197
+  order: 198
 ---
 
 ## ob_clean()
@@ -23,12 +23,6 @@ Cleans (erases) the contents of the active output buffer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_clean.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

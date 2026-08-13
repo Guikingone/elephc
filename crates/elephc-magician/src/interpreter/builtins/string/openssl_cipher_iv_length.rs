@@ -8,9 +8,8 @@
 //! - Supported ciphers return their PHP-visible IV length; unknown names return `false`.
 
 eval_builtin! {
-    name: "openssl_cipher_iv_length",
+    contract: "openssl_cipher_iv_length",
     area: String,
-    params: [cipher_algo],
     direct: Openssl,
     values: Openssl,
 }

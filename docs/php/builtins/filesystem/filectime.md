@@ -2,7 +2,7 @@
 title: "filectime()"
 description: "Gets inode change time of file."
 sidebar:
-  order: 122
+  order: 123
 ---
 
 ## filectime()
@@ -24,12 +24,6 @@ Gets inode change time of file.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/filectime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filectime.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

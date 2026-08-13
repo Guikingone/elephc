@@ -28,12 +28,6 @@ Counts the number of non-overlapping substring occurrences.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `substr_count` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/substr_count.md).

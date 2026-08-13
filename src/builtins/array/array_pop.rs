@@ -19,14 +19,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_pop",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Mixed,
+    contract: "array_pop",
     check: check,
     semantics: array_pop_semantics(),
-    summary: "Pops the element off the end of array.",
-    php_manual: "https://www.php.net/manual/en/function.array-pop.php",
 }
 
 /// Builds semantics whose EIR result preserves the builtin's nullable boxed payload.

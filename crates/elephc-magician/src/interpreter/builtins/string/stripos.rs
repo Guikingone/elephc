@@ -11,12 +11,9 @@
 //!   an offset outside the haystack is reference PHP's catchable `ValueError`, reported here as
 //!   `EvalStatus::RuntimeFatal` because eval has no throw machinery.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stripos",
+    contract: "stripos",
     area: String,
-    params: [haystack, needle, offset = EvalBuiltinDefaultValue::Int(0)],
     direct: StringPosition,
     values: StringPosition,
 }

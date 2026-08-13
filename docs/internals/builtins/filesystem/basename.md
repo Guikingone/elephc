@@ -2,7 +2,7 @@
 title: "basename() — internals"
 description: "Compiler internals for basename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 110
+  order: 111
 ---
 
 ## `basename()` — internals
@@ -49,6 +49,8 @@ function basename(string $path, string $suffix = ''): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/basename.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

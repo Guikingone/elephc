@@ -662,6 +662,7 @@ dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
  "console",
+ "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-image",
  "elephc-magician",
@@ -686,6 +687,10 @@ dependencies = [
  "toml_edit 0.25.12+spec-1.1.0",
  "ureq",
 ]
+
+[[package]]
+name = "elephc-builtin-contract"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-crypto"
@@ -724,6 +729,7 @@ dependencies = [
 name = "elephc-magician"
 version = "0.1.0"
 dependencies = [
+ "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-phar",
  "flate2",

@@ -26,12 +26,6 @@ Returns a formatted string using an array of values.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `vsprintf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/vsprintf.md).

@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "urlencode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "urlencode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::UrlEncode),
         crate::ir::Effects::PURE,
     ),
-    summary: "URL-encodes a string using application/x-www-form-urlencoded rules.",
-    php_manual: "https://www.php.net/manual/en/function.urlencode.php",
 }

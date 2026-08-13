@@ -1,6 +1,6 @@
 ---
 title: "die()"
-description: "die() — process builtin supported by Elephc."
+description: "Terminates execution with an optional status."
 sidebar:
   order: 340
 ---
@@ -8,19 +8,19 @@ sidebar:
 ## die()
 
 ```php
-function die(int $status): void
+function die(int $status = 0): void
 ```
 
-`die()` is a process builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Terminates execution with an optional status.
 
 **Parameters**:
-- `$status` (`int`), optional
+- `$status` (`int`), default `0`, optional
 
 **Returns**: `void`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: supported through a dedicated compiler language-construct path.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/die.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/die.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

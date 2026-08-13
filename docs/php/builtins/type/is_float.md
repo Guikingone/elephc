@@ -25,12 +25,6 @@ Checks whether a variable is a floating-point number.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `is_float` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_float.md).

@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_scalar",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_scalar",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Scalar,
     ),
-    summary: "Checks whether a variable is a scalar.",
-    php_manual: "function.is-scalar",
 }

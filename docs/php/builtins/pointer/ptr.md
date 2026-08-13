@@ -26,12 +26,6 @@ Returns a raw pointer to the given variable.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr.md).

@@ -10,15 +10,10 @@
 //!   (`Mixed`) is fully determined by its declaration. Both parameters are optional:
 //!   `timestamp` defaults to -1 (current time) and `associative` defaults to `false`.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "localtime",
-    area: System,
-    params: [timestamp: Int = DefaultSpec::Int(-1), associative: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "localtime",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Localtime,
     ),
-    summary: "Returns the local time.",
 }

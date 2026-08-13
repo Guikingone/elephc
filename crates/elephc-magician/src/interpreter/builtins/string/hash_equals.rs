@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the constant-time byte compare hook.
 
 eval_builtin! {
-    name: "hash_equals",
+    contract: "hash_equals",
     area: String,
-    params: [known_string, user_string],
     direct: HashEquals,
     values: HashEquals,
 }

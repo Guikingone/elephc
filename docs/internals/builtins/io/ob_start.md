@@ -2,7 +2,7 @@
 title: "ob_start() — internals"
 description: "Compiler internals for ob_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 210
 ---
 
 ## `ob_start()` — internals
@@ -49,6 +49,8 @@ function ob_start(mixed $callback = null, int $chunk_size = 0, int $flags = 112)
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/ob_start.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_start.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

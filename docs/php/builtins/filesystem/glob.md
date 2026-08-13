@@ -2,7 +2,7 @@
 title: "glob()"
 description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 133
+  order: 134
 ---
 
 ## glob()
@@ -24,12 +24,6 @@ Finds pathnames matching a pattern.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

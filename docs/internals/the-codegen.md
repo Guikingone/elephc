@@ -88,10 +88,12 @@ families while preserving deterministic linking.
 
 ## Builtin Boundary
 
-Each registry-backed builtin owns one backend-neutral `BuiltinSemantics`
-descriptor in `src/builtins/<area>/<name>.rs`. Checker validation/result typing,
-optimizer effects, ownership/aliasing, runtime/link requirements, callable policy,
-argument lowering, and EIR lowering consume that same descriptor.
+Each PHP builtin surface has one dependency-neutral contract in
+`crates/elephc-builtin-contract`. The AOT home file in
+`src/builtins/<area>/<name>.rs` joins its `BuiltinSemantics` by stable `BuiltinId`.
+Checker validation/result typing, optimizer effects, ownership/aliasing,
+runtime/link requirements, callable policy, argument lowering, and EIR lowering
+consume that assembled view without repeating signature metadata.
 
 Lowering emits reusable EIR primitives/graphs or an `Op::RuntimeCall` carrying a
 typed `RuntimeCallTarget`. `src/codegen/lower_inst/runtime_calls.rs` and the bounded

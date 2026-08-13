@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_sum",
+    contract: "array_sum",
     area: Array,
-    params: [array],
     direct: ArrayAggregate,
     values: ArrayAggregate,
 }

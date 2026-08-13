@@ -28,12 +28,6 @@ Generates a keyed hash value using the HMAC method.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `hash_hmac` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_hmac.md).

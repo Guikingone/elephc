@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the file-probe helper.
 
 eval_builtin! {
-    name: "file_exists",
+    contract: "file_exists",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

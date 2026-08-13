@@ -13,21 +13,16 @@
 //!   Argument types are inferred by the common registry dispatch path before the hook
 //!   fires.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "explode",
-    area: String,
-    params: [separator: Str, string: Str, limit: Int = DefaultSpec::IntMax],
-    returns: Mixed,
+    contract: "explode",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Explode,
     ),
-    summary: "Splits a string by a separator into an array of substrings.",
-    php_manual: "https://www.php.net/manual/en/function.explode.php",
 }
 
 /// Returns `PhpType::Array(Box::new(PhpType::Str))` for an `explode` call.

@@ -18,21 +18,16 @@
 //!   restart on skipped bytes, and PHP's padding rules. `_b64_decode_tbl` carries the
 //!   sentinels that distinguish "skip" from "reject".
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "base64_decode",
-    area: String,
-    params: [string: Str, strict: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "base64_decode",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Base64Decode,
     ),
-    summary: "Decodes a Base64-encoded string back into its original data.",
-    php_manual: "https://www.php.net/manual/en/function.base64-decode.php",
 }
 
 /// Returns `string|false` for every `base64_decode()` call.

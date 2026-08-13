@@ -20,18 +20,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_unshift",
-    area: Array,
-    params: [ref array: Mixed],
-    variadic: "values",
-    min_args: 1,
-    returns: Int,
+    contract: "array_unshift",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayUnshift,
     ),
-    summary: "Prepends one or more elements to the beginning of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-unshift.php",
 }
 
 /// Validates the first argument is an array for an `array_unshift` call.

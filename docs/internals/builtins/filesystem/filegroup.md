@@ -2,7 +2,7 @@
 title: "filegroup() — internals"
 description: "Compiler internals for filegroup(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 123
+  order: 124
 ---
 
 ## `filegroup()` — internals
@@ -49,6 +49,8 @@ function filegroup(string $filename): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filegroup.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filegroup.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

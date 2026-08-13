@@ -11,30 +11,16 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "openssl_encrypt",
-    area: String,
-    params: [
-        data: Str,
-        cipher_algo: Str,
-        passphrase: Str,
-        options: Int = DefaultSpec::Int(0),
-        iv: Str = DefaultSpec::Str(""),
-        ref tag: Mixed = DefaultSpec::Null,
-        aad: Str = DefaultSpec::Str(""),
-        tag_length: Int = DefaultSpec::Int(16)
-    ],
-    returns: Mixed,
+    contract: "openssl_encrypt",
     check: check,
     lazy_check: true,
     semantics: openssl_encrypt_semantics(),
-    summary: "Encrypts data with a supported AES cipher.",
-    php_manual: "https://www.php.net/manual/en/function.openssl-encrypt.php",
 }
 
 /// Builds encrypt semantics that preserve the by-reference tag target during EIR lowering.

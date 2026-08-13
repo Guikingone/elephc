@@ -25,12 +25,6 @@ Removes backslashes from a string previously escaped by addslashes.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stripslashes` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/stripslashes.md).

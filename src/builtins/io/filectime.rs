@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "filectime",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "filectime",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filectime,
     ),
-    summary: "Gets inode change time of file.",
-    php_manual: "function.filectime",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `filectime` can return a timestamp or `false`.

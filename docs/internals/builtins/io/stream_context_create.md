@@ -2,7 +2,7 @@
 title: "stream_context_create() — internals"
 description: "Compiler internals for stream_context_create(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 216
+  order: 217
 ---
 
 ## `stream_context_create()` — internals
@@ -49,6 +49,8 @@ function stream_context_create(array $options = null, array $params = null): mix
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_create.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

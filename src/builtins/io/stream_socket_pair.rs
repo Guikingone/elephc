@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "stream_socket_pair",
-    area: Io,
-    params: [domain: Int, type: Int, protocol: Int],
-    returns: Mixed,
+    contract: "stream_socket_pair",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketPair,
     ),
-    summary: "Creates a pair of connected, indistinguishable socket streams.",
-    php_manual: "function.stream-socket-pair",
 }

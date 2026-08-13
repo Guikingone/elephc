@@ -2,7 +2,7 @@
 title: "stream_context_get_default() — internals"
 description: "Compiler internals for stream_context_get_default(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 217
+  order: 218
 ---
 
 ## `stream_context_get_default()` — internals
@@ -49,6 +49,8 @@ function stream_context_get_default(array $options = null): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_default.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_get_default.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

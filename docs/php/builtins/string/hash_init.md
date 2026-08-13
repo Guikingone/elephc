@@ -8,21 +8,25 @@ sidebar:
 ## hash_init()
 
 ```php
-function hash_init(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed
+function hash_init(string $algo): HashContext
 ```
 
 Opens an incremental hashing context, returning a HashContext object. Provided by the compiler-injected hash prelude in compiled code; the eval interpreter still returns a resource.
 
 **Parameters**:
-- `$algo` (`mixed`)
-- `$flags` (`mixed`), default `'0'`, optional
-- `$key` (`mixed`), default `'""'`, optional
+- `$algo` (`string`)
 
-**Returns**: `mixed`
+**Returns**: `HashContext`
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
+- **Compiled (AOT)**: supported through the compiler-injected hash prelude.
+- **AOT signature compatibility**: `prelude-signature-subset` — compiled code accepts the signature shown above; eval may expose the broader canonical signature.
+- **Effective eval signature**: `hash_init(string $algo, int $flags = 0, string $key = "")`.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+## Internals
+
+For how `hash_init` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_init.md).

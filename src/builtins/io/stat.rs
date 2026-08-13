@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stat",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "stat",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Stat,
     ),
-    summary: "Gives information about a file.",
-    php_manual: "function.stat",
 }
 
 /// Returns `assoc-array<mixed, int>|bool` reflecting that `stat` returns a buffer or `false`.

@@ -2,7 +2,7 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 180
+  order: 181
 ---
 
 ## fputcsv()
@@ -27,12 +27,6 @@ Format line as CSV and write to file pointer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

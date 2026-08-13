@@ -32,12 +32,6 @@ Encrypts data with a supported AES cipher.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `openssl_encrypt` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/openssl_encrypt.md).

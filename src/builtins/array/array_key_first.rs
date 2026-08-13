@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_key_first",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_key_first",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayKeyFirst,
     ),
-    summary: "Gets the first key of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-key-first.php",
 }
 
 /// Validates that the argument is an array or Mixed and returns `Mixed`.

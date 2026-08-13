@@ -2,7 +2,7 @@
 title: "ob_clean() — internals"
 description: "Compiler internals for ob_clean(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 197
+  order: 198
 ---
 
 ## `ob_clean()` — internals
@@ -49,7 +49,8 @@ function ob_clean(): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/ob_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_clean.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(18)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

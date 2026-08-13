@@ -25,12 +25,6 @@ Returns the name of the class of an object.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `get_class` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_class.md).

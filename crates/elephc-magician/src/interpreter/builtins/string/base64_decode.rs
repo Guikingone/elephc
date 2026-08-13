@@ -11,12 +11,9 @@
 //!   input still flushes its accumulated bytes, and a stray byte is dropped by the lax mode
 //!   but makes `$strict = true` return `false`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "base64_decode",
+    contract: "base64_decode",
     area: String,
-    params: [string, strict = EvalBuiltinDefaultValue::Bool(false)],
     direct: Base64Decode,
     values: Base64Decode,
 }

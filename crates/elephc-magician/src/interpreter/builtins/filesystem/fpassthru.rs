@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the unary stream helper.
 
 eval_builtin! {
-    name: "fpassthru",
+    contract: "fpassthru",
     area: Filesystem,
-    params: [stream],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -1,8 +1,8 @@
 ---
 title: "buffer_new()"
-description: "buffer_new() — misc builtin supported by Elephc."
+description: "Allocates a raw byte buffer."
 sidebar:
-  order: 303
+  order: 320
 ---
 
 ## buffer_new()
@@ -11,7 +11,7 @@ sidebar:
 function buffer_new(int $length): mixed
 ```
 
-`buffer_new()` is a misc builtin supported by Elephc. Behavior matches the PHP manual unless noted below.
+Allocates a raw byte buffer.
 
 **Parameters**:
 - `$length` (`int`)
@@ -20,7 +20,7 @@ function buffer_new(int $length): mixed
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: supported through a dedicated AST/EIR syntax path.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_new.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/buffer_new.rs)).
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 

@@ -26,12 +26,6 @@ Appends a bucket to the brigade.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_bucket_append` is implemented in the compiler, see [the internals page](../../../internals/builtins/streams/stream_bucket_append.md).

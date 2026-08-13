@@ -25,12 +25,6 @@ Executes an external program and passes its output directly.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `passthru` is implemented in the compiler, see [the internals page](../../../internals/builtins/process/passthru.md).

@@ -2,7 +2,7 @@
 title: "acos() — internals"
 description: "Compiler internals for acos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 261
+  order: 262
 ---
 
 ## `acos()` — internals
@@ -49,6 +49,8 @@ function acos(float $num): float
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/acos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/acos.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

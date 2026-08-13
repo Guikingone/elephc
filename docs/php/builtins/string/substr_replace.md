@@ -28,12 +28,6 @@ Replaces text within a portion of a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `substr_replace` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/substr_replace.md).

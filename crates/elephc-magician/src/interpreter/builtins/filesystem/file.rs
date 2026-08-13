@@ -10,9 +10,8 @@
 //!   shape-identical to the static registry declaration, which the builtin parity gate asserts.
 
 eval_builtin! {
-    name: "file",
+    contract: "file",
     area: Filesystem,
-    params: [filename, flags = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

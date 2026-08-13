@@ -2,7 +2,7 @@
 title: "get_object_vars()"
 description: "Returns the accessible non-static properties of an object."
 sidebar:
-  order: 310
+  order: 90
 ---
 
 ## get_object_vars()
@@ -29,11 +29,6 @@ Returns the accessible non-static properties of an object.
 $vars = get_object_vars($object);
 echo $vars['name'];
 
-
-
-
-
-
 ## Internals
 
-For how `get_object_vars` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/get_object_vars.md).
+For how `get_object_vars` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_object_vars.md).

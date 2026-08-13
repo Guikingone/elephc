@@ -2,7 +2,7 @@
 title: "chdir() — internals"
 description: "Compiler internals for chdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 111
+  order: 112
 ---
 
 ## `chdir()` — internals
@@ -49,6 +49,8 @@ function chdir(string $directory): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/chdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/chdir.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -27,12 +27,6 @@ Create an array containing a range of elements.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `range` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/range.md).

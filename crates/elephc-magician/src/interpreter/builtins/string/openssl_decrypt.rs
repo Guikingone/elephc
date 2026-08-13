@@ -8,20 +8,9 @@
 //! - Default-mode input is decoded from Base64 before reaching the raw crypto bridge.
 //! - GCM authentication failures and all stable bridge errors return PHP `false`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "openssl_decrypt",
+    contract: "openssl_decrypt",
     area: String,
-    params: [
-        data,
-        cipher_algo,
-        passphrase,
-        options = EvalBuiltinDefaultValue::Int(0),
-        iv = EvalBuiltinDefaultValue::String(""),
-        tag = EvalBuiltinDefaultValue::Null,
-        aad = EvalBuiltinDefaultValue::String(""),
-    ],
     direct: Openssl,
     values: Openssl,
 }

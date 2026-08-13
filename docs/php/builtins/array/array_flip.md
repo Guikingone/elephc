@@ -25,12 +25,6 @@ Exchanges all keys with their associated values in an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_flip` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_flip.md).

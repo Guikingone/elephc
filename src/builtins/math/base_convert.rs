@@ -14,13 +14,8 @@
 //!   owns that contract.
 
 builtin! {
-    name: "base_convert",
-    area: Math,
-    params: [num: Str, from_base: Int, to_base: Int],
-    returns: Str,
+    contract: "base_convert",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BaseConvert,
     ),
-    summary: "Converts a number between two arbitrary bases from 2 to 36.",
-    php_manual: "https://www.php.net/manual/en/function.base-convert.php",
 }

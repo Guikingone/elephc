@@ -2,7 +2,7 @@
 title: "fstat() — internals"
 description: "Compiler internals for fstat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 184
+  order: 185
 ---
 
 ## `fstat()` — internals
@@ -49,6 +49,8 @@ function fstat(resource $stream): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fstat.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fstat.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

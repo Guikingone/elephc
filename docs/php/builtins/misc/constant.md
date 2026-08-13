@@ -25,12 +25,6 @@ Returns the value of a constant given its name.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `constant` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/constant.md).

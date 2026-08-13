@@ -2,7 +2,7 @@
 title: "get_object_vars() — internals"
 description: "Compiler internals for get_object_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 90
 ---
 
 ## `get_object_vars()` — internals
@@ -49,8 +49,10 @@ function get_object_vars(mixed $object): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 
-- [User reference for `get_object_vars()`](../../../php/builtins/misc/get_object_vars.md)
+- [User reference for `get_object_vars()`](../../../php/builtins/class/get_object_vars.md)

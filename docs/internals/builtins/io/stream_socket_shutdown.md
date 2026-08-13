@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown() — internals"
 description: "Compiler internals for stream_socket_shutdown(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 249
+  order: 250
 ---
 
 ## `stream_socket_shutdown()` — internals
@@ -49,6 +49,8 @@ function stream_socket_shutdown(resource $stream, int $mode): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_shutdown.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

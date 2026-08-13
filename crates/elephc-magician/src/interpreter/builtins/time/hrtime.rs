@@ -10,12 +10,9 @@
 use super::super::super::*;
 use super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "hrtime",
+    contract: "hrtime",
     area: Time,
-    params: [as_number = EvalBuiltinDefaultValue::Bool(false)],
     direct: Time,
     values: Time,
 }

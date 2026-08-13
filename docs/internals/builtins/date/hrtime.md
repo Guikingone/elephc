@@ -2,7 +2,7 @@
 title: "hrtime() — internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 105
 ---
 
 ## `hrtime()` — internals
@@ -49,6 +49,8 @@ function hrtime(bool $as_number = false): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/hrtime.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

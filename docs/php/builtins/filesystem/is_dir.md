@@ -2,7 +2,7 @@
 title: "is_dir()"
 description: "Tells whether the filename is a directory."
 sidebar:
-  order: 134
+  order: 135
 ---
 
 ## is_dir()
@@ -24,12 +24,6 @@ Tells whether the filename is a directory.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_dir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

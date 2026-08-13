@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "passthru",
-    area: System,
-    params: [command: Str],
-    returns: Void,
+    contract: "passthru",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Passthru,
     ),
-    summary: "Executes an external program and passes its output directly.",
 }

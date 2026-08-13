@@ -2,7 +2,7 @@
 title: "json_last_error_msg()"
 description: "Returns the error string of the last json_encode() or json_decode() call."
 sidebar:
-  order: 258
+  order: 259
 ---
 
 ## json_last_error_msg()
@@ -23,12 +23,6 @@ Returns the error string of the last json_encode() or json_decode() call.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_last_error_msg.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

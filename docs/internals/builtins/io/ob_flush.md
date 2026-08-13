@@ -2,7 +2,7 @@
 title: "ob_flush() — internals"
 description: "Compiler internals for ob_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 200
+  order: 201
 ---
 
 ## `ob_flush()` — internals
@@ -49,7 +49,8 @@ function ob_flush(): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/ob_flush.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_flush.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(19)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

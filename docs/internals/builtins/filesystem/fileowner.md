@@ -2,7 +2,7 @@
 title: "fileowner() — internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 126
+  order: 127
 ---
 
 ## `fileowner()` — internals
@@ -49,6 +49,8 @@ function fileowner(string $filename): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fileowner.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

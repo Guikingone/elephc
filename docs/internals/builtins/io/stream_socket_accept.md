@@ -2,7 +2,7 @@
 title: "stream_socket_accept() — internals"
 description: "Compiler internals for stream_socket_accept(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 241
+  order: 242
 ---
 
 ## `stream_socket_accept()` — internals
@@ -50,6 +50,8 @@ function stream_socket_accept(resource $socket, float $timeout = null, string $p
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_accept.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `values`
 - **By-reference parameters**: `$peer_name`.
 

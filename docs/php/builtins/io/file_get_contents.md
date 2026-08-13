@@ -2,7 +2,7 @@
 title: "file_get_contents()"
 description: "Reads an entire file into a string."
 sidebar:
-  order: 174
+  order: 175
 ---
 
 ## file_get_contents()
@@ -28,12 +28,6 @@ Reads an entire file into a string.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file_get_contents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -20,16 +20,11 @@ use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
-    name: "abs",
-    area: Math,
-    params: [num: Mixed],
-    returns: Mixed,
+    contract: "abs",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Abs,
     ),
-    summary: "Absolute value.",
-    php_manual: "https://www.php.net/manual/en/function.abs.php",
 }
 
 /// Returns the most precise result type for `abs($num)` based on the argument type.

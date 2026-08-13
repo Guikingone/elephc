@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_offset",
-    area: Pointers,
-    params: [pointer: Mixed, offset: Mixed],
-    returns: Mixed,
+    contract: "ptr_offset",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrOffset,
     ),
-    summary: "Returns a new pointer offset from the given pointer by the given byte count.",
-    extension: true,
 }
 
 /// Validates pointer and integer-compatible offset arguments and returns the pointer type.

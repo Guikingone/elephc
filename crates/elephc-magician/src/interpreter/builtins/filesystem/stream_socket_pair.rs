@@ -8,9 +8,8 @@
 //! - Creates connected local stream resources in eval's stream resource table.
 
 eval_builtin! {
-    name: "stream_socket_pair",
+    contract: "stream_socket_pair",
     area: Filesystem,
-    params: [domain, r#type, protocol],
     direct: Filesystem,
     values: Filesystem,
 }

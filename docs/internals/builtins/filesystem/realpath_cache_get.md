@@ -2,7 +2,7 @@
 title: "realpath_cache_get() — internals"
 description: "Compiler internals for realpath_cache_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 152
+  order: 153
 ---
 
 ## `realpath_cache_get()` — internals
@@ -49,6 +49,8 @@ function realpath_cache_get(): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_get.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

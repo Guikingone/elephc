@@ -7,12 +7,9 @@
 //! Key details:
 //! - Eval mirrors the main backend's conservative no-op autoload behavior.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "spl_autoload",
+    contract: "spl_autoload",
     area: Symbols,
-    params: [class, file_extensions = EvalBuiltinDefaultValue::Null],
     direct: Symbols,
     values: Symbols,
 }

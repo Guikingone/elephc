@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory resource close helper.
 
 eval_builtin! {
-    name: "closedir",
+    contract: "closedir",
     area: Filesystem,
-    params: [dir_handle],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "pi",
-    area: Math,
-    params: [],
-    returns: Float,
+    contract: "pi",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Pi,
     ),
-    summary: "Gets value of pi.",
-    php_manual: "https://www.php.net/manual/en/function.pi.php",
 }

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fread",
-    area: Io,
-    params: [stream: Mixed, length: Int],
-    returns: Str,
+    contract: "fread",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fread,
     ),
-    summary: "Binary-safe file read.",
-    php_manual: "function.fread",
 }
 
 /// Validates the stream argument is a stream resource and returns `Str`.

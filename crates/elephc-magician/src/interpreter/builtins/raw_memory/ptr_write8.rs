@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_write8",
+    contract: "ptr_write8",
     area: RawMemory,
-    params: [pointer, value],
     direct: PtrWrite8,
     values: PtrWrite8,
 }

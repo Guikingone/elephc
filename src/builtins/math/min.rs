@@ -16,19 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "min",
-    area: Math,
-    params: [value: Mixed],
-    variadic: "values",
-    min_args: 1,
-    arity_error: "min() expects at least 1 argument, 0 given",
-    returns: Mixed,
+    contract: "min",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Min,
     ),
-    summary: "Find lowest value.",
-    php_manual: "https://www.php.net/manual/en/function.min.php",
 }
 
 /// Returns the array element type for the single-array form; otherwise returns Float

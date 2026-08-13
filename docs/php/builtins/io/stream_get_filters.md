@@ -2,7 +2,7 @@
 title: "stream_get_filters()"
 description: "Retrieves list of registered filters."
 sidebar:
-  order: 227
+  order: 228
 ---
 
 ## stream_get_filters()
@@ -23,12 +23,6 @@ Retrieves list of registered filters.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stream_get_filters.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

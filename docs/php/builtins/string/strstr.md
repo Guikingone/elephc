@@ -27,12 +27,6 @@ Returns the portion of a string starting at the first occurrence of a substring,
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strstr` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strstr.md).

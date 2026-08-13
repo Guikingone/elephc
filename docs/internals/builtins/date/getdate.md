@@ -2,7 +2,7 @@
 title: "getdate() — internals"
 description: "Compiler internals for getdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 101
+  order: 102
 ---
 
 ## `getdate()` — internals
@@ -49,6 +49,8 @@ function getdate(int $timestamp = null): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/getdate.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/getdate.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

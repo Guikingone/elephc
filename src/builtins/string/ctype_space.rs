@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ctype_space",
-    area: String,
-    params: [text: Str],
-    returns: Bool,
+    contract: "ctype_space",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CtypeSpace,
     ),
-    summary: "Checks if all characters in the string are whitespace characters.",
-    php_manual: "https://www.php.net/manual/en/function.ctype-space.php",
 }

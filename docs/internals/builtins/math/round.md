@@ -2,7 +2,7 @@
 title: "round() — internals"
 description: "Compiler internals for round(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 297
+  order: 298
 ---
 
 ## `round()` — internals
@@ -49,6 +49,8 @@ function round(float $num, int $precision = 0, int $mode = 1): float
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/round.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/round.rs) (`eval_builtin!`)
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(13)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

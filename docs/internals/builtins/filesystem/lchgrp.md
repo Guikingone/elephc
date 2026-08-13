@@ -2,7 +2,7 @@
 title: "lchgrp() — internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 141
+  order: 142
 ---
 
 ## `lchgrp()` — internals
@@ -49,6 +49,8 @@ function lchgrp(string $filename, string $group): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/lchgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/lchgrp.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

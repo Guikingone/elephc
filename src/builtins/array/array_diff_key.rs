@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_diff_key",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_diff_key",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayDiffKey,
     ),
-    summary: "Computes the difference of arrays using keys for comparison.",
-    php_manual: "https://www.php.net/manual/en/function.array-diff-key.php",
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.

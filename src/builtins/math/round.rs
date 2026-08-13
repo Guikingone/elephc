@@ -16,20 +16,10 @@
 //!   out-of-range mode, and the mode can be a runtime value, so the guard lives in the
 //!   backend (`codegen::lower_inst::builtins::round_mode`) next to the ABI materialization.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "round",
-    area: Math,
-    params: [
-        num: Float,
-        precision: Int = DefaultSpec::Int(0),
-        mode: Int = DefaultSpec::Int(1)
-    ],
-    returns: Float,
+    contract: "round",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Round,
     ),
-    summary: "Rounds a float.",
-    php_manual: "https://www.php.net/manual/en/function.round.php",
 }

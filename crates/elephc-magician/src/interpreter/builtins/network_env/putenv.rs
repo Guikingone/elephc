@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "putenv",
+    contract: "putenv",
     area: NetworkEnv,
-    params: [assignment],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

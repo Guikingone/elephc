@@ -2,7 +2,7 @@
 title: "disk_total_space() — internals"
 description: "Compiler internals for disk_total_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 119
+  order: 120
 ---
 
 ## `disk_total_space()` — internals
@@ -49,6 +49,8 @@ function disk_total_space(string $directory): float
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/disk_total_space.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

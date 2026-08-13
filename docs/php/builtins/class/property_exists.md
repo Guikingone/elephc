@@ -2,7 +2,7 @@
 title: "property_exists()"
 description: "Checks whether an object or class has a property."
 sidebar:
-  order: 95
+  order: 96
 ---
 
 ## property_exists()
@@ -25,12 +25,6 @@ Checks whether an object or class has a property.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/property_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/property_exists.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -2,7 +2,7 @@
 title: "fnmatch() — internals"
 description: "Compiler internals for fnmatch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 130
+  order: 131
 ---
 
 ## `fnmatch()` — internals
@@ -49,6 +49,8 @@ function fnmatch(string $pattern, string $filename, int $flags = 0): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fnmatch.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

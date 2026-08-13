@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "asort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "asort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Asort,
     ),
-    summary: "Sorts an array and maintains index association.",
-    php_manual: "https://www.php.net/manual/en/function.asort.php",
 }
 
 /// Validates the argument type for an `asort` call.

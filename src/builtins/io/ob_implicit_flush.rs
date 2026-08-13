@@ -9,16 +9,10 @@
 //!   unbuffered syscalls, so implicit flushing is always effectively on.
 //! - Returns `true` like PHP 8.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "ob_implicit_flush",
-    area: Io,
-    params: [enable: Bool = DefaultSpec::Bool(true)],
-    returns: Bool,
+    contract: "ob_implicit_flush",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObImplicitFlush,
     ),
-    summary: "Turns implicit flush on/off.",
-    php_manual: "function.ob-implicit-flush",
 }

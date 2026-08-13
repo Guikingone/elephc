@@ -2,7 +2,7 @@
 title: "json_decode() — internals"
 description: "Compiler internals for json_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 255
+  order: 256
 ---
 
 ## `json_decode()` — internals
@@ -49,6 +49,8 @@ function json_decode(string $json, bool $associative = null, int $depth = 512, i
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/json/json_decode.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

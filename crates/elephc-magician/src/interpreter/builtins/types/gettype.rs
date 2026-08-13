@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "gettype",
+    contract: "gettype",
     area: Types,
-    params: [value],
     direct: Gettype,
     values: Gettype,
 }

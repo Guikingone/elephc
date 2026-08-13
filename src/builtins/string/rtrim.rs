@@ -12,16 +12,8 @@
 
 
 builtin! {
-    name: "rtrim",
-    area: String,
-    params: [
-        string: Str,
-        characters: Str = crate::builtins::spec::DefaultSpec::Str(" \n\r\t\u{000b}\u{000c}\0"),
-    ],
-    returns: Str,
+    contract: "rtrim",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rtrim,
     ),
-    summary: "Strips whitespace (or other characters) from the end of a string.",
-    php_manual: "https://www.php.net/manual/en/function.rtrim.php",
 }

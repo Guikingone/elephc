@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the unlink helper.
 
 eval_builtin! {
-    name: "unlink",
+    contract: "unlink",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

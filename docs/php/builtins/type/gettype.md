@@ -25,12 +25,6 @@ Returns the type of a variable as a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `gettype` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/gettype.md).

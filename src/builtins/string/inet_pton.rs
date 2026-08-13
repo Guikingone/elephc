@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "inet_pton",
-    area: String,
-    params: [ip: Str],
-    returns: Mixed,
+    contract: "inet_pton",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::InetPton,
     ),
-    summary: "Converts a human-readable IP address to its packed in_addr representation.",
-    php_manual: "https://www.php.net/manual/en/function.inet-pton.php",
 }
 
 /// Returns `PhpType::Union([Str, Bool])` for an `inet_pton` call.

@@ -2,7 +2,7 @@
 title: "flock() — internals"
 description: "Compiler internals for flock(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 176
+  order: 177
 ---
 
 ## `flock()` — internals
@@ -50,6 +50,8 @@ function flock(resource $stream, int $operation, bool $would_block = null): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/flock.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `values`
 - **By-reference parameters**: `$would_block`.
 

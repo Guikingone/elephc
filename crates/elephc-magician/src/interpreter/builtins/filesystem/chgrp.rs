@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the ownership/group helper.
 
 eval_builtin! {
-    name: "chgrp",
+    contract: "chgrp",
     area: Filesystem,
-    params: [filename, group],
     direct: Filesystem,
     values: Filesystem,
 }

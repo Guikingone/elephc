@@ -18,13 +18,8 @@
 //!   so the prelude simply skips empty names.
 
 builtin! {
-    name: "__elephc_object_prop_name",
-    area: Callables,
-    params: [value: Mixed, index: Int],
-    returns: Str,
+    contract: "__elephc_object_prop_name",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcObjectPropName,
     ),
-    summary: "Internal: bare name of an object's Nth renderable property.",
-    internal: true,
 }

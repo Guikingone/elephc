@@ -1,6 +1,6 @@
 ---
 title: "get_class_vars()"
-description: "get_class_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
+description: "Returns visible default properties for a class."
 sidebar:
   order: 86
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_class_vars(mixed $class): mixed
 ```
 
-get_class_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.
+Returns visible default properties for a class.
 
 **Parameters**:
 - `$class` (`mixed`)
@@ -20,7 +20,7 @@ get_class_vars() is available inside eval'd code via the magician interpreter; c
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_class_vars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

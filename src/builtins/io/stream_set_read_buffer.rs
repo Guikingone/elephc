@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "stream_set_read_buffer",
-    area: Io,
-    params: [stream: Mixed, size: Int],
-    returns: Int,
+    contract: "stream_set_read_buffer",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetReadBuffer,
     ),
-    summary: "Sets the read file buffering on a stream.",
-    php_manual: "function.stream-set-read-buffer",
 }

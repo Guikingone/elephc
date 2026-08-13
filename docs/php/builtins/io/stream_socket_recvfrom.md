@@ -2,7 +2,7 @@
 title: "stream_socket_recvfrom()"
 description: "Receives data from a socket, connected or not."
 sidebar:
-  order: 246
+  order: 247
 ---
 
 ## stream_socket_recvfrom()
@@ -27,12 +27,6 @@ Receives data from a socket, connected or not.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

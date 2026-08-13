@@ -24,12 +24,6 @@ Returns an array of all declared interfaces.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `get_declared_interfaces` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/get_declared_interfaces.md).

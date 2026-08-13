@@ -2,7 +2,7 @@
 title: "touch()"
 description: "Sets access and modification time of a file."
 sidebar:
-  order: 162
+  order: 163
 ---
 
 ## touch()
@@ -26,12 +26,6 @@ Sets access and modification time of a file.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/touch.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

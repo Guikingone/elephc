@@ -2,7 +2,7 @@
 title: "file()"
 description: "Reads an entire file into an array."
 sidebar:
-  order: 173
+  order: 174
 ---
 
 ## file()
@@ -25,12 +25,6 @@ Reads an entire file into an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

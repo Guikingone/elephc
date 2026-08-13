@@ -9,19 +9,9 @@
 //! - Direct calls keep their source-sensitive by-reference error-output path.
 //! - `pfsockopen` shares this implementation because eval has no persistent sockets.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "fsockopen",
+    contract: "fsockopen",
     area: Filesystem,
-    params: [
-        hostname,
-        port,
-        error_code: by_ref = EvalBuiltinDefaultValue::Null,
-        error_message: by_ref = EvalBuiltinDefaultValue::Null,
-        timeout = EvalBuiltinDefaultValue::Null
-    ],
-    by_ref: [error_code, error_message],
     direct: none,
     values: Filesystem,
 }

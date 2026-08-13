@@ -2,7 +2,7 @@
 title: "mt_rand()"
 description: "Generate a random value via the Mersenne Twister Random Number Generator."
 sidebar:
-  order: 290
+  order: 291
 ---
 
 ## mt_rand()
@@ -25,12 +25,6 @@ Generate a random value via the Mersenne Twister Random Number Generator.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/mt_rand.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/mt_rand.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

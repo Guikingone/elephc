@@ -15,14 +15,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "quoted_printable_encode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "quoted_printable_encode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::QuotedPrintableEncode),
         crate::ir::Effects::PURE,
     ),
-    summary: "Encodes a string with the MIME quoted-printable transfer encoding.",
-    php_manual: "https://www.php.net/manual/en/function.quoted-printable-encode.php",
 }

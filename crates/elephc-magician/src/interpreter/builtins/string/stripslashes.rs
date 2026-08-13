@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing slash unescaping hook.
 
 eval_builtin! {
-    name: "stripslashes",
+    contract: "stripslashes",
     area: String,
-    params: [string],
     direct: Slashes,
     values: Slashes,
 }

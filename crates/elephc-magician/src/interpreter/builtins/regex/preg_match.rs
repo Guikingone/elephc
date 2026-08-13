@@ -8,20 +8,12 @@
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //! - `$matches` writeback for `preg_match()`.
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_match",
+    contract: "preg_match",
     area: Regex,
-    params: [
-        pattern,
-        subject,
-        matches: by_ref = EvalBuiltinDefaultValue::EmptyArray,
-        flags = EvalBuiltinDefaultValue::Int(0),
-    ],
-    by_ref: [matches],
     direct: PregMatch,
     values: PregMatch,
 }

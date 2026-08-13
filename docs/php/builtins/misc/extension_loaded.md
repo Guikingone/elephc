@@ -25,12 +25,6 @@ Checks whether a named PHP extension is loaded.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `extension_loaded` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/extension_loaded.md).

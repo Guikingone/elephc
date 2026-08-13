@@ -2,7 +2,7 @@
 title: "stream_context_set_option() — internals"
 description: "Compiler internals for stream_context_set_option(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 221
+  order: 222
 ---
 
 ## `stream_context_set_option()` — internals
@@ -49,6 +49,8 @@ function stream_context_set_option(resource $context, string $wrapper_or_options
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_option.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

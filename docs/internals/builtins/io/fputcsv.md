@@ -2,7 +2,7 @@
 title: "fputcsv() — internals"
 description: "Compiler internals for fputcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 180
+  order: 181
 ---
 
 ## `fputcsv()` — internals
@@ -49,6 +49,8 @@ function fputcsv(resource $stream, array $fields, string $separator = ',', strin
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

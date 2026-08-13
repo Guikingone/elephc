@@ -2,7 +2,7 @@
 title: "stream_isatty() — internals"
 description: "Compiler internals for stream_isatty(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 233
+  order: 234
 ---
 
 ## `stream_isatty()` — internals
@@ -49,6 +49,8 @@ function stream_isatty(resource $stream): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_isatty.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_isatty.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

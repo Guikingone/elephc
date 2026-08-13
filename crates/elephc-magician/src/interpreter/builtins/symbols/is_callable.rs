@@ -8,17 +8,9 @@
 //! - Direct and dynamic-ref paths preserve `$callable_name` writeback.
 //! - Syntax-only callable checks avoid resolving non-object string targets.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "is_callable",
+    contract: "is_callable",
     area: Symbols,
-    params: [
-        value,
-        syntax_only = EvalBuiltinDefaultValue::Bool(false),
-        callable_name: by_ref = EvalBuiltinDefaultValue::Null
-    ],
-    by_ref: [callable_name],
     direct: Symbols,
     values: Symbols,
 }

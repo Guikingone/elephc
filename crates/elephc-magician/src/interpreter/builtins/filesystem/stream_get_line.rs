@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the delimiter-aware stream line helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_get_line",
+    contract: "stream_get_line",
     area: Filesystem,
-    params: [stream, length, ending = EvalBuiltinDefaultValue::String("")],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -2,7 +2,7 @@
 title: "fopen() — internals"
 description: "Compiler internals for fopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 177
+  order: 178
 ---
 
 ## `fopen()` — internals
@@ -49,6 +49,8 @@ function fopen(string $filename, string $mode, bool $use_include_path = false, m
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fopen.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fopen.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -2,7 +2,7 @@
 title: "is_file() — internals"
 description: "Compiler internals for is_file(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 136
+  order: 137
 ---
 
 ## `is_file()` — internals
@@ -49,6 +49,8 @@ function is_file(string $filename): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_file.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

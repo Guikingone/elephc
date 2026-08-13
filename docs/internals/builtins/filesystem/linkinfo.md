@@ -2,7 +2,7 @@
 title: "linkinfo() — internals"
 description: "Compiler internals for linkinfo(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 144
+  order: 145
 ---
 
 ## `linkinfo()` — internals
@@ -49,6 +49,8 @@ function linkinfo(string $path): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/linkinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/linkinfo.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

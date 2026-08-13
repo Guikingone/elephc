@@ -2,7 +2,7 @@
 title: "stream_filter_remove() — internals"
 description: "Compiler internals for stream_filter_remove(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 225
+  order: 226
 ---
 
 ## `stream_filter_remove()` — internals
@@ -49,6 +49,8 @@ function stream_filter_remove(resource $stream_filter): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_remove.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

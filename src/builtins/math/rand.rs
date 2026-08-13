@@ -14,17 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "rand",
-    area: Math,
-    params: [min: Int, max: Int],
-    min_args: 0,
-    returns: Int,
+    contract: "rand",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rand,
     ),
-    summary: "Generate a random integer.",
-    php_manual: "https://www.php.net/manual/en/function.rand.php",
 }
 
 /// Rejects exactly 1 argument, matching PHP's "0 or 2 arguments" arity rule.

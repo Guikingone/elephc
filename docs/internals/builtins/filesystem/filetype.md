@@ -2,7 +2,7 @@
 title: "filetype() — internals"
 description: "Compiler internals for filetype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 129
+  order: 130
 ---
 
 ## `filetype()` — internals
@@ -49,6 +49,8 @@ function filetype(string $filename): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/filetype.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

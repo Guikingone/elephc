@@ -2,7 +2,7 @@
 title: "stream_set_blocking() — internals"
 description: "Compiler internals for stream_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 236
+  order: 237
 ---
 
 ## `stream_set_blocking()` — internals
@@ -49,6 +49,8 @@ function stream_set_blocking(resource $stream, bool $enable): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_set_blocking.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

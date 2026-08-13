@@ -2,7 +2,7 @@
 title: "is_executable() — internals"
 description: "Compiler internals for is_executable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 136
 ---
 
 ## `is_executable()` — internals
@@ -49,6 +49,8 @@ function is_executable(string $filename): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

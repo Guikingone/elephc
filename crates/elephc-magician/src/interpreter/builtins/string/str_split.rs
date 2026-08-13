@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the string-split hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "str_split",
+    contract: "str_split",
     area: String,
-    params: [string, length = EvalBuiltinDefaultValue::Int(1)],
     direct: StrSplit,
     values: StrSplit,
 }

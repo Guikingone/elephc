@@ -27,12 +27,6 @@ Counts the words in a string, or returns them as a list or byte-offset map.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `str_word_count` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/str_word_count.md).

@@ -2,7 +2,7 @@
 title: "symlink() — internals"
 description: "Compiler internals for symlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 158
+  order: 159
 ---
 
 ## `symlink()` — internals
@@ -49,6 +49,8 @@ function symlink(string $target, string $link): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/symlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/symlink.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

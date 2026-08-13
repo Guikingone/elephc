@@ -25,12 +25,6 @@ Counts the occurrences of each distinct value in an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_count_values` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_count_values.md).
