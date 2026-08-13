@@ -98,6 +98,8 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_pad(emitter);
     arrays::emit_array_pad_refcounted(emitter);
     arrays::emit_array_diff(emitter);
+    arrays::emit_array_set_op_str(emitter, "__rt_array_diff_str", false);
+    arrays::emit_array_set_op_str(emitter, "__rt_array_intersect_str", true);
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);

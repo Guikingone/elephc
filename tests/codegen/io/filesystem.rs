@@ -366,6 +366,35 @@ unlink("rvd/a.txt"); unlink("rvd/z.txt"); rmdir("rvd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `array_diff()` and `array_intersect()` on STRING arrays.
+///
+/// Both refused string arrays at the shared 8-byte gate — plain literals included — which is
+/// what kept `array_diff(scandir($d), [".", ".."])`, the most ordinary directory idiom in
+/// PHP, from compiling. One parameterised string helper serves both operations (the loop is
+/// identical, only the keep-on-match sense differs), comparing through `__rt_str_eq` and
+/// re-persisting survivors.
+///
+/// The assertions are VALUE-based (implode) on purpose: the whole set-operation family
+/// reindexes its result where php preserves the source keys, a pre-existing divergence the
+/// string variants share with the Int helpers and which is tracked separately.
+#[test]
+fn test_string_array_set_operations_keep_the_right_values()
+{
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo implode(",", array_diff(["a", "b", "c"], ["b"])), "|";
+echo implode(",", array_intersect(["a", "b", "c"], ["b", "c", "z"])), "|";
+mkdir("sod");
+file_put_contents("sod/a.txt", "1");
+file_put_contents("sod/b.txt", "2");
+echo implode(",", array_diff(scandir("sod"), [".", ".."]));
+unlink("sod/a.txt"); unlink("sod/b.txt"); rmdir("sod");
+"#,
+    );
+    assert_eq!(out, "a,c|b,c|a.txt,b.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

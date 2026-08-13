@@ -10,7 +10,11 @@
 use super::*;
 
 /// Returns the element type accepted by indexed-array value set-operation helpers.
-pub(super) fn set_op_indexed_array_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
+pub(super) fn set_op_indexed_array_element_type(
+    ty: PhpType,
+    name: &str,
+    allow_strings: bool,
+) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
@@ -23,6 +27,10 @@ pub(super) fn set_op_indexed_array_element_type(ty: PhpType, name: &str) -> Resu
                     | PhpType::Void
                     | PhpType::Never
             ) || elem.is_refcounted()
+                // 16-byte (ptr, len) slots need a string-aware helper; only the operations
+                // that provide one may accept them, or the 8-byte comparison would read a
+                // descriptor as two unrelated words.
+                || (allow_strings && elem == PhpType::Str)
             {
                 return Ok(elem);
             }

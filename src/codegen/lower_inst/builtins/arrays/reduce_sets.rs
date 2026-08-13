@@ -195,6 +195,7 @@ pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction
         "array_diff",
         "__rt_array_diff",
         "__rt_array_diff_refcounted",
+        Some("__rt_array_diff_str"),
     )
 }
 
@@ -209,6 +210,7 @@ pub(crate) fn lower_array_intersect(
         "array_intersect",
         "__rt_array_intersect",
         "__rt_array_intersect_refcounted",
+        Some("__rt_array_intersect_str"),
     )
 }
 

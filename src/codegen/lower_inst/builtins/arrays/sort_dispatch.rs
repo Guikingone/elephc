@@ -50,12 +50,16 @@ pub(super) fn lower_indexed_array_set_op(
     name: &str,
     scalar_helper: &str,
     refcounted_helper: &str,
+    str_helper: Option<&str>,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name)?;
-    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name)?;
+    let allow_strings = str_helper.is_some();
+    let first_elem_ty =
+        set_op_indexed_array_element_type(ctx.value_php_type(first)?, name, allow_strings)?;
+    let second_elem_ty =
+        set_op_indexed_array_element_type(ctx.value_php_type(second)?, name, allow_strings)?;
     require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
     require_set_op_result_type(name, &first_elem_ty, &inst.result_php_type.codegen_repr())?;
     match ctx.emitter.target.arch {
@@ -68,7 +72,9 @@ pub(super) fn lower_indexed_array_set_op(
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    let helper = if first_elem_ty.is_refcounted() {
+    let helper = if first_elem_ty == PhpType::Str {
+        str_helper.expect("string set-op helper is required after validation")
+    } else if first_elem_ty.is_refcounted() {
         refcounted_helper
     } else {
         scalar_helper
