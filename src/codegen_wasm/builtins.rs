@@ -3449,7 +3449,8 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
     const STREAM: IrType = IrType::Heap(IrHeapKind::Mixed);
     let (helper, operands, result): (_, &'static [IrType], _) = match target {
         RuntimeFnId::Fopen => ("$__rt_fopen", &[IrType::Str, IrType::Str], STREAM),
-        RuntimeFnId::Fwrite => ("$__rt_fwrite", &[STREAM, IrType::Str], IrType::I64),
+        // `fwrite` answers `int|false` upstream now, so the count comes back boxed.
+        RuntimeFnId::Fwrite => ("$__rt_fwrite_boxed", &[STREAM, IrType::Str], STREAM),
         RuntimeFnId::Fread => ("$__rt_fread", &[STREAM, IrType::I64], IrType::Str),
         RuntimeFnId::Fclose => ("$__rt_fclose", &[STREAM], IrType::I64),
         // The position queries. `ftell` answers both stream kinds: WASI has no `fd_tell`, but a
@@ -8029,7 +8030,8 @@ mod tests {
                 &[IrType::Str, IrType::Str][..],
                 STREAM,
             ),
-            (RuntimeFnId::Fwrite, &[STREAM, IrType::Str][..], IrType::I64),
+            // `int|false` upstream: the byte count comes back boxed.
+            (RuntimeFnId::Fwrite, &[STREAM, IrType::Str][..], STREAM),
             (RuntimeFnId::Fread, &[STREAM, IrType::I64][..], IrType::Str),
             (RuntimeFnId::Fclose, &[STREAM][..], IrType::I64),
             (RuntimeFnId::FileExists, &[IrType::Str][..], IrType::I64),

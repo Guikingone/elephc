@@ -33,6 +33,7 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&rt_fopen());
     wm.add_raw_func(&rt_stream_fd());
     wm.add_raw_func(&rt_fwrite());
+    wm.add_raw_func(RT_FWRITE_BOXED);
     wm.add_raw_func(&rt_fread());
     wm.add_raw_func(&rt_fclose());
     wm.add_raw_func(&rt_file_exists());
@@ -541,6 +542,17 @@ fn rt_stream_fd() -> String {
 }
 
 /// `__rt_fwrite`: writes a string to a stream and answers the byte count.
+/// `__rt_fwrite_boxed`: `fwrite`'s byte count boxed as PHP's `int|false` cell.
+///
+/// The EIR types the result `mixed` since upstream widened the contract. This runtime
+/// never answers `false` — a failed write reports 0 bytes, as the raw helper always
+/// did — so the box always carries tag 0. The cell is what the consumer releases.
+const RT_FWRITE_BOXED: &str = r#"(func $__rt_fwrite_boxed (param $fd i32) (param $ptr i32) (param $len i64) (result i32)
+  (call $__rt_mixed_from_value (i64.const 0)
+    (call $__rt_fwrite (local.get $fd) (local.get $ptr) (local.get $len))
+    (i64.const 0)))
+"#;
+
 fn rt_fwrite() -> String {
     format!(
         r#"(func $__rt_fwrite (param $fd i32) (param $ptr i32) (param $len i64) (result i64)
