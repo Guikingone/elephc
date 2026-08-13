@@ -8,8 +8,9 @@
 //! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
-//! - The shared key-sort checker also accepts integer-indexed cells of `array<mixed>`; nested
-//!   lowering validates the runtime payload before sorting or returning the packed-array no-op.
+//! - The shared key-sort checker also accepts integer-indexed cells of `array<mixed>` locals and
+//!   supported property places; nested lowering validates the runtime payload before sorting or
+//!   returning the packed-array no-op.
 
 builtin! {
     name: "ksort",

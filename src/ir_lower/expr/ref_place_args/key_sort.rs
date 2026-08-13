@@ -9,6 +9,8 @@
 //! - Descending order promotes packed receivers to hashes so numeric keys can be relinked.
 //! - Nested Mixed cells are cloned before promotion when a shallow parent alias could observe
 //!   the mutation; attached write-fetched cells retain their parent-owned storage contract.
+//! - Non-local heterogeneous parents are stabilized into a retained temporary, sorted through
+//!   the local path, and written back to their property or containing element.
 
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::ir::{ArrayKeySort, Immediate, Op};
@@ -143,7 +145,9 @@ fn lower_mixed_array_element_key_sort(
         return None;
     };
     let ExprKind::Variable(parent_name) = &array.kind else {
-        return None;
+        return lower_non_local_mixed_array_element_key_sort(
+            ctx, name, sig, arg, place, array, index, expr, sort,
+        );
     };
     if let PhpType::Array(element_ty) = ctx.local_type(parent_name).codegen_repr() {
         if sort == ArrayKeySort::Ascending && element_ty.codegen_repr() != PhpType::Mixed {
@@ -223,6 +227,96 @@ fn lower_mixed_array_element_key_sort(
         );
     }
     lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
+}
+
+/// Sorts a Mixed child of a property or nested parent through a retained local parent copy.
+///
+/// The parent is stabilized before it is read, then written back after the existing local-parent
+/// lowering has performed COW separation, guarded child promotion, and key sorting. This preserves
+/// PHP mutation semantics for `$this->grid[0]`, `$object->rows[$key]`, and deeper supported places.
+#[allow(clippy::too_many_arguments)]
+fn lower_non_local_mixed_array_element_key_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    sig: &FunctionSig,
+    original_arg: &Expr,
+    place: &Expr,
+    array: &Expr,
+    index: &Expr,
+    expr: &Expr,
+    sort: ArrayKeySort,
+) -> Option<LoweredValue> {
+    let parent_ty = super::static_place_type(ctx, array)?.codegen_repr();
+    let supported = match &parent_ty {
+        PhpType::Array(element_ty) => {
+            element_ty.codegen_repr() == PhpType::Mixed
+                && super::super::index_expr_key_type(ctx, index) == PhpType::Int
+        }
+        PhpType::AssocArray { value, .. } => {
+            value.codegen_repr() == PhpType::Mixed
+                && matches!(
+                    super::super::index_expr_key_type(ctx, index),
+                    PhpType::Int | PhpType::Str | PhpType::Mixed
+                )
+        }
+        _ => false,
+    };
+    if !supported {
+        return None;
+    }
+
+    let stabilized = super::stabilize_place(ctx, place);
+    let ExprKind::ArrayAccess {
+        array: stabilized_parent,
+        index: stabilized_index,
+    } = &stabilized.kind
+    else {
+        return None;
+    };
+    let parent_value = lower_expr(ctx, stabilized_parent);
+    let parent_temp = ctx.declare_synthetic_php_local(parent_ty.clone());
+    ctx.store_local(
+        &parent_temp,
+        parent_value,
+        parent_ty,
+        Some(stabilized_parent.span),
+    );
+    let temp_parent = Expr::new(
+        ExprKind::Variable(parent_temp.clone()),
+        stabilized_parent.span,
+    );
+    let nested_place = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(temp_parent.clone()),
+            index: stabilized_index.clone(),
+        },
+        place.span,
+    );
+    let nested_arg = match &original_arg.kind {
+        ExprKind::NamedArg { name, .. } => Expr::new(
+            ExprKind::NamedArg {
+                name: name.clone(),
+                value: Box::new(nested_place),
+            },
+            original_arg.span,
+        ),
+        _ => nested_place,
+    };
+    let result = lower_mixed_array_element_key_sort(
+        ctx,
+        name,
+        sig,
+        std::slice::from_ref(&nested_arg),
+        expr,
+        sort,
+    )?;
+    super::lower_non_local_assignment_write(
+        ctx,
+        stabilized_parent,
+        &temp_parent,
+        stabilized_parent.span,
+    );
+    Some(result)
 }
 
 /// Sorts one packed-parent Mixed cell, widening the parent only when it is still concrete.

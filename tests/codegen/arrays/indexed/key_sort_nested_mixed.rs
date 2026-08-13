@@ -1,11 +1,12 @@
 //! Purpose:
-//! Regression coverage for key sorting nested array values stored in packed `array<mixed>` parents.
+//! Regression coverage for key sorting nested array values stored in heterogeneous parents.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests` through `tests/codegen/arrays/indexed.rs`.
 //!
 //! Key details:
 //! - Both key-sort directions must share runtime tag validation, COW separation, and write-back.
+//! - Local and property-backed parents must accept the same nested Mixed lvalue shapes.
 //! - Scalar and missing child cells must raise builtin-specific PHP `TypeError` diagnostics.
 
 use super::*;
@@ -43,6 +44,43 @@ echo "|" . $matrix["sentinel"];
 "#,
     );
     assert_eq!(out, "true|a1b2|true|b2a1|7");
+}
+
+/// Verifies `$this` and external object property parents use the same nested
+/// Mixed sorting path as locals, including parent-level copy-on-write.
+#[test]
+fn test_key_sorts_nested_mixed_object_property_parents() {
+    let out = compile_and_run(
+        r#"<?php
+class GridOwner {
+    public function __construct(public array $grid, public array $rows) {}
+
+    public function sortGrid(): void {
+        ksort($this->grid[0]);
+    }
+}
+
+function reverseRow(GridOwner $owner, int $key): void {
+    krsort($owner->rows[$key]);
+}
+
+$owner = new GridOwner(
+    [["b" => 2, "a" => 1], "sentinel"],
+    [["a" => 1, "b" => 2], 7],
+);
+$original = $owner->grid;
+$owner->sortGrid();
+foreach ($owner->grid[0] as $key => $value) { echo $key . $value; }
+echo "|";
+foreach ($original[0] as $key => $value) { echo $key . $value; }
+echo "|";
+$key = 0;
+reverseRow($owner, $key);
+foreach ($owner->rows[$key] as $name => $value) { echo $name . $value; }
+echo "|" . $owner->rows[1];
+"#,
+    );
+    assert_eq!(out, "a1b2|b2a1|b2a1|7");
 }
 
 /// Verifies `ksort()` treats a nested packed child as an ascending-key no-op returning true.

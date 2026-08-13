@@ -9,7 +9,8 @@
 //!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
 //!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
 //! - The shared key-sort checker accepts concrete arrays and integer-indexed cells of
-//!   `array<mixed>`; the latter are checked by nested lowering before mutation.
+//!   `array<mixed>` locals or supported property places; the latter are checked by nested
+//!   lowering before mutation.
 
 builtin! {
     name: "krsort",
