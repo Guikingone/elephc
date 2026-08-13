@@ -157,6 +157,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_disk_free_space_warn", DISK_FREE_SPACE_WARNING),
         ("_disk_total_space_warn", DISK_TOTAL_SPACE_WARNING),
         ("_fgc_mode_r", "r"),
+        ("_fpc_mode_w", "w"),
+        ("_fpc_mode_a", "a"),
         ("_fgc_filter_fail_tail", FGC_FILTER_FAIL_TAIL),
         ("_scandir_open_warn_head", SCANDIR_OPEN_WARNING_HEAD),
         ("_scandir_open_warn_mid", SCANDIR_OPEN_WARNING_MIDDLE),

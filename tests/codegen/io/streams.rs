@@ -6431,6 +6431,41 @@ unlink("fgcrt.txt");
     );
 }
 
+/// Verifies `file_put_contents()` writes THROUGH a `php://filter/write=...` chain.
+///
+/// The one-shot writer has nowhere to attach a chain, so a filter URL used to reach it as a
+/// FILENAME — and before the writer checked its open result, the payload went out through a
+/// garbage descriptor. The route opens the resource, attaches the parked write chain, writes
+/// through it and closes; php answers the INPUT byte count, which is what the filtered write
+/// helper returns. One spelling serves both forms (the URL is probed at run time), so the
+/// literal and the assembled URL are asserted against the same expectations:
+/// `rot13|toupper` proves order, FILE_APPEND proves the mode bit, and the unopenable resource
+/// proves the failure warns in php's words — naming `file_put_contents` and the WHOLE URL —
+/// and answers false.
+#[test]
+fn test_file_put_contents_writes_through_a_filter_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(file_put_contents("php://filter/write=string.rot13|string.toupper/resource=wf1.txt", "hello"));
+echo file_get_contents("wf1.txt"), "|";
+unlink("wf1.txt");
+file_put_contents("wf2.txt", "AB");
+var_dump(file_put_contents("php://filter/write=string.rot13/resource=" . "wf2" . ".txt", "cd", FILE_APPEND));
+echo file_get_contents("wf2.txt"), "|";
+unlink("wf2.txt");
+var_dump(file_put_contents("php://filter/write=string.rot13/resource=/no/such/wf.txt", "data"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "int(5)\nURYYB|int(2)\nABpq|bool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: file_put_contents(php://filter/write=string.rot13/resource=/no/such/wf.txt): \
+         Failed to open stream: operation failed\n",
+        "php's wording, the whole URL, and no inner-opener leak"
+    );
+}
+
 /// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
 ///
 /// The direction is published from the resolved count, so this is the case that distinguishes

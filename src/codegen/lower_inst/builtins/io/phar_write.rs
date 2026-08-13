@@ -30,14 +30,231 @@ pub(crate) fn lower_file_put_contents(
         "__rt_file_put_contents"
     };
     let flags = inst.operands.get(2).copied();
+    // A `php://filter/write=.../resource=...` filename writes THROUGH the named filters, which
+    // needs a stream: the one-shot writer below has nowhere to attach a chain. The route probes
+    // the URL at run time — one spelling serves the literal and the assembled form alike — and
+    // falls through to the ordinary writer when the URL is not a usable filter URL.
+    let filter_done = if path_literal.is_none()
+        || path_literal.as_deref().is_some_and(|p| p.starts_with("php://filter/"))
+    {
+        Some(emit_file_put_contents_filter_route(ctx, path, data, flags)?)
+    } else {
+        None
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
         Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
+    }
+    if let Some(done) = filter_done {
+        ctx.emitter.label(&done);                                               // the route rejoins with a raw count or -1
     }
     // php answers `int|false`, and the runtime's -1 is the failure sentinel; the box is what
     // lets `file_put_contents($p, $d) === false` — the manual's own failure test — fire.
     box_negative_int_or_false_result(ctx, "fpc");
     store_if_result(ctx, inst)
+}
+
+/// Writes THROUGH the filters a `php://filter/write=.../resource=...` filename names.
+///
+/// One spelling serves both forms: the URL bytes are probed with `__rt_php_filter_parse` at
+/// run time, so a literal URL and an assembled one take the identical path. When the parse
+/// declines, everything falls through untouched to the ordinary one-shot writer.
+///
+/// The streamed shape mirrors the read route: open the RESOURCE (php:// wrapper or filesystem,
+/// `w`/`a` chosen by the FILE_APPEND bit), attach the parked chain once the stream is boxed,
+/// write through `__rt_fwrite_filtered` — php answers the INPUT byte count, which is what that
+/// helper returns — and close. A resource that cannot be opened warns in php's words, naming
+/// `file_put_contents` and the WHOLE URL with the wrapper's generic `operation failed`, and
+/// leaves -1 for the shared negative-int-or-false boxing.
+///
+/// Emits everything up to and including the fall-through; the caller places the returned
+/// done-label after the plain writer, before the shared boxing, so both paths converge on a
+/// raw count-or-minus-one.
+fn emit_file_put_contents_filter_route(
+    ctx: &mut FunctionContext<'_>,
+    path: ValueId,
+    data: ValueId,
+    flags: Option<ValueId>,
+) -> Result<String> {
+    let done = ctx.next_label("fpc_filter_done");
+    let not_filter = ctx.next_label("fpc_filter_plain");
+    let drop_and_fall = ctx.next_label("fpc_filter_drop");
+    let open_file = ctx.next_label("fpc_filter_file");
+    let mode_ready = ctx.next_label("fpc_filter_mode_ready");
+    let boxed = ctx.next_label("fpc_filter_boxed");
+    let failed = ctx.next_label("fpc_filter_failed");
+    load_string_to_result(ctx, path, "file_put_contents filename")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the URL, for the failure warning
+            ctx.emitter.instruction("mov x0, x1");                              // the candidate filter URL
+            ctx.emitter.instruction("mov x1, x2");                              // and its length
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction(&format!("cbz x0, {}", drop_and_fall));     // not a usable filter URL: the plain writer decides
+            // The openers name themselves and the bare RESOURCE when they fail; php names
+            // `file_put_contents` and the whole URL. Same suppression the read route uses.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // -- the FILE_APPEND bit picks the mode, exactly as it does for the plain writer --
+            match flags {
+                Some(flags) => {
+                    ctx.load_value_to_result(flags)?;
+                }
+                None => ctx.emitter.instruction("mov x0, #0"),
+            }
+            abi::emit_symbol_address(ctx.emitter, "x3", "_fpc_mode_w");
+            ctx.emitter.instruction(&format!("tbz x0, #3, {}", mode_ready));    // FILE_APPEND clear: truncate
+            abi::emit_symbol_address(ctx.emitter, "x3", "_fpc_mode_a");
+            ctx.emitter.label(&mode_ready);
+            ctx.emitter.instruction("mov x4, #1");                              // one mode byte
+            // -- the RESOURCE the parse published decides the opener --
+            abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_res_ptr");
+            ctx.emitter.instruction("ldr x1, [x9]");
+            abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_res_len");
+            ctx.emitter.instruction("ldr x2, [x9]");
+            ctx.emitter.instruction("cmp x2, #6");                              // long enough for php://?
+            ctx.emitter.instruction(&format!("b.lt {}", open_file));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", open_file));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // the wrapper opener takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+            ctx.emitter.instruction(&format!("b {}", boxed));
+            ctx.emitter.label(&open_file);
+            abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
+            ctx.emitter.label(&boxed);
+            box_stream_fd_or_false_result(ctx, "fpc_filter");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: x9/x10 only
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");
+            ctx.emitter.instruction(&format!("b.ne {}", failed));
+            // -- write through the chain, then close the stream php opened on our behalf --
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
+            ctx.emitter.instruction("sub sp, sp, #32");
+            ctx.emitter.instruction("str x9, [sp, #0]");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // x0 = the input byte count php reports
+            ctx.emitter.instruction("str x0, [sp, #8]");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is the route's raw result
+            ctx.emitter.instruction("add sp, sp, #32");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            // php's wording: the function, the WHOLE URL, and the wrapper's generic reason.
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed false, released below
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fpc_prefix");
+            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: file_put_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // the saved full URL
+            ctx.emitter.instruction("ldr x2, [sp, #24]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");                // a fresh unaliased false cell owns nothing else
+            ctx.emitter.instruction("mov x0, #-1");                             // the shared boxing reads -1 as PHP false
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&drop_and_fall);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL on the plain path
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the URL, for the failure warning
+            ctx.emitter.instruction("mov rdi, rax");                            // the candidate filter URL
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its length
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", drop_and_fall));          // not a usable filter URL: the plain writer decides
+            // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            match flags {
+                Some(flags) => {
+                    ctx.load_value_to_result(flags)?;
+                }
+                None => ctx.emitter.instruction("xor eax, eax"),
+            }
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fpc_mode_w");
+            ctx.emitter.instruction("test rax, 8");                             // FILE_APPEND?
+            ctx.emitter.instruction(&format!("jz {}", mode_ready));
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fpc_mode_a");
+            ctx.emitter.label(&mode_ready);
+            ctx.emitter.instruction("mov rsi, 1");                              // one mode byte
+            abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_res_ptr");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");
+            abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_res_len");
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r9]");
+            ctx.emitter.instruction("cmp rdx, 6");                              // long enough for php://?
+            ctx.emitter.instruction(&format!("jl {}", open_file));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", open_file));
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // the wrapper opener takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+            ctx.emitter.instruction(&format!("jmp {}", boxed));
+            ctx.emitter.label(&open_file);
+            abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
+            ctx.emitter.label(&boxed);
+            box_stream_fd_or_false_result(ctx, "fpc_filter");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: r10 only
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");
+            ctx.emitter.instruction(&format!("jne {}", failed));
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
+            ctx.emitter.instruction("sub rsp, 32");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");          // rax = the input byte count php reports
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is the route's raw result
+            ctx.emitter.instruction("add rsp, 32");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed false, released below
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fpc_prefix");
+            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: file_put_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the saved full URL
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov rsi, {}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");                // a fresh unaliased false cell owns nothing else
+            ctx.emitter.instruction("mov rax, -1");                             // the shared boxing reads -1 as PHP false
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&drop_and_fall);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL on the plain path
+        }
+    }
+    ctx.emitter.label(&not_filter);
+    Ok(done)
 }
 
 /// Lowers one-shot `file_put_contents("phar://archive/entry", data)`.
