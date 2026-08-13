@@ -137,7 +137,13 @@ impl Scanner<'_> {
                 for (patterns, value) in arms { self.scan_exprs(patterns); self.scan_expr(value); }
                 if let Some(default) = default { self.scan_expr(default); }
             }
-            ExprKind::ArrayAccess { array, index } => { self.scan_expr(array); self.scan_expr(index); }
+            ExprKind::ArrayAccess { array, index } => {
+                if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    self.record_globals_index(index);
+                }
+                self.scan_expr(array);
+                self.scan_expr(index);
+            }
             ExprKind::Ternary { condition, then_expr, else_expr } => { self.scan_expr(condition); self.scan_expr(then_expr); self.scan_expr(else_expr); }
             ExprKind::Closure { params, variadic_type, return_type, body, .. } => {
                 self.scan_params(params, variadic_type.as_ref(), return_type.as_ref()); self.scan_nested(body, true);

@@ -35,6 +35,7 @@ pub struct Usage {
     pub(crate) instantiated_classes: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
+    pub(crate) dynamic_global_alias: bool,
     pub(crate) variable_methods: HashMap<String, HashSet<(String, bool)>>,
 }
 
@@ -58,6 +59,7 @@ impl Usage {
         self.instantiated_classes.extend(other.instantiated_classes);
         self.required_libraries.extend(other.required_libraries);
         self.global_aliases.extend(other.global_aliases);
+        self.dynamic_global_alias |= other.dynamic_global_alias;
         for (variable, methods) in other.variable_methods {
             self.variable_methods
                 .entry(variable)
@@ -319,7 +321,7 @@ impl Scanner<'_> {
         match &stmt.kind {
             StmtKind::Echo(e) | StmtKind::Throw(e) | StmtKind::ExprStmt(e)
             | StmtKind::ConstDecl { value: e, .. } | StmtKind::Return(Some(e))
-            | StmtKind::ArrayPush { value: e, .. } | StmtKind::Include { path: e, .. }
+            | StmtKind::Include { path: e, .. }
             | StmtKind::StaticPropertyArrayPush { value: e, .. } => self.scan_expr(e),
             StmtKind::Assign { name, value } => {
                 self.scan_expr(value);
@@ -351,8 +353,20 @@ impl Scanner<'_> {
                 self.scan_expr(init);
                 self.forget_variable(name);
             }
-            StmtKind::ArrayAssign { index, value, .. }
-            | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+            StmtKind::ArrayAssign { array, index, value } => {
+                if array == "GLOBALS" {
+                    self.record_globals_index(index);
+                }
+                self.scan_expr(index);
+                self.scan_expr(value);
+            }
+            StmtKind::ArrayPush { array, value } => {
+                if array == "GLOBALS" {
+                    self.usage.dynamic_global_alias = true;
+                }
+                self.scan_expr(value);
+            }
+            StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 self.scan_expr(index);
                 self.scan_expr(value);
             }
@@ -526,6 +540,15 @@ impl Scanner<'_> {
                 self.record_class(attribute.name.as_str());
                 for argument in &attribute.args { self.scan_expr(argument); }
             }
+        }
+    }
+
+    /// Records a `$GLOBALS[...]` alias, preserving literal variable names when possible.
+    fn record_globals_index(&mut self, index: &Expr) {
+        if let ExprKind::StringLiteral(variable) = &index.kind {
+            self.usage.global_aliases.insert(variable.clone());
+        } else {
+            self.usage.dynamic_global_alias = true;
         }
     }
 

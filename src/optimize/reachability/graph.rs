@@ -132,6 +132,7 @@ struct GraphState {
     scanned_methods: HashSet<(String, String, bool)>,
     behaviorally_scanned_methods: HashSet<(String, String, bool)>,
     opaque_variables: HashSet<String>,
+    all_variables_opaque: bool,
     behavioral_variable_methods: HashMap<String, HashSet<(String, bool)>>,
     internal_callable_methods: HashSet<(String, String, bool)>,
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
@@ -206,6 +207,7 @@ impl GraphState {
             scanned_methods: HashSet::new(),
             behaviorally_scanned_methods: HashSet::new(),
             opaque_variables: HashSet::new(),
+            all_variables_opaque: false,
             behavioral_variable_methods: HashMap::new(),
             internal_callable_methods,
             checker_interface_methods,
@@ -570,6 +572,7 @@ impl GraphState {
                 .extend(usage.instantiated_classes.iter().cloned());
             self.opaque_variables
                 .extend(usage.global_aliases.iter().cloned());
+            self.all_variables_opaque |= usage.dynamic_global_alias;
             for (variable, methods) in &usage.variable_methods {
                 self.behavioral_variable_methods
                     .entry(variable.clone())
@@ -620,6 +623,15 @@ impl GraphState {
 
     /// Turns method calls on interprocedurally aliased variable names into wildcard edges.
     fn promote_opaque_variable_methods(&mut self) {
+        if self.all_variables_opaque {
+            self.behavioral.referenced_methods.extend(
+                self.behavioral_variable_methods
+                    .values()
+                    .flatten()
+                    .cloned(),
+            );
+            return;
+        }
         for variable in &self.opaque_variables {
             if let Some(methods) = self.behavioral_variable_methods.get(variable) {
                 self.behavioral
@@ -643,6 +655,7 @@ impl GraphState {
             + self.structural_referenced_methods.len()
             + self.instantiated_classes.len()
             + self.opaque_variables.len()
+            + usize::from(self.all_variables_opaque)
             + self
                 .behavioral_variable_methods
                 .values()

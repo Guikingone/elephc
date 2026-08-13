@@ -194,6 +194,33 @@ fn test_global_alias_keeps_runtime_receiver_method_body() {
     assert_eq!(out, "B");
 }
 
+/// Verifies `$GLOBALS['name']` conservatively retains the aliased receiver method body.
+#[test]
+fn test_globals_array_alias_keeps_receiver_method_body() {
+    let dir = make_cli_test_dir("elephc_decl_reach_globals_alias");
+    let (user_asm, _, _) = compile_source_to_asm_with_options(
+        "<?php
+        class A { public function foo(): string { return 'A'; } }
+        class B extends A { public function foo(): string { return 'B'; } }
+        function later(): void {
+            $GLOBALS['receiver'] = new B();
+        }
+        $receiver = new A();
+        later();
+        echo $receiver->foo();
+        ",
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(
+        user_asm.contains(&elephc::names::method_symbol("B", "foo")),
+        "the `$GLOBALS` alias must retain B::foo even before runtime alias semantics are available"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a by-ref callee can replace a differently named caller receiver safely.
 #[test]
 fn test_by_ref_parameter_keeps_runtime_receiver_method_body() {

@@ -150,6 +150,26 @@ fn prune_reachable_global_alias_keeps_runtime_receiver_method() {
     assert!(has_method(&program, "B", "foo"));
 }
 
+/// Verifies a literal `$GLOBALS` slot aliases the same top-level receiver storage.
+#[test]
+fn prune_reachable_globals_array_alias_keeps_runtime_receiver_method() {
+    let (program, _) = prune(
+        "<?php class A { public function foo(): string { return 'A'; } } class B extends A { public function foo(): string { return 'B'; } } function later(): void { $GLOBALS['x'] = new B(); } $x = new A(); later(); echo $x->foo();",
+    );
+    assert!(has_method(&program, "A", "foo"));
+    assert!(has_method(&program, "B", "foo"));
+}
+
+/// Verifies a dynamic `$GLOBALS` key widens receiver dispatch for every variable name.
+#[test]
+fn prune_dynamic_globals_array_alias_widens_all_receiver_names() {
+    let (program, _) = prune(
+        "<?php class A { public function foo(): string { return 'A'; } } class B extends A { public function foo(): string { return 'B'; } } function later(string $name): void { $GLOBALS[$name] = new B(); } $receiver = new A(); later('receiver'); echo $receiver->foo();",
+    );
+    assert!(has_method(&program, "A", "foo"));
+    assert!(has_method(&program, "B", "foo"));
+}
+
 /// Verifies a direct by-ref call invalidates the caller variable even under a different name.
 #[test]
 fn prune_by_ref_argument_keeps_runtime_receiver_method() {
@@ -168,6 +188,16 @@ fn prune_ignores_global_alias_in_unreachable_function() {
     );
     assert!(has_method(&program, "A", "foo"));
     assert!(!has_class(&program, "B"));
+}
+
+/// Verifies expression-call conservatism deliberately retains methods on every live class.
+#[test]
+fn prune_expr_call_keeps_methods_on_live_classes() {
+    let (program, _) = prune(
+        "<?php class A { public function alpha(): int { return 1; } } class B { public function beta(): int { return 2; } } new A(); new B(); $callback = function(): void {}; ($callback)();",
+    );
+    assert!(has_method(&program, "A", "alpha"));
+    assert!(has_method(&program, "B", "beta"));
 }
 
 /// Verifies PDO's internal initializer builtin retains the private method called by its backend lowering.
