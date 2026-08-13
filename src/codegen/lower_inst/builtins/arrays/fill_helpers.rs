@@ -303,6 +303,10 @@ pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
 
 /// Returns the runtime helper for `array_unique()` based on element ownership.
 pub(super) fn array_unique_runtime_helper(elem_ty: &PhpType) -> &'static str {
+    if *elem_ty == PhpType::Str {
+        // 16-byte (ptr, len) slots re-persisted by the string variant.
+        return "__rt_array_unique_str";
+    }
     if elem_ty.is_refcounted() {
         "__rt_array_unique_refcounted"
     } else {
@@ -421,6 +425,7 @@ pub(super) fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
             | PhpType::Float
             | PhpType::Void
             | PhpType::Mixed
+            | PhpType::Str
             | PhpType::Array(_)
             | PhpType::AssocArray { .. }
             | PhpType::Object(_)

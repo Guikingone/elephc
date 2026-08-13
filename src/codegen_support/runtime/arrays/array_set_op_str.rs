@@ -120,6 +120,162 @@ pub fn emit_array_set_op_str(emitter: &mut Emitter, label: &str, keep_on_match: 
     emitter.instruction("ret");
 }
 
+/// Emits `__rt_array_unique_str`: first occurrences of a string array, in order.
+///
+/// The inner loop compares A[i] against the RESULT built so far — equivalent to comparing
+/// against A's own prefix, and it spares re-deciding elements that were already dropped.
+/// Like the whole family, the result is REINDEXED where php preserves the source keys.
+pub fn emit_array_unique_str(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_array_unique_str_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: array_unique_str ---");
+    emitter.label_global("__rt_array_unique_str");
+
+    // Frame: [0]=source [8]=dest [16]=i [24]=j, linkage at [32].
+    emitter.instruction("sub sp, sp, #48");
+    emitter.instruction("stp x29, x30, [sp, #32]");
+    emitter.instruction("add x29, sp, #32");
+    emitter.instruction("str x0, [sp, #0]");                                    // the source array
+    emitter.instruction("ldr x0, [x0]");                                        // capacity = source length
+    emitter.instruction("mov x1, #16");                                         // 16-byte (ptr, len) slots
+    emitter.instruction("bl __rt_array_new");
+    emitter.instruction("str x0, [sp, #8]");                                    // the destination array
+    emitter.instruction("str xzr, [sp, #16]");                                  // i = 0
+
+    emitter.label("__rt_aus_outer");
+    emitter.instruction("ldr x9, [sp, #16]");                                   // i
+    emitter.instruction("ldr x10, [sp, #0]");
+    emitter.instruction("ldr x11, [x10]");                                      // the source length
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.hs __rt_aus_done");                                  // every element decided
+    emitter.instruction("str xzr, [sp, #24]");                                  // j = 0
+
+    emitter.label("__rt_aus_inner");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // j
+    emitter.instruction("ldr x10, [sp, #8]");
+    emitter.instruction("ldr x11, [x10]");                                      // the kept count so far
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.hs __rt_aus_keep");                                  // nothing kept matches A[i]
+    // A[i] against KEPT[j], both reloaded from their frames: the comparison clobbers freely.
+    emitter.instruction("ldr x10, [sp, #0]");
+    emitter.instruction("ldr x12, [sp, #16]");
+    emitter.instruction("add x10, x10, #24");
+    emitter.instruction("add x10, x10, x12, lsl #4");                           // A[i]'s slot
+    emitter.instruction("ldr x1, [x10]");
+    emitter.instruction("ldr x2, [x10, #8]");
+    emitter.instruction("ldr x10, [sp, #8]");
+    emitter.instruction("add x10, x10, #24");
+    emitter.instruction("add x10, x10, x9, lsl #4");                            // KEPT[j]'s slot
+    emitter.instruction("ldr x3, [x10]");
+    emitter.instruction("ldr x4, [x10, #8]");
+    emitter.instruction("bl __rt_str_eq");                                      // x0 = 1 when the bytes agree
+    emitter.instruction("cbnz x0, __rt_aus_next");                              // a duplicate is dropped
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction("add x9, x9, #1");                                      // j += 1
+    emitter.instruction("str x9, [sp, #24]");
+    emitter.instruction("b __rt_aus_inner");
+
+    emitter.label("__rt_aus_keep");
+    emitter.instruction("ldr x10, [sp, #0]");
+    emitter.instruction("ldr x12, [sp, #16]");
+    emitter.instruction("add x10, x10, #24");
+    emitter.instruction("add x10, x10, x12, lsl #4");                           // A[i]'s slot again
+    emitter.instruction("ldr x1, [x10]");
+    emitter.instruction("ldr x2, [x10, #8]");
+    emitter.instruction("ldr x0, [sp, #8]");
+    emitter.instruction("bl __rt_array_push_str");                              // persist the first occurrence
+    emitter.instruction("str x0, [sp, #8]");                                    // the append may have grown it
+
+    emitter.label("__rt_aus_next");
+    emitter.instruction("ldr x9, [sp, #16]");
+    emitter.instruction("add x9, x9, #1");                                      // i += 1
+    emitter.instruction("str x9, [sp, #16]");
+    emitter.instruction("b __rt_aus_outer");
+
+    emitter.label("__rt_aus_done");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the deduplicated array
+    emitter.instruction("ldp x29, x30, [sp, #32]");
+    emitter.instruction("add sp, sp, #48");
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 form of [`emit_array_unique_str`].
+fn emit_array_unique_str_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: array_unique_str ---");
+    emitter.label_global("__rt_array_unique_str");
+
+    // Frame: [rbp-8]=source [rbp-16]=dest [rbp-24]=i [rbp-32]=j.
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 32");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the source array
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // capacity = source length
+    emitter.instruction("mov rsi, 16");                                         // 16-byte (ptr, len) slots
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the destination array
+    emitter.instruction("mov QWORD PTR [rbp - 24], 0");                         // i = 0
+
+    emitter.label("__rt_aus_outer_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // i
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // against the source length
+    emitter.instruction("jae __rt_aus_done_x");                                 // every element decided
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // j = 0
+
+    emitter.label("__rt_aus_inner_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // j
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");
+    emitter.instruction("cmp r9, QWORD PTR [r10]");                             // against the kept count so far
+    emitter.instruction("jae __rt_aus_keep_x");                                 // nothing kept matches A[i]
+    // A[i] against KEPT[j], both reloaded from their frames: the comparison clobbers freely.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");
+    emitter.instruction("shl r11, 4");
+    emitter.instruction("lea r10, [r10 + r11 + 24]");                           // A[i]'s slot
+    emitter.instruction("mov rdi, QWORD PTR [r10]");
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");
+    emitter.instruction("shl r9, 4");
+    emitter.instruction("lea r10, [r10 + r9 + 24]");                            // KEPT[j]'s slot
+    emitter.instruction("mov rdx, QWORD PTR [r10]");
+    emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");
+    emitter.instruction("call __rt_str_eq");                                    // rax = 1 when the bytes agree
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_aus_next_x");                                 // a duplicate is dropped
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");
+    emitter.instruction("add r9, 1");                                           // j += 1
+    emitter.instruction("mov QWORD PTR [rbp - 32], r9");
+    emitter.instruction("jmp __rt_aus_inner_x");
+
+    emitter.label("__rt_aus_keep_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");
+    emitter.instruction("shl r11, 4");
+    emitter.instruction("lea r10, [r10 + r11 + 24]");                           // A[i]'s slot again
+    emitter.instruction("mov rsi, QWORD PTR [r10]");
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_array_push_str");                            // persist the first occurrence
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the append may have grown it
+
+    emitter.label("__rt_aus_next_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");
+    emitter.instruction("add r9, 1");                                           // i += 1
+    emitter.instruction("mov QWORD PTR [rbp - 24], r9");
+    emitter.instruction("jmp __rt_aus_outer_x");
+
+    emitter.label("__rt_aus_done_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the deduplicated array
+    emitter.instruction("add rsp, 32");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+}
+
 /// Emits `__rt_array_merge_str`: append two string arrays into a new one.
 ///
 /// Same slot story as the set operations: 16-byte descriptors, elements re-persisted so the

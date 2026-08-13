@@ -101,6 +101,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_set_op_str(emitter, "__rt_array_diff_str", false);
     arrays::emit_array_set_op_str(emitter, "__rt_array_intersect_str", true);
     arrays::emit_array_merge_str(emitter);
+    arrays::emit_array_unique_str(emitter);
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
@@ -130,6 +131,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_splice_insert_refcounted(emitter);
     arrays::emit_array_splice_insert_boxed(emitter);
     arrays::emit_array_splice_insert_unboxed(emitter);
+    arrays::emit_array_slice_str(emitter);
     arrays::emit_array_splice_str(emitter);
     arrays::emit_array_splice_insert_str(emitter);
     arrays::emit_array_diff_key(emitter);

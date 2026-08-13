@@ -340,8 +340,12 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty =
-        eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_unique")?;
+    // String arrays take the string variant; see array_reverse above for the slot story.
+    let operand_ty = ctx.value_php_type(array)?;
+    let elem_ty = match operand_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => PhpType::Str,
+        _ => eight_byte_indexed_array_element_type(operand_ty, "array_unique")?,
+    };
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument

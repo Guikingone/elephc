@@ -782,32 +782,18 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
-            RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
-            RuntimeFnId::ArrayDiffKey |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayFlip |
-            RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
-            RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
-            RuntimeFnId::ArraySearch |
-            RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
-            RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
             // `base64_decode()` only reads the subject's bytes and writes its answer into a
@@ -901,7 +887,27 @@ impl RuntimeFnId {
             // be treated
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
-            RuntimeFnId::ArrayChunk
+            // These accept an `array|false` union argument (scandir, glob, file) through the
+            // lowering's unbox-or-throw wrap (`ARRAY_OR_FALSE_ARG_SITES`): a runtime `false`
+            // raises php's catchable TypeError at the argument. Claiming purity let DCE drop
+            // an unused call — and its throw — and let the try-prefix hoist move the call out
+            // of the `try` that must catch it, so the TypeError escaped as uncaught.
+            RuntimeFnId::ArrayColumn
+            | RuntimeFnId::ArrayDiff
+            | RuntimeFnId::ArrayDiffKey
+            | RuntimeFnId::ArrayFlip
+            | RuntimeFnId::ArrayIntersect
+            | RuntimeFnId::ArrayIntersectKey
+            | RuntimeFnId::ArrayMerge
+            | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::ArrayReverse
+            | RuntimeFnId::ArraySearch
+            | RuntimeFnId::ArraySlice
+            | RuntimeFnId::ArraySum
+            | RuntimeFnId::ArrayUnique
+            | RuntimeFnId::ArrayValues
+            // These raise reference PHP's catchable `ValueError` for out-of-range arguments.
+            | RuntimeFnId::ArrayChunk
             | RuntimeFnId::ArrayFill
             | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad

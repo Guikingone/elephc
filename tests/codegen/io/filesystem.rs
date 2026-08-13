@@ -317,7 +317,10 @@ unlink("sd/z.txt"); unlink("sd/a.txt"); rmdir("sd");
 ///
 /// The message is composed at compile time from php's own parameter naming — measured, not
 /// derived — and the throw happens at the argument, before the consumer's lowering ever sees
-/// the value. `sort($d)` exercises the by-reference spelling of the same contract.
+/// the value. `sort($d)` exercises the by-reference spelling of the same contract, and the
+/// variadic tail is asserted through `array_merge`'s SECOND argument, which php words with no
+/// parameter name at all. `array_merge`'s FIRST argument is nameless too — the builtin is
+/// fully variadic — where `array_values` names its `$array`.
 #[test]
 fn test_an_array_or_false_union_argument_throws_phps_type_error() {
     let out = compile_and_run_capture(
@@ -333,6 +336,16 @@ try {
 } catch (TypeError $e) {
     echo $e->getMessage(), "\n";
 }
+try {
+    array_merge([], $d);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    array_merge($d, []);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
 echo "alive\n";
 "#,
     );
@@ -340,7 +353,44 @@ echo "alive\n";
     assert_eq!(
         out.stdout,
         "in_array(): Argument #2 ($haystack) must be of type array, false given\n\
-         sort(): Argument #1 ($array) must be of type array, false given\nalive\n"
+         sort(): Argument #1 ($array) must be of type array, false given\n\
+         array_merge(): Argument #2 must be of type array, false given\n\
+         array_merge(): Argument #1 must be of type array, false given\nalive\n"
+    );
+}
+
+/// Verifies the argument TypeError stays INSIDE its `try` for a pure array-returning builtin.
+///
+/// Two optimizer decisions used to break this: claiming purity for `array_values` let the
+/// try-prefix hoist move `$y = array_values($d)` ABOVE the handler push — the bytes were
+/// right, but the TypeError reported itself uncaught — and let dead-code elimination drop an
+/// unused `array_merge([], $d)` call together with the throw php still performs. Both are
+/// pinned here: the assignment's throw must land in ITS catch, and the discarded call must
+/// still raise.
+#[test]
+fn test_the_union_type_error_is_catchable_and_survives_a_discarded_result() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$d = @scandir("/no/such/dir");
+try {
+    $y = array_values($d);
+    var_dump($y);
+} catch (TypeError $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+try {
+    array_diff([], $d);
+} catch (TypeError $e) {
+    echo "caught: ", $e->getMessage(), "\n";
+}
+echo "alive\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "caught: array_values(): Argument #1 ($array) must be of type array, false given\n\
+         caught: array_diff(): Argument #2 must be of type array, false given\nalive\n"
     );
 }
 
@@ -414,6 +464,52 @@ unlink("mgd/f.txt"); rmdir("mgd");
 "#,
     );
     assert_eq!(out, "a,b,c|x,y|.,..,f.txt,extra");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `array_slice()` on STRING arrays across php's whole window grammar.
+///
+/// The window arithmetic is the shared `emit_slice_bounds` prologue every slice helper
+/// inlines, so the cases pin the string variant against the same negative-offset,
+/// negative-length, omitted-length, and past-the-end rules the scalar helpers honour —
+/// measured against php: `b,c|b,c|b,c,d|b,c|` for the literal spellings.
+#[test]
+fn test_array_slice_on_a_string_array_matches_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$a = ["a", "b", "c", "d"];
+echo implode(",", array_slice($a, 1, 2)), "|";
+echo implode(",", array_slice($a, -3, 2)), "|";
+echo implode(",", array_slice($a, 1)), "|";
+echo implode(",", array_slice($a, 1, -1)), "|";
+echo implode(",", array_slice($a, 10)), "|";
+mkdir("sld");
+file_put_contents("sld/f.txt", "1");
+echo implode(",", array_slice(scandir("sld"), 2));
+unlink("sld/f.txt"); rmdir("sld");
+"#,
+    );
+    assert_eq!(out, "b,c|b,c|b,c,d|b,c||f.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `array_unique()` on STRING arrays keeps the first occurrences, in order.
+///
+/// The inner loop compares against the RESULT built so far, which is equivalent to comparing
+/// against the source's own prefix. Value-based assertions, like the rest of the family: the
+/// result is reindexed where php preserves the source keys, the family's tracked divergence.
+#[test]
+fn test_array_unique_on_a_string_array_keeps_first_occurrences() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo implode(",", array_unique(["a", "b", "a", "c", "b"])), "|";
+mkdir("uqd");
+file_put_contents("uqd/f.txt", "1");
+echo implode(",", array_unique(array_merge(scandir("uqd"), scandir("uqd"))));
+unlink("uqd/f.txt"); rmdir("uqd");
+"#,
+    );
+    assert_eq!(out, "a,b,c|.,..,f.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 

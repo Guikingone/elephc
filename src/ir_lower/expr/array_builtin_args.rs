@@ -96,7 +96,7 @@ pub(super) fn lower_union_array_in_place_sort(
     // in-place sort is visible through the box, and the local needs no write-back.
     let loaded = ctx.load_local(local, Some(args[0].span));
     let mut values = vec![loaded.value];
-    wrap_array_or_false_args_impl(ctx, &canonical, "array", 0, args, &mut values);
+    wrap_array_or_false_args_impl(ctx, &canonical, Some("array"), 0, args, &mut values);
     ctx.emit_void(
         Op::RuntimeCall,
         values,
@@ -114,27 +114,32 @@ pub(super) fn lower_union_array_in_place_sort(
 /// array_pop…) receives the caller's storage and needs its own write-back treatment. Each
 /// entry's check hook must accept the union through `array_or_false_member`, or the pair is
 /// unreachable; each is `(builtin, zero-based argument index, php's parameter name)`.
-const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, &str)] = &[
-    ("array_column", 0, "array"),
-    ("array_count_values", 0, "array"),
-    ("array_diff", 0, "array"),
-    ("array_diff_key", 0, "array"),
-    ("array_filter", 0, "array"),
-    ("array_flip", 0, "array"),
-    ("array_intersect", 0, "array"),
-    ("array_intersect_key", 0, "array"),
-    ("array_map", 1, "array"),
-    ("array_merge", 0, "array"),
-    ("array_pad", 0, "array"),
-    ("array_product", 0, "array"),
-    ("array_rand", 0, "array"),
-    ("array_reverse", 0, "array"),
-    ("array_search", 1, "haystack"),
-    ("array_slice", 0, "array"),
-    ("array_sum", 0, "array"),
-    ("array_unique", 0, "array"),
-    ("array_values", 0, "array"),
-    ("in_array", 1, "haystack"),
+const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, Option<&str>)] = &[
+    ("array_column", 0, Some("array")),
+    ("array_count_values", 0, Some("array")),
+    ("array_diff", 0, Some("array")),
+    ("array_diff", 1, None),
+    ("array_diff_key", 0, Some("array")),
+    ("array_filter", 0, Some("array")),
+    ("array_flip", 0, Some("array")),
+    ("array_intersect", 0, Some("array")),
+    ("array_intersect", 1, None),
+    ("array_intersect_key", 0, Some("array")),
+    ("array_map", 1, Some("array")),
+    // `array_merge(array ...$arrays)` is fully variadic: even its FIRST argument has no
+    // parameter name in php's TypeError, where `array_diff`/`array_intersect` name theirs.
+    ("array_merge", 0, None),
+    ("array_merge", 1, None),
+    ("array_pad", 0, Some("array")),
+    ("array_product", 0, Some("array")),
+    ("array_rand", 0, Some("array")),
+    ("array_reverse", 0, Some("array")),
+    ("array_search", 1, Some("haystack")),
+    ("array_slice", 0, Some("array")),
+    ("array_sum", 0, Some("array")),
+    ("array_unique", 0, Some("array")),
+    ("array_values", 0, Some("array")),
+    ("in_array", 1, Some("haystack")),
 ];
 
 /// Wraps `array|false` union arguments to array-taking builtins in an unbox-or-throw call.
@@ -160,7 +165,7 @@ fn wrap_array_or_false_args(
 fn wrap_array_or_false_args_impl(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
-    param: &str,
+    param: Option<&str>,
     index: usize,
     args: &[Expr],
     values: &mut [crate::ir::ValueId],
@@ -173,12 +178,21 @@ fn wrap_array_or_false_args_impl(
         return;
     };
     let span = args.get(index).map(|arg| arg.span);
-    let message = format!(
-        "{}(): Argument #{} (${}) must be of type array, false given",
-        name,
-        index + 1,
-        param
-    );
+    // A variadic argument has no name in php's wording: `array_merge(): Argument #2 must be
+    // of type array, false given` — measured, no `($name)` segment.
+    let message = match param {
+        Some(param) => format!(
+            "{}(): Argument #{} (${}) must be of type array, false given",
+            name,
+            index + 1,
+            param
+        ),
+        None => format!(
+            "{}(): Argument #{} must be of type array, false given",
+            name,
+            index + 1
+        ),
+    };
     let data = ctx.intern_string(&message);
     let message = ctx
         .builder
