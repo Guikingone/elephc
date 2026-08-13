@@ -37,20 +37,6 @@ pub(super) fn lower_unary_path_int(
     store_if_result(ctx, inst)
 }
 
-/// Loads a path string, calls an array-returning runtime helper, and stores the array.
-pub(super) fn lower_unary_path_array(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
-}
-
 /// Loads a stream resource, calls a boolean fd runtime helper, and stores its result.
 pub(super) fn lower_unary_stream_bool_runtime(
     ctx: &mut FunctionContext<'_>,
