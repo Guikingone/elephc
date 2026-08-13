@@ -3194,7 +3194,6 @@ pub(super) fn unary_string_is_supported(target: UnaryStringRuntime) -> bool {
             | UnaryStringRuntime::UrlDecode
             | UnaryStringRuntime::RawUrlDecode
             | UnaryStringRuntime::Base64Encode
-            | UnaryStringRuntime::Base64Decode
     )
 }
 
@@ -3294,10 +3293,6 @@ pub(super) fn lower_unary_string(
         UnaryStringRuntime::Base64Encode => {
             ctx.fb
                 .ins("call $__rt_str_base64_encode", "encode with padding to a quartet");
-        }
-        UnaryStringRuntime::Base64Decode => {
-            ctx.fb
-                .ins("call $__rt_str_base64_decode", "decode skipping non-alphabet bytes");
         }
         other => {
             return Err(WasmError::Unsupported(format!(
@@ -6816,7 +6811,6 @@ mod tests {
             UnaryStringRuntime::UrlDecode,
             UnaryStringRuntime::RawUrlDecode,
             UnaryStringRuntime::Base64Encode,
-            UnaryStringRuntime::Base64Decode,
         ] {
             assert!(unary_string_is_supported(target), "{target:?} is lowered");
             let ok = unary_string_call(target, IrType::Str, PhpType::Str);

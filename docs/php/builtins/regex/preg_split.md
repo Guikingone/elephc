@@ -2,7 +2,7 @@
 title: "preg_split()"
 description: "Splits a string by a regular expression."
 sidebar:
-  order: 341
+  order: 356
 ---
 
 ## preg_split()

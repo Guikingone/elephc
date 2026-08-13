@@ -2,7 +2,7 @@
 title: "array_is_list() — internals"
 description: "Compiler internals for array_is_list(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 17
+  order: 18
 ---
 
 ## `array_is_list()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_is_list.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_is_list.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

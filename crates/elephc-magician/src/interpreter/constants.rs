@@ -11,6 +11,32 @@
 
 use std::sync::atomic::AtomicU64;
 
+/// Requests raw binary output from the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_RAW_DATA: i64 = 1;
+
+/// Disables block-cipher padding in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_ZERO_PADDING: i64 = 2;
+
+/// Prevents zero-padding short cipher keys in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_DONT_ZERO_PAD_KEY: i64 = 4;
+
+/// `parse_url()` component selector for the scheme.
+pub(super) const EVAL_PHP_URL_SCHEME: i64 = 0;
+/// `parse_url()` component selector for the host.
+pub(super) const EVAL_PHP_URL_HOST: i64 = 1;
+/// `parse_url()` component selector for the port.
+pub(super) const EVAL_PHP_URL_PORT: i64 = 2;
+/// `parse_url()` component selector for the user name.
+pub(super) const EVAL_PHP_URL_USER: i64 = 3;
+/// `parse_url()` component selector for the password.
+pub(super) const EVAL_PHP_URL_PASS: i64 = 4;
+/// `parse_url()` component selector for the path.
+pub(super) const EVAL_PHP_URL_PATH: i64 = 5;
+/// `parse_url()` component selector for the query.
+pub(super) const EVAL_PHP_URL_QUERY: i64 = 6;
+/// `parse_url()` component selector for the fragment.
+pub(super) const EVAL_PHP_URL_FRAGMENT: i64 = 7;
+
 /// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
 pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",
@@ -237,8 +263,22 @@ pub(super) const EVAL_LOCK_NB: i64 = 4;
 pub(super) const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
 pub(super) const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 pub(super) const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
+/// `str_pad()` pads on the left of the input.
+pub(super) const EVAL_STR_PAD_LEFT: i64 = 0;
+/// `str_pad()` pads on the right of the input, which is PHP's default.
+pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
+/// `str_pad()` splits the padding across both sides of the input.
+pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
+/// `round()` breaks exact `.5` ties away from zero, which is PHP's default.
+pub(super) const EVAL_PHP_ROUND_HALF_UP: i64 = 1;
+/// `round()` breaks exact `.5` ties toward zero.
+pub(super) const EVAL_PHP_ROUND_HALF_DOWN: i64 = 2;
+/// `round()` breaks exact `.5` ties toward the nearest even digit.
+pub(super) const EVAL_PHP_ROUND_HALF_EVEN: i64 = 3;
+/// `round()` breaks exact `.5` ties toward the nearest odd digit.
+pub(super) const EVAL_PHP_ROUND_HALF_ODD: i64 = 4;
 pub(super) const EVAL_PREG_SPLIT_NO_EMPTY: i64 = 1;
 pub(super) const EVAL_PREG_SPLIT_DELIM_CAPTURE: i64 = 2;
 pub(super) const EVAL_PREG_SPLIT_OFFSET_CAPTURE: i64 = 4;

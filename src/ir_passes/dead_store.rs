@@ -204,7 +204,9 @@ fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | IDiv | ISDiv | ISMod | IPow | INeg | IBitAnd | IBitOr | IBitXor
+        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+            | ICheckedSubToInt | ICheckedMulToInt | ICheckedPow | IDiv | ISDiv | ISMod
+            | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq

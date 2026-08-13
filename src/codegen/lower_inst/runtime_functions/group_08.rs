@@ -28,6 +28,18 @@ pub(super) fn lower(
         RuntimeFnId::Tanh => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "tanh")
         }),
+        RuntimeFnId::ElephcObjectIsEnum => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_object_is_enum(ctx, inst)
+        }),
+        RuntimeFnId::ElephcObjectPropCount => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_object_prop_count(ctx, inst)
+        }),
+        RuntimeFnId::ElephcObjectPropName => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_object_prop_name(ctx, inst)
+        }),
+        RuntimeFnId::ElephcObjectPropValue => Some({
+            crate::codegen::lower_inst::builtins::object_props::lower_object_prop_value(ctx, inst)
+        }),
         RuntimeFnId::ElephcPtrIsNull => Some({
             crate::codegen::lower_inst::builtins::pointers::lower_ptr_is_null(ctx, inst)
         }),

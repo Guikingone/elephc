@@ -86,12 +86,13 @@ impl RuntimeCallTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryStringRuntime {
     AddSlashes,
-    Base64Decode,
     Base64Encode,
     BinToHex,
     HexToBin,
     HtmlEntityDecode,
     NlToBr,
+    QuoteMeta,
+    QuotedPrintableEncode,
     RawUrlDecode,
     RawUrlEncode,
     StripSlashes,
@@ -110,10 +111,10 @@ impl UnaryStringRuntime {
     pub fn all() -> &'static [UnaryStringRuntime] {
         use UnaryStringRuntime::*;
         &[
-            UnaryStringRuntime::AddSlashes, Base64Decode, Base64Encode, BinToHex, HexToBin,
-            UnaryStringRuntime::HtmlEntityDecode, NlToBr, RawUrlDecode, RawUrlEncode,
-            UnaryStringRuntime::StripSlashes, StrReverse, StrToLower, StrToUpper,
-            UnaryStringRuntime::UrlDecode, UrlEncode,
+            UnaryStringRuntime::AddSlashes, Base64Encode, BinToHex, HexToBin, HtmlEntityDecode,
+            UnaryStringRuntime::NlToBr, QuoteMeta, QuotedPrintableEncode, RawUrlDecode, RawUrlEncode,
+            UnaryStringRuntime::StripSlashes, StrReverse, StrToLower, StrToUpper, UrlDecode,
+            UnaryStringRuntime::UrlEncode,
         ]
     }
 
@@ -121,12 +122,13 @@ impl UnaryStringRuntime {
     pub fn as_eir(self) -> &'static str {
         match self {
             UnaryStringRuntime::AddSlashes => "string.add_slashes",
-            UnaryStringRuntime::Base64Decode => "string.base64_decode",
             UnaryStringRuntime::Base64Encode => "string.base64_encode",
             UnaryStringRuntime::BinToHex => "string.bin_to_hex",
             UnaryStringRuntime::HexToBin => "string.hex_to_bin",
             UnaryStringRuntime::HtmlEntityDecode => "string.html_entity_decode",
             UnaryStringRuntime::NlToBr => "string.nl_to_br",
+            UnaryStringRuntime::QuoteMeta => "string.quote_meta",
+            UnaryStringRuntime::QuotedPrintableEncode => "string.quoted_printable_encode",
             UnaryStringRuntime::RawUrlDecode => "string.raw_url_decode",
             UnaryStringRuntime::RawUrlEncode => "string.raw_url_encode",
             UnaryStringRuntime::StripSlashes => "string.strip_slashes",

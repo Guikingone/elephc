@@ -247,6 +247,14 @@ impl Checker {
     /// it always throws/exits/loops). `Never` combined with a body that *does* contain
     /// return statements produces a compile error. Generic array hints are passed
     /// through as-is to preserve inference.
+    ///
+    /// A method body containing `yield` is a generator: calling it produces a
+    /// `Generator` object regardless of what the body's `return` statements say, so
+    /// generator detection short-circuits the whole inference/validation chain the
+    /// same way the free-function path in `functions::resolution::signature` does.
+    /// Without that short-circuit an unhinted generator method infers `void` (the
+    /// body has no value return) and a `: Generator` hint trips the
+    /// "must return a value on every path" coverage check.
     fn update_method_return_type(
         &mut self,
         class: &FlattenedClass,
@@ -276,7 +284,20 @@ impl Checker {
             Some(widest)
         };
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
-        let effective_return = if let Some(type_ann) = method.return_type.as_ref() {
+        let effective_return = if crate::types::checker::yield_validation::body_contains_yield(
+            &method.body,
+        ) {
+            match self.generator_method_return_type(class, method) {
+                Ok(generator_ty) => generator_ty,
+                Err(error) => {
+                    pass_errors.extend(error.flatten());
+                    self.current_class = None;
+                    self.current_method = None;
+                    self.current_method_is_static = false;
+                    return;
+                }
+            }
+        } else if let Some(type_ann) = method.return_type.as_ref() {
             match self.resolve_declared_return_type_hint(
                 type_ann,
                 method.span,
@@ -398,6 +419,39 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Resolves the return type of a method whose body contains `yield`.
+    ///
+    /// The result is always `Generator`, because that is the object PHP hands back when
+    /// the generator method is called. A declared return hint is still resolved and
+    /// validated: hints that accept a `Generator` (`Generator`, `Traversable`,
+    /// `iterable`, `mixed`, …) pass through, anything else is reported as an
+    /// incompatible return type. Unlike the non-generator path there is no
+    /// return-coverage check — a generator body legitimately has no `return` at all.
+    fn generator_method_return_type(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+    ) -> Result<PhpType, CompileError> {
+        let generator_ty = PhpType::Object("Generator".to_string());
+        if let Some(type_ann) = method.return_type.as_ref() {
+            let declared = self.resolve_declared_return_type_hint(
+                type_ann,
+                method.span,
+                &format!("Method '{}::{}'", class.name, method.name),
+            )?;
+            if !self.generator_return_type_accepts(&declared) {
+                self.require_compatible_return_type(
+                    &declared,
+                    &generator_ty,
+                    true,
+                    method.span,
+                    &format!("Method '{}::{}' return type", class.name, method.name),
+                )?;
+            }
+        }
+        Ok(generator_ty)
     }
 
     /// Updates callable-return metadata for one checked method body.

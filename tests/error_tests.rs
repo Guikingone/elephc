@@ -39,6 +39,10 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let ast = elephc::hash_prelude::inject_if_used(ast, false);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
+    // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
+    // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
+    // their own diagnostics reach this harness instead of a bare `Undefined function`.
+    let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())
@@ -51,6 +55,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast);
     let ast = elephc::hash_prelude::inject_if_used(ast, false);
     let ast = elephc::name_resolver::resolve(ast)?;
+    let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast)
 }

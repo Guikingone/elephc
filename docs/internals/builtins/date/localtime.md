@@ -2,7 +2,7 @@
 title: "localtime() — internals"
 description: "Compiler internals for localtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 99
+  order: 106
 ---
 
 ## `localtime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/localtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/localtime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

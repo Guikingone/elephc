@@ -544,7 +544,7 @@ sidebar:
 
 `ROADMAP.md` is the planning document, organized by version. It stays as it is:
 
-- **Do not add entries to record implemented work.** Implementations are documented in `CHANGELOG.md` under `[Unreleased]` (see below). The roadmap only gains new items when work is being *planned*, under the appropriate future version.
+- **Do not add entries to record implemented work.** The roadmap only gains new items when work is being *planned*, under the appropriate future version.
 - When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
@@ -553,11 +553,7 @@ sidebar:
 
 `CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
 
-**Every implementation lands a bullet under the `## [Unreleased]` section in the same PR** — one terse, user-facing entry describing what shipped, not how it was implemented. If the `[Unreleased]` section does not exist, add it at the top of the file (under the header, above the newest version section) together with its compare link at the top of the link list at the end of the file:
-
-```
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v<latest>...HEAD
-```
+Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate `main` SHA, then prepare the approved user-facing bullets under `[Unreleased]`. An incomplete source ledger or unresolved commit is a release blocker.
 
 When cutting a release:
 
@@ -586,3 +582,28 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+
+## Cursor Cloud specific instructions
+
+The dependency-refresh update script runs `cargo build` on startup, which also
+materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
+compiled programs. Standard build/test/run commands are documented above and in
+`CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
+
+- **Rust toolchain is version-pinned.** CI pins the toolchain in
+  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
+  greps build output, so use that exact toolchain rather than a floating
+  `stable`. The cloud VM has it installed and set as the rustup default.
+- **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
+  On Linux, compiling a program prints benign linker warnings
+  (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,
+  executable stack). They are not errors — the produced binary runs fine.
+- **`php` is not installed.** PHP-equivalence cross-check tests
+  (`ELEPHC_PHP_CHECK=1 cargo test ...`) will not run without installing a PHP
+  interpreter first. Normal codegen tests do not need it.
+- **Docker-based Linux cross-test scripts are unavailable by default.**
+  `scripts/test-linux-x86_64.sh` / `-arm64.sh` require Docker, which is not set
+  up here. Rely on host `cargo test`/`cargo nextest` (this VM is `linux-x86_64`)
+  and CI for the full target matrix.
+- **Quick end-to-end sanity check:** `cargo run -- examples/fizzbuzz/main.php`
+  then `./examples/fizzbuzz/main`.

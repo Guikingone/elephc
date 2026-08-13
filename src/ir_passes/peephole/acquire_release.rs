@@ -14,6 +14,10 @@
 //! - The single-use guard makes this safe regardless of how far apart the two
 //!   ops are or which path the `Release` sits on: the value flows to exactly one
 //!   `Release`, so removing both cannot leak or double-free.
+//! - It does NOT make the raised refcount unobservable, which is why an `Acquire`
+//!   carrying the lifetime-pin marker is skipped: such a pair exists precisely
+//!   because something between the two ops may release the value's other owner
+//!   (issue #580).
 
 use std::collections::HashMap;
 
@@ -29,6 +33,13 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
     let release_of = release_targets(function);
     for (index, inst) in function.instructions.iter().enumerate() {
         if inst.op != Op::Acquire {
+            continue;
+        }
+        // A lifetime pin is an acquire whose result is deliberately never read: it exists so
+        // the value survives an interval in which its other owner may go away. Cancelling it
+        // against its release would leave that interval running on freed storage, so the
+        // marker opts the pair out of this rewrite entirely.
+        if inst.immediate.is_some() {
             continue;
         }
         let Some(acquired) = inst.result else {

@@ -23,7 +23,7 @@ use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -808,10 +808,7 @@ fn emit_aarch64_static_method_dispatch(
     fail_label: &str,
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
-        let next_label = format!(
-            "__elephc_eval_static_method_next_{}",
-            label_fragment(class_name)
-        );
+        let next_label = join_php_symbol("__elephc_eval_static_method_next", &[class_name]);
         emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
             emit_aarch64_static_method_name_compare(module, emitter, data, slot, fail_label);
@@ -830,8 +827,8 @@ fn emit_x86_64_static_method_dispatch(
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
         let next_label = format!(
-            "__elephc_eval_static_method_next_{}_x",
-            label_fragment(class_name)
+            "{}_x",
+            join_php_symbol("__elephc_eval_static_method_next", &[class_name])
         );
         emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
@@ -2309,16 +2306,20 @@ fn grouped_static_slots(
 }
 
 /// Returns a platform-safe body label for a method slot.
+///
+/// The class/impl-class/method triplet is joined through `join_php_symbol()` so two slots whose
+/// names differ only in where an underscore falls cannot land on the same label.
 fn method_body_label(module: &Module, slot: &EvalMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_method",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2329,16 +2330,19 @@ fn method_access_miss_label(module: &Module, slot: &EvalMethodSlot) -> String {
 }
 
 /// Returns a platform-safe body label for a static method slot.
+///
+/// Uses the same injective join as `method_body_label()` under a distinct symbol prefix.
 fn static_method_body_label(module: &Module, slot: &EvalStaticMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_static_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_static_method_body",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2404,13 +2408,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

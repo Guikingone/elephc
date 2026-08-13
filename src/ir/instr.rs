@@ -179,6 +179,7 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    Pow,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -219,6 +220,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Pow => "pow",
         }
     }
 }
@@ -283,6 +285,16 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// Adds two integers with PHP overflow promotion, then applies PHP's integer cast
+    /// without materializing the intermediate boxed `Mixed` value.
+    ICheckedAddToInt,
+    /// Subtracts two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedSubToInt,
+    /// Multiplies two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedMulToInt,
+    ICheckedPow,
     IDiv,
     ISDiv,
     ISMod,
@@ -301,6 +313,7 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    StrIncDec,
     ICmp,
     FCmp,
     StrEq,
@@ -327,6 +340,8 @@ pub enum Op {
     ResourceToStr,
     Cast,
     MixedBox,
+    /// Copies a boxed Mixed zval cell while retaining its nested payload for value semantics.
+    MixedClone,
     InvokerRefArg,
     MixedUnbox,
     MixedTagOf,
@@ -349,14 +364,32 @@ pub enum Op {
     HashLen,
     ArrayGet,
     ArrayGetSilent,
+    /// Prepares an indexed element for mutation: boxed Mixed reads retain the owning cell, while
+    /// typed container reads copy-on-write separate and republish the child in its parent slot.
+    ArrayGetForWrite,
     HashGet,
     HashGetSilent,
+    /// Prepares an associative element for mutation: boxed Mixed reads retain the owning cell,
+    /// while typed container reads copy-on-write separate and republish the child in its entry.
+    HashGetForWrite,
     ArrayIsset,
     HashIsset,
     ArrayElemAddr,
     ArraySet,
     HashSet,
     HashUnset,
+    /// Writes PHP null into `container[key]`, releasing whatever was there.
+    ///
+    /// Used by the nested-append lowering to hand a bucket's *only other* reference over to
+    /// the temporary that is about to be appended to: after the read the bucket is owned by
+    /// both the slot and the temp (refcount 2), which would make the append copy-on-write
+    /// clone it — O(length) on every push, hence O(n^2) over a growing bucket. Nulling the
+    /// slot drops it back to 1, so the append mutates in place, and the write-back then
+    /// re-publishes the bucket into the very same slot.
+    ///
+    /// It can never free the bucket: it only ever runs *after* the read has taken its
+    /// reference, so the refcount it decrements is at least 2.
+    SlotDetach,
     ArrayPush,
     MixedArrayAppend,
     HashAppend,
@@ -391,9 +424,31 @@ pub enum Op {
     DynamicObjectNew,
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
+    /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
+    CallablePtr,
+    /// Normalizes any supported PHP callable form into an owned descriptor.
+    NormalizeCallable,
+    /// Returns the address of one compiler-emitted PDO callback adapter.
+    PdoAdapterAddr,
+    /// Reports whether an AOT class selected by runtime name has a constructor.
+    DynamicClassHasConstructor,
+    /// Classifies a runtime class name for PDO statement construction.
+    DynamicPdoStatementClassStatus,
+    /// Classifies a runtime late-static class name for `PDO::connect()`.
+    DynamicPdoCalledClassStatus,
+    /// Invokes a PDO statement subclass constructor from a boxed argument container.
+    DynamicPdoStatementConstructorCall,
+    /// Initializes the private base state of a PDO statement subclass.
+    DynamicPdoStatementInitialize,
     PropGet,
+    PropGetForWrite,
     PropInitialized,
     PropSet,
+    /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
+    /// refcounted payload the slot owned and stamps the uninitialized-typed-property
+    /// marker, so the property stops being reported by `isset()` and by the
+    /// descriptor walkers. Operand: object; immediate: property name data id.
+    PropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
@@ -447,6 +502,8 @@ pub enum Op {
     EvalConstantExists,
     EvalConstantFetch,
     RuntimeCall,
+    /// Reads through a boxed Mixed/ArrayAccess receiver for an imminent nested write.
+    MixedArrayGetForWrite,
     ExternCall,
     ClosureNew,
     ClosureCapture,
@@ -520,32 +577,36 @@ impl Op {
             Op::DataAddr, LoadLocal, StoreLocal, UnsetLocal, LoadRefCell, StoreRefCell, PromoteLocalRefCell, AliasLocalRefCell,
             Op::ReleaseLocalRefCell, ReleaseLocalSlot, LoadGlobal, StoreGlobal, LoadStaticLocal, StoreStaticLocal, InitStaticLocal, LoadStaticProperty,
             Op::StoreStaticProperty, LoadReflectionStaticProperty, StoreReflectionStaticProperty, ReflectionStaticPropertyInitialized, IAdd, ISub, IMul, ICheckedAdd,
-            Op::ICheckedSub, ICheckedMul, IDiv, ISDiv, ISMod, IPow, INeg, IBitAnd,
-            Op::IBitOr, IBitXor, IBitNot, IShl, IShrA, FAdd, FSub, FMul,
-            Op::FDiv, FPow, FNeg, MixedNumericBinop, ICmp, FCmp, StrEq, StrCmp,
-            Op::StrLooseEq, StrictEq, StrictNotEq, LooseEq, LooseNotEq, Spaceship, IsNull, IsTruthy,
-            Op::TypePredicate, IsEmpty, InstanceOf, IToF, FToI, IToStr, FToStr, BoolToStr,
-            Op::StrToI, StrToF, StrToNumber, ResourceToStr, Cast, MixedBox, InvokerRefArg, MixedUnbox,
-            Op::MixedTagOf, ArrayToMixed, HashToMixed, MixedCastBool, MixedCastInt, MixedCastFloat, MixedCastString, StrConcat,
-            Op::StrLen, StrPersist, StrCharAt, StrInterpolate, ConcatReset, WriteStrStdout, ArrayNew, HashNew,
-            Op::ArrayLen, HashLen, ArrayGet, ArrayGetSilent, HashGet, HashGetSilent, ArrayIsset, HashIsset,
-            Op::ArrayElemAddr, ArraySet, HashSet, HashUnset, ArrayPush, MixedArrayAppend, HashAppend, ArrayEnsureUnique,
-            Op::HashEnsureUnique, ArrayCloneShallow, HashCloneShallow, ArrayUnion, HashUnion, ArrayHashUnion, HashArrayUnion, HashSpread,
-            Op::ArrayToHash, ArraySetMixedKey, ArrayGetMixedKey, ArrayGetMixedKeySilent, ArrayKeyExists, OffsetExists, OffsetUnset, ListUnpack,
-            Op::IterStart, IterCurrentKey, IterCurrentValue, IterCurrentValueRef, IterNext, IterEnd, IteratorMethodCall, SplRuntimeCall,
-            Op::ObjectNew, EvalObjectNew, ObjectCloneShallow, DynamicObjectNew, DynamicObjectNewMixed, DynamicObjectNewWithoutConstructorMixed, PropGet, PropInitialized,
-            Op::PropSet, LoadPropRefCell, LoadArrayElemRefCell, BindRefCellPtr, DynamicPropGet, DynamicPropSet, NullsafePropGet, NullsafeMethodCall,
-            Op::MethodLookup, MethodCall, StaticMethodCall, EvalStaticMethodCall, EnumBackingStringToInt, EnumBackingMixedToInt, ClassConstant, ScopedConstantGet,
-            Op::ClassAttrNames, ClassAttrArgs, ClassGetAttributes, InstanceOfDynamic, Call, FunctionVariantCall, ClosureBind, LanguageConstructCall,
-            Op::EvalLiteralCall, EvalScopeGet, EvalScopeSet, EvalFunctionCall, EvalFunctionCallArray, EvalFunctionExists, EvalClassExists, EvalConstantExists,
-            Op::EvalConstantFetch, RuntimeCall, ExternCall, ClosureNew, ClosureCapture, ClosureCall, ExprCall, FirstClassCallableNew,
-            Op::CallableArrayNew, CallableDescriptorInvoke, PipeCall, PtrCast, PtrRead, PtrWrite, PtrReadString, PtrWriteString,
-            Op::PtrOffset, PtrCheckNonnull, BufferNew, BufferLen, BufferGet, BufferSet, BufferFree, PackedFieldGet,
-            Op::PackedFieldSet, ExternGlobalLoad, ExternGlobalStore, EchoValue, PrintValue, WriteStdout, VarDump, PrintR,
-            Op::ErrorSuppressBegin, ErrorSuppressEnd, Warn, ThrowException, ThrowError, ThrowErrorValue, TryPushHandler, TryPopHandler,
-            Op::CatchCurrent, CatchBind, FinallyEnter, FinallyExit, FiberRuntimeCall, GeneratorNew, GeneratorYield, GeneratorYieldFrom,
-            Op::GeneratorReturn, IncludeOnceMark, IncludeOnceGuard, FunctionVariantMark, FunctionVariantDispatch, Acquire, Release, ReleaseUnlessAliases, GcCollect,
-            Op::Move, Borrow, EnsureOwned, Nop,        ]
+            Op::ICheckedSub, ICheckedMul, ICheckedAddToInt, ICheckedSubToInt, ICheckedMulToInt, ICheckedPow, IDiv, ISDiv,
+            Op::ISMod, IPow, INeg, IBitAnd, IBitOr, IBitXor, IBitNot, IShl,
+            Op::IShrA, FAdd, FSub, FMul, FDiv, FPow, FNeg, MixedNumericBinop,
+            Op::StrIncDec, ICmp, FCmp, StrEq, StrCmp, StrLooseEq, StrictEq, StrictNotEq,
+            Op::LooseEq, LooseNotEq, Spaceship, IsNull, IsTruthy, TypePredicate, IsEmpty, InstanceOf,
+            Op::IToF, FToI, IToStr, FToStr, BoolToStr, StrToI, StrToF, StrToNumber,
+            Op::ResourceToStr, Cast, MixedBox, MixedClone, InvokerRefArg, MixedUnbox, MixedTagOf, ArrayToMixed,
+            Op::HashToMixed, MixedCastBool, MixedCastInt, MixedCastFloat, MixedCastString, StrConcat, StrLen, StrPersist,
+            Op::StrCharAt, StrInterpolate, ConcatReset, WriteStrStdout, ArrayNew, HashNew, ArrayLen, HashLen,
+            Op::ArrayGet, ArrayGetSilent, ArrayGetForWrite, HashGet, HashGetSilent, HashGetForWrite, ArrayIsset, HashIsset,
+            Op::ArrayElemAddr, ArraySet, HashSet, HashUnset, SlotDetach, ArrayPush, MixedArrayAppend, HashAppend,
+            Op::ArrayEnsureUnique, HashEnsureUnique, ArrayCloneShallow, HashCloneShallow, ArrayUnion, HashUnion, ArrayHashUnion, HashArrayUnion,
+            Op::HashSpread, ArrayToHash, ArraySetMixedKey, ArrayGetMixedKey, ArrayGetMixedKeySilent, ArrayKeyExists, OffsetExists, OffsetUnset,
+            Op::ListUnpack, IterStart, IterCurrentKey, IterCurrentValue, IterCurrentValueRef, IterNext, IterEnd, IteratorMethodCall,
+            Op::SplRuntimeCall, ObjectNew, EvalObjectNew, ObjectCloneShallow, DynamicObjectNew, DynamicObjectNewMixed, DynamicObjectNewWithoutConstructorMixed, CallablePtr,
+            Op::NormalizeCallable, PdoAdapterAddr, DynamicClassHasConstructor, DynamicPdoStatementClassStatus, DynamicPdoCalledClassStatus, DynamicPdoStatementConstructorCall, DynamicPdoStatementInitialize, PropGet,
+            Op::PropGetForWrite, PropInitialized, PropSet, PropUnset, LoadPropRefCell, LoadArrayElemRefCell, BindRefCellPtr, DynamicPropGet,
+            Op::DynamicPropSet, NullsafePropGet, NullsafeMethodCall, MethodLookup, MethodCall, StaticMethodCall, EvalStaticMethodCall, EnumBackingStringToInt,
+            Op::EnumBackingMixedToInt, ClassConstant, ScopedConstantGet, ClassAttrNames, ClassAttrArgs, ClassGetAttributes, InstanceOfDynamic, Call,
+            Op::FunctionVariantCall, ClosureBind, LanguageConstructCall, EvalLiteralCall, EvalScopeGet, EvalScopeSet, EvalFunctionCall, EvalFunctionCallArray,
+            Op::EvalFunctionExists, EvalClassExists, EvalConstantExists, EvalConstantFetch, RuntimeCall, MixedArrayGetForWrite, ExternCall, ClosureNew,
+            Op::ClosureCapture, ClosureCall, ExprCall, FirstClassCallableNew, CallableArrayNew, CallableDescriptorInvoke, PipeCall, PtrCast,
+            Op::PtrRead, PtrWrite, PtrReadString, PtrWriteString, PtrOffset, PtrCheckNonnull, BufferNew, BufferLen,
+            Op::BufferGet, BufferSet, BufferFree, PackedFieldGet, PackedFieldSet, ExternGlobalLoad, ExternGlobalStore, EchoValue,
+            Op::PrintValue, WriteStdout, VarDump, PrintR, ErrorSuppressBegin, ErrorSuppressEnd, Warn, ThrowException,
+            Op::ThrowError, ThrowErrorValue, TryPushHandler, TryPopHandler, CatchCurrent, CatchBind, FinallyEnter, FinallyExit,
+            Op::FiberRuntimeCall, GeneratorNew, GeneratorYield, GeneratorYieldFrom, GeneratorReturn, IncludeOnceMark, IncludeOnceGuard, FunctionVariantMark,
+            Op::FunctionVariantDispatch, Acquire, Release, ReleaseUnlessAliases, GcCollect, Move, Borrow, EnsureOwned,
+            Op::Nop,
+        ]
     }
 }
 
@@ -567,18 +628,18 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | ICheckedAddToInt
+            | ICheckedSubToInt
+            | ICheckedMulToInt
             | IPow
             | INeg
             | IBitAnd
             | IBitOr
             | IBitXor
             | IBitNot
-            | IShl
-            | IShrA
             | FAdd
             | FSub
             | FMul
-            | FDiv
             | FPow
             | FNeg
             | ICmp
@@ -594,11 +655,21 @@ impl Op {
             | FunctionVariantDispatch
             | PtrCast
             | PtrOffset
+            | CallablePtr
+            | PdoAdapterAddr
+            | DynamicClassHasConstructor
+            | DynamicPdoStatementClassStatus
+            | DynamicPdoCalledClassStatus
             | Move
             | Borrow
             | Nop => E::PURE,
-            IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
-            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
+            // PHP 8 raises catchable errors here, so these are never removable, hoistable,
+            // or CSE-able: `/` and `%` throw `DivisionByZeroError` for a zero divisor and
+            // `<<` / `>>` throw `ArithmeticError` for a negative shift count.
+            IDiv | ISDiv | ISMod => E::MAY_FATAL | E::MAY_THROW,
+            IShl | IShrA | FDiv => E::MAY_THROW,
+            PtrCheckNonnull => E::MAY_FATAL,
+            ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -639,8 +710,9 @@ impl Op {
             FToI => E::MAY_WARN | E::MAY_FATAL,
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
-            MixedBox | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
+            MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
+            | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | GeneratorNew => {
                 E::ALLOC_HEAP
             }
             IsNull | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
@@ -654,6 +726,13 @@ impl Op {
             HashIsset => E::READS_HEAP | E::MAY_WARN | E::MAY_FATAL,
             ArrayGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN,
             HashGet => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_WARN | E::MAY_FATAL,
+            // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
+            // element slot (and the receiver's own local slot), so it must never be treated as
+            // reorderable or redundant against the plain reads around it.
+            ArrayGetForWrite | HashGetForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::WRITES_LOCAL | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP | E::MAY_WARN | E::MAY_FATAL
+            }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
@@ -666,12 +745,19 @@ impl Op {
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
+            // Not a pure read despite the name, exactly like `ArrayGetForWrite`: the
+            // copy-on-write split rewrites the receiver's PROPERTY slot, so it must never be
+            // treated as reorderable or redundant against the plain property reads around it.
+            PropGetForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
-            ArraySet | ArrayPush | OffsetUnset | PropSet | DynamicPropSet | BufferSet
+            ArraySet | ArrayPush | OffsetUnset | PropSet | PropUnset | DynamicPropSet | BufferSet
             | BufferFree | PackedFieldSet | PtrWrite | PtrWriteString => {
                 E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
@@ -679,6 +765,10 @@ impl Op {
                 E::WRITES_HEAP | E::MAY_WARN | E::MAY_FATAL | E::REFCOUNT_OP
             }
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
+            // checks its load factor and may grow/rehash the table before it even knows whether
+            // the key is already present.
+            SlotDetach => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr | ArraySetMixedKey => {
                 E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
@@ -697,6 +787,10 @@ impl Op {
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            // `++`/`--` on a string reads the operand's payload, may write the shared
+            // concat scratch while building the carried result, and always allocates the
+            // boxed Mixed cell the new value is returned in.
+            StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
             IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -720,6 +814,9 @@ impl Op {
             | EvalObjectNew
             | EvalStaticMethodCall
             | RuntimeCall
+            | MixedArrayGetForWrite
+            | DynamicPdoStatementConstructorCall
+            | DynamicPdoStatementInitialize
             | ClosureCall
             | ExprCall
             | CallableDescriptorInvoke
@@ -747,10 +844,22 @@ impl Op {
     }
 
     /// Returns true when the builder may replace the conservative default effects.
+    ///
+    /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable
+    /// `DivisionByZeroError` / `ArithmeticError` for a zero divisor or a negative shift count.
+    /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
+    /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
+    /// CSE-able exactly as they were before the guards existed.
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
-            Op::Call
+            Op::IDiv
+                | Op::ISDiv
+                | Op::ISMod
+                | Op::FDiv
+                | Op::IShl
+                | Op::IShrA
+                | Op::Call
                 | Op::FunctionVariantCall
                 | Op::ClosureBind
                 | Op::LanguageConstructCall
@@ -814,6 +923,10 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedAddToInt => "ichecked_add_to_int",
+            ICheckedSubToInt => "ichecked_sub_to_int",
+            ICheckedMulToInt => "ichecked_mul_to_int",
+            ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",
@@ -832,6 +945,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",
             StrEq => "str_eq",
@@ -858,6 +972,7 @@ impl Op {
             ResourceToStr => "resource_to_str",
             Cast => "cast",
             MixedBox => "mixed_box",
+            MixedClone => "mixed_clone",
             InvokerRefArg => "invoker_ref_arg",
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
@@ -880,14 +995,17 @@ impl Op {
             HashLen => "hash_len",
             ArrayGet => "array_get",
             ArrayGetSilent => "array_get_silent",
+            ArrayGetForWrite => "array_get_for_write",
             HashGet => "hash_get",
             HashGetSilent => "hash_get_silent",
+            HashGetForWrite => "hash_get_for_write",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
             HashUnset => "hash_unset",
+            SlotDetach => "slot_detach",
             ArrayPush => "array_push",
             MixedArrayAppend => "mixed_array_append",
             HashAppend => "hash_append",
@@ -924,9 +1042,19 @@ impl Op {
             DynamicObjectNewWithoutConstructorMixed => {
                 "dynamic_object_new_without_constructor_mixed"
             }
+            CallablePtr => "callable_ptr",
+            NormalizeCallable => "normalize_callable",
+            PdoAdapterAddr => "pdo_adapter_addr",
+            DynamicClassHasConstructor => "dynamic_class_has_constructor",
+            DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
+            DynamicPdoCalledClassStatus => "dynamic_pdo_called_class_status",
+            DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
+            DynamicPdoStatementInitialize => "dynamic_pdo_statement_initialize",
             PropGet => "prop_get",
+            PropGetForWrite => "prop_get_for_write",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
+            PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
@@ -960,6 +1088,7 @@ impl Op {
             EvalConstantExists => "eval_constant_exists",
             EvalConstantFetch => "eval_constant_fetch",
             RuntimeCall => "runtime_call",
+            MixedArrayGetForWrite => "mixed_array_get_for_write",
             ExternCall => "extern_call",
             ClosureNew => "closure_new",
             ClosureCapture => "closure_capture",

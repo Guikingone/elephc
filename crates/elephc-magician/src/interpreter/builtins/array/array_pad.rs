@@ -6,8 +6,20 @@
 //!
 //! Key details:
 //! - Runtime behavior stays delegated to the array-pad hook.
+//! - `$length` is bounded the way php-src bounds it, before any allocation: an unrepresentable
+//!   magnitude (`PHP_INT_MIN`) or one past the maximum allowed array size is refused instead of
+//!   driving the interpreter through a multi-billion-element build loop.
 
 use super::super::super::*;
+
+/// The largest `array_pad()` `$length` magnitude reference PHP will build an array for.
+///
+/// php-src rejects anything past this bound with
+/// `ValueError: array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size`
+/// before it looks at the input array, so the bound is a plain constant. The AOT path raises that
+/// catchable `ValueError`; eval refuses the call the same way it refuses a negative
+/// `array_fill()` count.
+const ARRAY_PAD_MAX_LENGTH: i64 = 1_073_741_824;
 
 eval_builtin! {
     name: "array_pad",
@@ -53,6 +65,9 @@ pub(in crate::interpreter) fn eval_builtin_array_pad(
 }
 
 /// Builds an `array_pad()` result by copying values and padding left or right.
+///
+/// A `$length` whose magnitude is unrepresentable or past `ARRAY_PAD_MAX_LENGTH` is refused before
+/// any array is allocated, so the build loop below always runs a bounded number of times.
 pub(in crate::interpreter) fn eval_array_pad_result(
     array: RuntimeCellHandle,
     length: RuntimeCellHandle,
@@ -63,6 +78,7 @@ pub(in crate::interpreter) fn eval_array_pad_result(
     let target = eval_int_value(length, values)?;
     let target_len = target
         .checked_abs()
+        .filter(|magnitude| *magnitude <= ARRAY_PAD_MAX_LENGTH)
         .ok_or(EvalStatus::RuntimeFatal)
         .and_then(|value| usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal))?;
     let result_len = usize::max(len, target_len);

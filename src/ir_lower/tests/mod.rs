@@ -68,6 +68,10 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
         &defines,
     )
     .expect("autoload failed");
+    // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
+    // `autoload::run` and constant folding. Without it an example using those functions
+    // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
+    let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);

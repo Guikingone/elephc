@@ -7463,6 +7463,39 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Md5
         | RuntimeFnId::Htmlspecialchars
         | RuntimeFnId::Gettype => true,
+        // Added upstream after this backend's last audit; refused until each is
+        // lowered and differentially tested here (fail-closed).
+        RuntimeFnId::ArrayCountValues |
+        RuntimeFnId::ArrayPtrSeek |
+        RuntimeFnId::ArrayPtrKey |
+        RuntimeFnId::ArrayPtrValue |
+        RuntimeFnId::BaseConvert |
+        RuntimeFnId::Bindec |
+        RuntimeFnId::Decbin |
+        RuntimeFnId::Dechex |
+        RuntimeFnId::Decoct |
+        RuntimeFnId::Hexdec |
+        RuntimeFnId::Octdec |
+        RuntimeFnId::ElephcObjectIsEnum |
+        RuntimeFnId::ElephcObjectPropCount |
+        RuntimeFnId::ElephcObjectPropName |
+        RuntimeFnId::ElephcObjectPropValue |
+        RuntimeFnId::Base64Decode |
+        RuntimeFnId::ChunkSplit |
+        RuntimeFnId::CountChars |
+        RuntimeFnId::OpensslCipherIvLength |
+        RuntimeFnId::OpensslDecrypt |
+        RuntimeFnId::OpensslEncrypt |
+        RuntimeFnId::OpensslGetCipherMethods |
+        RuntimeFnId::ParseUrl |
+        RuntimeFnId::StrWordCount |
+        RuntimeFnId::Strncasecmp |
+        RuntimeFnId::Strncmp |
+        RuntimeFnId::Stripos |
+        RuntimeFnId::Strripos |
+        RuntimeFnId::Strtr |
+        RuntimeFnId::SubstrCount |
+        RuntimeFnId::IntvalBase |
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -7827,8 +7860,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
 pub(super) fn unary_string_name(target: UnaryStringRuntime) -> &'static str {
     match target {
         UnaryStringRuntime::AddSlashes => "string.add_slashes",
-        UnaryStringRuntime::Base64Decode => "string.base64_decode",
         UnaryStringRuntime::Base64Encode => "string.base64_encode",
+        UnaryStringRuntime::QuoteMeta => "string.quote_meta",
+        UnaryStringRuntime::QuotedPrintableEncode => "string.quoted_printable_encode",
         UnaryStringRuntime::BinToHex => "string.bin_to_hex",
         UnaryStringRuntime::HexToBin => "string.hex_to_bin",
         UnaryStringRuntime::HtmlEntityDecode => "string.html_entity_decode",
@@ -8118,6 +8152,27 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         // payload is a different pointer than the one passed in. That comparison has no
         // lowering here yet, and releasing unconditionally would double-free the value a
         // callee handed back. Refused until the comparison is emitted.
+        // Added upstream after this backend's last audit; refused until lowered here.
+        | Op::ICheckedAddToInt
+        | Op::ICheckedSubToInt
+        | Op::ICheckedMulToInt
+        | Op::ICheckedPow
+        | Op::StrIncDec
+        | Op::MixedClone
+        | Op::ArrayGetForWrite
+        | Op::HashGetForWrite
+        | Op::SlotDetach
+        | Op::CallablePtr
+        | Op::NormalizeCallable
+        | Op::PdoAdapterAddr
+        | Op::DynamicClassHasConstructor
+        | Op::DynamicPdoStatementClassStatus
+        | Op::DynamicPdoCalledClassStatus
+        | Op::DynamicPdoStatementConstructorCall
+        | Op::DynamicPdoStatementInitialize
+        | Op::PropGetForWrite
+        | Op::PropUnset
+        | Op::MixedArrayGetForWrite
         | Op::ReleaseUnlessAliases
         | Op::EnsureOwned => false,
     }
@@ -8257,6 +8312,7 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_deprecations: Default::default(),
             constant_types: HashMap::new(),
             constant_visibilities: HashMap::new(),
             final_constants: HashSet::new(),

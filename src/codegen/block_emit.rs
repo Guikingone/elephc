@@ -38,8 +38,8 @@ use super::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
-    literal_default_value, LiteralDefaultValue,
+    emit_string_literal_default_to_result, emit_tagged_int_literal_to_result,
+    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
 };
 use super::lower_inst;
 use super::lower_term;
@@ -985,6 +985,9 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::TaggedNull => {
             emit_tagged_null_literal_to_result(ctx);
         }
+        LiteralDefaultValue::TaggedInt(value) => {
+            emit_tagged_int_literal_to_result(ctx, *value);
+        }
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_null_literal_to_result(ctx);
         }
@@ -1039,8 +1042,8 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
-    ctx.emitter
-        .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    let block_label = ctx.block_label_for_id(block.id)?;
+    ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;

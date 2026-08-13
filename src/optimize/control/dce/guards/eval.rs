@@ -38,7 +38,7 @@ pub(in crate::optimize::control::dce) fn scalar_guard_value(expr: &Expr) -> Opti
         ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
         ExprKind::Null => Some(GuardLiteral::Null),
         ExprKind::IntLiteral(value) => Some(GuardLiteral::Int(*value)),
-        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(value.to_bits())),
+        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(*value)),
         ExprKind::StringLiteral(value) => Some(GuardLiteral::String(value.clone())),
         _ => None,
     }
@@ -81,12 +81,13 @@ pub(in crate::optimize::control::dce) fn guard_literal_truthy(
         GuardLiteral::Bool(value) => *value,
         GuardLiteral::Null => false,
         GuardLiteral::Int(value) => *value != 0,
-        GuardLiteral::Float(bits) => {
-            let value = f64::from_bits(*bits);
+        // Value rule is theirs (f64 storage); the NAN bail is kept: folding a NAN
+        // truthiness would suppress the coercion diagnostic PHP 8.5 emits for it.
+        GuardLiteral::Float(value) => {
             if value.is_nan() {
                 return None;
             }
-            value != 0.0
+            *value != 0.0
         }
         GuardLiteral::String(value) => !value.is_empty() && value != "0",
     })

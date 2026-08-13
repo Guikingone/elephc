@@ -9,7 +9,6 @@
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_hex2bin` runtime helper for converting a hex string to binary.
 /// Dispatches to the target-specific implementation (x86_64 Linux calls
@@ -26,11 +25,16 @@ pub fn emit_hex2bin(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hex2bin ---");
     emitter.label_global("__rt_hex2bin");
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the decoded result before writing anything (1 byte out per 2 in, so len is an upper bound) --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed hexadecimal string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the hex2bin helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the hexadecimal pointer and length across the reservation call
+    emitter.instruction("mov x0, x2");                                          // the decoded payload never exceeds the hexadecimal character count
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the decoded result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed hexadecimal pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining hex chars
 
     emitter.label("__rt_hex2bin_loop");
@@ -75,9 +79,9 @@ pub fn emit_hex2bin(emitter: &mut Emitter) {
     emitter.label("__rt_hex2bin_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance
-    emitter.instruction("str x8, [x6]");                                        // store
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the hex2bin helper frame
     emitter.instruction("ret");                                                 // return
 }
 
@@ -89,12 +93,17 @@ fn emit_hex2bin_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hex2bin ---");
     emitter.label_global("__rt_hex2bin");
 
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer offset before appending the decoded bytes
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // load the base address of the shared concat buffer
-    emitter.instruction("add r9, r8");                                          // compute the destination pointer at the current concat-buffer tail
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed hexadecimal string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the hexadecimal pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the hexadecimal source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the hexadecimal character count across the reservation call
+    emitter.instruction("mov rax, rdx");                                        // the decoded payload never exceeds the hexadecimal character count
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the decoded result
+    emitter.instruction("mov r9, rax");                                         // compute the destination pointer at the reserved result start
     emitter.instruction("mov r10, r9");                                         // preserve the decoded string start pointer for the return value
-    emitter.instruction("mov rcx, rdx");                                        // copy the hexadecimal character count into a decrementing loop counter
-    emitter.instruction("mov rsi, rax");                                        // copy the hexadecimal source pointer into a cursor register for byte-by-byte reads
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // copy the hexadecimal character count into a decrementing loop counter
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // copy the hexadecimal source pointer into a cursor register for byte-by-byte reads
 
     emitter.label("__rt_hex2bin_loop_linux_x86_64");
     emitter.instruction("cmp rcx, 2");                                          // check whether at least one complete hexadecimal pair remains
@@ -139,11 +148,10 @@ fn emit_hex2bin_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hex2bin_done_linux_x86_64");
     emitter.instruction("mov rax, r10");                                        // return the decoded string start pointer in the standard x86_64 string result register
-    emitter.instruction("mov rdx, r9");                                         // copy the concat-buffer tail into the length scratch register
+    emitter.instruction("mov rdx, r9");                                         // copy the destination cursor into the length scratch register
     emitter.instruction("sub rdx, r10");                                        // compute the decoded string length from the written byte count
-    emitter.instruction("mov r8, r9");                                          // copy the absolute concat-buffer tail before normalizing it back to a shared offset
-    abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // load the concat-buffer base so the shared offset can stay relative
-    emitter.instruction("sub r8, r11");                                         // convert the absolute concat-buffer tail back into the shared relative offset
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated relative concat-buffer offset for later string appenders
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the hex2bin spill slots before returning the decoded string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the decoded string
     emitter.instruction("ret");                                                 // return the decoded string through the standard x86_64 string result registers
 }

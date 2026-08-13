@@ -2,7 +2,7 @@
 title: "__elephc_hash_ctx_copy() — internals"
 description: "Compiler internals for __elephc_hash_ctx_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 461
+  order: 495
 ---
 
 ## `__elephc_hash_ctx_copy()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/__elephc_hash_ctx_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/__elephc_hash_ctx_copy.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

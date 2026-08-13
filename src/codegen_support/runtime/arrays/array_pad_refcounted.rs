@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - `abs(size)` is clamped: `INT64_MIN` has no representable magnitude, so the negation is
+//!   forced to zero instead of wrapping back to a negative pad count. Callers still bound
+//!   `$length` in lowering, where PHP's `ValueError` is raised.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -14,6 +17,8 @@ use crate::codegen_support::platform::Arch;
 /// Emits the `__rt_array_pad_refcounted` runtime helper.
 /// Input: x0 = array pointer, x1 = size (negative = pad left), x2 = borrowed pad payload.
 /// Output: x0 = pointer to new padded array.
+/// The normalized target size is clamped to a non-negative value before the pad count is
+/// derived, so a magnitude the machine word cannot hold cannot produce a negative pad count.
 /// Dispatches to the x86_64 Linux variant; ARM64 uses the native implementation below.
 pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -39,6 +44,8 @@ pub fn emit_array_pad_refcounted(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, #0");                                          // check whether caller requested left-padding
     emitter.instruction("b.ge __rt_array_pad_ref_positive");                    // skip negation for right-padding
     emitter.instruction("neg x3, x1");                                          // compute absolute target size
+    emitter.instruction("cmp x3, #0");                                          // INT64_MIN has no representable magnitude and stays negative here
+    emitter.instruction("csel x3, x3, xzr, ge");                                // clamp that wrapped magnitude to zero so the pad count is never negative
     emitter.instruction("mov x4, #1");                                          // remember that padding goes on the left
     emitter.instruction("b __rt_array_pad_ref_check");                          // continue with normalized size
 
@@ -141,6 +148,9 @@ fn emit_array_pad_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 0");                                          // detect the negative-target-size case that means pad on the left
     emitter.instruction("jge __rt_array_pad_ref_abs_ready_x86");                // skip negation when the requested target size already pads on the right
     emitter.instruction("neg r11");                                             // normalize the requested target size to its absolute magnitude
+    emitter.instruction("xor eax, eax");                                        // stage a zero for the magnitude that INT64_MIN cannot represent
+    emitter.instruction("test r11, r11");                                       // detect the wrapped negation that leaves the magnitude negative
+    emitter.instruction("cmovs r11, rax");                                      // clamp that wrapped magnitude to zero so the pad count is never negative
     emitter.instruction("mov rcx, 1");                                          // remember that the requested target size was negative so padding must happen on the left
 
     emitter.label("__rt_array_pad_ref_abs_ready_x86");

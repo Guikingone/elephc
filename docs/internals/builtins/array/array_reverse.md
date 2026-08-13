@@ -2,7 +2,7 @@
 title: "array_reverse() — internals"
 description: "Compiler internals for array_reverse(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 34
+  order: 35
 ---
 
 ## `array_reverse()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_reverse.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_reverse.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_reverse(array $array): array
+function array_reverse(array $array, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

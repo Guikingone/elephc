@@ -2,7 +2,7 @@
 title: "stream_get_contents()"
 description: "Reads remainder of a stream into a string."
 sidebar:
-  order: 220
+  order: 227
 ---
 
 ## stream_get_contents()

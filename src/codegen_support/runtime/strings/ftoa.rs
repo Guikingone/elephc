@@ -1,16 +1,33 @@
 //! Purpose:
 //! Emits the `__rt_ftoa` runtime helper assembly for float-to-string conversion.
-//! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
+//! Reproduces PHP's default `precision = 14` layout (`echo`, `(string)`, `print_r`,
+//! string interpolation) and, through `__rt_ftoa_repr`, PHP's
+//! `serialize_precision = -1` layout used by `var_dump`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - PHP formats a float for `echo` with `zend_gcvt(value, 14, '.', 'E')`. C's `%.14G`
+//!   already picks the *same* notation (exponential when the decimal exponent is `>= 14`
+//!   or `<= -5`) and the same 14-significant-digit rounding, but it differs in two
+//!   byte-level details that `__rt_ftoa` fixes up while copying the snprintf scratch into
+//!   `_concat_buf`:
+//!   1. `zend_gcvt` always writes a fraction in exponential form, so a one-digit mantissa
+//!      becomes `1.0E+300`, never C's `1E+300`.
+//!   2. `zend_gcvt` writes the exponent with no leading zeros, so `1.0E-7`, never C's
+//!      `1E-07`.
+//! - `NAN` is normalized to the unsigned spelling PHP prints; glibc renders a negative
+//!   quiet NaN as `-NAN`, which PHP never does.
+//! - `__rt_ftoa_repr` answers `var_dump`'s `%.*H` at `serialize_precision = -1`: the
+//!   shortest decimal string that round-trips. The finite case is exactly
+//!   `__rt_json_ftoa` with an uppercase `E` marker, so this helper only owns the
+//!   `INF`/`-INF`/`NAN` spellings that `__rt_json_ftoa`'s caller normally handles.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Converts a double-precision float to a PHP-compatible byte string.
+/// Converts a double-precision float to a PHP-compatible byte string at `precision = 14`.
 ///
 /// # Input
 /// - ARM64: `d0` holds the float value
@@ -21,9 +38,11 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// - x86_64: `rax` = pointer to string, `rdx` = length
 ///
 /// # Behavior
-/// Formats the float using `snprintf` with `"%.14G"` format into the global
-/// `_concat_buf` buffer at the current `_concat_off` cursor, then advances
-/// `_concat_off` by the number of characters written.
+/// Formats the float with `snprintf("%.14G", …)` into a stack scratch buffer, then copies
+/// the bytes into the global `_concat_buf` at the current `_concat_off` cursor while
+/// applying PHP's `zend_gcvt` fixups (mandatory `.0` mantissa fraction in exponential
+/// form, unpadded exponent, unsigned `NAN`), and advances `_concat_off` by the number of
+/// bytes actually emitted.
 ///
 /// # ABI Notes
 /// - Apple ARM64: variadic floats are passed on the stack, not in SIMD registers
@@ -35,141 +54,104 @@ pub fn emit_ftoa(emitter: &mut Emitter) {
     }
 
     emitter.blank();
-    emitter.comment("--- runtime: ftoa ---");
+    emitter.comment("--- runtime: ftoa (precision=14, PHP zend_gcvt layout) ---");
     emitter.label_global("__rt_ftoa");
 
-    // -- set up stack frame (64 bytes) --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    // -- set up stack frame (80 bytes: variadic slot, 48-byte scratch, saved FP/LR) --
+    emitter.instruction("sub sp, sp, #80");                                     // allocate the variadic slot, snprintf scratch, and saved-register area
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
 
-    // -- get current concat_buf position --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current write offset
-    emitter.instruction("str x10, [sp, #32]");                                  // save original offset on stack
-    emitter.instruction("str x9, [sp, #40]");                                   // save offset variable address on stack
-
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x0, x11, x10");                                    // compute output buffer: concat_buf + offset
-    emitter.instruction("str x0, [sp, #24]");                                   // save output buffer start on stack
-
-    // -- call snprintf(buf, 32, "%.14G", double) --
-    emitter.instruction("mov x1, #32");                                         // buffer size limit = 32 bytes
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x2", "_fmt_g");          // load page address of format string "%.14G"
+    // -- call snprintf(scratch, 48, "%.14G", double) --
+    emitter.instruction("add x0, sp, #8");                                      // snprintf destination = stack scratch buffer
+    emitter.instruction("mov x1, #48");                                         // scratch buffer size limit
+    abi::emit_symbol_address(emitter, "x2", "_fmt_g");
     // -- Apple ARM64 variadic ABI: float arg goes on stack, not in SIMD reg --
     emitter.instruction("str d0, [sp]");                                        // push double onto stack for variadic call
-    emitter.bl_c("snprintf");                                        // call snprintf; returns char count in x0
+    emitter.bl_c("snprintf");                                                   // format the double at 14 significant digits
 
-    emit_php_scientific_fixup_arm64(emitter);
+    // -- destination cursor inside _concat_buf --
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current concat write offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x13, x11, x10");                                   // result start = concat_buf + offset
+    emitter.instruction("mov x12, x13");                                        // x12 = write cursor, x13 = result start
+    emitter.instruction("add x14, sp, #8");                                     // x14 = read cursor into the snprintf scratch
+    emitter.instruction("mov w15, #0");                                         // w15 = "mantissa already has a '.'" flag
 
-    // -- x0 = number of chars written --
-    emitter.instruction("mov x2, x0");                                          // save string length as return value
+    // -- PHP never prints a signed NAN: collapse "NAN"/"-NAN" to "NAN" --
+    emitter.instruction("ldrb w16, [x14]");                                     // first formatted byte
+    emitter.instruction("cmp w16, #45");                                        // is it an ASCII '-' sign?
+    emitter.instruction("b.ne __rt_ftoa_nan_check");                            // unsigned text: inspect the first byte directly
+    emitter.instruction("ldrb w16, [x14, #1]");                                 // signed text: inspect the byte after the sign
+    emitter.label("__rt_ftoa_nan_check");
+    emitter.instruction("cmp w16, #78");                                        // ASCII 'N' can only start the NAN spelling
+    emitter.instruction("b.ne __rt_ftoa_copy");                                 // ordinary numeric text: run the copy/fixup loop
+    emitter.instruction("mov w17, #78");                                        // ASCII 'N'
+    emitter.instruction("strb w17, [x12], #1");                                 // emit 'N'
+    emitter.instruction("mov w17, #65");                                        // ASCII 'A'
+    emitter.instruction("strb w17, [x12], #1");                                 // emit 'A'
+    emitter.instruction("mov w17, #78");                                        // ASCII 'N'
+    emitter.instruction("strb w17, [x12], #1");                                 // emit 'N'
+    emitter.instruction("b __rt_ftoa_finish");                                  // NAN needs no further fixups
 
-    // -- update concat_off by chars written --
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload offset variable address
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload original offset
-    emitter.instruction("add x10, x10, x2");                                    // new offset = original + chars written
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    // -- copy the mantissa, remembering whether it already contains a '.' --
+    emitter.label("__rt_ftoa_copy");
+    emitter.instruction("ldrb w16, [x14]");                                     // load the next scratch byte
+    emitter.instruction("cbz w16, __rt_ftoa_finish");                           // NUL terminator: decimal form needs no fixup
+    emitter.instruction("cmp w16, #69");                                        // ASCII 'E' starts the exponent part
+    emitter.instruction("b.eq __rt_ftoa_exp");                                  // switch to the exponential fixup path
+    emitter.instruction("cmp w16, #46");                                        // ASCII '.' marks an existing mantissa fraction
+    emitter.instruction("b.ne __rt_ftoa_copy_store");                           // no fraction marker: just copy the byte
+    emitter.instruction("mov w15, #1");                                         // record that the mantissa already has a fraction
+    emitter.label("__rt_ftoa_copy_store");
+    emitter.instruction("strb w16, [x12], #1");                                 // emit the mantissa byte
+    emitter.instruction("add x14, x14, #1");                                    // advance the scratch read cursor
+    emitter.instruction("b __rt_ftoa_copy");                                    // continue copying the mantissa
 
-    // -- set return pointer --
-    emitter.instruction("ldr x1, [sp, #24]");                                   // return pointer to start of formatted string
+    // -- exponential form: zend_gcvt always writes a fraction, C's %G does not --
+    emitter.label("__rt_ftoa_exp");
+    emitter.instruction("cbnz w15, __rt_ftoa_exp_marker");                      // mantissa already has a fraction
+    emitter.instruction("mov w17, #46");                                        // ASCII '.'
+    emitter.instruction("strb w17, [x12], #1");                                 // emit the mandatory decimal point
+    emitter.instruction("mov w17, #48");                                        // ASCII '0'
+    emitter.instruction("strb w17, [x12], #1");                                 // emit the mandatory "0" fraction digit
+    emitter.label("__rt_ftoa_exp_marker");
+    emitter.instruction("strb w16, [x12], #1");                                 // emit the 'E' exponent marker
+    emitter.instruction("add x14, x14, #1");                                    // advance past 'E' in the scratch
+    emitter.instruction("ldrb w16, [x14]");                                     // load the exponent sign byte
+    emitter.instruction("strb w16, [x12], #1");                                 // emit the exponent sign
+    emitter.instruction("add x14, x14, #1");                                    // advance past the exponent sign
 
-    // -- restore frame and return --
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    // -- zend_gcvt writes the exponent unpadded, C's %G pads it to two digits --
+    emitter.label("__rt_ftoa_exp_strip");
+    emitter.instruction("ldrb w16, [x14]");                                     // load the next exponent digit
+    emitter.instruction("cmp w16, #48");                                        // is it a padding ASCII '0'?
+    emitter.instruction("b.ne __rt_ftoa_exp_digits");                           // significant digit: stop stripping
+    emitter.instruction("ldrb w17, [x14, #1]");                                 // peek at the following byte
+    emitter.instruction("cbz w17, __rt_ftoa_exp_digits");                       // keep a lone '0' as the exponent value
+    emitter.instruction("add x14, x14, #1");                                    // drop one leading zero
+    emitter.instruction("b __rt_ftoa_exp_strip");                               // keep stripping leading zeros
+
+    emitter.label("__rt_ftoa_exp_digits");
+    emitter.instruction("ldrb w16, [x14]");                                     // load the next exponent digit
+    emitter.instruction("cbz w16, __rt_ftoa_finish");                           // NUL terminator ends the exponent
+    emitter.instruction("strb w16, [x12], #1");                                 // emit the exponent digit
+    emitter.instruction("add x14, x14, #1");                                    // advance the scratch read cursor
+    emitter.instruction("b __rt_ftoa_exp_digits");                              // copy the remaining exponent digits
+
+    // -- publish the result slice and advance the concat cursor --
+    emitter.label("__rt_ftoa_finish");
+    emitter.instruction("sub x2, x12, x13");                                    // result length = cursor - start
+    emitter.instruction("mov x1, x13");                                         // result pointer = start of the emitted text
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // reload the original concat offset
+    emitter.instruction("add x10, x10, x2");                                    // advance it past the emitted bytes
+    emitter.instruction("str x10, [x9]");                                       // publish the updated concat offset
+
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
-}
-
-/// Rewrites C `%.14G` scientific output into PHP's scientific format, in place.
-///
-/// PHP's float-to-string differs from C `%G` in exactly two ways, both confined to
-/// scientific notation: the mantissa always carries a fraction (`1.0E+20`, never
-/// `1E+20`), and the exponent has no zero padding (`1.0E-7`, never `1E-07`). Fixed
-/// notation already matches byte for byte, so a buffer without `E` is left untouched.
-///
-/// # Input
-/// - `x0` = byte count written by `snprintf`
-/// - `[sp, #24]` = buffer start (as saved by `emit_ftoa`)
-///
-/// # Output
-/// - `x0` = adjusted byte count
-///
-/// # Behavior
-/// Inserting `.0` grows the text by two bytes. `%.14G` never exceeds 21 bytes
-/// (`-1.2345678901234E-308`), so the rewritten form stays inside the 32-byte window
-/// `emit_ftoa` reserves and no bounds check is required. Clobbers `x9`-`x15`, all of
-/// which `emit_ftoa` reloads from its frame afterwards.
-fn emit_php_scientific_fixup_arm64(emitter: &mut Emitter) {
-    emitter.comment("-- rewrite C scientific output into PHP's format --");
-    emitter.instruction("ldr x9, [sp, #24]");                                   // buffer start
-    emitter.instruction("mov x10, x0");                                         // current byte count
-    emitter.instruction("mov x11, #0");                                         // scan cursor
-
-    emitter.label("__rt_ftoa_find_e");
-    emitter.instruction("cmp x11, x10");                                        // scanned every byte?
-    emitter.instruction("b.ge __rt_ftoa_done");                                 // no exponent: fixed notation already matches PHP
-    emitter.instruction("ldrb w12, [x9, x11]");                                 // load candidate byte
-    emitter.instruction("cmp w12, #69");                                        // 'E'
-    emitter.instruction("b.eq __rt_ftoa_have_e");                               // exponent found
-    emitter.instruction("add x11, x11, #1");                                    // advance scan cursor
-    emitter.instruction("b __rt_ftoa_find_e");                                  // keep scanning
-
-    emitter.label("__rt_ftoa_have_e");
-    emitter.instruction("mov x13, #0");                                         // mantissa scan cursor
-    emitter.label("__rt_ftoa_find_dot");
-    emitter.instruction("cmp x13, x11");                                        // reached the exponent?
-    emitter.instruction("b.ge __rt_ftoa_insert_dot");                           // bare mantissa: PHP requires ".0"
-    emitter.instruction("ldrb w12, [x9, x13]");                                 // load mantissa byte
-    emitter.instruction("cmp w12, #46");                                        // '.'
-    emitter.instruction("b.eq __rt_ftoa_exponent");                             // mantissa already has a fraction
-    emitter.instruction("add x13, x13, #1");                                    // advance mantissa cursor
-    emitter.instruction("b __rt_ftoa_find_dot");                                // keep scanning
-
-    emitter.label("__rt_ftoa_insert_dot");
-    emitter.instruction("mov x14, x10");                                        // copy backwards from the trailing NUL
-    emitter.label("__rt_ftoa_shift_right");
-    emitter.instruction("cmp x14, x11");                                        // reached the exponent?
-    emitter.instruction("b.lt __rt_ftoa_write_dot");                            // gap of two bytes is open
-    emitter.instruction("ldrb w12, [x9, x14]");                                 // load byte to relocate
-    emitter.instruction("add x15, x14, #2");                                    // destination two bytes higher
-    emitter.instruction("strb w12, [x9, x15]");                                 // store relocated byte
-    emitter.instruction("sub x14, x14, #1");                                    // walk towards the mantissa
-    emitter.instruction("b __rt_ftoa_shift_right");                             // keep shifting
-
-    emitter.label("__rt_ftoa_write_dot");
-    emitter.instruction("mov w12, #46");                                        // '.'
-    emitter.instruction("strb w12, [x9, x11]");                                 // write the fraction point
-    emitter.instruction("add x15, x11, #1");                                    // slot after the point
-    emitter.instruction("mov w12, #48");                                        // '0'
-    emitter.instruction("strb w12, [x9, x15]");                                 // write the mandated fraction digit
-    emitter.instruction("add x10, x10, #2");                                    // text grew by two bytes
-    emitter.instruction("add x11, x11, #2");                                    // exponent moved with it
-
-    emitter.label("__rt_ftoa_exponent");
-    emitter.instruction("add x13, x11, #2");                                    // first exponent digit, past 'E' and its sign
-    emitter.label("__rt_ftoa_strip_zero");
-    emitter.instruction("sub x14, x10, x13");                                   // exponent digits still present
-    emitter.instruction("cmp x14, #1");                                         // one digit left?
-    emitter.instruction("b.le __rt_ftoa_done");                                 // never strip the final digit
-    emitter.instruction("ldrb w12, [x9, x13]");                                 // load leading exponent digit
-    emitter.instruction("cmp w12, #48");                                        // '0'
-    emitter.instruction("b.ne __rt_ftoa_done");                                 // significant digit: exponent is PHP-exact
-    emitter.instruction("mov x14, x13");                                        // overwrite the padding zero
-    emitter.label("__rt_ftoa_shift_left");
-    emitter.instruction("add x15, x14, #1");                                    // source is the following byte
-    emitter.instruction("cmp x15, x10");                                        // past the end?
-    emitter.instruction("b.ge __rt_ftoa_drop");                                 // whole tail moved down
-    emitter.instruction("ldrb w12, [x9, x15]");                                 // load byte to relocate
-    emitter.instruction("strb w12, [x9, x14]");                                 // store one byte lower
-    emitter.instruction("mov x14, x15");                                        // advance destination
-    emitter.instruction("b __rt_ftoa_shift_left");                              // keep shifting
-
-    emitter.label("__rt_ftoa_drop");
-    emitter.instruction("sub x10, x10, #1");                                    // text shrank by the padding zero
-    emitter.instruction("b __rt_ftoa_strip_zero");                              // a second pad zero may remain
-
-    emitter.label("__rt_ftoa_done");
-    emitter.instruction("mov x0, x10");                                         // publish the adjusted byte count
 }
 
 /// Emits the `__rt_ftoa` routine for Linux x86_64.
@@ -181,131 +163,229 @@ fn emit_php_scientific_fixup_arm64(emitter: &mut Emitter) {
 /// - `rax` = pointer to formatted string, `rdx` = length
 ///
 /// # Behavior
-/// Same as `emit_ftoa` but for the Linux x86_64 target. Uses `rbp`-based
-/// frame with 32 bytes of scratch space for concat cursor and output pointer.
+/// Same as `emit_ftoa` but for the Linux x86_64 target: `snprintf("%.14G", …)` into a
+/// 48-byte stack scratch buffer, then the same `zend_gcvt` fixup copy into `_concat_buf`.
 /// Sets `eax = 1` to signal one SIMD register argument to `snprintf`.
 fn emit_ftoa_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
-    emitter.comment("--- runtime: ftoa ---");
+    emitter.comment("--- runtime: ftoa (precision=14, PHP zend_gcvt layout) ---");
     emitter.label_global("__rt_ftoa");
 
     emitter.instruction("push rbp");                                            // save the caller frame pointer before using stack locals
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the formatting helper
-    emitter.instruction("sub rsp, 32");                                         // reserve aligned scratch space for concat offsets and the output pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned scratch space for the snprintf result
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat cursor so formatted bytes append after prior output
-    emitter.instruction("mov QWORD PTR [rbp - 8], r9");                         // save the original concat cursor for the final offset update
-    emitter.instruction("mov QWORD PTR [rbp - 16], r8");                        // save the concat cursor symbol address for the final store
-
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea rdi, [r10 + r9]");                                 // compute the destination buffer inside the concat scratch area
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // preserve the destination pointer for the return value
-
-    emitter.instruction("mov esi, 32");                                         // cap float formatting to the same 32-byte scratch window used on AArch64
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rdx", "_fmt_g");
+    emitter.instruction("lea rdi, [rbp - 56]");                                 // snprintf destination = stack scratch buffer
+    emitter.instruction("mov esi, 48");                                         // scratch buffer size limit
+    abi::emit_symbol_address(emitter, "rdx", "_fmt_g");
     emitter.instruction("mov eax, 1");                                          // SysV variadic ABI: one SIMD register is live for the double argument
-    emitter.instruction("call snprintf");                                       // format xmm0 using "%.14G" into the concat scratch buffer
+    emitter.instruction("call snprintf");                                       // format the double at 14 significant digits
 
-    emit_php_scientific_fixup_x86_64(emitter);
+    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat write offset
+    abi::emit_symbol_address(emitter, "r8", "_concat_buf");
+    emitter.instruction("lea r10, [r8 + r9]");                                  // result start = concat_buf + offset
+    emitter.instruction("mov r11, r10");                                        // r11 = write cursor, r10 = result start
+    emitter.instruction("lea rsi, [rbp - 56]");                                 // rsi = read cursor into the snprintf scratch
+    emitter.instruction("xor ecx, ecx");                                        // ecx = "mantissa already has a '.'" flag
 
-    emitter.instruction("mov rdx, rax");                                        // return the formatted byte count in the string-length result register
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the concat cursor symbol address
-    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the original concat cursor
-    emitter.instruction("add r9, rdx");                                         // advance the concat cursor by the number of formatted bytes
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the updated concat cursor for subsequent string writes
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the pointer to the formatted float text
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // first formatted byte
+    emitter.instruction("cmp al, 45");                                          // is it an ASCII '-' sign?
+    emitter.instruction("jne __rt_ftoa_nan_check_x");                           // unsigned text: inspect the first byte directly
+    emitter.instruction("movzx eax, BYTE PTR [rsi + 1]");                       // signed text: inspect the byte after the sign
+    emitter.label("__rt_ftoa_nan_check_x");
+    emitter.instruction("cmp al, 78");                                          // ASCII 'N' can only start the NAN spelling
+    emitter.instruction("jne __rt_ftoa_copy_x");                                // ordinary numeric text: run the copy/fixup loop
+    emitter.instruction("mov BYTE PTR [r11], 78");                              // emit 'N'
+    emitter.instruction("mov BYTE PTR [r11 + 1], 65");                          // emit 'A'
+    emitter.instruction("mov BYTE PTR [r11 + 2], 78");                          // emit 'N'
+    emitter.instruction("add r11, 3");                                          // advance the write cursor past "NAN"
+    emitter.instruction("jmp __rt_ftoa_finish_x");                              // NAN needs no further fixups
 
-    emitter.instruction("add rsp, 32");                                         // release the local scratch area before returning
+    emitter.label("__rt_ftoa_copy_x");
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the next scratch byte
+    emitter.instruction("test al, al");                                         // check for the NUL terminator
+    emitter.instruction("jz __rt_ftoa_finish_x");                               // decimal form needs no fixup
+    emitter.instruction("cmp al, 69");                                          // ASCII 'E' starts the exponent part
+    emitter.instruction("je __rt_ftoa_exp_x");                                  // switch to the exponential fixup path
+    emitter.instruction("cmp al, 46");                                          // ASCII '.' marks an existing mantissa fraction
+    emitter.instruction("jne __rt_ftoa_copy_store_x");                          // no fraction marker: just copy the byte
+    emitter.instruction("mov ecx, 1");                                          // record that the mantissa already has a fraction
+    emitter.label("__rt_ftoa_copy_store_x");
+    emitter.instruction("mov BYTE PTR [r11], al");                              // emit the mantissa byte
+    emitter.instruction("inc r11");                                             // advance the write cursor
+    emitter.instruction("inc rsi");                                             // advance the scratch read cursor
+    emitter.instruction("jmp __rt_ftoa_copy_x");                                // continue copying the mantissa
+
+    emitter.label("__rt_ftoa_exp_x");
+    emitter.instruction("test ecx, ecx");                                       // does the mantissa already have a fraction?
+    emitter.instruction("jnz __rt_ftoa_exp_marker_x");                          // yes: keep it as formatted
+    emitter.instruction("mov BYTE PTR [r11], 46");                              // emit the mandatory decimal point
+    emitter.instruction("mov BYTE PTR [r11 + 1], 48");                          // emit the mandatory "0" fraction digit
+    emitter.instruction("add r11, 2");                                          // advance the write cursor past ".0"
+    emitter.label("__rt_ftoa_exp_marker_x");
+    emitter.instruction("mov BYTE PTR [r11], 69");                              // emit the 'E' exponent marker
+    emitter.instruction("inc r11");                                             // advance the write cursor
+    emitter.instruction("inc rsi");                                             // advance past 'E' in the scratch
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the exponent sign byte
+    emitter.instruction("mov BYTE PTR [r11], al");                              // emit the exponent sign
+    emitter.instruction("inc r11");                                             // advance the write cursor
+    emitter.instruction("inc rsi");                                             // advance past the exponent sign
+
+    emitter.label("__rt_ftoa_exp_strip_x");
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the next exponent digit
+    emitter.instruction("cmp al, 48");                                          // is it a padding ASCII '0'?
+    emitter.instruction("jne __rt_ftoa_exp_digits_x");                          // significant digit: stop stripping
+    emitter.instruction("movzx edx, BYTE PTR [rsi + 1]");                       // peek at the following byte
+    emitter.instruction("test dl, dl");                                         // is the zero the last exponent digit?
+    emitter.instruction("jz __rt_ftoa_exp_digits_x");                           // keep a lone '0' as the exponent value
+    emitter.instruction("inc rsi");                                             // drop one leading zero
+    emitter.instruction("jmp __rt_ftoa_exp_strip_x");                           // keep stripping leading zeros
+
+    emitter.label("__rt_ftoa_exp_digits_x");
+    emitter.instruction("movzx eax, BYTE PTR [rsi]");                           // load the next exponent digit
+    emitter.instruction("test al, al");                                         // check for the NUL terminator
+    emitter.instruction("jz __rt_ftoa_finish_x");                               // the exponent is complete
+    emitter.instruction("mov BYTE PTR [r11], al");                              // emit the exponent digit
+    emitter.instruction("inc r11");                                             // advance the write cursor
+    emitter.instruction("inc rsi");                                             // advance the scratch read cursor
+    emitter.instruction("jmp __rt_ftoa_exp_digits_x");                          // copy the remaining exponent digits
+
+    emitter.label("__rt_ftoa_finish_x");
+    emitter.instruction("mov rax, r10");                                        // result pointer = start of the emitted text
+    emitter.instruction("mov rdx, r11");                                        // write cursor, one past the last byte
+    emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the original concat offset
+    emitter.instruction("add r8, rdx");                                         // advance it past the emitted bytes
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat offset
+
+    emitter.instruction("add rsp, 64");                                         // release the local scratch area before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return pointer+length in rax/rdx
 }
 
-/// Rewrites C `%.14G` scientific output into PHP's scientific format, in place.
+/// Emits `__rt_ftoa_repr`, PHP's `serialize_precision = -1` float rendering.
 ///
-/// Behavioral twin of `emit_php_scientific_fixup_arm64`: the mantissa always gains a
-/// fraction (`1.0E+20`, never `1E+20`) and the exponent loses its zero padding
-/// (`1.0E-7`, never `1E-07`). Fixed notation already matches PHP and is left untouched.
+/// This is the layout `var_dump()` prints (`%.*H` with `serialize_precision = -1`): the
+/// shortest decimal string that round-trips back to the same `double`, with an uppercase
+/// `E` marker, a mandatory `d.d` mantissa in exponential form, an unpadded exponent, and
+/// NO trailing `.0` for integer-valued floats (`float(100)`, not `float(100.0)`).
 ///
-/// # Input
-/// - `rax` = byte count written by `snprintf`
-/// - `[rbp - 24]` = buffer start (as saved by `emit_ftoa_linux_x86_64`)
+/// Finite values are handed to `__rt_json_ftoa` — the tested shortest-round-trip
+/// formatter shared with `json_encode`/`serialize` — with `'E'` as the exponent marker.
+/// This helper only owns the three non-finite spellings, because `__rt_json_ftoa` relies
+/// on its caller to filter them out.
 ///
-/// # Output
-/// - `rax` = adjusted byte count
+/// Input: AArch64 `d0` / x86_64 `xmm0` = the double to render.
+/// Output: AArch64 `x1`/`x2`, x86_64 `rax`/`rdx` = pointer/length inside `_concat_buf`,
+/// with `_concat_off` advanced past the emitted bytes — the same ABI as `__rt_ftoa`.
+pub fn emit_ftoa_repr(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_ftoa_repr_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: ftoa_repr (serialize_precision=-1, var_dump layout) ---");
+    emitter.label_global("__rt_ftoa_repr");
+
+    // -- classify the double through its raw bits: finite, infinite, or NaN --
+    emitter.instruction("fmov x9, d0");                                         // raw IEEE-754 bit pattern of the value
+    emitter.instruction("and x10, x9, #0x7fffffffffffffff");                    // drop the sign bit to test the magnitude
+    emitter.instruction("movz x11, #0x7ff0, lsl #48");                          // the exact bit pattern of positive infinity
+    emitter.instruction("cmp x10, x11");                                        // compare the magnitude against infinity
+    emitter.instruction("b.hi __rt_ftoa_repr_nan");                             // above infinity means NaN
+    emitter.instruction("b.eq __rt_ftoa_repr_inf");                             // exactly infinity
+
+    // -- finite: PHP's shortest round-trip formatter with an uppercase exponent marker --
+    emitter.instruction("mov w0, #69");                                         // ASCII 'E': var_dump uses the uppercase marker
+    emitter.instruction("b __rt_json_ftoa");                                    // tail-call the shared shortest-round-trip formatter
+
+    emitter.label("__rt_ftoa_repr_nan");
+    emitter.instruction("mov x9, #0");                                          // no sign byte: PHP always prints an unsigned NAN
+    emitter.instruction("mov w12, #78");                                        // ASCII 'N' as the first literal byte
+    emitter.instruction("mov w13, #65");                                        // ASCII 'A' as the second literal byte
+    emitter.instruction("mov w14, #78");                                        // ASCII 'N' as the third literal byte
+    emitter.instruction("b __rt_ftoa_repr_emit");                               // emit the three-byte literal
+
+    emitter.label("__rt_ftoa_repr_inf");
+    emitter.instruction("mov w12, #73");                                        // ASCII 'I' as the first literal byte
+    emitter.instruction("mov w13, #78");                                        // ASCII 'N' as the second literal byte
+    emitter.instruction("mov w14, #70");                                        // ASCII 'F' as the third literal byte
+
+    // -- write "[-]XXX" straight into the concat buffer and publish the cursor --
+    emitter.label("__rt_ftoa_repr_emit");
+    abi::emit_symbol_address(emitter, "x15", "_concat_off");
+    emitter.instruction("ldr x16, [x15]");                                      // current concat write offset
+    abi::emit_symbol_address(emitter, "x17", "_concat_buf");
+    emitter.instruction("add x1, x17, x16");                                    // result start = concat_buf + offset
+    emitter.instruction("mov x11, x1");                                         // x11 = write cursor, x1 = result start
+    emitter.instruction("tbz x9, #63, __rt_ftoa_repr_body");                    // skip the sign byte for non-negative values
+    emitter.instruction("mov w10, #45");                                        // ASCII '-'
+    emitter.instruction("strb w10, [x11], #1");                                 // emit the sign byte for -INF
+    emitter.label("__rt_ftoa_repr_body");
+    emitter.instruction("strb w12, [x11], #1");                                 // emit the first literal byte
+    emitter.instruction("strb w13, [x11], #1");                                 // emit the second literal byte
+    emitter.instruction("strb w14, [x11], #1");                                 // emit the third literal byte
+    emitter.instruction("sub x2, x11, x1");                                     // result length = cursor - start
+    emitter.instruction("add x16, x16, x2");                                    // advance the concat cursor past the literal
+    emitter.instruction("str x16, [x15]");                                      // publish the updated concat offset
+    emitter.instruction("ret");                                                 // return pointer (x1) and length (x2)
+}
+
+/// Emits the Linux x86_64 variant of `__rt_ftoa_repr`.
 ///
-/// # Behavior
-/// Clobbers `rcx`, `rsi`, `rdi`, and `r8`-`r11`. The caller reloads `r8`/`r9` from its
-/// frame afterwards, and the two bytes added by `.0` stay inside the reserved 32-byte
-/// window because `%.14G` never exceeds 21 bytes.
-fn emit_php_scientific_fixup_x86_64(emitter: &mut Emitter) {
-    emitter.comment("-- rewrite C scientific output into PHP's format --");
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // buffer start
-    emitter.instruction("mov r10, rax");                                        // current byte count
-    emitter.instruction("xor r11, r11");                                        // scan cursor
+/// Mirrors the AArch64 helper: classify the double from its raw bits, tail-call
+/// `__rt_json_ftoa` with `'E'` for finite values, and emit `INF` / `-INF` / `NAN` directly
+/// into `_concat_buf` otherwise.
+///
+/// Input: `xmm0` = the double to render. Output: `rax`/`rdx` = pointer/length.
+fn emit_ftoa_repr_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: ftoa_repr (serialize_precision=-1, var_dump layout) ---");
+    emitter.label_global("__rt_ftoa_repr");
 
-    emitter.label("__rt_ftoa_find_e");
-    emitter.instruction("cmp r11, r10");                                        // scanned every byte?
-    emitter.instruction("jge __rt_ftoa_done");                                  // no exponent: fixed notation already matches PHP
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + r11]");                      // load candidate byte
-    emitter.instruction("cmp cl, 69");                                          // 'E'
-    emitter.instruction("je __rt_ftoa_have_e");                                 // exponent found
-    emitter.instruction("inc r11");                                             // advance scan cursor
-    emitter.instruction("jmp __rt_ftoa_find_e");                                // keep scanning
+    emitter.instruction("movq r9, xmm0");                                       // raw IEEE-754 bit pattern of the value
+    emitter.instruction("movabs r10, 0x7fffffffffffffff");                      // mask that drops the sign bit
+    emitter.instruction("and r10, r9");                                         // magnitude bits of the value
+    emitter.instruction("movabs r11, 0x7ff0000000000000");                      // the exact bit pattern of positive infinity
+    emitter.instruction("cmp r10, r11");                                        // compare the magnitude against infinity
+    emitter.instruction("ja __rt_ftoa_repr_nan_x");                             // above infinity means NaN
+    emitter.instruction("je __rt_ftoa_repr_inf_x");                             // exactly infinity
 
-    emitter.label("__rt_ftoa_have_e");
-    emitter.instruction("xor rsi, rsi");                                        // mantissa scan cursor
-    emitter.label("__rt_ftoa_find_dot");
-    emitter.instruction("cmp rsi, r11");                                        // reached the exponent?
-    emitter.instruction("jge __rt_ftoa_insert_dot");                            // bare mantissa: PHP requires ".0"
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + rsi]");                      // load mantissa byte
-    emitter.instruction("cmp cl, 46");                                          // '.'
-    emitter.instruction("je __rt_ftoa_exponent");                               // mantissa already has a fraction
-    emitter.instruction("inc rsi");                                             // advance mantissa cursor
-    emitter.instruction("jmp __rt_ftoa_find_dot");                              // keep scanning
+    emitter.instruction("mov edi, 69");                                         // ASCII 'E': var_dump uses the uppercase marker
+    emitter.instruction("jmp __rt_json_ftoa");                                  // tail-call the shared shortest-round-trip formatter
 
-    emitter.label("__rt_ftoa_insert_dot");
-    emitter.instruction("mov rdi, r10");                                        // copy backwards from the trailing NUL
-    emitter.label("__rt_ftoa_shift_right");
-    emitter.instruction("cmp rdi, r11");                                        // reached the exponent?
-    emitter.instruction("jl __rt_ftoa_write_dot");                              // gap of two bytes is open
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // load byte to relocate
-    emitter.instruction("mov BYTE PTR [r9 + rdi + 2], cl");                     // store two bytes higher
-    emitter.instruction("dec rdi");                                             // walk towards the mantissa
-    emitter.instruction("jmp __rt_ftoa_shift_right");                           // keep shifting
+    emitter.label("__rt_ftoa_repr_nan_x");
+    emitter.instruction("xor r9d, r9d");                                        // no sign byte: PHP always prints an unsigned NAN
+    emitter.instruction("mov ecx, 78");                                         // ASCII 'N' as the first literal byte
+    emitter.instruction("mov esi, 65");                                         // ASCII 'A' as the second literal byte
+    emitter.instruction("mov edi, 78");                                         // ASCII 'N' as the third literal byte
+    emitter.instruction("jmp __rt_ftoa_repr_emit_x");                           // emit the three-byte literal
 
-    emitter.label("__rt_ftoa_write_dot");
-    emitter.instruction("mov BYTE PTR [r9 + r11], 46");                         // write the fraction point
-    emitter.instruction("mov BYTE PTR [r9 + r11 + 1], 48");                     // write the mandated fraction digit
-    emitter.instruction("add r10, 2");                                          // text grew by two bytes
-    emitter.instruction("add r11, 2");                                          // exponent moved with it
+    emitter.label("__rt_ftoa_repr_inf_x");
+    emitter.instruction("mov ecx, 73");                                         // ASCII 'I' as the first literal byte
+    emitter.instruction("mov esi, 78");                                         // ASCII 'N' as the second literal byte
+    emitter.instruction("mov edi, 70");                                         // ASCII 'F' as the third literal byte
 
-    emitter.label("__rt_ftoa_exponent");
-    emitter.instruction("lea rsi, [r11 + 2]");                                  // first exponent digit, past 'E' and its sign
-    emitter.label("__rt_ftoa_strip_zero");
-    emitter.instruction("mov rdi, r10");                                        // exponent digits still present
-    emitter.instruction("sub rdi, rsi");                                        // = length - first digit index
-    emitter.instruction("cmp rdi, 1");                                          // one digit left?
-    emitter.instruction("jle __rt_ftoa_done");                                  // never strip the final digit
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + rsi]");                      // load leading exponent digit
-    emitter.instruction("cmp cl, 48");                                          // '0'
-    emitter.instruction("jne __rt_ftoa_done");                                  // significant digit: exponent is PHP-exact
-    emitter.instruction("mov rdi, rsi");                                        // overwrite the padding zero
-    emitter.label("__rt_ftoa_shift_left");
-    emitter.instruction("lea r8, [rdi + 1]");                                   // source is the following byte
-    emitter.instruction("cmp r8, r10");                                         // past the end?
-    emitter.instruction("jge __rt_ftoa_drop");                                  // whole tail moved down
-    emitter.instruction("movzx ecx, BYTE PTR [r9 + r8]");                       // load byte to relocate
-    emitter.instruction("mov BYTE PTR [r9 + rdi], cl");                         // store one byte lower
-    emitter.instruction("mov rdi, r8");                                         // advance destination
-    emitter.instruction("jmp __rt_ftoa_shift_left");                            // keep shifting
-
-    emitter.label("__rt_ftoa_drop");
-    emitter.instruction("dec r10");                                             // text shrank by the padding zero
-    emitter.instruction("jmp __rt_ftoa_strip_zero");                            // a second pad zero may remain
-
-    emitter.label("__rt_ftoa_done");
-    emitter.instruction("mov rax, r10");                                        // publish the adjusted byte count
+    emitter.label("__rt_ftoa_repr_emit_x");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // current concat write offset
+    abi::emit_symbol_address(emitter, "r11", "_concat_buf");
+    emitter.instruction("lea rax, [r11 + r10]");                                // result start = concat_buf + offset
+    emitter.instruction("mov r8, rax");                                         // r8 = write cursor, rax = result start
+    emitter.instruction("test r9, r9");                                         // is the sign bit set?
+    emitter.instruction("jns __rt_ftoa_repr_body_x");                           // skip the sign byte for non-negative values
+    emitter.instruction("mov BYTE PTR [r8], 45");                               // emit the ASCII '-' for -INF
+    emitter.instruction("inc r8");                                              // advance the write cursor
+    emitter.label("__rt_ftoa_repr_body_x");
+    emitter.instruction("mov BYTE PTR [r8], cl");                               // emit the first literal byte
+    emitter.instruction("mov BYTE PTR [r8 + 1], sil");                          // emit the second literal byte
+    emitter.instruction("mov BYTE PTR [r8 + 2], dil");                          // emit the third literal byte
+    emitter.instruction("add r8, 3");                                           // advance the write cursor past the literal
+    emitter.instruction("mov rdx, r8");                                         // write cursor, one past the last byte
+    emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
+    emitter.instruction("add r10, rdx");                                        // advance the concat cursor past the literal
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat offset
+    emitter.instruction("ret");                                                 // return pointer (rax) and length (rdx)
 }
 
 #[cfg(test)]
@@ -315,7 +395,8 @@ mod tests {
     use super::*;
 
     /// Verifies that `emit_ftoa` on Linux x86_64 uses the SysV variadic calling convention
-    /// by checking that `eax` is set to 1 (one SIMD register argument) before calling `snprintf`.
+    /// by checking that `eax` is set to 1 (one SIMD register argument) before calling
+    /// `snprintf`, and that the fixup copy returns pointer/length in `rax`/`rdx`.
     #[test]
     fn test_emit_ftoa_linux_x86_64_uses_sysv_variadic_call() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
@@ -325,6 +406,38 @@ mod tests {
         assert!(asm.contains("__rt_ftoa:\n"));
         assert!(asm.contains("mov eax, 1\n"));
         assert!(asm.contains("call snprintf\n"));
-        assert!(asm.contains("mov rdx, rax\n"));
+        assert!(asm.contains("sub rdx, rax\n"));
+    }
+
+    /// Verifies that both targets emit the `zend_gcvt` fixup path: the mandatory `.0`
+    /// mantissa fraction (ASCII 46/48) and the exponent leading-zero strip loop.
+    #[test]
+    fn test_emit_ftoa_applies_php_gcvt_fixups() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_ftoa(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_ftoa_exp"), "missing exponential fixup for {:?}", arch);
+            assert!(
+                asm.contains("__rt_ftoa_exp_strip") || asm.contains("__rt_ftoa_exp_strip_x"),
+                "missing exponent zero-strip for {:?}",
+                arch
+            );
+        }
+    }
+
+    /// Verifies that `__rt_ftoa_repr` delegates finite values to the shared
+    /// shortest-round-trip formatter with the uppercase `E` marker (ASCII 69) and owns the
+    /// non-finite spellings itself.
+    #[test]
+    fn test_emit_ftoa_repr_delegates_to_json_ftoa() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_ftoa_repr(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_ftoa_repr:\n"), "missing entry point for {:?}", arch);
+            assert!(asm.contains("__rt_json_ftoa"), "missing delegation for {:?}", arch);
+            assert!(asm.contains("69"), "missing uppercase 'E' marker for {:?}", arch);
+        }
     }
 }

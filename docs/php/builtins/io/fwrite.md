@@ -2,13 +2,13 @@
 title: "fwrite()"
 description: "Binary-safe file write."
 sidebar:
-  order: 182
+  order: 189
 ---
 
 ## fwrite()
 
 ```php
-function fwrite(resource $stream, string $data): int
+function fwrite(resource $stream, string $data): mixed
 ```
 
 Binary-safe file write.
@@ -17,7 +17,7 @@ Binary-safe file write.
 - `$stream` (`resource`)
 - `$data` (`string`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

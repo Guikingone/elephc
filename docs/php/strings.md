@@ -129,6 +129,31 @@ echo "[" . $s[99] . "]";  // []
 
 Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 
+## Incrementing a string
+
+`++` on a string uses PHP's perl-style alphanumeric carry, which is how the
+spreadsheet-column idiom works:
+
+```php
+<?php
+$col = "A";
+for ($i = 0; $i < 30; $i++) { echo $col, " "; $col++; }
+// A B C ... Z AA AB AC AD
+```
+
+The carry runs over raw bytes from the end: `a`–`y`, `A`–`Y` and `0`–`8` advance in
+place; `z`, `Z` and `9` wrap to `a`, `A` and `0` and carry left; a carry out of the
+front prepends `a`, `A` or `1` (`"zz"++` is `"aaa"`, `"Zz"++` is `"AAa"`, `"9z"++` is
+`"10a"`). Any other byte stops the carry, so `"a-"++` is unchanged while `"-a"++` is
+`"-b"`, and `""++` is `"1"`.
+
+A *numeric* string increments as a number and therefore changes type — `"9"++` is
+`int(10)`, `"1.5"++` is `float(2.5)`. `--` never carries: it decrements a numeric
+string, turns `""` into `int(-1)`, and leaves every other string alone.
+
+See [Operators](./operators.md#increment--decrement) for the full rules and the one
+documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
+
 ## Built-in string functions
 
 | Function | Signature | Description |
@@ -136,8 +161,10 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
-| `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
-| `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
+| `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
+| `strrpos()` | `strrpos($haystack, $needle, $offset = 0): int\|false` | Find last occurrence. A non-negative `$offset` starts the search there; a negative one stops it that many bytes before the end. Returns `false` if not found |
+| `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
+| `strripos()` | `strripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strrpos()`. Folding is ASCII-only (`A`-`Z`). `$offset` behaves exactly as in `strrpos()` |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
@@ -146,14 +173,14 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
-| `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
+| `ucwords()` | `ucwords($string, $separators = " \t\r\n\f\v"): string` | Uppercase the first letter of each word. `$separators` is a byte set |
 | `trim()` | `trim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from both ends |
 | `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
 | `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |
 | `chop()` | `chop($str [, $chars]): string` | Alias of `rtrim()` |
-| `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
-| `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
-| `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
+| `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string. A negative `$times` throws `\ValueError`. |
+| `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length. When padding is actually needed, an empty `$pad` or a `$type` outside `STR_PAD_LEFT`/`STR_PAD_RIGHT`/`STR_PAD_BOTH` throws `\ValueError`. |
+| `str_split()` | `str_split($str [, $len]): array` | Split into chunks. A `$len` of `0` or less throws `\ValueError`. |
 | `strrev()` | `strrev($str): string` | Reverse a string |
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
@@ -163,9 +190,9 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `str_ends_with()` | `str_ends_with($hay, $suffix): bool` | Check suffix |
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
-| `explode()` | `explode($delim, $str): array` | Split string into array |
-| `implode()` | `implode($glue, $arr): string` | Join array into string |
-| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number |
+| `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
+| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator |
+| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `vsprintf()` | `vsprintf($fmt, array $values): string` | Like `sprintf()`, with the arguments supplied as an array. Each element becomes one format argument — int/float/bool/string, including the elements of a mixed array. |
@@ -174,7 +201,12 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
-| `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words |
+| `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words. An empty `$break`, or a `$width` of `0` together with `$cut`, throws `\ValueError`. |
+| `chunk_split()` | `chunk_split($str [, $length [, $separator]]): string` | Split into fixed-length chunks, appending `$separator` after every chunk including the last. Defaults to 76-byte chunks joined by `\r\n`. An empty subject yields a single separator; a `$length` below `1` throws `\ValueError`. |
+| `quotemeta()` | `quotemeta($str): string` | Prefix each of `. \ + * ? [ ^ ] $ ( )` with a backslash |
+| `strtr()` | `strtr($str, $from, $to): string`<br>`strtr($str, array $pairs): string` | Translate bytes pairwise, truncated to the shorter of `$from`/`$to` (a later pair for the same source byte wins), or apply replacement `$pairs` longest-match-first in a single left-to-right pass with no re-substitution. Empty keys and keys longer than the subject are ignored. `$pairs` must have string values. |
+| `str_word_count()` | `str_word_count($str [, $format [, $characters]]): array\|int` | Count words (`$format` 0), return them as a list (1), or map each word to its byte offset (2). A word is letters plus interior `'` and `-`, widened by every byte of `$characters`. `$format` must be an integer literal, and a value outside `0..2` throws `\ValueError`. |
+| `count_chars()` | `count_chars($str [, $mode]): array\|string` | Byte-frequency information: `$mode` 0 tallies all 256 byte values, 1 only the used ones, 2 only the unused ones, 3 renders the used byte values as a string, and 4 the unused ones. `$mode` must be an integer literal, and a value outside `0..4` throws `\ValueError`. |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
@@ -193,6 +225,74 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
+| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a supported AES CBC, CTR, ECB, or GCM cipher. |
+| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and, for GCM, authenticate data with the supplied tag and AAD. |
+| `openssl_cipher_iv_length()` | `openssl_cipher_iv_length($cipher_algo): int\|false` | Return the default IV length for a supported cipher. |
+| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return the exact cipher matrix implemented by elephc. |
+| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
+| `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
+| `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
+| `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
+| `urldecode()` | `urldecode($str): string` | URL-decode |
+| `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
+| `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
+| `base64_encode()` | `base64_encode($str): string` | Base64 encode |
+| `base64_decode()` | `base64_decode($string, $strict = false): string\|false` | Base64 decode. Whitespace inside the payload is skipped and missing padding is tolerated; the default (lax) mode also drops any other character outside the Base64 alphabet, while `$strict = true` returns `false` for such a character, for data after a padding character, for a truncated final group, and for an invalid amount of padding |
+| `quoted_printable_encode()` | `quoted_printable_encode($string): string` | MIME quoted-printable encode. Control bytes, `0x7F`, high-bit bytes, `=`, and a space directly before a `CR` become `=XX`; an embedded `CRLF` is kept as a hard line break; lines are folded at 75 columns with a trailing `=` |
+| `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
+| `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
+| `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
+| `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
+| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
+| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
+| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
+| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+#### `explode()` and the `$limit` argument
+
+`explode()` takes PHP's optional third argument:
+
+```php
+explode(",", "a,b,c");      // ["a", "b", "c"]
+explode(",", "a,b,c", 2);   // ["a", "b,c"]  — the last element keeps the rest
+explode(",", "a,b,c", 0);   // ["a,b,c"]     — 0 behaves exactly like 1
+explode(",", "a,b,c", -1);  // ["a", "b"]    — drops the last element
+explode(",", "a,b,c", -9);  // []            — drops every element
+```
+
+An empty `$separator` throws `\ValueError: explode(): Argument #1 ($separator) must not be empty`.
+
+#### `str_pad()` padding modes
+
+`STR_PAD_RIGHT` (`1`, the default), `STR_PAD_LEFT` (`0`), and `STR_PAD_BOTH` (`2`)
+are predefined constants:
+
+```php
+str_pad("x", 4, "-", STR_PAD_LEFT);  // "---x"
+str_pad("x", 5, "ab", STR_PAD_BOTH); // "abxab"
+```
+
+Both value checks follow PHP's order: a `$len` that cannot grow the input returns
+the input untouched *before* either check runs, so `str_pad("xyz", 1, "")` is
+`"xyz"` and not an error. Once padding is actually required, an empty `$pad`
+throws `\ValueError: str_pad(): Argument #3 ($pad_string) must not be empty` and a
+`$type` outside `0..2` throws
+`\ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH`.
+
+#### `number_format()` and negative `$decimals`
+
+A negative `$decimals` is not an error in PHP. The number is rounded to that power
+of ten (half away from zero, applied to the magnitude) and then formatted with no
+decimals:
+
+```php
+number_format(1234.5678, -1);  // "1,230"
+number_format(1234.5678, -2);  // "1,200"
+number_format(-1234.5678, -1); // "-1,230"
+number_format(-4.9, -1);       // "0"  — never "-0"
+number_format(1234.5678, -9);  // "0"
+```
 
 #### The `HashContext` object
 
@@ -245,23 +345,56 @@ Known divergences:
   compile-time "unsupported" error and `var_export()` prints nothing.
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
-| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
-| `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
-| `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
-| `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
-| `urldecode()` | `urldecode($str): string` | URL-decode |
-| `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
-| `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
-| `base64_encode()` | `base64_encode($str): string` | Base64 encode |
-| `base64_decode()` | `base64_decode($str): string` | Base64 decode |
-| `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
-| `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
-| `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
-| `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
-| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
-| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
-| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
-| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+### Symmetric encryption (OpenSSL-compatible)
+
+elephc implements `openssl_encrypt()`, `openssl_decrypt()`,
+`openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()` on both compiled
+and `eval()` paths. They use the pure-Rust `elephc-crypto` bridge and do not link
+the system OpenSSL library. Programs that do not use crypto builtins do not link
+the bridge.
+
+The supported cipher list is intentionally smaller than stock PHP/OpenSSL and is
+exactly what `openssl_get_cipher_methods()` returns:
+
+| Mode | Supported names | Key bytes | IV bytes |
+|---|---|---:|---:|
+| CBC | `aes-128-cbc`, `aes-192-cbc`, `aes-256-cbc` | 16 / 24 / 32 | 16 |
+| CTR | `aes-128-ctr`, `aes-192-ctr`, `aes-256-ctr` | 16 / 24 / 32 | 16 |
+| ECB | `aes-128-ecb`, `aes-192-ecb`, `aes-256-ecb` | 16 / 24 / 32 | 0 |
+| GCM | `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | 16 / 24 / 32 | 12 by default |
+
+Cipher names are case-insensitive. Without `OPENSSL_RAW_DATA`, encryption returns
+Base64 and decryption accepts Base64. With the flag, both functions exchange raw
+bytes. The supported option constants are:
+
+| Constant | Value | Behavior |
+|---|---:|---|
+| `OPENSSL_RAW_DATA` | 1 | Exchange raw ciphertext instead of Base64. |
+| `OPENSSL_ZERO_PADDING` | 2 | Disable PKCS#7 padding for CBC/ECB; plaintext must be block-aligned. |
+| `OPENSSL_DONT_ZERO_PAD_KEY` | 4 | Reject a short key instead of zero-padding it. |
+
+Short keys are zero-padded by default and long keys are truncated.
+
+CBC and CTR IVs are zero-padded or truncated to 16 bytes. GCM accepts every
+non-empty IV length, reports 12 as its default, writes a 1–16 byte authentication
+tag through encrypt's by-reference `$tag`, and authenticates the supplied `$tag`
+and `$aad` during decryption. Unknown ciphers, invalid tag/IV lengths, padding
+errors, and GCM authentication failures return `false`.
+
+PHP's warning text is not yet reproduced for OpenSSL failures or successful
+CBC/CTR IV normalization; the cryptographic result and `false` return behavior
+match the supported PHP fixtures. See the
+[`examples/openssl_crypt`](https://github.com/illegalstudio/elephc/tree/main/examples/openssl_crypt)
+program for CBC and GCM round trips.
+
+`parse_url()` follows PHP's component shapes: without a selector (or with any
+negative selector) it returns an associative array containing only present keys,
+with `port` stored as an integer. `PHP_URL_SCHEME` through `PHP_URL_FRAGMENT`
+select one string or integer component, returning `null` when that component is
+absent. A malformed URL returns `false` in either mode; selectors greater than
+`PHP_URL_FRAGMENT` raise a catchable `ValueError`. Query and fragment bytes are
+returned verbatim rather than decoded.
 
 Regex functions are documented separately in [Regex](regex.md), including the
 managed `pcre2` declaration required when a `preg_*` program is finally linked.

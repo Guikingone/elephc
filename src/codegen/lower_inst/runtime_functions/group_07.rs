@@ -61,6 +61,54 @@ pub(super) fn lower(
         RuntimeFnId::Cosh => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "cosh")
         }),
+        RuntimeFnId::Bindec => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base_to_number(
+                    ctx,
+                    inst,
+                    "bindec",
+                    2,
+                )
+        }),
+        RuntimeFnId::Hexdec => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base_to_number(
+                    ctx,
+                    inst,
+                    "hexdec",
+                    16,
+                )
+        }),
+        RuntimeFnId::Octdec => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base_to_number(
+                    ctx,
+                    inst,
+                    "octdec",
+                    8,
+                )
+        }),
+        RuntimeFnId::Decbin => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_dec_to_base(
+                    ctx,
+                    inst,
+                    "decbin",
+                    2,
+                )
+        }),
+        RuntimeFnId::Dechex => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_dec_to_base(
+                    ctx,
+                    inst,
+                    "dechex",
+                    16,
+                )
+        }),
+        RuntimeFnId::Decoct => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_dec_to_base(
+                    ctx,
+                    inst,
+                    "decoct",
+                    8,
+                )
+        }),
         RuntimeFnId::Deg2rad => Some({
             crate::codegen::lower_inst::builtins::math::lower_deg2rad(ctx, inst)
         }),
@@ -116,7 +164,7 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::math::lower_random_int(ctx, inst)
         }),
         RuntimeFnId::Round => Some({
-            crate::codegen::lower_inst::builtins::math::lower_round(ctx, inst)
+            crate::codegen::lower_inst::builtins::round_mode::lower_round(ctx, inst)
         }),
         RuntimeFnId::Sin => Some({
             crate::codegen::lower_inst::builtins::math::lower_unary_libm(ctx, inst, "sin")

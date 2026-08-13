@@ -22,9 +22,30 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_parse_url_wrong_args,
+    "<?php parse_url();",
+    "parse_url() takes 1 or 2 arguments"
+);
+
+/// Verifies that `parse_url()` rejects a statically non-integer component selector.
+#[test]
+fn test_error_parse_url_component_type() {
+    expect_error(
+        "<?php parse_url('https://example.com', 'host');",
+        "parse_url() component must be int",
+    );
+}
+
+expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
-    "base64_decode() takes exactly 1 argument"
+    "base64_decode() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_base64_decode_too_many_args,
+    "<?php base64_decode(\"SGk=\", true, 1);",
+    "base64_decode() takes 1 or 2 arguments"
 );
 
 expect_builtin_arity_error!(
@@ -130,11 +151,53 @@ fn test_error_substr_wrong_args() {
 }
 
 /// Verifies that `strpos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is now accepted, so the derived phrasing is a
+/// range rather than an exact count.
 #[test]
 fn test_error_strpos_wrong_args() {
     expect_error(
         "<?php strpos(\"hi\");",
-        "strpos() takes exactly 2 arguments",
+        "strpos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `stripos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is accepted, so the derived phrasing is a range
+/// rather than an exact count, exactly like `strpos()`.
+#[test]
+fn test_error_stripos_wrong_args() {
+    expect_error(
+        "<?php stripos(\"hi\");",
+        "stripos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `strripos()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_strripos_too_many_args() {
+    expect_error(
+        "<?php strripos(\"hi\", \"h\", 0, 1);",
+        "strripos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `quoted_printable_encode()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_quoted_printable_encode_wrong_args() {
+    expect_error(
+        "<?php quoted_printable_encode();",
+        "quoted_printable_encode() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that `quoted_printable_encode()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_quoted_printable_encode_too_many_args() {
+    expect_error(
+        "<?php quoted_printable_encode(\"a\", \"b\");",
+        "quoted_printable_encode() takes exactly 1 argument",
     );
 }
 
@@ -195,11 +258,47 @@ fn test_error_ord_undefined_variable_arg() {
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
+///
+/// The reported range covers the optional `$limit` third parameter.
 #[test]
 fn test_error_explode_wrong_args() {
     expect_error(
         "<?php explode(\",\");",
-        "explode() takes exactly 2 arguments",
+        "explode() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `explode()` rejects a fourth argument now that `$limit` is accepted.
+#[test]
+fn test_error_explode_too_many_args() {
+    expect_error(
+        "<?php explode(\",\", \"a,b\", 1, 2);",
+        "explode() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `explode()` accepts the optional `$limit`, positionally and by name.
+#[test]
+fn test_explode_limit_argument_type_checks() {
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", -1);").is_ok(),
+        "explode() must accept a negative positional $limit",
+    );
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", limit: 2);").is_ok(),
+        "explode() must accept $limit as a named argument",
+    );
+}
+
+/// Verifies that `str_pad()`'s padding-mode constants are predefined like PHP's.
+#[test]
+fn test_str_pad_mode_constants_are_predefined() {
+    assert!(
+        check_source(
+            "<?php $a = str_pad(\"x\", 4, \"-\", STR_PAD_LEFT) . str_pad(\"x\", 4, \"-\", STR_PAD_RIGHT) . str_pad(\"x\", 4, \"-\", STR_PAD_BOTH);"
+        )
+        .is_ok(),
+        "STR_PAD_LEFT/STR_PAD_RIGHT/STR_PAD_BOTH must resolve as predefined constants",
     );
 }
 
@@ -422,5 +521,64 @@ fn test_error_vprintf_wrong_args() {
     expect_error(
         "<?php vprintf(\"%d\", [1], 3);",
         "vprintf() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies that `join()` with no arguments produces the correct arity error.
+/// `join()` mirrors PHP's `implode()` signature, whose `$array` parameter is optional,
+/// so the enforced contract is one or two arguments.
+#[test]
+fn test_error_join_wrong_args() {
+    expect_error("<?php join();", "join() takes 1 or 2 arguments");
+}
+
+/// Verifies that `join()` with three arguments produces the correct arity error.
+#[test]
+fn test_error_join_too_many_args() {
+    expect_error("<?php join(\"a\", [\"b\"], \"c\");", "join() takes 1 or 2 arguments");
+}
+
+/// Verifies that `substr_count()` with a single argument produces the correct arity error.
+#[test]
+fn test_error_substr_count_wrong_args() {
+    expect_error(
+        "<?php substr_count(\"abc\");",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies that `substr_count()` with five arguments produces the correct arity error.
+#[test]
+fn test_error_substr_count_too_many_args() {
+    expect_error(
+        "<?php substr_count(\"abc\", \"b\", 0, 1, 2);",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies that `strncmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncmp_wrong_args() {
+    expect_error(
+        "<?php strncmp(\"a\", \"b\");",
+        "strncmp() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that `strncasecmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncasecmp_wrong_args() {
+    expect_error(
+        "<?php strncasecmp(\"a\", \"b\");",
+        "strncasecmp() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies `openssl_encrypt()` rejects a non-variable GCM tag output argument.
+#[test]
+fn test_error_openssl_encrypt_tag_must_be_variable() {
+    expect_error(
+        r#"<?php openssl_encrypt("data", "aes-256-gcm", "key", 1, "iv", "tag");"#,
+        "openssl_encrypt() parameter $tag must be passed a variable",
     );
 }

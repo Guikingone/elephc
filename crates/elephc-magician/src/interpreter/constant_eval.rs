@@ -75,6 +75,14 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     match name.trim_start_matches('\\') {
+        "PHP_URL_SCHEME" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_SCHEME)),
+        "PHP_URL_HOST" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_HOST)),
+        "PHP_URL_PORT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PORT)),
+        "PHP_URL_USER" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_USER)),
+        "PHP_URL_PASS" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PASS)),
+        "PHP_URL_PATH" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_PATH)),
+        "PHP_URL_QUERY" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_QUERY)),
+        "PHP_URL_FRAGMENT" => Some(EvalPredefinedConstant::Int(EVAL_PHP_URL_FRAGMENT)),
         "PATHINFO_DIRNAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_DIRNAME)),
         "PATHINFO_BASENAME" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_BASENAME)),
         "PATHINFO_EXTENSION" => Some(EvalPredefinedConstant::Int(EVAL_PATHINFO_EXTENSION)),
@@ -88,11 +96,23 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "LOCK_EX" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)),
         "LOCK_UN" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)),
         "LOCK_NB" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_NB)),
+        "OPENSSL_RAW_DATA" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_RAW_DATA)),
+        "OPENSSL_ZERO_PADDING" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_ZERO_PADDING)),
+        "OPENSSL_DONT_ZERO_PAD_KEY" => {
+            Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_DONT_ZERO_PAD_KEY))
+        }
         "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
         "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
+        "STR_PAD_LEFT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_LEFT)),
+        "STR_PAD_RIGHT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_RIGHT)),
+        "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
+        "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
+        "PHP_ROUND_HALF_DOWN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_DOWN)),
+        "PHP_ROUND_HALF_EVEN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_EVEN)),
+        "PHP_ROUND_HALF_ODD" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_ODD)),
         "PREG_SPLIT_NO_EMPTY" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_NO_EMPTY)),
         "PREG_SPLIT_DELIM_CAPTURE" => {
             Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_DELIM_CAPTURE))

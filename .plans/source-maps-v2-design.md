@@ -76,7 +76,7 @@ The CLI flag stays `--source-map`.
 - `src/pipeline.rs` — pass the asm output path through for the `asm` field.
 - `tests/codegen/cli.rs` — update the `--source-map` CLI test for v2.
 - Docs: new `docs/compiling/source-maps.md` (schema contract), update
-  `docs/compiling/output-and-diagnostics.md`, CHANGELOG, ROADMAP checkbox.
+  `docs/compiling/output-and-diagnostics.md`, and mark the ROADMAP checkbox.
 
 ## Extensions (second iteration — "implementa tutto")
 

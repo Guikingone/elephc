@@ -47,6 +47,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayUnique,
     /// Dispatches `array_values(...)`.
     ArrayValues,
+    /// Dispatches `base_convert(...)`.
+    BaseConvert,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -59,12 +61,16 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Ceil,
     /// Dispatches `chr(...)`.
     Chr,
+    /// Dispatches `chunk_split(...)`.
+    ChunkSplit,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// Dispatches `count_chars(...)`.
+    CountChars,
     /// Dispatches `crc32(...)`.
     Crc32,
     /// Dispatches `ctype_*` predicates.
@@ -189,14 +195,22 @@ pub(in crate::interpreter) enum EvalValuesHook {
     NetworkEnv,
     /// Dispatches `number_format(...)`.
     NumberFormat,
+    /// Dispatches the bridge-backed OpenSSL cipher builtins.
+    Openssl,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `quotemeta(...)`.
+    QuoteMeta,
+    /// Dispatches `quoted_printable_encode(...)`.
+    QuotedPrintableEncode,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -285,6 +299,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrReplace,
     /// Dispatches `str_split(...)`.
     StrSplit,
+    /// Dispatches `str_word_count(...)`.
+    StrWordCount,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -293,6 +309,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches `strtr(...)`.
+    Strtr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -353,16 +371,41 @@ impl EvalValuesHook {
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
-            Self::Base64Decode => one_arg(evaluated_args, values, eval_base64_decode_result),
+            Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
+            Self::Base64Decode => match evaluated_args {
+                [value] => eval_base64_decode_result(*value, false, values),
+                [value, strict] => {
+                    let strict = values.truthy(*strict)?;
+                    eval_base64_decode_result(*value, strict, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
             Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
             Self::Ceil => one_arg(evaluated_args, values, eval_ceil_result),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
+            Self::ChunkSplit => match evaluated_args {
+                [subject] => eval_chunk_split_result(*subject, None, None, values),
+                [subject, length] => {
+                    eval_chunk_split_result(*subject, Some(*length), None, values)
+                }
+                [subject, length, separator] => {
+                    eval_chunk_split_result(*subject, Some(*length), Some(*separator), values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
+            Self::CountChars => match evaluated_args {
+                [subject] => eval_count_chars_result(*subject, None, context, values),
+                [subject, mode] => {
+                    eval_count_chars_result(*subject, Some(*mode), context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
             Self::Ctype => one_arg(evaluated_args, values, |value, values| match name {
                 "ctype_alnum" => eval_ctype_alnum_result(value, values),
@@ -380,7 +423,11 @@ impl EvalValuesHook {
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
-            Self::Intval => one_arg(evaluated_args, values, eval_intval_result),
+            Self::Intval => match evaluated_args {
+                [value] => eval_intval_result(*value, None, values),
+                [value, base] => eval_intval_result(*value, Some(*base), values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::IsArray => one_arg(evaluated_args, values, eval_is_array_result),
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
@@ -481,7 +528,13 @@ impl EvalValuesHook {
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }
+            Self::Openssl => {
+                eval_openssl_declared_values_result(name, evaluated_args, context, values)
+            }
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
+            Self::ParseUrl => {
+                eval_parse_url_declared_values_result(evaluated_args, context, values)
+            }
             Self::Pi => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);
@@ -490,12 +543,19 @@ impl EvalValuesHook {
             }
             Self::Printf => eval_printf_result(evaluated_args, values),
             Self::Pow => two_args(evaluated_args, values, eval_pow_result),
+            Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
+            Self::QuotedPrintableEncode => {
+                one_arg(evaluated_args, values, eval_quoted_printable_encode_result)
+            }
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
             Self::Round => match evaluated_args {
-                [value] => eval_round_result(*value, None, values),
-                [value, precision] => eval_round_result(*value, Some(*precision), values),
+                [value] => eval_round_result(*value, None, None, values),
+                [value, precision] => eval_round_result(*value, Some(*precision), None, values),
+                [value, precision, mode] => {
+                    eval_round_result(*value, Some(*precision), Some(*mode), values)
+                }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),
@@ -549,13 +609,20 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }),
-            Self::StringPosition => two_args(evaluated_args, values, |haystack, needle, values| {
+            Self::StringPosition => {
+                let (haystack, needle, offset) = match evaluated_args {
+                    [haystack, needle] => (*haystack, *needle, None),
+                    [haystack, needle, offset] => (*haystack, *needle, Some(*offset)),
+                    _ => return Err(EvalStatus::RuntimeFatal),
+                };
                 match name {
-                    "strpos" => eval_strpos_result(haystack, needle, values),
-                    "strrpos" => eval_strrpos_result(haystack, needle, values),
+                    "stripos" => eval_stripos_result(haystack, needle, offset, values),
+                    "strpos" => eval_strpos_result(haystack, needle, offset, values),
+                    "strripos" => eval_strripos_result(haystack, needle, offset, values),
+                    "strrpos" => eval_strrpos_result(haystack, needle, offset, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
-            }),
+            }
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
                 match name {
                     "str_contains" => eval_str_contains_result(haystack, needle, values),
@@ -615,6 +682,20 @@ impl EvalValuesHook {
                 [value, length] => eval_str_split_result(*value, Some(*length), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StrWordCount => match evaluated_args {
+                [subject] => eval_str_word_count_result(*subject, None, None, context, values),
+                [subject, format] => {
+                    eval_str_word_count_result(*subject, Some(*format), None, context, values)
+                }
+                [subject, format, characters] => eval_str_word_count_result(
+                    *subject,
+                    Some(*format),
+                    Some(*characters),
+                    context,
+                    values,
+                ),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Strlen => match name {
                 "mb_strlen" => match evaluated_args {
                     [value] => eval_mb_strlen_result(*value, None, context, values),
@@ -631,6 +712,11 @@ impl EvalValuesHook {
                 eval_strval_result(value, context, values)
             }),
             Self::Strrev => one_arg(evaluated_args, values, eval_strrev_result),
+            Self::Strtr => match evaluated_args {
+                [subject, from] => eval_strtr_result(*subject, *from, None, values),
+                [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
                 [haystack, needle, before_needle] => {

@@ -312,6 +312,7 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
+            constant_deprecations: Default::default(),
             constant_types: HashMap::new(),
             constant_visibilities: HashMap::new(),
             final_constants: HashSet::new(),

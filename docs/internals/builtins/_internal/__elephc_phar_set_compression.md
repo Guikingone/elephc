@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_compression() — internals"
 description: "Compiler internals for __elephc_phar_set_compression(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 475
+  order: 520
 ---
 
 ## `__elephc_phar_set_compression()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_compression.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_compression.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

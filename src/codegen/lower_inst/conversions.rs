@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, IrType, ValueId};
-use crate::names::method_symbol;
+use crate::names::{label_fragment, method_symbol};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -236,7 +236,7 @@ fn emit_mixed_string_context(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_string_{}",
-                super::label_fragment(&candidate.class_name)
+                label_fragment(&candidate.class_name)
             ))
         })
         .collect::<Vec<_>>();

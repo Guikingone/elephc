@@ -427,3 +427,108 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
         "pipe target parameter $n expects Int, got Str",
     );
 }
+
+// --- Argument introspection (`func_num_args` / `func_get_args` / `func_get_arg`) ---
+
+/// Verifies that calling an argument-introspection construct outside any function reports
+/// PHP's "must be called from a function context" error instead of an undefined function.
+#[test]
+fn test_error_func_num_args_outside_function() {
+    expect_error(
+        "<?php echo func_num_args();",
+        "func_num_args() must be called from a function context",
+    );
+}
+
+/// Verifies that a function with an optional parameter is rejected: elephc collects the
+/// surplus arguments through a hidden variadic and cannot tell a passed argument from a
+/// defaulted one, so it refuses instead of reporting a wrong count.
+#[test]
+fn test_error_func_num_args_with_optional_parameter() {
+    expect_error(
+        "<?php function f($a, $b = 5) { return func_num_args(); } echo f(1);",
+        "parameter $b has a default value",
+    );
+}
+
+/// Verifies that a function which already declares a variadic parameter is rejected,
+/// because the body may reassign that parameter and PHP would still report the arguments
+/// actually passed.
+#[test]
+fn test_error_func_get_args_in_variadic_function() {
+    expect_error(
+        "<?php function f(...$r) { return func_get_args(); } var_dump(f(1));",
+        "it declares the variadic parameter $r",
+    );
+}
+
+/// Verifies php-src's rule that these constructs cannot be called dynamically, here through
+/// first-class callable syntax.
+#[test]
+fn test_error_func_num_args_first_class_callable() {
+    expect_error(
+        "<?php function f() { $g = func_num_args(...); return $g(); } echo f(1);",
+        "Cannot call func_num_args() dynamically",
+    );
+}
+
+/// Verifies the arity check: `func_num_args()` takes no arguments.
+#[test]
+fn test_error_func_num_args_rejects_arguments() {
+    expect_error(
+        "<?php function f() { return func_num_args(1); } echo f();",
+        "func_num_args() expects 0 arguments, got 1",
+    );
+}
+
+/// Verifies the arity check: `func_get_arg()` requires its `$position` argument.
+#[test]
+fn test_error_func_get_arg_requires_position() {
+    expect_error(
+        "<?php function f() { return func_get_arg(); } echo f(1);",
+        "func_get_arg() expects 1 arguments, got 0",
+    );
+}
+
+/// Verifies that surplus *named* arguments stay rejected for a function that only carries
+/// the hidden argument-collection parameter: PHP accepts extra positional arguments there
+/// but still rejects an unknown named one.
+#[test]
+fn test_error_surplus_named_argument_to_introspecting_function() {
+    expect_error(
+        "<?php function f($a) { return func_num_args(); } echo f(1, c: 3);",
+        "has no parameter $c",
+    );
+}
+
+/// Verifies that a method using the constructs while implementing an interface method is
+/// rejected with a targeted message: the inherited signature has no slot for the collected
+/// surplus arguments.
+#[test]
+fn test_error_func_get_args_in_interface_implementation() {
+    expect_error(
+        "<?php interface I { public function q(); } class C implements I { public function q() { return func_num_args(); } }",
+        "the inherited signature cannot be widened to collect surplus arguments",
+    );
+}
+
+/// Verifies a callable string that names nothing is rejected at compile time with the reason
+/// spelled out. PHP throws `TypeError` when the call runs; elephc resolves callables
+/// statically, so the same program cannot be built.
+#[test]
+fn test_error_callable_parameter_rejects_unknown_name_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } echo apply(\"nosuchfn\", \"a\");",
+        "Undefined function for first-class callable: nosuchfn",
+    );
+}
+
+/// Verifies a callable string that is only known at run time is rejected with a named
+/// diagnostic instead of being bound to storage the callee could not invoke.
+#[test]
+fn test_error_callable_parameter_rejects_runtime_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
+        "a callable string must be a compile-time constant here",
+    );
+}

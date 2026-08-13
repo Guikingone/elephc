@@ -54,16 +54,16 @@ By the time codegen sees this, it can already emit constants instead of calling 
 
 Current folding coverage includes:
 
-- scalar arithmetic: `+`, `-`, `*`, `/`, `%`, `**`
-- bitwise and shift ops on integers
+- scalar arithmetic: `+`, `-`, `*`, `/`, `%`, `**`, keeping PHP's result *types* and overflow rules — `6 / 3` stays `int(2)` while `7 / 2` becomes `float(3.5)`, `2 ** 3` stays `int(8)`, and results that leave the `i64` range (`PHP_INT_MAX + 1`, `-PHP_INT_MIN`, `PHP_INT_MIN / -1`) promote to float. Operations PHP turns into a runtime error (`% 0`, `/ 0`, a negative shift count) are left unfolded so the error still happens.
+- bitwise and shift ops on integers, including PHP's out-of-width shift results (`1 << 64` is `0`, `-1 >> 64` is `-1`)
 - unary `-`, `!`, and `~`
 - string-literal concatenation with `.`
-- strict comparisons and numeric comparisons
+- comparisons (`==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`) through a reimplementation of PHP 8's `zend_compare()` in `src/optimize/fold/compare.rs`. Integers are compared as integers rather than through `f64`, numeric strings are classified with PHP's `is_numeric_string()` grammar, and a number against a non-numeric string follows PHP 8's stringify-and-compare rule. A float against a non-numeric string is left unfolded because the answer depends on float-to-string formatting.
 - logical `&&` / `||` when both sides are scalar constants
 - spaceship `<=>`
 - `??`, ternary, and `match` when the selected result is already known
-- scalar indexed and associative array-literal reads such as `[2, 9][0]` and `["a" => 2]["a"]` when every literal entry is scalar
-- scalar casts such as `(int)"42"` or `(bool)"0"` when the semantics are unambiguous
+- scalar indexed and associative array-literal reads such as `[2, 9][0]` and `["a" => 2]["a"]` when every literal entry is scalar. Keys are normalized with PHP's array-key rules first (`false` and `0` are the same slot, `"1"` is the integer `1`, `null` is `""`), and duplicate normalized keys are last-wins. A float key PHP would report as a lossy implicit conversion is left unfolded so the deprecation still fires.
+- scalar casts such as `(int)"42"` or `(bool)"0"`. String-to-number casts use PHP's leading-numeric-prefix grammar, so `(int)"12abc"` is `12` and `(float)"INF"` is `0` — PHP's numeric strings have no `INF`, `NAN`, hexadecimal, or `_` separator forms.
 - recursive folding inside:
   - function and method bodies
   - closures and arrow functions
@@ -469,7 +469,11 @@ fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting wit
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
-`move`/`borrow` cleanup), then per-block constant folding that collapses
+`move`/`borrow` cleanup), then immutable integer-local classification and
+integer-sink specialization for checked add/subtract/multiply. Those passes make
+proven-stable local loads pure and replace transient boxed Mixed arithmetic with
+allocation-free `ichecked_*_to_int` operations only when every use observes an
+integer. Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

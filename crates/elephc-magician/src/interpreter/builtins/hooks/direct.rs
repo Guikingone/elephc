@@ -44,6 +44,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayUnique,
     /// Dispatches `array_values(...)`.
     ArrayValues,
+    /// Dispatches `base_convert(...)`.
+    BaseConvert,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -56,12 +58,16 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Ceil,
     /// Dispatches `chr(...)`.
     Chr,
+    /// Dispatches `chunk_split(...)`.
+    ChunkSplit,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// Dispatches `count_chars(...)`.
+    CountChars,
     /// Dispatches `crc32(...)`.
     Crc32,
     /// Dispatches `ctype_*` predicates.
@@ -186,14 +192,22 @@ pub(in crate::interpreter) enum EvalDirectHook {
     NetworkEnv,
     /// Dispatches `number_format(...)`.
     NumberFormat,
+    /// Dispatches the bridge-backed OpenSSL cipher builtins.
+    Openssl,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
     Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `quotemeta(...)`.
+    QuoteMeta,
+    /// Dispatches `quoted_printable_encode(...)`.
+    QuotedPrintableEncode,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -280,6 +294,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrReplace,
     /// Dispatches `str_split(...)`.
     StrSplit,
+    /// Dispatches `str_word_count(...)`.
+    StrWordCount,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -288,6 +304,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches `strtr(...)`.
+    Strtr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -346,16 +364,19 @@ impl EvalDirectHook {
             Self::Asin => eval_builtin_asin(args, context, scope, values),
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
+            Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
             Self::Boolval => eval_builtin_boolval(args, context, scope, values),
             Self::Ceil => eval_builtin_ceil(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
+            Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),
             Self::Cosh => eval_builtin_cosh(args, context, scope, values),
+            Self::CountChars => eval_builtin_count_chars(args, context, scope, values),
             Self::Crc32 => eval_builtin_crc32(args, context, scope, values),
             Self::Ctype => match name {
                 "ctype_alnum" => eval_builtin_ctype_alnum(args, context, scope, values),
@@ -440,10 +461,18 @@ impl EvalDirectHook {
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
+            Self::Openssl => {
+                eval_builtin_openssl_declared_call(name, args, context, scope, values)
+            }
             Self::Ord => eval_builtin_ord(args, context, scope, values),
+            Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
+            Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
+            Self::QuotedPrintableEncode => {
+                eval_builtin_quoted_printable_encode(args, context, scope, values)
+            }
             Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
@@ -497,7 +526,9 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StringPosition => match name {
+                "stripos" => eval_builtin_stripos(args, context, scope, values),
                 "strpos" => eval_builtin_strpos(args, context, scope, values),
+                "strripos" => eval_builtin_strripos(args, context, scope, values),
                 "strrpos" => eval_builtin_strrpos(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
@@ -534,6 +565,7 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),
+            Self::StrWordCount => eval_builtin_str_word_count(args, context, scope, values),
             Self::Strlen => match name {
                 "mb_strlen" => eval_builtin_mb_strlen(args, context, scope, values),
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
@@ -542,6 +574,7 @@ impl EvalDirectHook {
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strrev => eval_builtin_strrev(args, context, scope, values),
+            Self::Strtr => eval_builtin_strtr(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),

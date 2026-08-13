@@ -2,7 +2,7 @@
 title: "rawurldecode() — internals"
 description: "Compiler internals for rawurldecode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 423
 ---
 
 ## `rawurldecode()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/rawurldecode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/rawurldecode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

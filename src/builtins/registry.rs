@@ -844,11 +844,14 @@ mod tests {
     }
 
     /// Verifies typed runtime lowering derives count's visible arity from registry semantics.
+    ///
+    /// `count()` now declares PHP's optional `$mode`, so the bounds are `1..=2`; the backend
+    /// still accepts a single operand because a statically-zero mode is pruned during lowering.
     #[test]
     fn count_runtime_function_arity_comes_from_registry_semantics() {
         assert_eq!(
             runtime_fn_arity_bounds(crate::ir::RuntimeFnId::Count),
-            Some((1, Some(1))),
+            Some((1, Some(2))),
         );
     }
 

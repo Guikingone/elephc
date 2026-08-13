@@ -8,7 +8,10 @@
 //! Key details:
 //! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
 
+use std::cmp::Ordering;
+
 use super::super::*;
+use super::compare::{compare_scalars, loose_eq_values};
 
 /// Extracts an i64 from an integer literal expression.
 pub(in crate::optimize) fn int_literal(expr: &Expr) -> Option<i64> {
@@ -53,7 +56,7 @@ pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarVa
         } => {
             let then_value = assigned_scalar_value(then_expr)?;
             let else_value = assigned_scalar_value(else_expr)?;
-            (then_value == else_value).then_some(then_value)
+            then_value.same_constant(&else_value).then_some(then_value)
         }
         ExprKind::ShortTernary { value, default } => {
             let value = assigned_scalar_value(value)?;
@@ -67,7 +70,10 @@ pub(in crate::optimize) fn assigned_scalar_value(expr: &Expr) -> Option<ScalarVa
             let default = default.as_ref()?;
             let default_value = assigned_scalar_value(default)?;
             arms.iter()
-                .all(|(_, value)| assigned_scalar_value(value) == Some(default_value.clone()))
+                .all(|(_, value)| {
+                    assigned_scalar_value(value)
+                        .is_some_and(|value| value.same_constant(&default_value))
+                })
                 .then_some(default_value)
         }
         _ => None,
@@ -112,131 +118,32 @@ pub(in crate::optimize) fn strict_eq(left: &Expr, right: &Expr) -> Option<bool> 
 }
 
 /// Returns `Some(true)` if two scalar expressions are loosely equal (==) per PHP coercion rules,
-/// `Some(false)` if not, or `None` if either operand is not a scalar literal.
+/// `Some(false)` if not, or `None` if either operand is not a scalar literal or the pair has no
+/// compile-time answer (a float against a non-numeric string).
 pub(in crate::optimize) fn loose_eq(left: &Expr, right: &Expr) -> Option<bool> {
     let left = scalar_value(left)?;
     let right = scalar_value(right)?;
-    match (&left, &right) {
-        (ScalarValue::Bool(left), right) => {
-            Some(*left == right.diagnostic_free_truthiness()?)
-        }
-        (left, ScalarValue::Bool(right)) => {
-            Some(left.diagnostic_free_truthiness()? == *right)
-        }
-        (ScalarValue::Null, ScalarValue::Null) => Some(true),
-        (ScalarValue::Null, ScalarValue::String(right)) => Some(right.is_empty()),
-        (ScalarValue::String(left), ScalarValue::Null) => Some(left.is_empty()),
-        (ScalarValue::Null, ScalarValue::Int(right)) => Some(*right == 0),
-        (ScalarValue::Int(left), ScalarValue::Null) => Some(*left == 0),
-        (ScalarValue::Null, ScalarValue::Float(right)) => Some(*right == 0.0),
-        (ScalarValue::Float(left), ScalarValue::Null) => Some(*left == 0.0),
-        (ScalarValue::String(left), ScalarValue::String(right)) => {
-            match (php_numeric_string(left), php_numeric_string(right)) {
-                (Some(left), Some(right)) => Some(left == right),
-                _ => Some(left == right),
-            }
-        }
-        (ScalarValue::Int(left), ScalarValue::Int(right)) => Some(left == right),
-        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
-        (ScalarValue::Int(left), ScalarValue::Float(right)) => Some(*left as f64 == *right),
-        (ScalarValue::Float(left), ScalarValue::Int(right)) => Some(*left == *right as f64),
-        (ScalarValue::Int(left), ScalarValue::String(right)) => {
-            php_numeric_string(right).map(|right| *left as f64 == right).or(Some(false))
-        }
-        (ScalarValue::String(left), ScalarValue::Int(right)) => {
-            php_numeric_string(left).map(|left| left == *right as f64).or(Some(false))
-        }
-        (ScalarValue::Float(left), ScalarValue::String(right)) => {
-            php_numeric_string(right).map(|right| *left == right).or(Some(false))
-        }
-        (ScalarValue::String(left), ScalarValue::Float(right)) => {
-            php_numeric_string(left).map(|left| left == *right).or(Some(false))
-        }
-    }
+    loose_eq_values(&left, &right)
 }
 
-/// Parses a numeric string (int or float) from a trimmed string, returning the f64 value or None if the string is not purely numeric.
+/// Returns PHP's `zend_compare()` ordering for two scalar literal expressions.
 ///
-/// Handles leading sign, integer part, optional fractional part, and optional exponent.
-/// Returns `None` for non-numeric strings, empty strings, or non-finite results.
-fn php_numeric_string(value: &str) -> Option<f64> {
-    let trimmed = value.trim_matches(|c: char| c.is_ascii_whitespace());
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let bytes = trimmed.as_bytes();
-    let mut idx = 0;
-    if matches!(bytes[idx], b'+' | b'-') {
-        idx += 1;
-        if idx == bytes.len() {
-            return None;
-        }
-    }
-
-    let mut digits = 0;
-    while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-        idx += 1;
-        digits += 1;
-    }
-
-    if idx < bytes.len() && bytes[idx] == b'.' {
-        idx += 1;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-            digits += 1;
-        }
-    }
-    if digits == 0 {
-        return None;
-    }
-
-    if idx < bytes.len() && matches!(bytes[idx], b'e' | b'E') {
-        idx += 1;
-        if idx < bytes.len() && matches!(bytes[idx], b'+' | b'-') {
-            idx += 1;
-        }
-        let exp_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        if idx == exp_start {
-            return None;
-        }
-    }
-
-    if idx != bytes.len() {
-        return None;
-    }
-    trimmed.parse::<f64>().ok().filter(|value| value.is_finite())
+/// Returns `None` when either operand is not a scalar literal, or when the pair has no
+/// compile-time answer. Relational folding must pass the operands in the order the engine
+/// uses (`a > b` is `compare(b, a) == Less`) so NAN keeps PHP's behavior.
+pub(in crate::optimize) fn compare_scalar_exprs(left: &Expr, right: &Expr) -> Option<Ordering> {
+    let left = scalar_value(left)?;
+    let right = scalar_value(right)?;
+    compare_scalars(&left, &right)
 }
 
-/// Returns `Some(true)` if two numeric expressions satisfy the given comparison function,
-/// or `None` if either operand is not a numeric literal.
-pub(in crate::optimize) fn compare_numeric(
-    left: &Expr,
-    right: &Expr,
-    cmp: impl FnOnce(f64, f64) -> bool,
-) -> Option<bool> {
-    let left = numeric_literal(left)?;
-    let right = numeric_literal(right)?;
-    Some(cmp(left, right))
-}
-
-/// Returns the result of the spaceship operator (<=>) on two numeric literals as an i64 (-1, 0, or 1),
-/// or `None` if either operand is not a numeric literal.
-pub(in crate::optimize) fn spaceship_numeric(left: &Expr, right: &Expr) -> Option<i64> {
-    let left = numeric_literal(left)?;
-    let right = numeric_literal(right)?;
-    Some(if left.is_nan() || right.is_nan() {
-        // NAN is uncomparable: PHP's `<=>` yields 1 whenever either operand is NAN.
-        1
-    } else if left < right {
-        -1
-    } else if left > right {
-        1
-    } else {
-        0
+/// Returns the result of the spaceship operator (`<=>`) on two scalar literals as -1, 0, or 1,
+/// or `None` when the comparison has no compile-time answer.
+pub(in crate::optimize) fn spaceship_scalar(left: &Expr, right: &Expr) -> Option<i64> {
+    Some(match compare_scalar_exprs(left, right)? {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
     })
 }
 
@@ -269,6 +176,22 @@ impl ScalarValue {
     /// gate before replacing control flow or logical expressions with literals.
     pub(in crate::optimize) fn diagnostic_free_truthiness(&self) -> Option<bool> {
         (!self.is_nan_float()).then(|| self.truthy())
+    }
+
+    /// Returns whether two scalar values denote the *same constant*, i.e. whether one can be
+    /// substituted for the other without changing any observable byte of the program.
+    ///
+    /// This is deliberately stricter than `PartialEq`: floats are compared by bit pattern, so
+    /// `0.0` and `-0.0` stay distinct (`echo -0.0` prints `-0`) and two NANs with the same
+    /// payload merge. Use it for constant identity — merging ternary/match arms into one
+    /// propagated fact — never for PHP's `==` or `===`, which are value comparisons.
+    pub(in crate::optimize) fn same_constant(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ScalarValue::Float(left), ScalarValue::Float(right)) => {
+                left.to_bits() == right.to_bits()
+            }
+            (left, right) => left == right,
+        }
     }
 
     /// Returns whether this scalar value is a floating-point NAN.

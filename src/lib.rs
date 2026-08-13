@@ -27,6 +27,8 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
+/// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
+pub mod func_args;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod hash_prelude;
@@ -63,6 +65,8 @@ pub mod opcache_prelude;
 pub mod optimize;
 /// Parser for PHP syntax.
 pub mod parser;
+/// Selected PHP compatibility version for version-sensitive compiler surfaces.
+pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
 

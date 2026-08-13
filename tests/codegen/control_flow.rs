@@ -5,10 +5,13 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for branches and loops, functions, booleans, assignments, nulls, and related suites.
+//! - Submodules group focused fixtures for branches and loops, alternative (`:` … `endif;`)
+//!   syntax, functions, booleans, assignments, nulls, and related suites.
 
 use crate::support::*;
 
+#[path = "control_flow/alternative_syntax.rs"]
+mod alternative_syntax;
 #[path = "control_flow/branches_and_loops.rs"]
 mod branches_and_loops;
 #[path = "control_flow/functions.rs"]

@@ -106,6 +106,11 @@ impl Checker {
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
+        // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
+        // `false` / the default; only a probe context may do so.
+        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+            return Ok(PhpType::Void);
+        }
         Err(CompileError::new(
             expr.span,
             "Property access requires an object or typed pointer",
@@ -375,12 +380,22 @@ impl Checker {
     /// Resolves the static receiver (named, `self::`, `static::`, `parent::`)
     /// to a class name, then looks up the declared static property type after
     /// validating visibility rules.
+    ///
+    /// A flow narrowing recorded for the same place (`self::$p === null` guards,
+    /// `self::$p = <non-null>` writes) wins over the declared type, the same way
+    /// `infer_property_access_type` consults its instance-property key.
     pub(crate) fn infer_static_property_access_type(
         &mut self,
         receiver: &StaticReceiver,
         property: &str,
         expr: &Expr,
+        env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let Some(key) = self.narrowed_static_property_env_key(receiver, property, expr) {
+            if let Some(narrowed) = env.get(&key) {
+                return Ok(narrowed.clone());
+            }
+        }
         let class_name = self.resolve_static_property_receiver(receiver, expr)?;
         let Some(class_info) = self.classes.get(&class_name) else {
             if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {

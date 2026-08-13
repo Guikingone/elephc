@@ -9,7 +9,7 @@
 //! Key details:
 //! - Fields are consumed by optimizer, codegen, and linker setup; keep additions explicit and phase-owned.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::{Platform, Target};
 use crate::errors::{CompileError, CompileWarning};
@@ -87,6 +87,9 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
+    /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
+    /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
+    pub string_incdec_locals: HashSet<(String, String)>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

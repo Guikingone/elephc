@@ -38,16 +38,15 @@ pub(crate) fn dce_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// tracks guard state, handles tail-sinking for if/switch/try, and breaks early on terminal control flow.
 fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
     let mut eliminated = Vec::new();
-    let mut stmts = body.into_iter().peekable();
+    let mut stmts = body.into_iter();
     while let Some(stmt) = stmts.next() {
-        let has_tail = stmts.peek().is_some();
+        let has_tail = !stmts.as_slice().is_empty();
         let mut use_tail_sink = has_tail
             && matches!(
                 stmt.kind,
                 StmtKind::If { .. } | StmtKind::IfDef { .. } | StmtKind::Switch { .. } | StmtKind::Try { .. }
             );
         let dce_stmt = if use_tail_sink {
-            let tail: Vec<Stmt> = stmts.clone().collect();
             // Tail-sinking copies the tail into each branch of the if/switch/try.
             // Declarations (functions, classes, interfaces, enums, traits, externs)
             // are hoisted and must stay singular — sinking one into multiple
@@ -56,10 +55,13 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             // sinking them duplicates nested control flow and produces exponential
             // AST growth (each successive if duplicates the remaining tail).
             // Fall back to plain per-statement DCE when the tail contains either.
-            if stmts_contain_declaration(&tail) || stmts_contain_control_flow(&tail) {
+            if stmts_contain_declaration(stmts.as_slice())
+                || stmts_contain_control_flow(stmts.as_slice())
+            {
                 use_tail_sink = false;
                 dce_stmt_with_guards(stmt, &guards)
             } else {
+                let tail = stmts.by_ref().collect();
                 dce_stmt_with_tail(stmt, tail, &guards)
             }
         } else {
@@ -133,6 +135,26 @@ mod tests {
 
         assert!(matches!(statements[0].kind, StmtKind::Synthetic(_)));
         assert!(stmt_contains_control_flow(&statements[0]));
+    }
+
+    /// Keeps large control-flow-heavy bodies linear by inspecting the remaining tail by reference.
+    #[test]
+    fn large_control_flow_tail_is_processed_without_ast_cloning() {
+        let mut source = String::from("<?php function stress(int $argc): void {");
+        for value in 0..512 {
+            source.push_str(&format!("if ($argc > {value}) {{ echo {value}; }}"));
+        }
+        source.push_str("echo 'done'; }");
+        let tokens = crate::lexer::tokenize(&source).expect("tokenize large DCE fixture");
+        let mut statements = crate::parser::parse(&tokens).expect("parse large DCE fixture");
+        let StmtKind::FunctionDecl { body, .. } = statements.remove(0).kind else {
+            panic!("expected function declaration fixture");
+        };
+
+        let eliminated = dce_block(body);
+        // The final echo is legally tail-sunk into the last if, while the preceding 511 ifs stay
+        // singular because their remaining tail still contains control flow.
+        assert_eq!(eliminated.len(), 512);
     }
 }
 
@@ -211,7 +233,7 @@ fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
         GuardLiteral::Bool(value) => ScalarValue::Bool(*value),
         GuardLiteral::Null => ScalarValue::Null,
         GuardLiteral::Int(value) => ScalarValue::Int(*value),
-        GuardLiteral::Float(bits) => ScalarValue::Float(f64::from_bits(*bits)),
+        GuardLiteral::Float(value) => ScalarValue::Float(*value),
         GuardLiteral::String(value) => ScalarValue::String(value.clone()),
     }
 }
@@ -234,7 +256,7 @@ fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool>
             ScalarValue::Bool(value) => GuardLiteral::Bool(value),
             ScalarValue::Null => GuardLiteral::Null,
             ScalarValue::Int(value) => GuardLiteral::Int(value),
-            ScalarValue::Float(value) => GuardLiteral::Float(value.to_bits()),
+            ScalarValue::Float(value) => GuardLiteral::Float(value),
             ScalarValue::String(value) => GuardLiteral::String(value),
         };
         return guard_literal_truthy(&guard_literal);
@@ -297,8 +319,8 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
 /// side-effect-free expression statements. Guard state is propagated and invalidated
 /// based on writes and branch structure.
 fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
-    let source_mode = stmt.source_mode;
-    crate::source::with_parse_mode(source_mode, || {
+    let profile = stmt.profile();
+    crate::source::with_parse_mode(profile, || {
         dce_stmt_in_source_mode(stmt, guards)
     })
 }
@@ -307,11 +329,13 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
 fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
     let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     match stmt.kind {
         StmtKind::Echo(expr) => vec![Stmt {
             kind: StmtKind::Echo(prune_expr(expr)),
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::Assign { name, value } => vec![Stmt {
@@ -321,12 +345,14 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::RefAssign { target, source } => vec![Stmt {
             kind: StmtKind::RefAssign { target, source },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::TypedAssign {
@@ -341,6 +367,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyAssign {
@@ -355,6 +382,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyAssign {
@@ -369,6 +397,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyArrayPush {
@@ -383,6 +412,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyArrayAssign {
@@ -399,6 +429,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyArrayAssign {
@@ -415,6 +446,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyArrayPush {
@@ -429,6 +461,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::ArrayAssign { array, index, value } => vec![Stmt {
@@ -439,6 +472,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::NestedArrayAssign { target, value } => vec![Stmt {
@@ -448,6 +482,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::ArrayPush { array, value } => vec![Stmt {
@@ -457,6 +492,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::ListUnpack { vars, value } => vec![Stmt {
@@ -466,6 +502,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::StaticVar { name, init } => vec![Stmt {
@@ -475,6 +512,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::ConstDecl { name, value } => vec![Stmt {
@@ -484,12 +522,14 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::IncludeOnceMark { label } => vec![Stmt {
             kind: StmtKind::IncludeOnceMark { label },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::IncludeOnceGuard { label, body } => vec![Stmt {
@@ -499,6 +539,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::If {
@@ -526,6 +567,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     },
                     span,
             source_mode,
+            strict_types,
                     attributes: Vec::new(),
                 }]
             }
@@ -541,6 +583,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
                 source_mode,
+                strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -554,6 +597,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
                 source_mode,
+                strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -584,6 +628,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
                 source_mode,
+                strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -612,6 +657,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
                 source_mode,
+                strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -632,6 +678,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::FunctionDecl {
@@ -660,6 +707,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
                 source_mode,
+                strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -667,12 +715,14 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             kind: StmtKind::Return(expr.map(prune_expr)),
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::Throw(expr) => vec![Stmt {
             kind: StmtKind::Throw(prune_expr(expr)),
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::ClassDecl {
@@ -707,6 +757,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 },
                 span,
             source_mode,
+            strict_types,
                 attributes: Vec::new(),
             }]
         }
@@ -717,6 +768,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                     kind: StmtKind::ExprStmt(expr),
                     span,
             source_mode,
+            strict_types,
                     attributes: Vec::new(),
                 }]
             } else {
@@ -743,12 +795,14 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
             kind: StmtKind::PackedClassDecl { name, fields },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::InterfaceDecl {
@@ -770,6 +824,7 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
         StmtKind::TraitDecl {
@@ -791,8 +846,9 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }],
-        kind => vec![Stmt { kind, span, source_mode, attributes: Vec::new() }],
+        kind => vec![Stmt { kind, span, source_mode, strict_types, attributes: Vec::new() }],
     }
 }

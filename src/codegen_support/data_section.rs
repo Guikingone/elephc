@@ -7,10 +7,50 @@
 //!
 //! Key details:
 //! - Labels must stay stable within one compilation because code emission references them before final serialization.
+//! - `.comm`'s alignment operand is target-dependent and must follow the object format, not the
+//!   host: Mach-O reads it as a power-of-two exponent, ELF as a byte count. Emitting one spelling
+//!   everywhere silently under-aligns every common symbol on ELF, which the assembler accepts and
+//!   the linker then rejects with `relocation truncated to fit` for any 64-bit access.
 
 use std::collections::HashMap;
 
+use crate::codegen_support::platform::{Platform, Target, TargetKind};
 use crate::types::PhpType;
+
+/// Alignment every common symbol is emitted with: 8 bytes, i.e. `2^3`.
+///
+/// Common storage holds pointers, `Mixed` boxes and 64-bit scalars, all of which are reached
+/// through 64-bit loads and stores. On AArch64 those assemble to `R_AARCH64_LDST64_ABS_LO12_NC`,
+/// whose displacement is encoded pre-shifted by 3 — so anything less than 8-byte alignment cannot
+/// be represented and the link fails.
+const COMM_ALIGN_BYTES: usize = 8;
+const COMM_ALIGN_LOG2: usize = 3;
+
+/// Renders `.comm`'s third operand for `target`'s object format.
+///
+/// Mach-O's assembler documents the operand as `log2(alignment)`; GNU as on ELF documents it as
+/// the alignment in bytes. The same intended 8-byte alignment is therefore spelled `3` on Mach-O
+/// and `8` on ELF.
+fn comm_alignment_operand(target: Target) -> usize {
+    match target.platform {
+        Platform::MacOS => COMM_ALIGN_LOG2,
+        Platform::Linux | Platform::Windows => COMM_ALIGN_BYTES,
+    }
+}
+
+/// Renders one complete `.comm` directive line, alignment included, for `target`.
+///
+/// Every common symbol in the program must go through here rather than spelling the directive
+/// inline: the alignment operand is the one part of it that is not portable, and a hardcoded
+/// spelling is accepted by both assemblers while only being right for one of them.
+pub(crate) fn comm_directive(label: &str, size: usize, target: Target) -> String {
+    format!(
+        ".comm {}, {}, {}\n",
+        label,
+        size,
+        comm_alignment_operand(target)
+    )
+}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum DataWord {
@@ -151,7 +191,10 @@ impl DataSection {
     /// Serializes all entries into a GNU assembly `.data` section string.
     /// Returns an empty string when no entries have been collected.
     /// Emits `.comm` directives first, then `.ascii` string literals, then `.p2align 3`/`quad` float entries.
-    pub fn emit(&self) -> String {
+    ///
+    /// `target` is required because `.comm`'s alignment operand is spelled differently per object
+    /// format; see [`comm_alignment_operand`].
+    pub fn emit(&self, target: Target) -> String {
         if self.entries.is_empty()
             && self.float_entries.is_empty()
             && self.word_entries.is_empty()
@@ -161,8 +204,9 @@ impl DataSection {
         }
 
         let mut out = String::from(".data\n");
+        let comm_align = comm_alignment_operand(target);
         for (label, size) in &self.comm_entries {
-            out.push_str(&format!(".comm {}, {}, 3\n", label, size));
+            out.push_str(&format!(".comm {}, {}, {}\n", label, size, comm_align));
         }
         for (label, bytes) in &self.entries {
             out.push_str(&format!(".globl {}\n{}:\n", label, label));
@@ -202,6 +246,25 @@ impl DataSection {
 #[cfg(test)]
 mod tests {
     use super::DataSection;
+    use crate::codegen_support::platform::{Arch, Platform, Target, TargetKind};
+
+    /// A Mach-O target, whose assembler reads `.comm`'s alignment operand as `log2(bytes)`.
+    fn macos() -> Target {
+        Target {
+            platform: Platform::MacOS,
+            arch: Arch::AArch64,
+            kind: TargetKind::Native,
+        }
+    }
+
+    /// An ELF target, whose assembler reads `.comm`'s alignment operand as a byte count.
+    fn linux(arch: Arch) -> Target {
+        Target {
+            platform: Platform::Linux,
+            arch,
+            kind: TargetKind::Native,
+        }
+    }
 
     /// Verifies that float constants use power of two alignment directive.
     #[test]
@@ -209,7 +272,7 @@ mod tests {
         let mut data = DataSection::new();
         data.add_float(3.14);
 
-        let asm = data.emit();
+        let asm = data.emit(macos());
 
         assert!(asm.contains(".p2align 3\n"));
         assert!(!asm.contains(".align 3\n"));
@@ -221,7 +284,7 @@ mod tests {
         let mut data = DataSection::new();
         data.add_string(b"a\0b");
 
-        let asm = data.emit();
+        let asm = data.emit(macos());
 
         assert!(asm.contains(r#".ascii "a\000b""#));
         assert!(!asm.contains(r#"\x00b"#));
@@ -236,10 +299,32 @@ mod tests {
             super::DataWord::Symbol("_fn_demo".to_string()),
         ]);
 
-        let asm = data.emit();
+        let asm = data.emit(macos());
 
         assert!(asm.contains(&format!(".globl {}\n{}:\n", label, label)));
         assert!(asm.contains("    .quad 0x0000000000000001\n"));
         assert!(asm.contains("    .quad _fn_demo\n"));
+    }
+
+    /// Verifies `.comm` asks each object format for the same 8-byte alignment in the spelling
+    /// that format's assembler understands: `log2` on Mach-O, bytes on ELF.
+    ///
+    /// Emitting the Mach-O spelling on ELF declares 3-byte alignment, which the assembler
+    /// accepts and the linker then rejects — `R_AARCH64_LDST64_ABS_LO12_NC` encodes its
+    /// displacement pre-shifted by 3, so a 64-bit load of an under-aligned common symbol fails
+    /// with `relocation truncated to fit`. That took out every linux-aarch64 link once
+    /// `_stack_limit` became a common symbol.
+    #[test]
+    fn test_comm_alignment_operand_follows_the_object_format() {
+        let mut data = DataSection::new();
+        data.add_comm("_stack_limit".to_string(), 8);
+
+        assert!(data.emit(macos()).contains(".comm _stack_limit, 8, 3\n"));
+        assert!(data
+            .emit(linux(Arch::AArch64))
+            .contains(".comm _stack_limit, 8, 8\n"));
+        assert!(data
+            .emit(linux(Arch::X86_64))
+            .contains(".comm _stack_limit, 8, 8\n"));
     }
 }
