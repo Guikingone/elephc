@@ -6328,11 +6328,15 @@ fclose($h);
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a run-time filter URL that names nothing usable opens the resource unfiltered or
-/// fails, rather than opening something else.
+/// Verifies a run-time filter URL that names nothing usable opens the resource unfiltered,
+/// throws, or fails — each the way php does it.
 ///
-/// An unknown filter name is what php-src also tolerates by opening the resource plain; a URL with
-/// no `/resource=` names nothing at all.
+/// An unknown filter name is what php-src tolerates by opening the resource plain. A URL with
+/// no `/resource=` at all is answered with `Error: No URL resource specified` — a THROW, not a
+/// warning, and `@` does not soften it; the same Error covers the literal spelling, where the
+/// decision is made at compile time. The NESTED case still pins a KNOWN DIVERGENCE: php
+/// recurses into a `resource=php://filter/...` and applies both levels, elephc refuses the
+/// open — loudly, as `false` — until the parses learn to recurse.
 #[test]
 fn test_run_time_filter_url_edge_cases() {
     let (out, dir) = compile_and_run_in_dir(
@@ -6343,12 +6347,20 @@ $a = @fopen($unknown, "r");
 echo "unknown=", var_export($a !== false, true);
 if ($a !== false) { echo ":", stream_get_contents($a); fclose($a); }
 $nores = "php://filter/read=string." . "toupper";
-echo " noresource=", var_export(@fopen($nores, "r"), true);
+try {
+    @fopen($nores, "r");
+    echo " noresource=unreached";
+} catch (Error $e) {
+    echo " noresource=", $e->getMessage();
+}
 $nested = "php://filter/read=string.toupper/resource=php://filter/read=string." . "tolower";
 echo " nested=", var_export(@fopen($nested, "r"), true);
 "#,
     );
-    assert_eq!(out, "unknown=true:hello noresource=false nested=false");
+    assert_eq!(
+        out,
+        "unknown=true:hello noresource=No URL resource specified nested=false"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

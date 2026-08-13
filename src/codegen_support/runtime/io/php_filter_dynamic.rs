@@ -141,7 +141,7 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #8]");                                    // bytes remaining after the direction
     emitter.instruction("add x10, x9, #10");                                    // does "/resource=" still fit here?
     emitter.instruction("cmp x10, x1");
-    emitter.instruction("b.gt __rt_pfp_no");                                    // ran out: the URL names no resource
+    emitter.instruction("b.gt __rt_pfp_no_resource");                           // ran out: the URL names no resource
     emitter.instruction("ldr x0, [sp, #0]");                                    // the filter-name cursor
     emitter.instruction("add x0, x0, x9");                                      // the candidate separator position
     emitter.instruction("sub x1, x1, x9");                                      // bytes left from there
@@ -163,7 +163,7 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub x11, x1, x9");                                     // bytes from the separator on
     emitter.instruction("sub x11, x11, #10");                                   // minus the separator itself
     emitter.instruction("cmp x11, #1");                                         // an empty resource names nothing
-    emitter.instruction("b.lt __rt_pfp_no");                                    // reject it, as php-src does
+    emitter.instruction("b.lt __rt_pfp_no_resource");                           // php throws for it, and the caller does the throwing
     abi::emit_symbol_address(emitter, "x12", "_php_filter_res_ptr");
     emitter.instruction("str x10, [x12]");                                      // publish the resource pointer
     abi::emit_symbol_address(emitter, "x12", "_php_filter_res_len");
@@ -238,6 +238,19 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_mode");
     emitter.instruction("str xzr, [x12]");
     emitter.instruction("mov x0, #0");                                          // the path is not a usable filter URL
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
+    emitter.instruction("ret");
+
+    // A filter URL that names NO resource — missing or empty — is verdict 2: php answers it
+    // with `Error: No URL resource specified`, and the throw lives at the call sites, which
+    // have the lowering machinery a throwable needs.
+    emitter.label("__rt_pfp_no_resource");
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_count");
+    emitter.instruction("str xzr, [x12]");                                      // nothing is pending
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_mode");
+    emitter.instruction("str xzr, [x12]");
+    emitter.instruction("mov x0, #2");                                          // the caller must throw php's Error
     emitter.instruction("ldp x29, x30, [sp, #64]");
     emitter.instruction("add sp, sp, #80");
     emitter.instruction("ret");
@@ -405,7 +418,7 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // bytes remaining after the direction
     emitter.instruction("lea r10, [r9 + 10]");                                  // does "/resource=" still fit here?
     emitter.instruction("cmp r10, rsi");
-    emitter.instruction("jg __rt_pfp_no_x");                                    // ran out: the URL names no resource
+    emitter.instruction("jg __rt_pfp_no_resource_x");                           // ran out: the URL names no resource
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the filter-name cursor
     emitter.instruction("add rdi, r9");                                         // the candidate separator position
     emitter.instruction("sub rsi, r9");                                         // bytes left from there
@@ -429,7 +442,7 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r11, r9");                                         // bytes from the separator on
     emitter.instruction("sub r11, 10");                                         // minus the separator itself
     emitter.instruction("cmp r11, 1");                                          // an empty resource names nothing
-    emitter.instruction("jl __rt_pfp_no_x");                                    // reject it, as php-src does
+    emitter.instruction("jl __rt_pfp_no_resource_x");                           // php throws for it, and the caller does the throwing
     abi::emit_symbol_address(emitter, "r8", "_php_filter_res_ptr");
     emitter.instruction("mov QWORD PTR [r8], r10");                             // publish the resource pointer
     abi::emit_symbol_address(emitter, "r8", "_php_filter_res_len");
@@ -507,6 +520,17 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_mode");
     emitter.instruction("mov QWORD PTR [r8], 0");
     emitter.instruction("xor eax, eax");                                        // the path is not a usable filter URL
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+
+    // See the AArch64 counterpart: verdict 2 asks the caller to throw php's Error.
+    emitter.label("__rt_pfp_no_resource_x");
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_count");
+    emitter.instruction("mov QWORD PTR [r8], 0");                               // nothing is pending
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_mode");
+    emitter.instruction("mov QWORD PTR [r8], 0");
+    emitter.instruction("mov eax, 2");                                          // the caller must throw php's Error
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");

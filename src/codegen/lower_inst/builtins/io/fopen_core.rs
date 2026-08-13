@@ -80,6 +80,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// open the resource itself.
 pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
     let unchanged = ctx.next_label("fopen_dynamic_not_filter");
+    let no_resource = ctx.next_label("fopen_dynamic_filter_no_resource");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // Both pairs must be saved, not just the mode: the parse takes its argument in x0/x1
@@ -92,6 +93,8 @@ pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov x9, x0");                              // did it parse as a filter URL?
             abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction("cmp x9, #2");                              // a filter URL that names no resource?
+            ctx.emitter.instruction(&format!("b.eq {}", no_resource));          // php throws for it
             ctx.emitter.instruction(&format!("cbz x9, {}", unchanged));         // no: the filename stands
             abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_res_ptr");
             ctx.emitter.instruction("ldr x1, [x9]");                            // open the resource instead
@@ -109,6 +112,8 @@ pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov r9, rax");                             // did it parse as a filter URL?
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("cmp r9, 2");                               // a filter URL that names no resource?
+            ctx.emitter.instruction(&format!("je {}", no_resource));            // php throws for it
             ctx.emitter.instruction("test r9, r9");
             ctx.emitter.instruction(&format!("jz {}", unchanged));              // no: the filename stands
             abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_res_ptr");
@@ -117,6 +122,13 @@ pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdx, QWORD PTR [r9]");                 // with its length
         }
     }
+    let past_throw = ctx.next_label("fopen_dynamic_filter_resourced");
+    abi::emit_jump(ctx.emitter, &past_throw);
+    ctx.emitter.label(&no_resource);
+    // php's wording and class, and `@` does not soften it — the throw ignores the diagnostic
+    // suppression depth, exactly as php's Error does.
+    crate::codegen::lower_inst::exceptions::emit_error(ctx, "No URL resource specified");
+    ctx.emitter.label(&past_throw);
     ctx.emitter.label(&unchanged);
 }
 
@@ -640,6 +652,14 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     path: &str,
 ) -> Result<()> {
     let Some((mode_bits, filter_ids, resource)) = parse_php_filter_url(path) else {
+        // php THROWS for a filter URL that names no resource — `Error: No URL resource
+        // specified`, not a warning, and `@` does not soften it. A NESTED resource is the
+        // other reason the parse declines; php recurses there, which is a separate,
+        // still-open divergence, so it keeps the loud failed-open path.
+        if literal_filter_url_names_no_resource(path) {
+            crate::codegen::lower_inst::exceptions::emit_error(ctx, "No URL resource specified");
+            return Ok(());
+        }
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen_php_filter");
         return Ok(());
@@ -649,6 +669,21 @@ pub(super) fn emit_literal_php_filter_fopen_result(
         emit_php_filter_table_stamps(ctx, mode_bits, &filter_ids);
     }
     Ok(())
+}
+
+/// Returns whether a literal `php://filter/...` URL names NO resource — missing or empty.
+///
+/// This is the case php answers with `Error: No URL resource specified`; a nested resource
+/// also makes [`parse_php_filter_url`] decline, but that is a different php behavior.
+pub(super) fn literal_filter_url_names_no_resource(path: &str) -> bool {
+    match path
+        .strip_prefix("php://filter/")
+        .map(|spec| spec.split_once("/resource="))
+    {
+        Some(None) => true,                                  // no separator at all
+        Some(Some((_, resource))) => resource.is_empty(),    // an empty resource names nothing
+        None => false,                                       // not a filter URL: not this error
+    }
 }
 
 /// Parses `php://filter/[read=|write=]a|b|.../resource=path` for literal `fopen`.

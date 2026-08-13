@@ -90,6 +90,8 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.instruction("mov x0, x1");                              // the candidate filter URL
             ctx.emitter.instruction("mov x1, x2");                              // and its length
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction("cmp x0, #2");                              // a filter URL that names no resource?
+            ctx.emitter.instruction(&format!("b.eq {}_no_resource", not_filter)); // php throws for it
             ctx.emitter.instruction(&format!("cbz x0, {}", drop_and_fall));     // not a usable filter URL: the plain writer decides
             // The openers name themselves and the bare RESOURCE when they fail; php names
             // `file_put_contents` and the whole URL. Same suppression the read route uses.
@@ -175,6 +177,8 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.instruction("mov rdi, rax");                            // the candidate filter URL
             ctx.emitter.instruction("mov rsi, rdx");                            // and its length
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction("cmp rax, 2");                              // a filter URL that names no resource?
+            ctx.emitter.instruction(&format!("je {}_no_resource", not_filter)); // php throws for it
             ctx.emitter.instruction("test rax, rax");
             ctx.emitter.instruction(&format!("jz {}", drop_and_fall));          // not a usable filter URL: the plain writer decides
             // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
@@ -253,6 +257,13 @@ fn emit_file_put_contents_filter_route(
             abi::emit_release_temporary_stack(ctx.emitter, 16);                 // drop the saved URL on the plain path
         }
     }
+    let past_throw = ctx.next_label("fpc_filter_resourced");
+    abi::emit_jump(ctx.emitter, &past_throw);
+    ctx.emitter.label(&format!("{}_no_resource", not_filter));
+    // The saved URL pair stays on the stack through the throw, exactly as count()'s probe
+    // leaves its pushed value: the unwinder walks frames, not the temporary stack.
+    crate::codegen::lower_inst::exceptions::emit_error(ctx, "No URL resource specified");
+    ctx.emitter.label(&past_throw);
     ctx.emitter.label(&not_filter);
     Ok(done)
 }
