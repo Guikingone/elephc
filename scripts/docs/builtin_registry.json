@@ -4997,7 +4997,7 @@
           "type": "array"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": "arrays"
     },
     "slug": "array_diff",
@@ -5863,7 +5863,7 @@
           "type": "array"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": "arrays"
     },
     "slug": "array_intersect",

@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_intersect(array $array, ...$arrays): array
+function array_intersect(array $array, ...$arrays): mixed
 ```
 
 ## What the type checker enforces
