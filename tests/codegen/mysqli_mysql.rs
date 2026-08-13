@@ -443,17 +443,21 @@ echo "|", $db->errno;
     assert_eq!(out, "F|1064|7|str-ok|8|mq|6|F|1064");
 }
 
-/// Compound-body DDL (`CREATE PROCEDURE ... BEGIN ...; ... END`) is one
-/// statement: the scanner's exemption lets it through `query()`, the server
-/// accepts it, and calling it through `multi_query()` returns its result set.
+/// Compound-body DDL is NOT exempt from the multi-statement scan: through
+/// `query()` it fails 1064 (including the `... END; DROP ...` injection-tail
+/// shape), while `multi_query()` runs it as one statement and `CALL` works.
 #[test]
 #[ignore]
-fn test_mysqli_query_accepts_compound_ddl() {
+fn test_mysqli_compound_ddl_requires_multi_query() {
     let out = compile_and_run(&my_program(
         r#"
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS mproc");
-echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === true ? "ddl" : ("no:" . $db->errno);
+echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === false ? "F" : "leaked";
+echo "|", $db->errno;
+echo "|", $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 1; END; DROP TABLE users") === false ? "F" : "leaked";
+echo "|", $db->errno;
+echo "|", $db->multi_query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") ? "ddl" : ("no:" . $db->errno);
 echo "|", $db->multi_query("CALL mproc()") ? "call" : "no";
 $r1 = $db->store_result();
 echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
@@ -468,7 +472,7 @@ $db->query("DROP PROCEDURE mproc");
 echo "|done";
 "#,
     ));
-    assert_eq!(out, "ddl|call|41|42|done");
+    assert_eq!(out, "F|1064|F|1064|ddl|call|41|42|done");
 }
 
 /// `fetch_field_direct()->decimals` carries MySQL's wire "decimals" byte

@@ -204,6 +204,10 @@ class mysqli {
         $this->client_info = elephc_pdo_client_version($_conn);
         $this->client_version = $this->versionStringToInt($this->client_info);
         $this->thread_id = $this->fetchIntScalar("SELECT CONNECTION_ID()");
+        // Read the session charset now: character_set_name() must answer like
+        // php-src from client-side state, without issuing a statement later
+        // (which would collide with the 2014 pending-results guard).
+        $this->currentCharset = $this->fetchStringScalar("SELECT @@character_set_client");
         $this->warning_count = elephc_pdo_warning_count($_conn);
         if ($this->optCharsetName !== "") {
             // MYSQLI_SET_CHARSET_NAME collected before connect applies now.
@@ -299,11 +303,10 @@ class mysqli {
     }
 
     public function character_set_name(): string {
+        // Client-side state (read at connect, updated by set_charset): never
+        // issues a statement, so it stays usable mid-multi_query like php-src.
         if ($this->conn < 0) {
             return "";
-        }
-        if ($this->currentCharset === "") {
-            $this->currentCharset = $this->fetchStringScalar("SELECT @@character_set_client");
         }
         return $this->currentCharset;
     }
@@ -656,35 +659,20 @@ class mysqli {
     // session runs NO_BACKSLASH_ESCAPES so a literal backslash cannot hide a
     // terminator), backtick identifiers, and `#`, `-- ` (MySQL requires the
     // whitespace), and `/* */` comments are skipped; a trailing `;` followed
-    // only by whitespace/comments is still a single statement. Compound-body
-    // DDL is exempt: a statement whose head words are `CREATE …
-    // PROCEDURE|FUNCTION|TRIGGER|EVENT` (covering DEFINER=... and MariaDB's
-    // OR REPLACE/AGGREGATE) is one statement whose BEGIN … END body
-    // legitimately contains semicolons. A bare `CREATE TABLE …; …` is NOT
-    // exempt.
+    // only by whitespace/comments is still a single statement. There is
+    // deliberately NO exemption for compound-body DDL: telling a procedure
+    // body's semicolons apart from a statement separator needs a real
+    // BEGIN/END parser (END IF / END WHILE / bare END in CASE expressions),
+    // and any cheaper heuristic leaves a `... END; DROP ...` injection tail
+    // executable. `CREATE PROCEDURE ... BEGIN ...; ... END` therefore goes
+    // through multi_query(), which is the multi-statement path by contract.
     private function queryHasMultipleStatements(string $query): bool {
         $_len = strlen($query);
         $_backslashEscapes = elephc_pdo_no_backslash_escapes($this->conn) == 0;
         $_i = 0;
         $_afterSeparator = false;
-        $_headWords = [];
-        $_word = "";
         while ($_i < $_len) {
             $_c = substr($query, $_i, 1);
-            $_o = ord($_c);
-            if ((($_o >= 97 && $_o <= 122) || ($_o >= 65 && $_o <= 90)) && !$_afterSeparator) {
-                // Head-word accumulation (the first few words decide the
-                // compound-DDL exemption at the first separator).
-                if (strlen($_word) < 12) {
-                    $_word = $_word . $_c;
-                }
-                $_i = $_i + 1;
-                continue;
-            }
-            if ($_word !== "" && count($_headWords) < 6) {
-                $_headWords[] = strtoupper($_word);
-            }
-            $_word = "";
             if ($_c === "#") {
                 while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
                     $_i = $_i + 1;
@@ -719,19 +707,6 @@ class mysqli {
                 return true;
             }
             if ($_c === ";") {
-                $_isCompoundDdl = false;
-                if (count($_headWords) > 1 && (string) $_headWords[0] === "CREATE") {
-                    $_hw = count($_headWords);
-                    for ($_w = 1; $_w < $_hw; $_w++) {
-                        $_kw = (string) $_headWords[$_w];
-                        if ($_kw === "PROCEDURE" || $_kw === "FUNCTION" || $_kw === "TRIGGER" || $_kw === "EVENT") {
-                            $_isCompoundDdl = true;
-                        }
-                    }
-                }
-                if ($_isCompoundDdl) {
-                    return false;
-                }
                 $_afterSeparator = true;
                 $_i = $_i + 1;
                 continue;

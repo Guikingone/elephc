@@ -214,11 +214,13 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
   mysqlnd toggles them per `multi_query()` call via `COM_SET_OPTION`, which
   the bridge does not expose), so without the client-side scan a classic
   `"1; DROP TABLE …"` injection would execute. The scan skips string
-  literals, backtick identifiers, and comments; a trailing `;` is fine; and
-  compound-body DDL is exempt — a statement whose head is
-  `CREATE … PROCEDURE|FUNCTION|TRIGGER|EVENT` (covering `DEFINER=` and
-  MariaDB's `OR REPLACE`/`AGGREGATE`) keeps its `BEGIN …; … END` body. A bare
-  `CREATE TABLE …; …` is rejected like any other multi-statement string.
+  literals, backtick identifiers, and comments; a trailing `;` is fine. There
+  is no exemption for compound-body DDL: `CREATE PROCEDURE … BEGIN …; … END`
+  through `query()` is rejected too (telling body semicolons apart from a
+  statement separator safely needs a full BEGIN/END parser, and any cheaper
+  heuristic would let an `… END; DROP …` tail execute) — run compound DDL
+  through `multi_query()`, which handles it as one statement. php-src's
+  `mysqli_query()` accepts such DDL, so this is a (loud) divergence.
 - **`$info` is always `""`** (and `mysqli_info()` always `null`): the bridge
   does not expose the OK-packet info string ("Rows matched: … Changed: …").
 - **`insert_id` is an `int`**: an `AUTO_INCREMENT` value beyond
