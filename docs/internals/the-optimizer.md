@@ -300,6 +300,18 @@ vtable metadata, but dynamic operations in those bodies widen the graph only if
 an executable edge also reaches the method. Compiler-owned prelude methods may
 likewise identify private closure dispatch that cannot name user declarations.
 
+Receiver tracking is a conservative may-analysis. Assignments union known
+classes, opaque writes forget the affected receiver, and interprocedural
+`global` or by-reference mutation turns calls through the aliased variable into
+wildcard method edges. A literal `$GLOBALS['name']` access applies that rule to
+the matching top-level variable; a computed `$GLOBALS[$key]` makes every tracked
+receiver name opaque. This models PHP's aliasing conservatively for declaration
+retention, but does not implement the still-unsupported `$GLOBALS` runtime alias
+storage itself. Likewise, an expression call such as `($value)()` intentionally
+sets both the dynamic-function and dynamic-method hazards because the value may
+be a function, closure, or callable array. Keeping every method of every live
+class in that case is a documented precision cost, not a correctness defect.
+
 Pruning the AST alone would be ineffective because EIR lowering reads flattened
 methods from `CheckResult`. The pass therefore filters `method_decls` and all
 related method maps, resolves inherited implementations through

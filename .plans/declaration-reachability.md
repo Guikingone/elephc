@@ -157,9 +157,16 @@ reachable function or method makes calls through `$name` wildcard across scanned
 function, method, static-method, and constructor calls use checker-validated signatures plus the
 shared call-argument planner to forget the actual caller variable passed to any by-reference
 parameter, including named arguments and cases where the callee parameter has a different name.
-Dynamic expression calls remain intentionally broad:
+`$GLOBALS['literal']` aliases that literal top-level variable name; a computed `$GLOBALS[$key]`
+makes every tracked variable name opaque. Dynamic expression calls remain intentionally broad:
 they may denote a function, closure, or callable array, so retaining methods of live classes is a
 precision cost rather than a correctness defect.
+
+This `$GLOBALS` rule is a declaration-retention model, not an implementation of PHP's special
+runtime alias storage. Native AOT lowering does not currently make `$GLOBALS['name']` and `$name`
+the same runtime cell, so coverage for this pass asserts that the candidate method symbol survives
+instead of asserting unsupported runtime output. If `$GLOBALS` storage semantics are implemented,
+the conservative reachability edge is already in place and the fixture can gain a runtime assertion.
 
 `__elephc_initialize_pdo_statement()` is an explicit compiler-internal coupling: its backend
 lowering directly calls `PDOStatement::__elephcInitialize()`, so the scanner records that method
