@@ -1942,9 +1942,12 @@ pub(super) fn declared_return_coercion_target(
         return None;
     }
     let flags = &function.flags;
+    // `is_synthetic` is NOT excluded: prelude bodies are compiler-written ordinary
+    // methods with faithful declared types, and they are exactly where a boxed value
+    // meets a declared return (DateTime::__elephc_*, PDO). The remaining flags carry
+    // special ABIs or entry conventions the return rules do not describe.
     if flags.is_main
         || flags.is_closure
-        || flags.is_synthetic
         || flags.is_generator
         || flags.is_fiber_wrapper
         || flags.is_callback_wrapper
