@@ -17,13 +17,9 @@
 //! - Legacy callable-handler dispatch is injected only when user code can reach
 //!   `session_set_save_handler()`.
 
-use std::collections::{HashMap, HashSet, VecDeque};
-
 use crate::parser::ast::{Program, StmtKind};
 
 pub use crate::php_version::PhpVersion;
-
-mod usage;
 
 /// Returns the `PHP_SAPI` / `php_sapi_name()` string for an elephc compile mode.
 ///
@@ -1858,13 +1854,14 @@ pub fn inject_if_web(
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     if !web {
         return program;
     }
-    let user_usage = usage::collect(&program);
-    let needs_callable_session_handler = user_usage.references("session_set_save_handler")
-        || user_usage.dynamic_function_call;
+    let user_usage = crate::optimize::reachability::usage::scan_program(&program);
+    let needs_callable_session_handler = user_usage.references_function("session_set_save_handler")
+        || user_usage.hazards.dynamic_function;
     let prelude = WEB_PRELUDE_SRC
         .replace(
             "__ELEPHC_PHP_VERSION_ID__",
@@ -1877,7 +1874,7 @@ pub fn inject_if_web(
         // The runtime ELEPHC_INI_* env-override block goes in FIRST and only here on the --web
         // path: the raw-string arms above call into it, and so does the injected
         // opcache_get_configuration() (which opcache_prelude::inject_if_used emits BEFORE this
-        // runs, so prune_unreachable_prelude_functions already sees those calls as roots).
+        // runs, so the shared declaration pass sees those calls as roots).
         // opcache_prelude deliberately does not emit the block when `web` is true — two copies
         // would be a redeclaration.
         .replace(
@@ -1900,7 +1897,7 @@ pub fn inject_if_web(
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
     }
-    prune_unreachable_prelude_functions(&mut combined, &user_usage);
+    inventory.record_program("web", &combined);
     combined.extend(program);
 
     // The catch-all try wrap below reorders the top level (declarations hoisted
@@ -1945,61 +1942,6 @@ pub fn inject_if_web(
     // Parser invariant changed unexpectedly; fall back to the unwrapped body.
     decls.extend(exec);
     decls
-}
-
-/// Removes compiler-owned prelude functions that cannot be reached from user
-/// code, executable bootstrap statements, retained class methods, or the web
-/// exception/finalization wrapper. Unknown dynamic calls keep every declaration
-/// so PHP runtime-name dispatch and `eval()` remain conservative.
-fn prune_unreachable_prelude_functions(prelude: &mut Program, user_usage: &usage::Usage) {
-    let mut dependencies = HashMap::new();
-    let mut roots = user_usage.clone();
-    for stmt in prelude.iter() {
-        if let StmtKind::FunctionDecl { name, body, .. } = &stmt.kind {
-            dependencies.insert(crate::names::php_symbol_key(name), usage::collect(body));
-        } else {
-            roots.merge(usage::collect_stmt(stmt));
-        }
-    }
-
-    let wrap_tokens = crate::lexer::tokenize(WEB_WRAP_SRC).expect("web wrapper must tokenize");
-    let wrapper = crate::parser::parse_internal(&wrap_tokens).expect("web wrapper must parse");
-    roots.merge(usage::collect(&wrapper));
-
-    if roots.dynamic_function_call {
-        return;
-    }
-
-    let mut reachable = HashSet::new();
-    let mut pending = roots
-        .functions
-        .iter()
-        .filter(|name| dependencies.contains_key(*name))
-        .cloned()
-        .collect::<VecDeque<_>>();
-    while let Some(name) = pending.pop_front() {
-        if !reachable.insert(name.clone()) {
-            continue;
-        }
-        let Some(function_usage) = dependencies.get(&name) else {
-            continue;
-        };
-        if function_usage.dynamic_function_call {
-            return;
-        }
-        for dependency in &function_usage.functions {
-            if dependencies.contains_key(dependency) && !reachable.contains(dependency) {
-                pending.push_back(dependency.clone());
-            }
-        }
-    }
-
-    prelude.retain(|stmt| match &stmt.kind {
-        StmtKind::FunctionDecl { name, .. } => {
-            reachable.contains(&crate::names::php_symbol_key(name))
-        }
-        _ => true,
-    });
 }
 
 /// Returns true for the heavy legacy callable-handler declarations that ordinary
@@ -2163,17 +2105,34 @@ mod tests {
         })
     }
 
-    /// Plain web programs keep auto-start/finalization roots but shed optional APIs.
+    /// Injects the web prelude with a throwaway declaration inventory.
+    fn inject_web_for_test(
+        program: Program,
+        web: bool,
+        php_version: PhpVersion,
+        ini_overrides: &[(String, String)],
+    ) -> Program {
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        inject_if_web(
+            program,
+            web,
+            php_version,
+            ini_overrides,
+            &mut inventory,
+        )
+    }
+
+    /// Plain web injection defers function pruning but skips its optional callable-handler class.
     #[test]
-    fn plain_web_program_prunes_optional_session_declarations() {
-        let injected = inject_if_web(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
+    fn plain_web_program_defers_function_pruning() {
+        let injected = inject_web_for_test(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
         assert!(declares_function(
             &injected,
             "__elephc_session_start_core"
         ));
-        assert!(!declares_function(&injected, "session_start"));
+        assert!(declares_function(&injected, "session_start"));
         assert!(declares_function(&injected, "session_write_close"));
-        assert!(!declares_function(&injected, "session_regenerate_id"));
+        assert!(declares_function(&injected, "session_regenerate_id"));
         assert!(!declares_function(&injected, "session_set_save_handler"));
         assert!(!declares_class(
             &injected,
@@ -2184,7 +2143,7 @@ mod tests {
     /// A direct session API call roots that function and its transitive helpers.
     #[test]
     fn direct_session_api_call_keeps_requested_declaration() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php session_start(); session_regenerate_id(true);"),
             true,
             PhpVersion::Php85,
@@ -2214,7 +2173,7 @@ mod tests {
     /// Literal availability probes retain the queried PHP-visible function.
     #[test]
     fn function_exists_probe_keeps_session_save_handler() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php echo function_exists('session_set_save_handler');"),
             true,
             PhpVersion::Php85,
@@ -2230,7 +2189,7 @@ mod tests {
     /// Unknown runtime calls keep the complete prelude conservatively.
     #[test]
     fn dynamic_call_disables_prelude_function_pruning() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php $name = 'session_regenerate_id'; $name();"),
             true,
             PhpVersion::Php85,
@@ -2243,7 +2202,7 @@ mod tests {
     /// Unknown availability probes keep the complete prelude conservatively.
     #[test]
     fn dynamic_function_probe_disables_prelude_function_pruning() {
-        let injected = inject_if_web(
+        let injected = inject_web_for_test(
             parse("<?php $name = 'session_regenerate_id'; echo function_exists($name);"),
             true,
             PhpVersion::Php85,
@@ -2258,7 +2217,7 @@ mod tests {
     fn non_web_program_is_unchanged() {
         let program = parse("<?php echo 'ok';");
         assert_eq!(
-            inject_if_web(program.clone(), false, PhpVersion::Php85, &[]),
+            inject_web_for_test(program.clone(), false, PhpVersion::Php85, &[]),
             program
         );
     }

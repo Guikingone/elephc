@@ -112,12 +112,17 @@ function hash_copy(HashContext $context): HashContext {
 /// `force` comes from an explicit opt-in (the codegen harness); otherwise the
 /// decision is `detect::program_uses_hash_context`. The prelude carries only
 /// declarations, so prepending it is order-independent — PHP hoists them.
-pub fn inject_if_used(program: crate::parser::ast::Program, force: bool) -> crate::parser::ast::Program {
+pub fn inject_if_used(
+    program: crate::parser::ast::Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> crate::parser::ast::Program {
     if !force && !detect::program_uses_hash_context(&program) {
         return program;
     }
     let tokens = crate::lexer::tokenize(HASH_PRELUDE_SRC).expect("hash prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("hash prelude must parse");
+    inventory.record_program("hash", &combined);
     combined.extend(program);
     combined
 }

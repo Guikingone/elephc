@@ -9,6 +9,31 @@
 
 use super::*;
 
+/// Injects the OPcache prelude with a throwaway declaration inventory for unit tests.
+pub(super) fn inject_for_test(
+    program: Program,
+    php_version: PhpVersion,
+    web: bool,
+    entry_path: Option<&str>,
+    manifest: &[ScriptEntry],
+    overrides: &[(String, String)],
+    preload: Option<&PreloadStatistics>,
+    strict: bool,
+) -> (Program, ManifestBakeSites) {
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    inject_if_used(
+        program,
+        php_version,
+        web,
+        entry_path,
+        manifest,
+        overrides,
+        preload,
+        strict,
+        &mut inventory,
+    )
+}
+
 mod basics;
 mod env_restrict;
 mod manifest_bake;

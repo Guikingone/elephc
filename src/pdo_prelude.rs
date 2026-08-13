@@ -6793,8 +6793,12 @@ namespace Pdo {
 /// `force` (set by `--with-pdo`) bypasses the usage scan so the PDO surface is
 /// always injected, making it available even when auto-detection would not see
 /// the usage.
-pub fn inject_if_used(program: Program, force: bool) -> Program {
-    inject_if_used_for_version(program, force, PhpVersion::default())
+pub fn inject_if_used(
+    program: Program,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    inject_if_used_for_version(program, force, PhpVersion::default(), inventory)
 }
 
 /// Prepends the PDO prelude generated for an explicit PHP compatibility version.
@@ -6806,11 +6810,23 @@ pub fn inject_if_used_for_version(
     program: Program,
     force: bool,
     php_version: PhpVersion,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     if !force && !detect::program_uses_pdo(&program) {
         return program;
     }
     let mut combined = parsed_prelude_for_version(php_version);
+    inventory.record_program("pdo", &combined);
+    // These methods invoke only closure descriptors that this prelude creates and stores
+    // privately. Their generic callable syntax is not a user-controlled declaration lookup.
+    for (class, method) in [
+        ("PDO", "__construct"),
+        ("PDOStatement", "execute"),
+        ("PDOStatement", "syncOutputParameters"),
+        ("PDOStatement", "updateBoundColumns"),
+    ] {
+        inventory.record_internal_callable_method("pdo", class, method, false);
+    }
     combined.extend(program);
     combined
 }

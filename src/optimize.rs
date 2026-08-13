@@ -23,6 +23,7 @@ mod effect_analysis;
 mod effects;
 mod fold;
 mod propagate;
+pub mod reachability;
 
 use control::*;
 use effect_analysis::{
@@ -31,6 +32,8 @@ use effect_analysis::{
 use effects::*;
 use fold::*;
 use propagate::*;
+
+pub use reachability::prune_unreachable_declarations;
 
 #[cfg(test)]
 mod tests;

@@ -432,6 +432,97 @@ fn test_cli_web_isolation_validation_errors_are_focused() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--with-pdo` roots the complete injected PDO group even without source-level PDO use.
+#[test]
+fn test_with_pdo_keeps_unreferenced_pdo_function() {
+    let dir = make_cli_test_dir("elephc_cli_with_pdo_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-pdo")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced PDO assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-pdo --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read PDO assembly");
+    let symbol = elephc::names::function_symbol("pdo_drivers");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-pdo must keep unreferenced PDO declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-crypto` force-links the bridge without force-injecting the hash prelude.
+#[test]
+fn test_with_crypto_does_not_force_hash_prelude() {
+    let dir = make_cli_test_dir("elephc_cli_with_crypto_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-crypto")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced crypto assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-crypto --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read crypto assembly");
+    let hash_init = elephc::names::function_symbol("hash_init");
+    assert!(
+        !asm.contains(&format!(".globl {hash_init}\n")),
+        "--with-crypto must not inject the source-level hash prelude"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-eval` keeps user declarations available to opaque runtime source.
+#[test]
+fn test_with_eval_keeps_unreferenced_user_declaration() {
+    let dir = make_cli_test_dir("elephc_cli_with_eval_reachability");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php function runtime_only(): string { return 'eval'; } echo 'ok';",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--with-eval")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile forced eval assembly");
+    assert!(
+        output.status.success(),
+        "elephc --with-eval --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("failed to read eval assembly");
+    let symbol = elephc::names::function_symbol("runtime_only");
+    assert!(
+        asm.contains(&format!(".globl {symbol}\n")),
+        "--with-eval must keep unreferenced user declarations"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies repeated boxed-Mixed callable sites reuse module-wide descriptor
 /// wrappers instead of regenerating the full candidate set in every function.
 #[test]
