@@ -166,22 +166,31 @@ rmdir("sd");
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies `scandir()` on an unopenable directory returns instead of killing the process.
+/// Verifies `scandir()` on a missing directory answers FALSE, as php does.
 ///
-/// AArch64 handed `opendir()`'s NULL straight to `readdir()`, so a missing path was a
-/// SIGSEGV; x86_64 already guarded it, which is why the crash was invisible to CI's
-/// x86_64 legs. The assertion is that execution CONTINUES — the empty listing is the
-/// pre-existing answer, and diverges from PHP's `false` for reasons recorded with the
-/// `array|false` family.
+/// Three eras of this test: AArch64 first handed `opendir()`'s NULL straight to `readdir()`
+/// and crashed; then the empty listing papered over the crash while diverging from php's
+/// `false`; now the union is real. `=== false` is the manual's own failure test, and
+/// `count()` on the false raises php's TypeError — both asserted, because the empty-array era
+/// made exactly those two observations impossible.
 #[test]
-fn test_scandir_on_a_missing_directory_does_not_crash() {
+fn test_scandir_on_a_missing_directory_answers_false() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 $entries = @scandir("no_such_directory_here");
-echo "survived:", count($entries);
+var_dump($entries === false);
+try {
+    count($entries);
+    echo "uncaught";
+} catch (TypeError $e) {
+    echo "count: ", $e->getMessage();
+}
 "#,
     );
-    assert_eq!(out, "survived:0");
+    assert_eq!(
+        out,
+        "bool(true)\ncount: count(): Argument #1 ($value) must be of type Countable|array, false given"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -258,6 +267,80 @@ var_dump(@file_put_contents("/no/such/dir/leak.txt", "SECRET-PAYLOAD"));
          No such file or directory\n",
         "one warning in php's wording; the @-suppressed call prints nothing, \
          and the payload appears on neither stream"
+    );
+}
+
+/// Verifies `scandir()` sorts like php and its `array|false` union flows through the family.
+///
+/// php sorts ascending by default, descending for SCANDIR_SORT_DESCENDING, and keeps readdir
+/// order only for SCANDIR_SORT_NONE — elephc answered readdir order for every call, which is
+/// filesystem-dependent. The file names are created in REVERSE alphabetical order so an
+/// unsorted listing cannot pass by accident.
+///
+/// The consumers each pin one leg of the union machinery: `in_array`/`array_values`/
+/// `array_map`/`array_filter`/`array_search` go through the argument unbox (which must borrow,
+/// not own — an owned unbox freed the listing UNDER the box and a later `sort($d)` sorted
+/// freed memory), and `sort($d)` goes through the in-place path where the box must remain the
+/// listing's sole owner or the copy-on-write split sorts a copy.
+#[test]
+fn test_scandir_sorts_like_php_and_the_union_flows_through_the_family() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("sd");
+file_put_contents("sd/z.txt", "1");
+file_put_contents("sd/a.txt", "2");
+echo implode(",", scandir("sd")), "\n";
+echo implode(",", scandir("sd", SCANDIR_SORT_DESCENDING)), "\n";
+$none = scandir("sd", SCANDIR_SORT_NONE);
+sort($none);
+echo implode(",", $none), "\n";
+$d = scandir("sd");
+echo "in=", var_export(in_array("a.txt", $d), true), "\n";
+sort($d);
+echo "s0=", $d[2], "\n";
+echo "vals=", count(array_values(scandir("sd"))), "\n";
+$up = array_map(fn($f) => strtoupper($f), scandir("sd"));
+echo "map=", $up[2], "\n";
+echo "search=", var_export(array_search("z.txt", scandir("sd")), true), "\n";
+echo "filter=", count(array_filter(scandir("sd"), fn($f) => $f !== ".")), "\n";
+unlink("sd/z.txt"); unlink("sd/a.txt"); rmdir("sd");
+"#,
+    );
+    assert_eq!(
+        out,
+        ".,..,a.txt,z.txt\nz.txt,a.txt,..,.\n.,..,a.txt,z.txt\nin=true\ns0=a.txt\nvals=4\nmap=A.TXT\nsearch=3\nfilter=3\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a runtime `false` flowing into an array-taking builtin raises php's TypeError.
+///
+/// The message is composed at compile time from php's own parameter naming — measured, not
+/// derived — and the throw happens at the argument, before the consumer's lowering ever sees
+/// the value. `sort($d)` exercises the by-reference spelling of the same contract.
+#[test]
+fn test_an_array_or_false_union_argument_throws_phps_type_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$d = @scandir("/no/such/dir");
+try {
+    in_array("x", $d);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+try {
+    sort($d);
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo "alive\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "in_array(): Argument #2 ($haystack) must be of type array, false given\n\
+         sort(): Argument #1 ($array) must be of type array, false given\nalive\n"
     );
 }
 

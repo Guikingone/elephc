@@ -38,6 +38,9 @@ builtin! {
 /// is pre-validated by `check_arity`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let arr_ty = arr_ty.array_or_false_member().cloned().unwrap_or(arr_ty);
     if let Some(mode) = cx.args.get(2) {
         cx.checker.infer_type(mode, cx.env)?;
     }

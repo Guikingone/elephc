@@ -69,8 +69,72 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `scandir(path)` through the target-aware runtime directory listing helper.
+///
+/// php's signature is `array|false`, so the raw pointer is boxed rather than stored bare:
+/// the runtime answers NULL for a directory it cannot open, and the boxing turns that into
+/// PHP false — which is what lets `scandir($d) === false`, the manual's own failure test,
+/// finally fire. The success side boxes the indexed array as a tag-4 Mixed payload.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "scandir", "__rt_scandir")
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "scandir")?;
+    // $sorting_order rides beside the path pair, defaulting to SCANDIR_SORT_ASCENDING —
+    // php sorts the listing unless SCANDIR_SORT_NONE asks it not to.
+    match inst.operands.get(1).copied() {
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),
+            Arch::X86_64 => ctx.emitter.instruction("xor edi, edi"),
+        },
+        Some(order) => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
+            ctx.load_value_to_result(order)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x9, x0");                      // hold the order while the pair returns
+                    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+                    ctx.emitter.instruction("mov x0, x9");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");
+                    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+                }
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_scandir");
+    // The box RETAINS a tag-4 payload, and the runtime's own creation reference was never
+    // released, so the listing sat at refcount 2: `sort($d)`'s copy-on-write split then sorted
+    // a COPY while the box kept pointing at the unsorted original. The box is the sole owner.
+    let no_release = ctx.next_label("scandir_no_release");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the creator's raw listing (or null)
+            box_indexed_array_or_false_result(ctx, "scandir");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("cbz x9, {}", no_release));        // a failed listing has nothing to release
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed result across the release
+            ctx.emitter.instruction("mov x0, x9");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.label(&no_release);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the creator's raw listing (or null)
+            box_indexed_array_or_false_result(ctx, "scandir");
+            abi::emit_pop_reg(ctx.emitter, "r9");
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", no_release));             // a failed listing has nothing to release
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed result across the release
+            ctx.emitter.instruction("mov rax, r9");                             // the decref family reads rax
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.label(&no_release);
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.

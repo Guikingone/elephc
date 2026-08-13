@@ -119,8 +119,61 @@ pub(super) fn lower_indexed_array_sort(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    let elem_ty =
-        indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+    let operand_ty = ctx.value_php_type(array)?;
+    // An `array|false` union — `$d = scandir($dir); sort($d);` — arrives BOXED. The payload is
+    // sorted in place, so the box keeps pointing at the sorted storage and no write-back is
+    // needed; a runtime `false` throws php's TypeError, worded exactly as php words it. The
+    // copy-on-write split is skipped: the box owns its array, so the sort mutates the only
+    // storage the value has, which is also why `ensure_unique_sort_source` has nothing to do.
+    if let Some(member) = operand_ty.array_or_false_member().cloned() {
+        let elem_ty = indexed_sort_element_type(member, name, str_helper.is_some())?;
+        ctx.load_value_to_result(array)?;
+        let sortable = ctx.next_label(&format!("{}_union_array", name));
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [x0]");                        // the boxed payload tag
+                ctx.emitter.instruction("cmp x9, #4");                          // an indexed array?
+                ctx.emitter.instruction(&format!("b.eq {}", sortable));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r9, QWORD PTR [rax]");             // the boxed payload tag
+                ctx.emitter.instruction("cmp r9, 4");                           // an indexed array?
+                ctx.emitter.instruction(&format!("je {}", sortable));
+            }
+        }
+        let message = format!(
+            "{}(): Argument #1 ($array) must be of type array, false given",
+            name
+        );
+        let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_symbol_address(ctx.emitter, ptr_reg, &message_label);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, message_len as i64);
+        super::super::exceptions::emit_type_error_from_string_result(ctx);
+        ctx.emitter.label(&sortable);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the raw array the box owns
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the raw array the box owns
+                ctx.emitter.instruction("mov rdi, rax");                        // the sort helpers take rdi
+            }
+        }
+        let helper = if elem_ty == PhpType::Str {
+            str_helper.expect("string sort helper is required after validation")
+        } else {
+            int_helper
+        };
+        abi::emit_call_label(ctx.emitter, helper);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            0x7fff_ffff_ffff_fffe,
+        );
+        return store_if_result(ctx, inst);
+    }
+    let elem_ty = indexed_sort_element_type(operand_ty, name, str_helper.is_some())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;

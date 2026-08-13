@@ -9,14 +9,14 @@
 //!   because the array return type cannot be expressed through the scalar `returns:`
 //!   field.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     name: "scandir",
     area: Io,
-    params: [directory: Str],
+    params: [directory: Str, sorting_order: Int = DefaultSpec::Int(0)],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
@@ -26,14 +26,17 @@ builtin! {
     php_manual: "function.scandir",
 }
 
-/// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.
+/// Returns `array|false`, the signature php documents.
 ///
-/// PHP's signature is `array|false`, but declaring the union costs more than it buys here:
-/// `Mixed` makes `in_array($name, scandir($dir))` — ordinary, correct PHP — fail to compile,
-/// because the array-taking builtins require a declared array. The failure case is kept
-/// non-fatal instead (an empty listing rather than a crash) and the `false` divergence is
-/// left for a decision that can weigh it against that cost.
+/// `False`, not `Bool`: the member a `!== false` narrowing removes, following `fgetcsv`.
+/// The union is what lets the failure case exist at all — with a bare `Array<Str>` the
+/// runtime's `false` had no representation and a failed listing was indistinguishable from
+/// an empty directory. The array-taking consumers accept the union by unboxing at their own
+/// call sites.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    Ok(PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::False,
+    ]))
 }

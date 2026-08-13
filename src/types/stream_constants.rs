@@ -185,6 +185,10 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILE_SKIP_EMPTY_LINES", 4),
     ("FILE_APPEND", 8),
     ("FILE_NO_DEFAULT_CONTEXT", 16),
+    // scandir() sorting orders.
+    ("SCANDIR_SORT_ASCENDING", 0),
+    ("SCANDIR_SORT_DESCENDING", 1),
+    ("SCANDIR_SORT_NONE", 2),
     // seek() whence constants (also used by fseek).
     ("SEEK_SET", 0),
     ("SEEK_CUR", 1),

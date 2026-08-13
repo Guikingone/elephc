@@ -60,6 +60,161 @@ pub(super) fn lower_static_array_push(
     Some(lower_null(ctx, expr))
 }
 
+/// Lowers `sort($local)` / `rsort($local)` on an `array|false`-union local as unbox-then-sort.
+///
+/// `$d = scandir($dir); sort($d);` stores a BOXED value, and the by-reference receiver path
+/// hands codegen a Mixed-typed operand the sort dispatch refuses. The union is only visible
+/// HERE, at lowering time: the local is loaded, unboxed through the same `ExpectArrayArg`
+/// wrap the positional family uses (a runtime `false` throws php's TypeError, worded as php
+/// words it), and the raw array is sorted IN PLACE — so the box keeps pointing at the sorted
+/// storage and the local needs no write-back. php's `sort()` returns `true`; the sort
+/// builtins here are declared `Void`, so the call's value is the shared null sentinel,
+/// matching every other sort call site.
+pub(super) fn lower_union_array_in_place_sort(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let runtime = match canonical.as_str() {
+        "sort" => crate::ir::RuntimeFnId::Sort,
+        "rsort" => crate::ir::RuntimeFnId::Rsort,
+        _ => return None,
+    };
+    if args.len() != 1 || crate::types::call_args::has_named_args(args) {
+        return None;
+    }
+    let ExprKind::Variable(local) = &args[0].kind else {
+        return None;
+    };
+    let local_ty = ctx.local_type(local);
+    local_ty.array_or_false_member()?;
+    // The unbox-or-throw wrap hands the sort machinery a RAW array typed with the union's
+    // member (a runtime `false` throws php's TypeError first). The box is its array's sole
+    // owner, so the copy-on-write split sees refcount 1 and leaves the storage in place: the
+    // in-place sort is visible through the box, and the local needs no write-back.
+    let loaded = ctx.load_local(local, Some(args[0].span));
+    let mut values = vec![loaded.value];
+    wrap_array_or_false_args_impl(ctx, &canonical, "array", 0, args, &mut values);
+    ctx.emit_void(
+        Op::RuntimeCall,
+        values,
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(runtime))),
+        Op::RuntimeCall.default_effects(),
+        Some(expr.span),
+    );
+    Some(lower_null(ctx, expr))
+}
+
+/// The array-taking builtin arguments the lowering unboxes when an `array|false` union flows
+/// in, with php's own parameter naming for the TypeError a runtime `false` produces.
+///
+/// Only POSITIONAL, by-value arguments belong here: the by-reference family (sort, array_push,
+/// array_pop…) receives the caller's storage and needs its own write-back treatment. Each
+/// entry's check hook must accept the union through `array_or_false_member`, or the pair is
+/// unreachable; each is `(builtin, zero-based argument index, php's parameter name)`.
+const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, &str)] = &[
+    ("array_column", 0, "array"),
+    ("array_count_values", 0, "array"),
+    ("array_diff", 0, "array"),
+    ("array_diff_key", 0, "array"),
+    ("array_filter", 0, "array"),
+    ("array_flip", 0, "array"),
+    ("array_intersect", 0, "array"),
+    ("array_intersect_key", 0, "array"),
+    ("array_map", 1, "array"),
+    ("array_merge", 0, "array"),
+    ("array_pad", 0, "array"),
+    ("array_product", 0, "array"),
+    ("array_rand", 0, "array"),
+    ("array_reverse", 0, "array"),
+    ("array_search", 1, "haystack"),
+    ("array_slice", 0, "array"),
+    ("array_sum", 0, "array"),
+    ("array_unique", 0, "array"),
+    ("array_values", 0, "array"),
+    ("in_array", 1, "haystack"),
+];
+
+/// Wraps `array|false` union arguments to array-taking builtins in an unbox-or-throw call.
+///
+/// The wrapped value is a raw array pointer typed with the union's array member, so the
+/// consumer's lowering is untouched; a runtime `false` throws php's TypeError with the exact
+/// message php composes, built here at compile time.
+fn wrap_array_or_false_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    args: &[Expr],
+    values: &mut [crate::ir::ValueId],
+) {
+    for &(name, index, param) in ARRAY_OR_FALSE_ARG_SITES {
+        if name != canonical {
+            continue;
+        }
+        wrap_array_or_false_args_impl(ctx, name, param, index, args, values);
+    }
+}
+
+/// Wraps ONE argument slot in the unbox-or-throw call when it carries an `array|false` union.
+fn wrap_array_or_false_args_impl(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    param: &str,
+    index: usize,
+    args: &[Expr],
+    values: &mut [crate::ir::ValueId],
+) {
+    let Some(&value) = values.get(index) else {
+        return;
+    };
+    let ty = ctx.builder.value_php_type(value);
+    let Some(member) = ty.array_or_false_member().cloned() else {
+        return;
+    };
+    let span = args.get(index).map(|arg| arg.span);
+    let message = format!(
+        "{}(): Argument #{} (${}) must be of type array, false given",
+        name,
+        index + 1,
+        param
+    );
+    let data = ctx.intern_string(&message);
+    let message = ctx
+        .builder
+        .emit_with_effects(
+            Op::ConstStr,
+            Vec::new(),
+            Some(Immediate::Data(data)),
+            IrType::Str,
+            PhpType::Str,
+            Ownership::Persistent,
+            Op::ConstStr.default_effects(),
+            span,
+        )
+        .expect("const_str produces a value");
+    // BORROWED, not owned: the unboxed pointer is the box's own storage, and the consuming
+    // call's owned-argument release would otherwise free the array UNDER the box — measured as
+    // `sort($d)` sorting freed memory after an earlier `in_array(..., $d)` had "released" it.
+    let member_ir = crate::ir_lower::context::return_ir_type(&member);
+    let wrapped = ctx
+        .builder
+        .emit_with_effects(
+            Op::RuntimeCall,
+            vec![value, message],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ExpectArrayArg,
+            ))),
+            member_ir,
+            member,
+            Ownership::Borrowed,
+            Op::RuntimeCall.default_effects(),
+            span,
+        )
+        .expect("expect_array_arg produces a value");
+    values[index] = wrapped;
+}
+
 /// Lowers builtin call operands, applying builtin-specific preservation where source order matters.
 pub(super) fn lower_builtin_call_args(
     ctx: &mut LoweringContext<'_, '_>,
@@ -123,7 +278,12 @@ pub(super) fn lower_builtin_call_args(
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {
-            lower_positional_builtin_args_with_signature(ctx, sig, args)
+            let mut values = lower_positional_builtin_args_with_signature(ctx, sig, args);
+            // Named/spread spellings skip the wrap and fail the consumer's own gate loudly at
+            // compile time — an honest refusal, where the wrap's absence at RUN time would
+            // have been a boxed cell read as an array.
+            wrap_array_or_false_args(ctx, &canonical, args, &mut values);
+            values
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }

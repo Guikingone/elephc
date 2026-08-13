@@ -64,6 +64,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_union_array_in_place_sort(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_array_internal_pointer(ctx, canonical, args, expr) {
         return value;
     }

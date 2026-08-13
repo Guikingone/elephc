@@ -44835,6 +44835,12 @@
           "default": null,
           "name": "directory",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "sorting_order",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -44924,9 +44930,16 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "sorting_order",
+          "optional": true,
+          "type": "int"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "scandir",

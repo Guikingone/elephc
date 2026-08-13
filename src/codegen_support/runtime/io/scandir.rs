@@ -45,9 +45,10 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label_global("__rt_scandir");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate the frame, with two slots for the failure diagnostic
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // frame: diagnostic slots plus the sorting order
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    emitter.instruction("str x0, [sp, #48]");                                   // hold $sorting_order across the listing
 
     // -- null-terminate path --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
@@ -98,13 +99,32 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
     emitter.bl_c("closedir");                                        // closedir(DIR*)
+    // php sorts the listing — ascending by default, descending for SCANDIR_SORT_DESCENDING,
+    // and readdir order only when SCANDIR_SORT_NONE asks for it. elephc answered readdir
+    // order for every call, which is filesystem-dependent: the same program printed a
+    // different listing on a different machine.
+    emitter.instruction("ldr x9, [sp, #48]");                                   // the requested sorting order
+    emitter.instruction("cmp x9, #2");                                          // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("b.eq __rt_scandir_ret");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the listing to sort
+    emitter.instruction("cmp x9, #1");                                          // SCANDIR_SORT_DESCENDING?
+    emitter.instruction("b.eq __rt_scandir_sort_desc");
+    emitter.instruction("bl __rt_sort_str");                                    // ascending, php's default
+    emitter.instruction("b __rt_scandir_ret");
+    emitter.label("__rt_scandir_sort_desc");
+    emitter.instruction("bl __rt_rsort_str");
     emitter.instruction("b __rt_scandir_ret");                                  // a directory that opened has nothing to warn about
 
     // -- the two lines php prints for a directory it cannot open --
     // Neither needs a composer of its own. `__rt_errno_warning` already appends `strerror` and
-    // the newline, so it serves as the TAIL of both and only the beginning differs. Falls
-    // through to the ordinary return, which still answers the empty listing.
+    // the newline, so it serves as the TAIL of both and only the beginning differs. The
+    // pre-allocated result array is released and the return slot zeroed: php answers FALSE for
+    // a directory it cannot open, and a null pointer is what the caller's boxing reads as
+    // false — an empty listing here made failure indistinguishable from an empty directory.
     emitter.label("__rt_scandir_open_failed");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the listing that will never be filled
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction("str xzr, [sp, #8]");                                   // the caller boxes the null as PHP false
     emitter.bl_c(errno_function);                                               // x0 = &errno for this thread
     emitter.instruction("ldrsw x9, [x0]");                                      // the errno libc opendir() set
     emitter.instruction("str x9, [sp, #32]");                                   // hold it across every fragment
@@ -155,8 +175,8 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     // -- restore frame and return --
     emitter.label("__rt_scandir_ret");
     emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -183,7 +203,8 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while scandir() uses directory and result-array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the C path, result array, and DIR* locals
-    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, and the failure diagnostic
+    emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the C path, result array, DIR* handle, loop scratch, the failure diagnostic, and the sorting order
+    emitter.instruction("mov QWORD PTR [rbp - 48], rdi");                       // hold $sorting_order across the listing
     emitter.instruction("call __rt_cstr");                                      // convert the elephc directory string in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the C directory path pointer across the result-array allocation and opendir() call
     emitter.instruction("mov rdi, 128");                                        // request an initial result-array capacity of 128 directory entry names
@@ -219,10 +240,24 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_scandir_close");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the DIR* handle before closing the directory stream
     emitter.instruction("call closedir");                                       // close the directory stream through libc closedir()
+    // See the AArch64 counterpart: php sorts the listing unless SCANDIR_SORT_NONE asks not to.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // the requested sorting order
+    emitter.instruction("cmp r9, 2");                                           // SCANDIR_SORT_NONE keeps readdir order
+    emitter.instruction("je __rt_scandir_ret");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the listing to sort
+    emitter.instruction("cmp r9, 1");                                           // SCANDIR_SORT_DESCENDING?
+    emitter.instruction("je __rt_scandir_sort_desc_x");
+    emitter.instruction("call __rt_sort_str");                                  // ascending, php's default
+    emitter.instruction("jmp __rt_scandir_ret");
+    emitter.label("__rt_scandir_sort_desc_x");
+    emitter.instruction("call __rt_rsort_str");
     emitter.instruction("jmp __rt_scandir_ret");                                // a directory that opened has nothing to warn about
 
     // -- the two lines php prints for a directory it cannot open; see the AArch64 counterpart --
     emitter.label("__rt_scandir_open_failed_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the listing that will never be filled
+    emitter.instruction("call __rt_heap_free");                                 // reads rax: the rax-first family
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // the caller boxes the null as PHP false
     emitter.instruction(&format!("call {errno_function}"));                     // rax = &errno for this thread
     emitter.instruction("movsxd rax, DWORD PTR [rax]");                         // the errno libc opendir() set
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // hold it across every fragment

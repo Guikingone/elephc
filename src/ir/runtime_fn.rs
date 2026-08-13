@@ -399,6 +399,14 @@ pub enum RuntimeFnId {
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Unboxes an `array|false` builtin ARGUMENT, throwing php's TypeError for the false.
+    ///
+    /// Inserted by the argument lowering when an `array|false` union (scandir, glob, file…)
+    /// flows into an array-taking builtin: the consumer's own lowering then sees a raw array
+    /// pointer and stays untouched. Operands: the boxed value, then the message string —
+    /// composed at compile time, `{fn}(): Argument #{n} (${param}) must be of type array,
+    /// false given` — the throw uses verbatim.
+    ExpectArrayArg,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -560,6 +568,9 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            // Compiler-internal: no PHP builtin declares it, so the registry cannot. The two
+            // operands are the boxed `array|false` value and the TypeError message.
+            RuntimeFnId::ExpectArrayArg => Some((2, Some(2))),
             _ => None,
         }
     }
@@ -621,11 +632,12 @@ impl RuntimeFnId {
             // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
             // checked call-site type — read the boxed Mixed cell as a raw array pointer and
             // hand back its header words as integers.
+            // `Scandir` left this list when its result became a boxed `array|false`, the same
+            // exit `Fgetcsv` made: the boxed cell IS the representation the lowering builds.
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
             | RuntimeFnId::File
             | RuntimeFnId::Glob
-            | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
@@ -1386,6 +1398,7 @@ impl RuntimeFnId {
     /// Returns the stable textual EIR spelling for diagnostics and snapshots.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeFnId::ExpectArrayArg => "expect_array_arg",
             RuntimeFnId::ArrayAll => "array_all",
             RuntimeFnId::ArrayAny => "array_any",
             RuntimeFnId::ArrayChunk => "array_chunk",
