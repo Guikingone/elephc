@@ -8,6 +8,7 @@
 //! Key details:
 //! - Request-local session and response state are reset before invoking generated PHP.
 //! - The configured execution alarm is armed only around handler execution and cancelled after it.
+//! - Request channels arrive close-on-exec from the broker control receiver.
 
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};

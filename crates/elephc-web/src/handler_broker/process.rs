@@ -29,6 +29,11 @@ const BROKER_POLL_MILLIS: libc::c_int = 100;
 /// Set by the broker's `SIGTERM` handler so its supervision loop can clean up.
 static BROKER_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+/// Reports whether the broker's signal handler has requested cooperative shutdown.
+pub(super) fn shutdown_requested() -> bool {
+    BROKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+}
+
 /// Runs the selected broker model until the worker parent disappears.
 pub(super) unsafe fn broker_loop(
     dispatch: RawFd,

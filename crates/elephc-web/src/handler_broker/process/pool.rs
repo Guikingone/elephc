@@ -455,10 +455,6 @@ unsafe fn run_pool_child(
             libc::close(dispatch.channel);
             libc::_exit(1);
         }
-        if control::set_close_on_exec(dispatch.channel).is_err() {
-            libc::close(dispatch.channel);
-            libc::_exit(1);
-        }
         let stream = File::from_raw_fd(dispatch.channel);
         let complete = execute_handler_request(handler, stream, dispatch.id);
         served = served.saturating_add(1);

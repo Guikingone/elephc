@@ -59,7 +59,7 @@ pub(super) fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
             break result;
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINTR) {
+        if !should_retry_interrupted(&error, super::process::shutdown_requested()) {
             return Err(error);
         }
     };
@@ -68,7 +68,7 @@ pub(super) fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
             return Ok(());
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::EINTR) {
+        if !should_retry_interrupted(&error, super::process::shutdown_requested()) {
             return Err(error);
         }
     }
@@ -170,7 +170,7 @@ pub(super) fn send_dispatch(
             }
             if written < 0 {
                 let error = io::Error::last_os_error();
-                if error.raw_os_error() == Some(libc::EINTR) {
+                if should_retry_interrupted(&error, super::process::shutdown_requested()) {
                     continue;
                 }
                 return Err(error);
@@ -204,13 +204,13 @@ pub(super) unsafe fn recv_dispatch(control: RawFd) -> io::Result<Option<Dispatch
         .try_into()
         .map_err(|_| io::Error::other("descriptor control length does not fit msghdr"))?;
     loop {
-        let received = libc::recvmsg(control, &mut message, 0);
+        let received = libc::recvmsg(control, &mut message, recvmsg_flags());
         if received == 0 {
             return Ok(None);
         }
         if received < 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
+            if should_retry_interrupted(&error, super::process::shutdown_requested()) {
                 continue;
             }
             return Err(error);
@@ -235,10 +235,15 @@ pub(super) unsafe fn recv_dispatch(control: RawFd) -> io::Result<Option<Dispatch
                 "broker dispatch omitted its request descriptor",
             ));
         }
+        let channel = std::ptr::read(libc::CMSG_DATA(header).cast::<RawFd>());
+        if let Err(error) = set_close_on_exec(channel) {
+            libc::close(channel);
+            return Err(error);
+        }
         let bytes = payload.assume_init();
         return Ok(Some(Dispatch {
             id: u64::from_be_bytes(bytes),
-            channel: std::ptr::read(libc::CMSG_DATA(header).cast::<RawFd>()),
+            channel,
         }));
     }
 }
@@ -290,7 +295,7 @@ fn send_bytes(control: RawFd, bytes: &[u8]) -> io::Result<()> {
         }
         if written < 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
+            if should_retry_interrupted(&error, super::process::shutdown_requested()) {
                 continue;
             }
             return Err(error);
@@ -312,7 +317,7 @@ unsafe fn recv_fixed<const N: usize>(control: RawFd) -> io::Result<Option<[u8; N
         }
         if received < 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
+            if should_retry_interrupted(&error, super::process::shutdown_requested()) {
                 continue;
             }
             return Err(error);
@@ -327,6 +332,26 @@ unsafe fn recv_fixed<const N: usize>(control: RawFd) -> io::Result<Option<[u8; N
     }
 }
 
+/// Returns whether an interrupted broker-control syscall may be retried.
+///
+/// Once `SIGTERM` has requested shutdown, returning the original `EINTR` lets
+/// the supervision loop leave its blocking operation and reap its children.
+fn should_retry_interrupted(error: &io::Error, shutdown_requested: bool) -> bool {
+    error.raw_os_error() == Some(libc::EINTR) && !shutdown_requested
+}
+
+/// Requests atomic close-on-exec installation while receiving SCM_RIGHTS on Linux.
+#[cfg(target_os = "linux")]
+fn recvmsg_flags() -> libc::c_int {
+    libc::MSG_CMSG_CLOEXEC
+}
+
+/// Uses the post-receive `fcntl` fallback on macOS.
+#[cfg(target_os = "macos")]
+fn recvmsg_flags() -> libc::c_int {
+    0
+}
+
 /// Selects no-SIGPIPE and optional nonblocking flags on Linux.
 #[cfg(target_os = "linux")]
 fn send_flags(nonblocking: bool) -> libc::c_int {
@@ -337,4 +362,48 @@ fn send_flags(nonblocking: bool) -> libc::c_int {
 #[cfg(target_os = "macos")]
 fn send_flags(nonblocking: bool) -> libc::c_int {
     if nonblocking { libc::MSG_DONTWAIT } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit coverage for broker control-message interruption and descriptor flags.
+    //!
+    //! Called from:
+    //! - `cargo test -p elephc-web` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Shutdown must break an interrupted blocking syscall, and every received
+    //!   request descriptor must be close-on-exec before either isolation model uses it.
+
+    use super::*;
+    use std::os::fd::AsRawFd;
+
+    /// Verifies `EINTR` retries only while the broker is still running.
+    #[test]
+    fn interrupted_control_io_stops_retrying_during_shutdown() {
+        let interrupted = io::Error::from_raw_os_error(libc::EINTR);
+        assert!(should_retry_interrupted(&interrupted, false));
+        assert!(!should_retry_interrupted(&interrupted, true));
+        assert!(!should_retry_interrupted(
+            &io::Error::from_raw_os_error(libc::EPIPE),
+            false,
+        ));
+    }
+
+    /// Verifies SCM_RIGHTS dispatch receipt marks the transferred stream close-on-exec.
+    #[test]
+    fn received_dispatch_descriptor_is_close_on_exec() {
+        let (sender, receiver) = datagram_pair().expect("create control pair");
+        let (request, _peer) = std::os::unix::net::UnixStream::pair().expect("create request pair");
+        send_dispatch(sender.as_raw_fd(), 41, request.as_raw_fd(), false)
+            .expect("send dispatch");
+        let dispatch = unsafe { recv_dispatch(receiver.as_raw_fd()) }
+            .expect("receive dispatch")
+            .expect("dispatch present");
+        let flags = unsafe { libc::fcntl(dispatch.channel, libc::F_GETFD) };
+        assert!(flags >= 0, "read received descriptor flags");
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
+        unsafe { libc::close(dispatch.channel) };
+    }
 }
