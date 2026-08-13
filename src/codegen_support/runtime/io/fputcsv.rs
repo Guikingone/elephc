@@ -451,7 +451,13 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, r10");                                         // copy the field index before scaling
     emitter.instruction("shl rcx, 3");                                           // convert the field index into the byte offset
     emitter.instruction("lea rcx, [r11 + rcx + 24]");                            // compute the current 8-byte slot address
-    emitter.instruction("mov rdi, QWORD PTR [rcx]");                             // load the raw element payload
+    // The cast takes its cell pointer in `rax`, NOT in the SysV first-argument register: the
+    // runtime's own helpers are split, `__rt_fd_write` above takes rdi/rsi/rdx while
+    // `__rt_mixed_cast_string` — like `__rt_heap_free` below — reads `rax`, because it opens by
+    // tail-calling `__rt_mixed_unbox`, whose input register that is. Staging in `rdi` handed the
+    // unboxer whatever the previous `__rt_fd_write` had returned, which is a byte count, and it
+    // dereferenced it. AArch64 has one convention for both, so the same code was correct there.
+    emitter.instruction("mov rax, QWORD PTR [rcx]");                             // load the raw element payload
     emitter.instruction("cmp rdx, 7");                                           // are elements boxed Mixed cells?
     emitter.instruction("je __rt_fputcsv_x_field_cast");                          // a boxed slot already holds the cell pointer
     // A scalar array stores bare payloads. Wrapping one in a frame-local Mixed cell lets the
@@ -464,9 +470,9 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     // enclosure-doubling flag. AArch64 addresses the same cell from `sp` with rising offsets,
     // which is why only one architecture was wrong.
     emitter.instruction("mov QWORD PTR [rbp - 152], rdx");                        // cell tag = the array's element value_type
-    emitter.instruction("mov QWORD PTR [rbp - 144], rdi");                        // cell payload low word
+    emitter.instruction("mov QWORD PTR [rbp - 144], rax");                        // cell payload low word
     emitter.instruction("mov QWORD PTR [rbp - 136], 0");                          // cell payload high word
-    emitter.instruction("lea rdi, [rbp - 152]");                                  // cast the frame-local cell
+    emitter.instruction("lea rax, [rbp - 152]");                                  // cast the frame-local cell
     emitter.label("__rt_fputcsv_x_field_cast");
     emitter.instruction("call __rt_mixed_cast_string");                           // rax = payload pointer, rdx = payload length
     // Only the string arm allocates (through `__rt_str_persist`); int/float/bool render into the
@@ -655,7 +661,7 @@ mod tests {
         emit_fputcsv(&mut emitter);
         let asm = emitter.output();
         let base = asm
-            .find("lea rdi, [rbp - 152]")
+            .find("lea rax, [rbp - 152]")
             .expect("the cell pointer must be the LOWEST of the three slots");
         for (offset, slot) in [(0usize, "rbp - 152"), (8, "rbp - 144"), (16, "rbp - 136")] {
             assert!(
@@ -668,6 +674,51 @@ mod tests {
             .find("mov QWORD PTR [rbp - 152], rdx")
             .expect("the cell tag must be written at the base address");
         assert!(tag_write < base, "the cell must be filled before it is passed");
+    }
+
+    /// The cast must receive its cell pointer in the register the formatter actually READS.
+    ///
+    /// The runtime's helpers do not share one calling convention on x86_64: `__rt_fd_write` takes
+    /// rdi/rsi/rdx like any SysV function, while `__rt_mixed_cast_string` and `__rt_heap_free`
+    /// read `rax` — the first opens by falling into `__rt_mixed_unbox`, whose input register that
+    /// is. Staging the cell in `rdi` therefore compiled, linked and ran, and handed the unboxer
+    /// whatever the previous `__rt_fd_write` had left in `rax`: a byte count, dereferenced as a
+    /// pointer. Every non-string CSV layout segfaulted on x86_64 and every one passed on aarch64,
+    /// where one convention serves both helpers.
+    ///
+    /// `implode` is the reference caller — it has always staged this cast in `rax`.
+    #[test]
+    fn test_the_cast_argument_reaches_the_register_the_formatter_reads() {
+        for (arch, label, stage) in [
+            (Arch::AArch64, "__rt_fputcsv_field_cast:", "add x0, sp, #144"),
+            (Arch::X86_64, "__rt_fputcsv_x_field_cast:", "lea rax, [rbp - 152]"),
+        ] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_fputcsv(&mut emitter);
+            let asm = emitter.output();
+            let staged = asm
+                .find(stage)
+                .unwrap_or_else(|| panic!("{arch:?}: the cell pointer must be staged for the cast"));
+            let at = asm
+                .find(label)
+                .unwrap_or_else(|| panic!("{arch:?}: the cast must be labelled"));
+            assert!(
+                staged < at,
+                "{arch:?}: the pointer must be in place before the cast is entered"
+            );
+            // The scalar arm falls through into the label; the boxed arm jumps to it. Both must
+            // therefore leave the pointer in the SAME register, which is the half that was wrong.
+            let boxed = asm
+                .find(match arch {
+                    Arch::AArch64 => "mov x0, x5",
+                    Arch::X86_64 => "mov rax, QWORD PTR [rcx]",
+                })
+                .unwrap_or_else(|| panic!("{arch:?}: the boxed arm must load the cell pointer"));
+            assert!(
+                boxed < at,
+                "{arch:?}: the boxed arm must load into the same register the scalar arm uses"
+            );
+        }
     }
 
     /// The AArch64 half writes the same cell upward from `sp`, and its pointer is the LOWEST
