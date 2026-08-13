@@ -145,6 +145,19 @@ fn is_planned_recycle(status: libc::c_int) -> bool {
         || exit_code == isolated_worker::RECYCLE_EXIT_CODE
 }
 
+/// Removes one exact worker PID from the supervised set and returns its spawn time.
+///
+/// Reparented broker/handler descendants may also be returned by `waitpid(-1)`
+/// when the master is PID 1; those PIDs are reaped but must not trigger a worker
+/// replacement or change the configured pool size.
+fn remove_tracked_worker(
+    children: &mut Vec<(libc::pid_t, Instant)>,
+    pid: libc::pid_t,
+) -> Option<Instant> {
+    let index = children.iter().position(|(child, _)| *child == pid)?;
+    Some(children.remove(index).1)
+}
+
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
 ///
 /// # Safety
@@ -217,11 +230,9 @@ fn run_server(
             break;
         }
         if pid > 0 {
-            let spawned_at = children
-                .iter()
-                .find(|(c, _)| *c == pid)
-                .map(|(_, t)| *t);
-            children.retain(|(c, _)| *c != pid);
+            let Some(spawned_at) = remove_tracked_worker(&mut children, pid) else {
+                continue;
+            };
             if SHUTDOWN.load(Ordering::SeqCst) {
                 if children.is_empty() {
                     break;
@@ -245,7 +256,7 @@ fn run_server(
                         libc::WEXITSTATUS(status)
                     );
                 }
-                if spawned_at.map(|t| t.elapsed() < FAST_DEATH).unwrap_or(false) {
+                if spawned_at.elapsed() < FAST_DEATH {
                     fast_deaths += 1;
                     if fast_deaths >= MAX_FAST_DEATHS {
                         eprintln!(
@@ -318,6 +329,20 @@ mod tests {
         assert!(!is_planned_recycle(libc::SIGSEGV));
         assert!(!is_planned_recycle(libc::SIGKILL));
         assert!(!is_planned_recycle(libc::SIGTERM));
+    }
+
+    /// A reparented descendant reaped by the master must not consume a tracked
+    /// worker slot or cause the supervisor to spawn an extra worker.
+    #[test]
+    fn untracked_reaped_pid_does_not_change_worker_set() {
+        let first = Instant::now();
+        let second = Instant::now();
+        let mut children = vec![(101, first), (202, second)];
+
+        assert!(remove_tracked_worker(&mut children, 303).is_none());
+        assert_eq!(children.len(), 2);
+        assert!(remove_tracked_worker(&mut children, 101).is_some());
+        assert_eq!(children.iter().map(|(pid, _)| *pid).collect::<Vec<_>>(), vec![202]);
     }
 
 }

@@ -20,11 +20,11 @@ mod process;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use tokio::io::unix::AsyncFd;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{oneshot, Mutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 use crate::handler_ipc::{self, HandlerRequest, ResponseFrame, ResponseStart};
 
@@ -38,8 +38,10 @@ const CANCEL_SENDER_STACK_BYTES: usize = 64 * 1024;
 pub(super) static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);
 /// Exact broker PID owned by this isolated worker, read by its `SIGTERM` handler.
 static WORKER_BROKER_PID: AtomicI32 = AtomicI32::new(0);
-/// Records that broker exit is part of an intentional worker shutdown.
-static WORKER_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Sentinel meaning broker death was not requested by the worker.
+const NO_REQUESTED_WORKER_EXIT: libc::c_int = -1;
+/// Exit code the broker monitor must use after an intentional broker shutdown.
+static REQUESTED_WORKER_EXIT: AtomicI32 = AtomicI32::new(NO_REQUESTED_WORKER_EXIT);
 
 /// Handler process model implemented by the threadless broker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -90,18 +92,13 @@ struct RequestLease {
 }
 
 impl RequestLease {
-    /// Creates an inactive lease that cannot cancel an ID before its dispatch is sent.
-    fn pending(id: u64, cancel: mpsc::Sender<u64>) -> Self {
+    /// Creates an active lease only after broker ownership has been acknowledged.
+    fn acknowledged(id: u64, cancel: mpsc::Sender<u64>) -> Self {
         Self {
             id,
             cancel,
-            active: false,
+            active: true,
         }
-    }
-
-    /// Arms cancellation after the descriptor-bearing dispatch datagram is accepted.
-    fn arm(&mut self) {
-        self.active = true;
     }
 }
 
@@ -133,7 +130,7 @@ fn configure_execution_timeout(seconds: u32) {
 
 /// Forwards worker termination to its broker without exiting from the signal handler.
 extern "C" fn handle_worker_shutdown(_signal: libc::c_int) {
-    WORKER_SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    REQUESTED_WORKER_EXIT.store(0, Ordering::SeqCst);
     let pid = WORKER_BROKER_PID.load(Ordering::SeqCst);
     if pid > 0 {
         unsafe {
@@ -145,7 +142,7 @@ extern "C" fn handle_worker_shutdown(_signal: libc::c_int) {
 /// Installs cooperative worker shutdown before the broker is forked.
 fn install_worker_shutdown_handler() -> io::Result<()> {
     WORKER_BROKER_PID.store(0, Ordering::SeqCst);
-    WORKER_SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    REQUESTED_WORKER_EXIT.store(NO_REQUESTED_WORKER_EXIT, Ordering::SeqCst);
     unsafe {
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction =
@@ -198,7 +195,7 @@ impl PrestartedBroker {
             return Err(io::Error::last_os_error());
         }
         WORKER_BROKER_PID.store(pid, Ordering::SeqCst);
-        if WORKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+        if REQUESTED_WORKER_EXIT.load(Ordering::SeqCst) != NO_REQUESTED_WORKER_EXIT {
             unsafe {
                 libc::kill(pid, libc::SIGTERM);
             }
@@ -261,9 +258,11 @@ fn start_broker_monitor(pid: libc::pid_t) -> io::Result<()> {
         .stack_size(BROKER_MONITOR_STACK_BYTES)
         .spawn(move || unsafe {
             if let Some(status) = reap_broker(pid) {
-                if WORKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
-                    libc::_exit(0);
-                } else if libc::WIFSIGNALED(status) {
+                let requested_exit = REQUESTED_WORKER_EXIT.load(Ordering::SeqCst);
+                if requested_exit != NO_REQUESTED_WORKER_EXIT {
+                    libc::_exit(requested_exit);
+                }
+                if libc::WIFSIGNALED(status) {
                     eprintln!(
                         "elephc-web: handler broker terminated by signal {}",
                         libc::WTERMSIG(status)
@@ -278,6 +277,24 @@ fn start_broker_monitor(pid: libc::pid_t) -> io::Result<()> {
             libc::_exit(BROKER_FAILURE_EXIT_CODE);
         })
         .map(|_| ())
+}
+
+/// Stops and reaps the isolated worker's broker before a planned recycle exit.
+///
+/// The broker monitor owns `waitpid`, so this thread requests exit code 86 and
+/// waits for the monitor to terminate the process after all handlers are reaped.
+pub(crate) fn finish_worker_recycle() -> ! {
+    REQUESTED_WORKER_EXIT.store(crate::isolated_worker::RECYCLE_EXIT_CODE, Ordering::SeqCst);
+    let pid = WORKER_BROKER_PID.load(Ordering::SeqCst);
+    if pid <= 0 {
+        unsafe { libc::_exit(crate::isolated_worker::RECYCLE_EXIT_CODE) }
+    }
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+        loop {
+            libc::pause();
+        }
+    }
 }
 
 /// Terminates a broker whose worker-side setup failed, then reaps it synchronously.
@@ -312,18 +329,16 @@ impl HandlerBroker {
         worker_stream.set_nonblocking(true)?;
         control::set_close_on_exec(worker_stream.as_raw_fd())?;
         control::set_close_on_exec(broker_stream.as_raw_fd())?;
-        let dispatch_control = self.dispatch.lock().await;
+        let dispatch_control = Arc::clone(&self.dispatch).lock_owned().await;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let mut lease = RequestLease::pending(id, self.cancel.clone());
-        Self::send_channel(
-            &dispatch_control,
+        let lease = Self::send_channel(
+            dispatch_control,
             id,
             broker_stream.as_raw_fd(),
-            &mut lease,
+            broker_stream,
+            self.cancel.clone(),
         )
         .await?;
-        drop(broker_stream);
-        drop(dispatch_control);
 
         let stream = tokio::net::UnixStream::from_std(worker_stream)?;
         let (mut reader, mut writer) = stream.into_split();
@@ -364,11 +379,12 @@ impl HandlerBroker {
 
     /// Transfers one request channel and waits until the broker acknowledges ownership.
     async fn send_channel(
-        dispatch: &AsyncFd<OwnedFd>,
+        dispatch: OwnedMutexGuard<AsyncFd<OwnedFd>>,
         id: u64,
         channel: RawFd,
-        lease: &mut RequestLease,
-    ) -> io::Result<()> {
+        broker_stream: UnixStream,
+        cancel: mpsc::Sender<u64>,
+    ) -> io::Result<RequestLease> {
         loop {
             let mut writable = dispatch.writable().await?;
             match writable.try_io(|fd| {
@@ -376,12 +392,37 @@ impl HandlerBroker {
             }) {
                 Ok(result) => {
                     result?;
-                    lease.arm();
                     break;
                 }
                 Err(_) => continue,
             }
         }
+        let (acknowledged, acknowledgement) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = Self::receive_ack(&dispatch, id).await;
+            drop(broker_stream);
+            let result = match result {
+                Ok(()) => Ok(RequestLease::acknowledged(id, cancel.clone())),
+                Err(error) => {
+                    let _ = cancel.send(id);
+                    Err(error)
+                }
+            };
+            // If the HTTP task disappeared after sendmsg, dropping the active
+            // lease here emits cancellation after the ACK has been drained.
+            let _ = acknowledged.send(result);
+            drop(dispatch);
+        });
+        acknowledgement.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "handler broker ACK owner stopped unexpectedly",
+            )
+        })?
+    }
+
+    /// Receives and validates one broker acknowledgement while its mutex is held.
+    async fn receive_ack(dispatch: &AsyncFd<OwnedFd>, id: u64) -> io::Result<()> {
         loop {
             let mut readable = dispatch.readable().await?;
             match readable.try_io(|fd| unsafe {
@@ -484,6 +525,80 @@ mod tests {
 
             drop(dispatch_lock);
             drop(broker_dispatch);
+        });
+    }
+
+    /// Verifies cancellation after descriptor send but before ACK still drains
+    /// that ACK, emits one cancellation, and leaves the next dispatch aligned.
+    #[test]
+    fn cancellation_between_send_and_ack_does_not_poison_dispatch_socket() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread test runtime");
+        runtime.block_on(async {
+            let (worker_dispatch, broker_dispatch) = control::datagram_pair()
+                .expect("create dispatch socket pair");
+            control::set_nonblocking(worker_dispatch.as_raw_fd())
+                .expect("make worker dispatch socket nonblocking");
+            let dispatch = Arc::new(Mutex::new(
+                AsyncFd::new(worker_dispatch).expect("register dispatch socket"),
+            ));
+            let (cancel, cancellations) = mpsc::channel();
+            let peer = std::thread::spawn(move || unsafe {
+                let first = control::recv_dispatch(broker_dispatch.as_raw_fd())
+                    .expect("receive first dispatch")
+                    .expect("first dispatch socket closed");
+                std::thread::sleep(Duration::from_millis(75));
+                control::send_id(broker_dispatch.as_raw_fd(), first.id)
+                    .expect("acknowledge first dispatch");
+                libc::close(first.channel);
+
+                let second = control::recv_dispatch(broker_dispatch.as_raw_fd())
+                    .expect("receive second dispatch")
+                    .expect("second dispatch socket closed");
+                control::send_id(broker_dispatch.as_raw_fd(), second.id)
+                    .expect("acknowledge second dispatch");
+                libc::close(second.channel);
+            });
+
+            let (_first_worker, first_broker) = UnixStream::pair().expect("first request channel");
+            let first_control = Arc::clone(&dispatch).lock_owned().await;
+            let first = tokio::time::timeout(
+                Duration::from_millis(10),
+                HandlerBroker::send_channel(
+                    first_control,
+                    1,
+                    first_broker.as_raw_fd(),
+                    first_broker,
+                    cancel.clone(),
+                ),
+            )
+            .await;
+            assert!(first.is_err(), "first dispatch unexpectedly received its delayed ACK");
+
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(
+                cancellations.try_recv(),
+                Ok(1),
+                "cancelled ACK waiter did not cancel its acknowledged request"
+            );
+
+            let (_second_worker, second_broker) =
+                UnixStream::pair().expect("second request channel");
+            let second_control = Arc::clone(&dispatch).lock_owned().await;
+            let mut second = HandlerBroker::send_channel(
+                second_control,
+                2,
+                second_broker.as_raw_fd(),
+                second_broker,
+                cancel,
+            )
+            .await
+            .expect("second dispatch must consume its own ACK");
+            second.active = false;
+            peer.join().expect("dispatch peer panicked");
+            assert_eq!(cancellations.try_recv(), Err(TryRecvError::Empty));
         });
     }
 }

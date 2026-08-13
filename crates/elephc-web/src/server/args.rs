@@ -27,7 +27,7 @@ Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
-  --max-requests N       Recycle a worker after N requests; 0 = never (default: 0)
+  --max-requests N       Drain and recycle after N completed requests; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill and respawn a worker when its handler runs > N seconds; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
@@ -51,7 +51,7 @@ Options:
   --body-read-timeout N  Max seconds to receive a request body; 0 = unlimited (default: 30)
   --response-write-timeout N
                          Max seconds a response may wait on client backpressure; 0 = unlimited (default: 30)
-  --max-requests N       Recycle a web worker after N requests; 0 = never (default: 0)
+  --max-requests N       Drain and recycle after N completed requests; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
   --max-execution-time N Kill only the timed-out handler process; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip

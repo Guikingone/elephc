@@ -39,6 +39,7 @@ pub(super) unsafe fn broker_loop(
 ) {
     BROKER_SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
     install_shutdown_handler();
+    ignore_signal(libc::SIGINT);
     ignore_signal(libc::SIGPIPE);
     install_child_exit_handler();
     match config.mode {

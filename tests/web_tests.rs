@@ -1908,6 +1908,69 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let _ = child.wait();
 }
 
+/// Verifies every isolation model stops accepting and closes an idle keep-alive
+/// connection once its completed request reaches the recycle quota.
+#[test]
+fn web_max_requests_drains_keep_alive_before_recycle() {
+    for mode in ["worker", "pool", "request"] {
+        let dir = make_test_dir(&format!("web_{mode}_maxreq_keepalive"));
+        let bin = if mode == "worker" {
+            compile_web(&dir, "<?php echo 'ok';", "app")
+        } else {
+            compile_isolated_web(&dir, "<?php echo 'ok';", "app", mode)
+        };
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = ServerGuard::new(
+            Command::new(&bin)
+                .args([
+                    "--listen",
+                    &addr,
+                    "--workers",
+                    "1",
+                    "--max-requests",
+                    "1",
+                ])
+                .spawn()
+                .expect("spawn isolated web server"),
+        );
+        wait_until_ready(&addr);
+
+        let mut socket = TcpStream::connect(&addr).expect("connect keep-alive client");
+        socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let request = format!("GET / HTTP/1.1\r\nHost: {addr}\r\n\r\n");
+        socket.write_all(request.as_bytes()).unwrap();
+        let first = read_complete_http_response(&mut socket);
+        assert!(
+            first.contains("200") && first.ends_with("ok"),
+            "{mode} first response failed: {first:?}"
+        );
+
+        let mut trailing = [0u8; 1];
+        assert_eq!(
+            socket.read(&mut trailing).expect("wait for graceful keep-alive close"),
+            0,
+            "{mode} worker left the keep-alive connection open after its quota"
+        );
+
+        let mut served_after_recycle = false;
+        for _ in 0..40 {
+            if try_http_get(&addr, "/").ends_with("ok") {
+                served_after_recycle = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            served_after_recycle,
+            "{mode} master did not replace the recycled worker"
+        );
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 /// Regression for issue #516 (caveat 2): planned --max-requests recycles used to
 /// count toward the master's fast-death crash-loop guard, so sustained traffic
 /// recycled a worker >10 times in under a second each and the master printed

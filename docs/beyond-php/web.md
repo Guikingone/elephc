@@ -47,7 +47,7 @@ The produced binary accepts these arguments at runtime:
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of worker processes to prefork. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; `0` means unlimited. A request whose body exceeds the cap gets `413 Payload Too Large` and the PHP handler never runs. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after serving N requests (the master respawns it), bounding memory growth in long-running servers. |
+| `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests. It stops accepting, drains active HTTP connections, and exits after isolated handlers/brokers are reaped; the master then respawns it. |
 | `--access-log` | No | off | Log one line per request to stderr (`<ip> "<method> <path>" <status> <ms>`). |
 | `--max-execution-time N` | No | `0` (none) | In `worker`, terminate and respawn the worker. In `pool`/`request`, terminate only the timed-out handler process. |
 | `--handler-concurrency N` | No | `1` | Handler processes per web worker. Available only in `pool` and `request`. |
@@ -248,6 +248,9 @@ worker so the master reconstructs a clean worker/broker pair.
   in-flight request may be dropped when shutdown arrives.
 - **Process supervision** — the master replaces failed web workers. In isolated
   modes, the broker separately tracks, reaps, and replaces handler children.
+- **Planned recycling** — `--max-requests` stops new accepts at the quota, asks
+  keep-alive connections to close after their current responses, drains in-flight
+  work, and reaps the isolated broker before the worker exits for replacement.
 - **Request body cap** — see `--max-body-size`; oversized bodies are rejected with
   `413` before the handler runs.
 - **Slow-connection bound** — HTTP/1.1 keep-alive is enabled, but a connection that

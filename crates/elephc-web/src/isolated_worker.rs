@@ -28,7 +28,7 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::handler_broker::{BrokerMode, HandlerBroker, HandlerResponse, PrestartedBroker};
 use crate::handler_ipc::{HandlerRequest, ResponseFrame, MAX_REQUEST_BODY_BYTES};
@@ -52,6 +52,14 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Records one completed isolated handler and broadcasts a graceful recycle at the quota.
+fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
+    if max_requests > 0 && served >= max_requests {
+        let _ = recycle.send(true);
+    }
+}
 
 /// Exit code a worker child uses for a planned `--max-requests` recycle.
 /// Distinct from 0 (clean exit), 1 (worker setup/handler errors), and 2 (usage
@@ -242,24 +250,42 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 std::process::exit(1);
             }
         };
+        let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut connections = Vec::new();
         loop {
+            connections.retain(|connection: &tokio::task::JoinHandle<_>| {
+                !connection.is_finished()
+            });
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
-            if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
+            if *recycle_requested.borrow() {
                 break;
             }
-            let (stream, peer) = match listener.accept().await {
+            let accepted = tokio::select! {
+                changed = recycle_requested.changed() => {
+                    if changed.is_err() || *recycle_requested.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+                accepted = listener.accept() => accepted,
+            };
+            let (stream, peer) = match accepted {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let io = TokioIo::new(stream);
             let broker = broker.clone();
-            tokio::task::spawn_local(http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(30))
-                .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
-                    let broker = broker.clone();
-                    async move {
+            let request_recycle = recycle.clone();
+            let mut connection_recycle = recycle.subscribe();
+            connections.push(tokio::task::spawn_local(async move {
+                let connection = http1::Builder::new()
+                    .timer(TokioTimer::new())
+                    .header_read_timeout(Duration::from_secs(30))
+                    .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
+                        let broker = broker.clone();
+                        let request_recycle = request_recycle.clone();
+                        async move {
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
@@ -341,6 +367,8 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                             request,
                             accepts_gzip,
                             response_write_secs,
+                            max_requests,
+                            &request_recycle,
                         )
                         .await;
                     let status = handler_result.status;
@@ -362,9 +390,25 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         );
                     }
                     Ok::<_, Infallible>(response)
-                }})));
+                }}));
+                tokio::pin!(connection);
+                tokio::select! {
+                    _ = &mut connection => {}
+                    changed = connection_recycle.changed() => {
+                        if changed.is_ok() && *connection_recycle.borrow() {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                }
+            }));
+        }
+        drop(listener);
+        for connection in connections {
+            let _ = connection.await;
         }
     });
+    crate::handler_broker::finish_worker_recycle();
 }
 
 /// Drains the request body frame-by-frame while feeding an upload-progress
@@ -401,12 +445,14 @@ async fn run_handler_isolated(
     request: HandlerRequest,
     accepts_gzip: bool,
     response_write_secs: u64,
+    max_requests: usize,
+    recycle: &watch::Sender<bool>,
 ) -> HandlerResult {
     let mut response = match broker.dispatch(request).await {
         Ok(response) => response,
         Err(error) => {
             eprintln!("elephc-web: handler dispatch failed: {error}");
-            SERVED.fetch_add(1, Ordering::Relaxed);
+            record_completed_request(max_requests, recycle);
             return handler_failure_response();
         }
     };
@@ -428,12 +474,19 @@ async fn run_handler_isolated(
                         return HandlerResult {
                             status,
                             headers,
-                            body: stream_body(response, prefix, true, response_write_secs),
+                            body: stream_body(
+                                response,
+                                prefix,
+                                true,
+                                response_write_secs,
+                                max_requests,
+                                recycle.clone(),
+                            ),
                         };
                     }
                 }
                 Ok(ResponseFrame::End) => {
-                    SERVED.fetch_add(1, Ordering::Relaxed);
+                    record_completed_request(max_requests, recycle);
                     return HandlerResult {
                         status,
                         headers,
@@ -441,7 +494,7 @@ async fn run_handler_isolated(
                     };
                 }
                 Ok(ResponseFrame::Start(_)) | Err(_) => {
-                    SERVED.fetch_add(1, Ordering::Relaxed);
+                    record_completed_request(max_requests, recycle);
                     return HandlerResult {
                         status,
                         headers,
@@ -455,10 +508,17 @@ async fn run_handler_isolated(
         Ok(ResponseFrame::Chunk(chunk)) => HandlerResult {
             status,
             headers,
-            body: stream_body(response, chunk, false, response_write_secs),
+            body: stream_body(
+                response,
+                chunk,
+                false,
+                response_write_secs,
+                max_requests,
+                recycle.clone(),
+            ),
         },
         Ok(ResponseFrame::End) => {
-            SERVED.fetch_add(1, Ordering::Relaxed);
+            record_completed_request(max_requests, recycle);
             HandlerResult {
                 status,
                 headers,
@@ -466,7 +526,7 @@ async fn run_handler_isolated(
             }
         }
         Ok(ResponseFrame::Start(_)) | Err(_) => {
-            SERVED.fetch_add(1, Ordering::Relaxed);
+            record_completed_request(max_requests, recycle);
             HandlerResult {
                 status,
                 headers,
@@ -530,6 +590,8 @@ fn stream_body(
     prefix: Vec<u8>,
     gzip: bool,
     response_write_secs: u64,
+    max_requests: usize,
+    recycle: watch::Sender<bool>,
 ) -> WebBody {
     let (sender, receiver) = mpsc::channel(RESPONSE_CHANNEL_CAPACITY);
     let aborted = Arc::new(AtomicBool::new(false));
@@ -541,6 +603,8 @@ fn stream_body(
             response_write_secs,
             sender,
             Arc::clone(&aborted),
+            max_requests,
+            recycle.clone(),
         ));
     } else {
         let _ = sender.try_send(Frame::data(Bytes::from(prefix)));
@@ -551,6 +615,8 @@ fn stream_body(
             response_write_secs,
             sender,
             Arc::clone(&aborted),
+            max_requests,
+            recycle,
         ));
     }
     WebBody {
@@ -569,6 +635,8 @@ async fn pump_response(
     response_write_secs: u64,
     sender: mpsc::Sender<Frame<Bytes>>,
     aborted: Arc<AtomicBool>,
+    max_requests: usize,
+    recycle: watch::Sender<bool>,
 ) {
     let mut encoder = gzip.then(|| {
         flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default())
@@ -580,7 +648,7 @@ async fn pump_response(
         )
     {
         aborted.store(true, Ordering::Release);
-        SERVED.fetch_add(1, Ordering::Relaxed);
+        record_completed_request(max_requests, &recycle);
         return;
     }
     loop {
@@ -615,7 +683,7 @@ async fn pump_response(
             }
         }
     }
-    SERVED.fetch_add(1, Ordering::Relaxed);
+    record_completed_request(max_requests, &recycle);
 }
 
 /// Sends plaintext or newly-produced gzip bytes for one handler chunk.
