@@ -37,7 +37,7 @@ mod include_paths;
 mod magic_constants;
 mod strings;
 mod curl;
-mod io;
+pub(crate) mod io;
 mod mysqli;
 mod mysqli_mysql;
 mod pdo;
