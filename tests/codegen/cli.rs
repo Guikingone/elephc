@@ -17382,3 +17382,74 @@ greet();
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a boxed Mixed value stores into a string-NARROWED property slot on wasm32-wasi.
+///
+/// An untyped property assigned an untyped parameter narrows the slot to string while the
+/// parameter ABI stays a boxed Mixed cell. The store used to push the single cell pointer
+/// straight into `__rt_str_persist` (which wants ptr+len), so the whole module failed
+/// wasmparser validation — every magic-methods-style class was unbuildable. The WAT must now
+/// unbox through `__rt_mixed_cast_string`, and because that helper already persists, the
+/// constructor must NOT persist a second copy (the leak a passing run would never show).
+#[test]
+fn test_cli_wasm_mixed_value_into_string_narrowed_property() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_into_str_prop");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class U {
+    public $name;
+    public function __construct($n) { $this->name = $n; }
+}
+$u = new U("x");
+echo $u->name, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile mixed-into-narrowed-property to WASM");
+    assert!(
+        output.status.success(),
+        "mixed value into string-narrowed property failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wat = fs::read_to_string(dir.join("main.wat"))
+        .expect("wasm publication always writes the readable .wat beside the module");
+    let ctor_start = wat
+        .find("(func $fn_m_U_x3a__x3a__u__u_construct")
+        .expect("constructor function missing from WAT");
+    let ctor = &wat[ctor_start..];
+    let ctor = &ctor[..ctor.find("\n  (func ").unwrap_or(ctor.len())];
+    assert!(
+        ctor.contains("call $__rt_mixed_cast_string"),
+        "the store must unbox the Mixed cell into the string slot: {ctor}"
+    );
+    assert!(
+        !ctor.contains("call $__rt_str_persist"),
+        "`__rt_mixed_cast_string` already persists; a second copy is a per-store leak: {ctor}"
+    );
+
+    if Command::new("wasmer").arg("--version").output().is_ok() {
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run under Wasmer");
+        assert!(
+            run.status.success(),
+            "narrowed property store trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stdout), "x\n");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -1952,8 +1952,14 @@ fn emit_declared_property_store(
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i32.load offset={}", offset), "load previous slot value ptr");
             ctx.fb.ins("call $__rt_decref_any", "release previous slot value (null-safe)");
-            ctx.emit_load_value(value)?;
-            ctx.fb.ins("call $__rt_str_persist", "persist string copy (ptr,len) -> (new_ptr,new_len)");
+            if narrows_from_mixed {
+                // `__rt_mixed_cast_string` already persists — the (ptr,len) it leaves on the
+                // stack is the slot's own copy, and a second `__rt_str_persist` would strand it.
+                super::transfer::emit_narrow_mixed_into(ctx, value, prop_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+                ctx.fb.ins("call $__rt_str_persist", "persist string copy (ptr,len) -> (new_ptr,new_len)");
+            }
             let len_tmp = ctx.fresh_temp(ValType::I64);
             let ptr_tmp = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(&format!("local.set {}", len_tmp), "save persisted string len");
@@ -1970,7 +1976,14 @@ fn emit_declared_property_store(
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i32.load offset={}", offset), "load previous slot value ptr");
             ctx.fb.ins("call $__rt_decref_any", "release previous slot value (null-safe)");
-            ctx.emit_load_value(value)?;
+            if narrows_from_mixed {
+                // The tag-checked unbox yields the heap pointer BORROWED from the cell; the
+                // shared incref below then makes the slot its own owner. Storing the raw cell
+                // pointer here would validate — both are i32 — and corrupt every later read.
+                super::transfer::emit_narrow_mixed_into(ctx, value, prop_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
             let ptr_tmp = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(&format!("local.set {}", ptr_tmp), "save container cell ptr");
             ctx.fb.ins(&format!("local.get {}", ptr_tmp), "container cell ptr");
