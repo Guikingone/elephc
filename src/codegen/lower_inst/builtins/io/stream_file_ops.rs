@@ -646,6 +646,14 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_str_getcsv");
+    if arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                 // the parsed row, or the null pointer for no record
+    }
+    // php-src substitutes `php_bc_fgetcsv_empty_line()` — a one-element array holding null —
+    // when the parser reports no record, and the row widens to boxed Mixed cells so that null
+    // survives the read back. An `array<string>` slot cannot: the sentinel reaches the slot but
+    // nothing reads it as null.
+    abi::emit_call_label(ctx.emitter, "__rt_csv_row_to_mixed");
     store_if_result(ctx, inst)
 }
 

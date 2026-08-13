@@ -644,6 +644,11 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
+            // A CSV row is `?string[]`: php answers `[null]` for a wholly empty subject, so the
+            // runtime widens every row to boxed Mixed cells. A callable-dispatched
+            // `$f = 'str_getcsv'; $f("")` has no checked call-site type and would otherwise read
+            // those cells as raw string pointer/length pairs.
+            RuntimeFnId::StrGetcsv => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
         }

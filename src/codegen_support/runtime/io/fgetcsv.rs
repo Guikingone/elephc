@@ -18,10 +18,118 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_fgetcsv_linux_x86_64(emitter);
         emit_str_getcsv_x86_64(emitter);
+        emit_csv_row_to_mixed_x86_64(emitter);
         return;
     }
     emit_fgetcsv_aarch64(emitter);
     emit_str_getcsv_aarch64(emitter);
+    emit_csv_row_to_mixed_aarch64(emitter);
+}
+
+/// Emits `__rt_csv_row_to_mixed(x0 = row_or_null) -> array<mixed>: x0`.
+///
+/// php-src's `php_fgetcsv()` returns NO ARRAY for a blank record and both of its callers —
+/// `PHP_FUNCTION(str_getcsv)` in `ext/standard/string.c` and `PHP_FUNCTION(fgetcsv)` in
+/// `ext/standard/file.c` — replace it with `php_bc_fgetcsv_empty_line()`, a one-element array
+/// holding `null`. This helper is that substitution, and it is also where the row widens from
+/// string slots to boxed `Mixed` cells.
+///
+/// The widening is the whole point, and it is not decoration: writing the null SENTINEL into a
+/// string slot is INERT, because a `array<string>` element has no way to read back as null —
+/// the container was well formed and only the READS lied, so `var_dump()` kept printing
+/// `string(0) ""`. A boxed cell carries runtime value tag 8 (canonical PHP null), which every
+/// Mixed reader already understands.
+///
+/// Ownership: `__rt_array_to_mixed` TRANSFERS each owned field string into its box rather than
+/// copying it, and `__rt_array_push_int` stores the fresh box pointer without retaining it, so
+/// the row owns exactly one reference to every cell either way.
+fn emit_csv_row_to_mixed_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: csv_row_to_mixed ---");
+    emitter.label_global("__rt_csv_row_to_mixed");
+
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // save fp/lr and reserve one spill slot
+    emitter.instruction("add x29, sp, #0");
+    emitter.instruction("cbz x0, __rt_csv_row_to_mixed_empty");                 // no record: build php's [null] instead
+    emitter.instruction("mov x1, #1");                                          // parsed rows hold 16-byte string ptr/len pairs
+    emitter.instruction("bl __rt_array_to_mixed");                              // transfer the owned fields into boxed Mixed cells
+    emitter.instruction("b __rt_csv_row_to_mixed_return");
+
+    // -- php_bc_fgetcsv_empty_line(): one element, holding null --
+    emitter.label("__rt_csv_row_to_mixed_empty");
+    emitter.instruction("mov x0, #1");                                          // capacity 1
+    emitter.instruction("mov x1, #8");                                          // boxed Mixed cells are pointer-sized
+    emitter.instruction("bl __rt_array_new");
+    emitter.instruction("str x0, [sp, #16]");                                   // hold the row across the box allocation
+    emitter.instruction("mov x0, #8");                                          // runtime value tag 8 = canonical PHP null
+    emitter.instruction("mov x1, #0");                                          // canonical null has no low payload word
+    emitter.instruction("mov x2, #0");                                          // canonical null has no high payload word
+    emitter.instruction("bl __rt_mixed_from_value");                            // x0 = owned boxed null
+    emitter.instruction("mov x1, x0");                                          // the box transfers into the row
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the row again
+    emitter.instruction("bl __rt_array_push_int");                              // store the cell pointer without retaining it
+    emit_stamp_mixed_value_type_aarch64(emitter);
+
+    emitter.label("__rt_csv_row_to_mixed_return");
+    emitter.instruction("ldp x29, x30, [sp], #32");
+    emitter.instruction("ret");
+}
+
+/// Stamps the indexed array in `x0` as holding boxed `Mixed` cells (runtime value_type 7).
+///
+/// `__rt_array_push_int` specializes a freshly empty array to SCALAR slots, so the tag has to be
+/// written after the push, not before.
+fn emit_stamp_mixed_value_type_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x9, [x0, #-8]");                                   // the packed array kind word
+    emitter.instruction("mov x10, #0x80ff");                                    // preserve heap kind and the persistent COW flag
+    emitter.instruction("and x9, x9, x10");                                     // clear the scalar value_type push_int just stamped
+    emitter.instruction("mov x10, #7");                                         // runtime value_type 7 = boxed Mixed
+    emitter.instruction("lsl x10, x10, #8");                                    // into the packed kind word's tag lane
+    emitter.instruction("orr x9, x9, x10");
+    emitter.instruction("str x9, [x0, #-8]");
+}
+
+/// x86_64 form of [`emit_csv_row_to_mixed_aarch64`]:
+/// `__rt_csv_row_to_mixed(rdi = row_or_null) -> array<mixed>: rax`.
+///
+/// `__rt_mixed_from_value` takes its TAG IN RAX here, not in `rdi`: the runtime helpers do not
+/// share one x86_64 convention, and reading this one as System V would box the row pointer as if
+/// it were a tag.
+fn emit_csv_row_to_mixed_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: csv_row_to_mixed ---");
+    emitter.label_global("__rt_csv_row_to_mixed");
+
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 16");                                         // one spill slot, keeping rsp 16-byte aligned
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_csv_row_to_mixed_x_empty");                    // no record: build php's [null] instead
+    emitter.instruction("mov esi, 1");                                          // parsed rows hold 16-byte string ptr/len pairs
+    emitter.instruction("call __rt_array_to_mixed");                            // transfer the owned fields into boxed Mixed cells
+    emitter.instruction("jmp __rt_csv_row_to_mixed_x_return");
+
+    // -- php_bc_fgetcsv_empty_line(): one element, holding null --
+    emitter.label("__rt_csv_row_to_mixed_x_empty");
+    emitter.instruction("mov edi, 1");                                          // capacity 1
+    emitter.instruction("mov esi, 8");                                          // boxed Mixed cells are pointer-sized
+    emitter.instruction("call __rt_array_new");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // hold the row across the box allocation
+    emitter.instruction("mov eax, 8");                                          // runtime value tag 8 = canonical PHP null, IN RAX
+    emitter.instruction("xor edi, edi");                                        // canonical null has no low payload word
+    emitter.instruction("xor esi, esi");                                        // canonical null has no high payload word
+    emitter.instruction("call __rt_mixed_from_value");                          // rax = owned boxed null
+    emitter.instruction("mov rsi, rax");                                        // the box transfers into the row
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the row again
+    emitter.instruction("call __rt_array_push_int");                            // store the cell pointer without retaining it
+    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // the packed array kind word
+    emitter.instruction("and r10, 0x80ff");                                     // preserve heap kind and the persistent COW flag
+    emitter.instruction("or r10, 0x700");                                       // runtime value_type 7 = boxed Mixed
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");
+
+    emitter.label("__rt_csv_row_to_mixed_x_return");
+    emitter.instruction("leave");
+    emitter.instruction("ret");
 }
 
 /// Emits `__rt_str_getcsv(x0 = csv_opts, x1 = ptr, x2 = len) -> array_ptr: x0`.
@@ -32,14 +140,20 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
 /// unusual. Measured against `php -n` 8.5.6 over 22 inputs:
 ///
 ///   1. strip ONE trailing `\r\n`, `\n` or `\r`;
-///   2. if nothing is left, the answer is a single-element array — php-src puts `null`
-///      there and elephc puts `""`, the same divergence `fgetcsv()` already has for a
-///      blank line, because an `array<string>` cannot hold a null;
+///   2. if nothing is left there is NO RECORD, and the helper returns the null pointer —
+///      exactly what php-src's `php_fgetcsv()` returns for a blank line. The caller
+///      substitutes the one-element `[null]` array, as `php_bc_fgetcsv_empty_line()` does
+///      for both `str_getcsv()` and `fgetcsv()`;
 ///   3. strip ONE more trailing terminator;
 ///   4. parse the rest with a newline as data.
 ///
 /// Step 2 is what separates `""` from `"\n\n"` (which yields `[""]`): without it the two
 /// collapse to the same answer.
+///
+/// The result is widened to boxed `Mixed` cells by `__rt_csv_row_to_mixed`, because the
+/// `[null]` of step 2 has no representation in an `array<string>`: a string slot can hold
+/// the null SENTINEL, but nothing reads that slot back as PHP null, so `var_dump()` still
+/// printed `string(0) ""`. Only a boxed cell carries the null tag through to every reader.
 ///
 /// The bytes are COPIED first, because the shared state machine unescapes in place and the
 /// argument may be a read-only literal.
@@ -75,20 +189,9 @@ fn emit_str_getcsv_aarch64(emitter: &mut Emitter) {
 
     emit_strip_one_terminator_aarch64(emitter, "a");                            // step 1
 
-    // -- step 2: nothing left means one empty field, with no parse at all --
+    // -- step 2: nothing left is php-src's "no record at all", not an empty field --
     emitter.instruction("cbnz x2, __rt_str_getcsv_more");
-    emitter.instruction("mov x0, #8");
-    emitter.instruction("mov x1, #16");
-    emitter.instruction("bl __rt_array_new");
-    emitter.instruction("mov x20, x0");                                         // the result array
-    emitter.instruction("mov x1, x0");                                          // any readable pointer serves a zero-length field
-    emitter.instruction("mov x2, #0");
-    emitter.instruction("bl __rt_str_persist");
-    emitter.instruction("mov x1, x0");
-    emitter.instruction("mov x0, x20");
-    emitter.instruction("mov x2, #0");
-    emitter.instruction("bl __rt_array_push_str");
-    emitter.instruction("mov x20, x0");
+    emitter.instruction("mov x20, xzr");                                        // no record: the caller substitutes [null]
     emitter.instruction("b __rt_str_getcsv_return");
 
     emitter.label("__rt_str_getcsv_more");
@@ -444,21 +547,10 @@ fn emit_str_getcsv_x86_64(emitter: &mut Emitter) {
 
     emit_strip_one_terminator_x86_64(emitter, "a");                             // step 1
 
-    // -- step 2: nothing left means one empty field, with no parse at all --
+    // -- step 2: nothing left is php-src's "no record at all", not an empty field --
     emitter.instruction("test rdx, rdx");
     emitter.instruction("jnz __rt_str_getcsv_x_more");
-    emitter.instruction("mov edi, 8");
-    emitter.instruction("mov esi, 16");
-    emitter.instruction("call __rt_array_new");
-    emitter.instruction("mov rbx, rax");                                        // the result array
-    emitter.instruction("mov rsi, rax");                                        // any readable pointer serves a zero-length field
-    emitter.instruction("xor edx, edx");
-    emitter.instruction("call __rt_str_persist");
-    emitter.instruction("mov rsi, rax");
-    emitter.instruction("mov rdi, rbx");
-    emitter.instruction("xor edx, edx");
-    emitter.instruction("call __rt_array_push_str");
-    emitter.instruction("mov rbx, rax");
+    emitter.instruction("xor ebx, ebx");                                        // no record: the caller substitutes [null]
     emitter.instruction("jmp __rt_str_getcsv_x_return");
 
     emitter.label("__rt_str_getcsv_x_more");

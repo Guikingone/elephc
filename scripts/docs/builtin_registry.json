@@ -48329,7 +48329,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "str_getcsv"
       ],

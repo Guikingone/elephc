@@ -7,7 +7,8 @@
 //! Key details:
 //! - Applies the same rule as the compiled `__rt_str_getcsv` helper, derived from `php -n`
 //!   8.5.6 over 22 inputs: strip ONE trailing line terminator; if nothing is left the answer
-//!   is a single empty field; strip ONE more; then parse with a newline as ordinary data.
+//!   is the single-element `[null]` array php-src builds with `php_bc_fgetcsv_empty_line()`;
+//!   strip ONE more; then parse with a newline as ordinary data.
 //! - A newline is only structural at the very end. `"a\nb"` is one field containing a
 //!   newline, and `"\n\n"` yields one empty field while `"\n"` yields the single-element
 //!   answer from the early exit.
@@ -72,9 +73,13 @@ pub(in crate::interpreter) fn eval_str_getcsv_result(
     let trimmed = strip_one_terminator(&subject);
     let mut result = values.array_new(0)?;
     if trimmed.is_empty() {
-        // php-src puts `null` here; an eval string array holds strings, so this matches the
-        // compiled backend's `""` rather than inventing a different answer for `eval()`.
-        result = values.string_array_push(result, "")?;
+        // php-src's `php_fgetcsv()` reports NO RECORD here and its callers substitute
+        // `php_bc_fgetcsv_empty_line()`: one element, holding null. Measured on `php -n` 8.5.6,
+        // `str_getcsv("")` is `[NULL]` while `str_getcsv(" ")` is `[" "]`. A boxed cell holds
+        // that null; the string slot this used to push could only hold `""`.
+        let key = values.int(0)?;
+        let null = values.null()?;
+        result = values.array_set(result, key, null)?;
         return Ok(result);
     }
     let record = strip_one_terminator(trimmed);
