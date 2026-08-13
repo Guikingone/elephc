@@ -209,7 +209,15 @@ pub(super) fn lower_indexed_array_sort(
 pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
-    eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
+    // String arrays store 16-byte (ptr, len) slots the 8-byte swap would tear in half,
+    // pairing one string's pointer with another's length; they get their own helper.
+    let helper = match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => "__rt_shuffle_str",
+        ty => {
+            eight_byte_indexed_array_element_type(ty, "shuffle")?;
+            "__rt_shuffle"
+        }
+    };
     let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     receiver.store_back_value(ctx, array)?;
@@ -221,7 +229,7 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
             ctx.load_value_to_reg(array, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_shuffle");
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),

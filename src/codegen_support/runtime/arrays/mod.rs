@@ -146,6 +146,7 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
+mod natcmp;
 mod natsort;
 mod object_free_deep;
 mod range;
@@ -512,11 +513,12 @@ pub use range::emit_range;
 /// Emit range helper.
 pub use refcount::emit_refcount;
 /// Emit reference count helper.
-pub use shuffle::emit_shuffle;
+pub use shuffle::{emit_shuffle, emit_shuffle_str};
 /// Emit array shuffle helper.
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
-pub use sort_str::emit_sort_str;
+pub use natcmp::emit_natcmp;
+pub use sort_str::{emit_natsort_str, emit_sort_str};
 /// Emit undefined integer array key warning helper.
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 /// Emit user-defined sort helper.

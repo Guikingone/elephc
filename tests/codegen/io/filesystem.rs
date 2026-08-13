@@ -467,6 +467,64 @@ unlink("mgd/f.txt"); rmdir("mgd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `natsort()` and `natcasesort()` on STRING arrays against php's natural order.
+///
+/// The comparator is a from-scratch `strnatcmp_ex`: whitespace skipped before a field
+/// ("a 3" sits between "a2" and "a10"), digit runs compared as integers ("img2" before
+/// "img10"), a leading zero turning the field fractional ("a002" before "a01" before "a1",
+/// "1.002" < "1.010" < "1.02"), and case folded UP for the case-insensitive spelling —
+/// `strnatcasecmp("_", "x")` is +1 in php, which only toupper reproduces. Every line is
+/// php's measured output. Values only: like the whole sort family, the result is reindexed
+/// where php preserves keys.
+#[test]
+fn test_natsort_on_string_arrays_matches_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ["a01", "a1", "a2", "a002", "a 3", "a10"];
+natsort($a);
+echo implode(",", $a), "\n";
+$b = ["1.002", "1.02", "1.1", "1.010"];
+natsort($b);
+echo implode(",", $b), "\n";
+$c = ["B", "a", "C", "b", "A_x", "Ax"];
+natcasesort($c);
+echo implode(",", $c), "\n";
+$d = ["x", "", " ", "x1y10", "x1y9", "x01y2"];
+natsort($d);
+echo implode(",", $d), "\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "a002,a01,a1,a2,a 3,a10\n1.002,1.010,1.02,1.1\na,Ax,A_x,B,b,C\n, ,x,x01y2,x1y9,x1y10\n"
+    );
+}
+
+/// Verifies `shuffle()` on a STRING array permutes whole descriptors.
+///
+/// The 8-byte swap would tear each 16-byte `(ptr, len)` slot in half, pairing one string's
+/// pointer with another's length. Randomness cannot be pinned, so the assertion is the
+/// invariant a torn descriptor breaks: after shuffling, sorting must recover exactly the
+/// original elements.
+#[test]
+fn test_shuffle_on_a_string_array_keeps_every_descriptor() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$s = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot"];
+shuffle($s);
+echo count($s), "\n";
+sort($s);
+echo implode(",", $s), "\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "6\nalpha,bravo,charlie,delta,echo,foxtrot\n"
+    );
+}
+
 /// Verifies `array_slice()` on STRING arrays across php's whole window grammar.
 ///
 /// The window arithmetic is the shared `emit_slice_bounds` prologue every slice helper

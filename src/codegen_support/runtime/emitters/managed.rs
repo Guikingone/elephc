@@ -46,6 +46,9 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_sort_int(emitter, true);
     arrays::emit_sort_str(emitter, false);
     arrays::emit_sort_str(emitter, true);
+    arrays::emit_natcmp(emitter, "__rt_natcmp", false);
+    arrays::emit_natcmp(emitter, "__rt_natcasecmp", true);
+    arrays::emit_natsort_str(emitter);
     arrays::emit_hash_fnv1a(emitter);
     arrays::emit_hash_key_hash(emitter);
     arrays::emit_hash_key_eq(emitter);
@@ -88,6 +91,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_chunk_to_hash(emitter);
     arrays::emit_range(emitter);
     arrays::emit_shuffle(emitter);
+    arrays::emit_shuffle_str(emitter);
     arrays::emit_array_unique(emitter);
     arrays::emit_array_unique_refcounted(emitter);
     arrays::emit_array_rand(emitter);

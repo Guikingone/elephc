@@ -205,14 +205,21 @@ pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     lower_array_key_sort(ctx, inst, "krsort", KeySortOrder::Descending)
 }
 
-/// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
+/// Lowers `natsort()` through the natural-sort wrappers (numeric for ints, `__rt_natcmp`
+/// insertion sort for string arrays).
 pub(crate) fn lower_natsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", None)
+    lower_indexed_array_sort(ctx, inst, "natsort", "__rt_natsort", Some("__rt_natsort_str"))
 }
 
-/// Lowers `natcasesort()` for indexed integer arrays through the case-insensitive wrapper.
+/// Lowers `natcasesort()` through the case-insensitive natural-sort wrappers.
 pub(crate) fn lower_natcasesort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_sort(ctx, inst, "natcasesort", "__rt_natcasesort", None)
+    lower_indexed_array_sort(
+        ctx,
+        inst,
+        "natcasesort",
+        "__rt_natcasesort",
+        Some("__rt_natcasesort_str"),
+    )
 }
 
 /// Lowers `shuffle()` for indexed arrays with 8-byte slots by mutating the source array in place.
