@@ -45,6 +45,7 @@ class mysqli_result implements IteratorAggregate {
     private array $metaNativeTypes = [];
     private array $metaFlags = [];
     private array $metaLens = [];
+    private array $metaDecimals = [];
     private int $rowCount = 0;
     private int $pos = 0;
     private int $fieldPos = 0;
@@ -52,7 +53,7 @@ class mysqli_result implements IteratorAggregate {
     // Internal factory used by mysqli::query's drain (not part of PHP's
     // surface; a user never constructs mysqli_result directly). `$cells` is
     // the flat row-major cell list described above.
-    public static function __elephcFromDrain(array $cells, int $rowCount, array $names, array $tables, array $nativeTypes, array $flags, array $lens): mysqli_result {
+    private static function __elephcFromDrain(array $cells, int $rowCount, array $names, array $tables, array $nativeTypes, array $flags, array $lens, array $decimals): mysqli_result {
         $_result = new mysqli_result();
         $_result->cells = $cells;
         $_result->rowCount = $rowCount;
@@ -61,6 +62,7 @@ class mysqli_result implements IteratorAggregate {
         $_result->metaNativeTypes = $nativeTypes;
         $_result->metaFlags = $flags;
         $_result->metaLens = $lens;
+        $_result->metaDecimals = $decimals;
         $_result->num_rows = $rowCount;
         $_result->field_count = count($names);
         return $_result;
@@ -208,7 +210,8 @@ class mysqli_result implements IteratorAggregate {
         $_field->{"charsetnr"} = 0;
         $_field->{"flags"} = (int) $this->metaFlags[$index];
         $_field->{"type"} = $this->mysqliTypeFromNative((string) $this->metaNativeTypes[$index]);
-        $_field->{"decimals"} = 0;
+        // The bridge's column_precision is MySQL's own wire "decimals" byte.
+        $_field->{"decimals"} = (int) $this->metaDecimals[$index];
         return $_field;
     }
 

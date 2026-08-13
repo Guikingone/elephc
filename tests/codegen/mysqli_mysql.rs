@@ -364,6 +364,127 @@ echo "|", mysqli_more_results($db) ? "more" : "done";
     assert_eq!(out, "mq|7|more|next|8|done");
 }
 
+/// `real_connect` on an already-connected object closes the previous
+/// connection first (php-src reconnect semantics): the new session has a new
+/// thread id and the object stays fully usable.
+#[test]
+#[ignore]
+fn test_mysqli_reconnect_closes_previous_connection() {
+    let out = compile_and_run(&my_program(
+        r#"
+$tid1 = $db->thread_id;
+echo $tid1 > 0 ? "tid" : "notid";
+echo "|", $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
+echo "|", $db->thread_id > 0 && $db->thread_id != $tid1 ? "newtid" : "same";
+$r = $db->query("SELECT 42");
+echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
+"#,
+    ));
+    assert_eq!(out, "tid|re|newtid|42");
+}
+
+/// While multi_query result sets remain unconsumed, `query()` and `prepare()`
+/// fail with errno 2014 (php-src's "Commands out of sync"); after the batch is
+/// fully consumed the connection accepts statements again.
+#[test]
+#[ignore]
+fn test_mysqli_out_of_sync_guard() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->multi_query("SELECT 1 AS a; SELECT 2 AS b");
+echo $db->query("SELECT 3") === false ? "F" : "ok";
+echo "|", $db->errno;
+$r1 = $db->store_result();
+echo "|", $db->query("SELECT 3") === false ? "F" : "ok";
+echo "|", $db->errno;
+echo "|", $db->prepare("SELECT ?") === false ? "F" : "ok";
+$db->next_result();
+$r2 = $db->store_result();
+$q = $db->query("SELECT 3 AS c");
+echo "|", ($q instanceof mysqli_result) ? $q->fetch_column(0) : "no";
+echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
+"#,
+    ));
+    assert_eq!(out, "F|2014|F|2014|F|3|1");
+}
+
+/// `query()` rejects a second top-level statement client-side (errno 1064) —
+/// the anti-injection contract php-src enforces server-side — while a trailing
+/// `;`, semicolons inside string literals, and `--`-commented tails stay
+/// single statements, and `multi_query()` remains the batch path.
+#[test]
+#[ignore]
+fn test_mysqli_query_rejects_multi_statement() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+echo $db->query("SELECT 1 AS a; SELECT 2 AS b") === false ? "F" : "ok";
+echo "|", $db->errno;
+$r = $db->query("SELECT 7;");
+echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
+$s = $db->query("SELECT '; not a statement' AS s");
+echo "|", ($s instanceof mysqli_result) ? "str-ok" : "no";
+$c = $db->query("SELECT 8 -- tail; SELECT 9");
+echo "|", ($c instanceof mysqli_result) ? $c->fetch_column(0) : "no";
+echo "|", $db->multi_query("SELECT 5 AS a; SELECT 6 AS b") ? "mq" : "no";
+$m1 = $db->store_result();
+$db->next_result();
+$m2 = $db->store_result();
+echo "|", ($m2 instanceof mysqli_result) ? $m2->fetch_column(0) : "no";
+"#,
+    ));
+    assert_eq!(out, "F|1064|7|str-ok|8|mq|6");
+}
+
+/// `fetch_field_direct()->decimals` carries MySQL's wire "decimals" byte
+/// (through the bridge's column_precision), so a DECIMAL(10,2) reports 2.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_field_decimals() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS md");
+$db->query("CREATE TABLE md (price DECIMAL(10,2), label VARCHAR(8))");
+$db->query("INSERT INTO md VALUES (12.34, 'x')");
+$r = $db->query("SELECT price, label FROM md");
+if (!($r instanceof mysqli_result)) {
+    echo "no-result";
+    exit(1);
+}
+$f = $r->fetch_field_direct(0);
+echo $f->decimals;
+$g = $r->fetch_field_direct(1);
+echo "|", $g->decimals;
+$db->query("DROP TABLE md");
+"#,
+    ));
+    assert_eq!(out, "2|0");
+}
+
+/// Pins the documented bind_param divergence: values are captured at bind
+/// time, so mutating the variable WITHOUT re-binding executes with the value
+/// seen at bind (PHP's references would read the mutated value instead).
+#[test]
+#[ignore]
+fn test_mysqli_stmt_bind_param_snapshot_divergence() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msnap");
+$db->query("CREATE TABLE msnap (name VARCHAR(32))");
+$ins = $db->prepare("INSERT INTO msnap (name) VALUES (?)");
+$name = "Ada";
+$ins->bind_param("s", $name);
+$name = "Ben";
+$ins->execute();
+$r = $db->query("SELECT name FROM msnap");
+echo ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
+$db->query("DROP TABLE msnap");
+"#,
+    ));
+    assert_eq!(out, "Ada");
+}
+
 /// Connection information, ping, charset, autocommit, and a commit round-trip
 /// against the live server.
 #[test]

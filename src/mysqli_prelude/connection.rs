@@ -26,12 +26,13 @@
 
 /// The `mysqli` class and its connection-level behavior (fragment without a
 /// `<?php` header).
-pub(super) const SRC: &str = r#"
+pub(super) const SRC: &str = r##"
 // -- mysqli connection surface --
 
 class mysqli {
-    // Opaque elephc_pdo bridge connection handle; -1 = not connected.
-    public int $conn = -1;
+    // Opaque elephc_pdo bridge connection handle; -1 = not connected. Not part
+    // of PHP's surface: private, handed to mysqli_stmt through its factory.
+    private int $conn = -1;
 
     // Process-wide mysqli_report() mode. The literal default is rewritten at
     // injection time for --php-version 8.0 (OFF); see fragments.rs.
@@ -108,6 +109,20 @@ class mysqli {
             // MYSQLI_CLIENT_SSL is declared but unsupported: fail loudly rather
             // than silently connecting in cleartext.
             return $this->connectFailure(2054, "elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes", "HY000");
+        }
+        if ($this->conn >= 0) {
+            // php-src reconnect semantics: mysqlnd closes the existing
+            // connection before dialing the new one, so a second real_connect
+            // never strands the previous bridge handle (or leaves a persistent
+            // handle checked out of the pool).
+            $this->multiClose();
+            if (elephc_pdo_in_transaction($this->conn) === 1) {
+                elephc_pdo_rollback($this->conn);
+            }
+            elephc_pdo_release($this->conn, 0);
+            $this->conn = -1;
+            $this->pendingResult = null;
+            $this->currentCharset = "";
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
@@ -450,6 +465,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         // Native (non-emulated) prepare: real `?` placeholders on the server.
         $_handle = elephc_pdo_prepare($this->conn, $query, 0);
         if ($_handle < 0) {
@@ -457,7 +475,7 @@ class mysqli {
             return false;
         }
         $this->clearError();
-        return mysqli_stmt::__elephcFromPrepare($this, $_handle, $query);
+        return mysqli_stmt::__elephcFromPrepare($this, $this->conn, $_handle, $query);
     }
 
     // -- elephc PHP >= 8.2 mysqli execute_query begin --
@@ -504,6 +522,9 @@ class mysqli {
             throw new ValueError("mysqli::multi_query(): Argument #1 (\$query) must not be empty");
         }
         if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
             return false;
         }
         // One server round-trip for the whole batch: the bridge's emulated
@@ -601,6 +622,104 @@ class mysqli {
 
     // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
 
+    // Returns true when $query contains a second statement after a top-level
+    // `;`. String literals (with backslash escapes, disabled live when the
+    // session runs NO_BACKSLASH_ESCAPES so a literal backslash cannot hide a
+    // terminator), backtick identifiers, and `#`, `-- ` (MySQL requires the
+    // whitespace), and `/* */` comments are skipped; a trailing `;` followed
+    // only by whitespace/comments is still a single statement. CREATE-leading
+    // statements are exempt: compound-body DDL (CREATE PROCEDURE/FUNCTION/
+    // TRIGGER/EVENT ... BEGIN ...; ... END) is one statement whose body
+    // legitimately contains semicolons.
+    private function queryHasMultipleStatements(string $query): bool {
+        $_len = strlen($query);
+        $_backslashEscapes = elephc_pdo_no_backslash_escapes($this->conn) == 0;
+        $_i = 0;
+        $_afterSeparator = false;
+        $_firstWord = "";
+        while ($_i < $_len) {
+            $_c = substr($query, $_i, 1);
+            if ($_c === "#") {
+                while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
+                    $_i = $_i + 1;
+                }
+                continue;
+            }
+            if ($_c === "-" && substr($query, $_i, 2) === "--") {
+                // MySQL's `--` comment requires trailing whitespace (or end of
+                // input); `a--b` is arithmetic, not a comment, and treating it
+                // as one would let a separator hide behind it.
+                $_next = substr($query, $_i + 2, 1);
+                if ($_next === "" || $_next === " " || $_next === "\t" || $_next === "\n" || $_next === "\r") {
+                    while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
+                        $_i = $_i + 1;
+                    }
+                    continue;
+                }
+            }
+            if ($_c === "/" && substr($query, $_i, 2) === "/*") {
+                $_i = $_i + 2;
+                while ($_i + 1 < $_len && substr($query, $_i, 2) !== "*/") {
+                    $_i = $_i + 1;
+                }
+                $_i = $_i + 2;
+                continue;
+            }
+            if ($_c === " " || $_c === "\t" || $_c === "\n" || $_c === "\r") {
+                $_i = $_i + 1;
+                continue;
+            }
+            if ($_afterSeparator) {
+                return true;
+            }
+            if ($_c === ";") {
+                if (strtoupper($_firstWord) === "CREATE") {
+                    return false;
+                }
+                $_afterSeparator = true;
+                $_i = $_i + 1;
+                continue;
+            }
+            if ($_c === "'" || $_c === "\"" || $_c === "`") {
+                $_quote = $_c;
+                $_i = $_i + 1;
+                while ($_i < $_len) {
+                    $_d = substr($query, $_i, 1);
+                    if ($_d === "\\" && $_quote !== "`" && $_backslashEscapes) {
+                        $_i = $_i + 2;
+                        continue;
+                    }
+                    if ($_d === $_quote) {
+                        $_i = $_i + 1;
+                        break;
+                    }
+                    $_i = $_i + 1;
+                }
+                continue;
+            }
+            $_o = ord($_c);
+            if (strlen($_firstWord) < 6 && (($_o >= 97 && $_o <= 122) || ($_o >= 65 && $_o <= 90))) {
+                $_firstWord = $_firstWord . $_c;
+            } else {
+                $_firstWord = $_firstWord . "_";
+            }
+            $_i = $_i + 1;
+        }
+        return false;
+    }
+
+    // Guards statement-issuing operations while multi_query result sets (or a
+    // real_query result) remain unconsumed: php-src raises
+    // CR_COMMANDS_OUT_OF_SYNC (2014) there, and silently mixing the pending
+    // batch state with a new statement would corrupt store_result/next_result.
+    private function requireNoPendingResults(): bool {
+        if ($this->multiStmt >= 0 || $this->multiMore || $this->pendingResult !== null) {
+            $this->syntheticFailure(2014, "Commands out of sync; you can't run this command now", "HY000");
+            return false;
+        }
+        return true;
+    }
+
     // Guards every operation that needs a live connection: an unconnected
     // object records CR_SERVER_GONE_ERROR and reports it (false under
     // ERROR/OFF, throw under STRICT), matching the locked "fail loudly" rule.
@@ -685,6 +804,19 @@ class mysqli {
         if (!$this->requireConnection()) {
             return 0;
         }
+        if (!$this->requireNoPendingResults()) {
+            return 0;
+        }
+        // php-src rejects multi-statement strings in mysqli_query (mysqlnd
+        // toggles CLIENT_MULTI_STATEMENTS per multi_query call via
+        // COM_SET_OPTION; the bridge keeps it enabled for the whole
+        // connection), so a classic "1; DROP TABLE …" injection would
+        // otherwise EXECUTE here. Reject client-side; multi_query() is the
+        // one multi-statement path.
+        if ($this->queryHasMultipleStatements($query)) {
+            $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
+            return 0;
+        }
         $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
         if ($_stmt < 0) {
             $this->opFailed();
@@ -714,12 +846,14 @@ class mysqli {
         $_natives = [];
         $_flags = [];
         $_lens = [];
+        $_decimals = [];
         for ($_i = 0; $_i < $_columnCount; $_i++) {
             $_names[] = elephc_pdo_column_name($_stmt, $_i);
             $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
             $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
             $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
             $_lens[] = elephc_pdo_column_len($_stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
         }
         // Cells are buffered FLAT in row-major order (see mysqli_result): every
         // buffered value stays a Mixed scalar and fetches build fresh rows.
@@ -745,7 +879,7 @@ class mysqli {
         $this->field_count = $_columnCount;
         $this->warning_count = elephc_pdo_warning_count($this->conn);
         $this->clearError();
-        $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
+        $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
         return 2;
     }
 
@@ -768,12 +902,14 @@ class mysqli {
             $_natives = [];
             $_flags = [];
             $_lens = [];
+            $_decimals = [];
             for ($_i = 0; $_i < $_cols; $_i++) {
                 $_names[] = elephc_pdo_column_name($_stmt, $_i);
                 $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
                 $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
                 $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
                 $_lens[] = elephc_pdo_column_len($_stmt, $_i);
+                $_decimals[] = elephc_pdo_column_precision($_stmt, $_i);
             }
             $_cells = [];
             $_rowCount = 0;
@@ -788,7 +924,7 @@ class mysqli {
             $this->affected_rows = $_rowCount;
             $this->insert_id = 0;
             $this->field_count = $_cols;
-            $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
+            $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
         }
         $this->warning_count = elephc_pdo_warning_count($this->conn);
         $this->clearError();
@@ -895,4 +1031,4 @@ class mysqli {
         return true;
     }
 }
-"#;
+"##;

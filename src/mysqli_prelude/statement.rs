@@ -55,10 +55,10 @@ class mysqli_stmt {
 
     // Internal factory used by mysqli::prepare (a user never constructs
     // mysqli_stmt directly in the v1 subset).
-    public static function __elephcFromPrepare(mysqli $link, int $stmt, string $query): mysqli_stmt {
+    private static function __elephcFromPrepare(mysqli $link, int $conn, int $stmt, string $query): mysqli_stmt {
         $_statement = new mysqli_stmt();
         $_statement->link = $link;
-        $_statement->conn = $link->conn;
+        $_statement->conn = $conn;
         $_statement->stmt = $stmt;
         // The bridge has no server-side parameter counter; count `?` in the
         // source, skipping string literals, identifiers, and comments.
@@ -191,12 +191,14 @@ class mysqli_stmt {
         $_natives = [];
         $_flags = [];
         $_lens = [];
+        $_decimals = [];
         for ($_i = 0; $_i < $_cols; $_i++) {
             $_names[] = elephc_pdo_column_name($this->stmt, $_i);
             $_tables[] = elephc_pdo_column_table_name($this->stmt, $_i);
             $_natives[] = elephc_pdo_column_native_type($this->stmt, $_i);
             $_flags[] = elephc_pdo_column_flags($this->stmt, $_i);
             $_lens[] = elephc_pdo_column_len($this->stmt, $_i);
+            $_decimals[] = elephc_pdo_column_precision($this->stmt, $_i);
         }
         $_cells = [];
         $_rowCount = 0;
@@ -218,7 +220,7 @@ class mysqli_stmt {
         $this->num_rows = $_rowCount;
         $this->affected_rows = $_rowCount;
         $this->clearError();
-        return mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
+        return mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens, $_decimals);
     }
 
     public function store_result(): bool {

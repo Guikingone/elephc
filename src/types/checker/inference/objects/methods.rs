@@ -881,6 +881,7 @@ impl Checker {
                         .unwrap_or(class_name);
                     if !self.can_access_member(declaring_class, visibility)
                         && !self.can_access_pdo_exception_internal_factory(class_name, method)
+                        && !self.can_access_mysqli_prelude_internal_factory(class_name, method)
                     {
                         return Err(CompileError::new(
                             expr.span,
@@ -1269,6 +1270,21 @@ impl Checker {
         class_name == "PDOException"
             && php_symbol_key(method) == "__elephcfromerrorinfo"
             && matches!(self.current_class.as_deref(), Some("PDO" | "PDOStatement"))
+    }
+
+    /// Allows the mysqli prelude's internal static factories to stay private
+    /// (they are not part of PHP's mysqli surface): the buffered-result drain
+    /// factory is invoked by the connection's query/multi_query paths and by
+    /// `mysqli_stmt::get_result`, and the prepared-statement factory by
+    /// `mysqli::prepare`.
+    fn can_access_mysqli_prelude_internal_factory(&self, class_name: &str, method: &str) -> bool {
+        let drain_factory = class_name == "mysqli_result"
+            && php_symbol_key(method) == "__elephcfromdrain"
+            && matches!(self.current_class.as_deref(), Some("mysqli" | "mysqli_stmt"));
+        let prepare_factory = class_name == "mysqli_stmt"
+            && php_symbol_key(method) == "__elephcfromprepare"
+            && self.current_class.as_deref() == Some("mysqli");
+        drain_factory || prepare_factory
     }
 }
 

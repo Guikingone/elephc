@@ -43,6 +43,9 @@ $db->close();
 - `mysqli_options()` honors `MYSQLI_OPT_CONNECT_TIMEOUT`,
   `MYSQLI_INIT_COMMAND`, and `MYSQLI_SET_CHARSET_NAME` (collected before
   `real_connect`, applied at connect time).
+- Calling `real_connect()` on an already-connected object closes the previous
+  connection first (php-src's mysqlnd reconnect semantics), so a reconnect
+  never strands the old handle.
 - Connect-time failures populate `connect_errno` / `connect_error` (distinct
   from `errno` / `error`), and the no-argument procedural
   `mysqli_connect_errno()` / `mysqli_connect_error()` read the process-wide
@@ -78,10 +81,12 @@ The fetch family matches PHP: `fetch_assoc()`, `fetch_row()`,
 `free()` / `free_result()` / `close()`. `fetch_*` return `null` when the
 cursor is exhausted (`fetch_column()` returns `false`).
 
-Field metadata comes from the wire protocol: `name`, `orgname`, `table`,
-`orgtable`, `type` (`MYSQLI_TYPE_*`), `flags`, and `length` are real;
-metadata the bridge does not expose (`def`, `db`, `max_length`, `charsetnr`,
-`decimals`) reads `0` / `""`.
+Field metadata comes from the wire protocol: `name`, `table`, `type`
+(`MYSQLI_TYPE_*`), `flags`, `length`, and `decimals` are real; `orgname` and
+`orgtable` mirror `name` and `table` (the bridge exposes no original-name
+accessors, so an aliased column reports its alias in both); metadata the
+bridge does not expose (`def`, `db`, `max_length`, `charsetnr`) reads
+`0` / `""`.
 
 Non-select statements return `true` and refresh `affected_rows` and
 `insert_id` on the connection. `real_query()` runs the statement and leaves
@@ -143,6 +148,11 @@ while ($db->more_results()) {
 Each produced `mysqli_result` is independent and stays valid while the batch
 advances.
 
+While result sets remain unconsumed (including a `real_query()` result not yet
+picked up by `store_result()`), issuing a new `query()`, `prepare()`, or
+`multi_query()` fails with errno 2014 — php-src's "Commands out of sync; you
+can't run this command now".
+
 ## Errors, mysqli_report, and mysqli_sql_exception
 
 `mysqli_report()` mirrors PHP 8.1+: the default is
@@ -197,11 +207,20 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
 - **`ping()` runs `SELECT 1`** rather than the wire-protocol ping packet.
-- **`query()` with multiple statements executes the whole string** (the
-  bridge connects with multi-statements enabled, matching mysqlnd's default)
-  but returns only the first result set and discards the rest; php-src's
-  `mysqli_query()` rejects multi-statement strings. Use `multi_query()` for
-  batches.
+- **`query()` rejects multi-statement strings client-side** (errno 1064 with
+  an elephc-worded message) instead of php-src's server-side rejection: the
+  bridge keeps multi-statements enabled for the whole connection (php's
+  mysqlnd toggles them per `multi_query()` call via `COM_SET_OPTION`, which
+  the bridge does not expose), so without the client-side scan a classic
+  `"1; DROP TABLE …"` injection would execute. The scan skips string
+  literals, backtick identifiers, and comments; a trailing `;` is fine; and
+  `CREATE`-leading statements are exempt so compound-body DDL
+  (`CREATE PROCEDURE … BEGIN …; … END`) still works through `query()`.
+- **`$info` is always `""`** (and `mysqli_info()` always `null`): the bridge
+  does not expose the OK-packet info string ("Rows matched: … Changed: …").
+- **`insert_id` is an `int`**: an `AUTO_INCREMENT` value beyond
+  `PHP_INT_MAX` (e.g. `BIGINT UNSIGNED`) wraps, where PHP returns a numeric
+  string.
 - **`fetch_object()` constructs before assigning properties** (the
   `PDO::FETCH_PROPS_LATE` order); php-src assigns the row first and calls the
   constructor afterwards.
