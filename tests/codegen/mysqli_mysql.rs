@@ -399,6 +399,10 @@ $r1 = $db->store_result();
 echo "|", $db->query("SELECT 3") === false ? "F" : "ok";
 echo "|", $db->errno;
 echo "|", $db->prepare("SELECT ?") === false ? "F" : "ok";
+echo "|", $db->ping() === false ? "F" : "ok";
+echo "|", $db->select_db("testdb") === false ? "F" : "ok";
+echo "|", $db->begin_transaction() === false ? "F" : "ok";
+echo "|", $db->errno;
 $db->next_result();
 $r2 = $db->store_result();
 $q = $db->query("SELECT 3 AS c");
@@ -406,7 +410,7 @@ echo "|", ($q instanceof mysqli_result) ? $q->fetch_column(0) : "no";
 echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
 "#,
     ));
-    assert_eq!(out, "F|2014|F|2014|F|3|1");
+    assert_eq!(out, "F|2014|F|2014|F|F|F|F|2014|3|1");
 }
 
 /// `query()` rejects a second top-level statement client-side (errno 1064) —
@@ -432,9 +436,39 @@ $m1 = $db->store_result();
 $db->next_result();
 $m2 = $db->store_result();
 echo "|", ($m2 instanceof mysqli_result) ? $m2->fetch_column(0) : "no";
+echo "|", $db->query("CREATE TABLE mms (i INT); DROP TABLE mms") === false ? "F" : "ok";
+echo "|", $db->errno;
 "#,
     ));
-    assert_eq!(out, "F|1064|7|str-ok|8|mq|6");
+    assert_eq!(out, "F|1064|7|str-ok|8|mq|6|F|1064");
+}
+
+/// Compound-body DDL (`CREATE PROCEDURE ... BEGIN ...; ... END`) is one
+/// statement: the scanner's exemption lets it through `query()`, the server
+/// accepts it, and calling it through `multi_query()` returns its result set.
+#[test]
+#[ignore]
+fn test_mysqli_query_accepts_compound_ddl() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS mproc");
+echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === true ? "ddl" : ("no:" . $db->errno);
+echo "|", $db->multi_query("CALL mproc()") ? "call" : "no";
+$r1 = $db->store_result();
+echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
+while ($db->more_results()) {
+    $db->next_result();
+    $rn = $db->store_result();
+    if ($rn instanceof mysqli_result) {
+        echo "|", $rn->fetch_column(0);
+    }
+}
+$db->query("DROP PROCEDURE mproc");
+echo "|done";
+"#,
+    ));
+    assert_eq!(out, "ddl|call|41|42|done");
 }
 
 /// `fetch_field_direct()->decimals` carries MySQL's wire "decimals" byte

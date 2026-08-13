@@ -149,9 +149,10 @@ Each produced `mysqli_result` is independent and stays valid while the batch
 advances.
 
 While result sets remain unconsumed (including a `real_query()` result not yet
-picked up by `store_result()`), issuing a new `query()`, `prepare()`, or
-`multi_query()` fails with errno 2014 — php-src's "Commands out of sync; you
-can't run this command now".
+picked up by `store_result()`), issuing a new statement — `query()`,
+`prepare()`, `multi_query()`, `ping()`, `select_db()`, `set_charset()`,
+`stat()`, or a transaction control — fails with errno 2014, php-src's
+"Commands out of sync; you can't run this command now".
 
 ## Errors, mysqli_report, and mysqli_sql_exception
 
@@ -214,8 +215,10 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
   the bridge does not expose), so without the client-side scan a classic
   `"1; DROP TABLE …"` injection would execute. The scan skips string
   literals, backtick identifiers, and comments; a trailing `;` is fine; and
-  `CREATE`-leading statements are exempt so compound-body DDL
-  (`CREATE PROCEDURE … BEGIN …; … END`) still works through `query()`.
+  compound-body DDL is exempt — a statement whose head is
+  `CREATE … PROCEDURE|FUNCTION|TRIGGER|EVENT` (covering `DEFINER=` and
+  MariaDB's `OR REPLACE`/`AGGREGATE`) keeps its `BEGIN …; … END` body. A bare
+  `CREATE TABLE …; …` is rejected like any other multi-statement string.
 - **`$info` is always `""`** (and `mysqli_info()` always `null`): the bridge
   does not expose the OK-packet info string ("Rows matched: … Changed: …").
 - **`insert_id` is an `int`**: an `AUTO_INCREMENT` value beyond

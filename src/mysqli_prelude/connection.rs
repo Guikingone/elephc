@@ -145,11 +145,16 @@ class mysqli {
         if ($database !== null && $database !== "") {
             $_dsn = $_dsn . ";dbname=" . $database;
         }
-        if ($username !== null && $username !== "") {
-            $_dsn = $_dsn . ";user=" . $username;
+        if ($username !== null) {
+            // '%' first, so the '%' introduced by encoding ';' is not itself
+            // re-encoded; the bridge percent-decodes user=/password= DSN values
+            // (F-CORE-02), so a ';' or '%' inside a credential survives the
+            // DSN's split on ';'. An explicitly-passed empty credential is
+            // still transmitted (no !== "" gate).
+            $_dsn = $_dsn . ";user=" . str_replace(";", "%3B", str_replace("%", "%25", $username));
         }
-        if ($password !== null && $password !== "") {
-            $_dsn = $_dsn . ";password=" . $password;
+        if ($password !== null) {
+            $_dsn = $_dsn . ";password=" . str_replace(";", "%3B", str_replace("%", "%25", $password));
         }
         if ($this->optConnectTimeout > 0) {
             $_dsn = $_dsn . ";connect_timeout=" . $this->optConnectTimeout;
@@ -244,6 +249,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         // A cheap round-trip; see the plan's elephc_pdo_ping escape hatch if
         // this ever eats a pending multi_query result.
         if (elephc_pdo_exec($this->conn, "SELECT 1") < 0) {
@@ -257,6 +265,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         $_ident = str_replace("`", "``", $database);
         if (elephc_pdo_exec($this->conn, "USE `" . $_ident . "`") < 0) {
             return $this->opFailed();
@@ -267,6 +278,9 @@ class mysqli {
 
     public function set_charset(string $charset): bool {
         if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
             return false;
         }
         // Same [A-Za-z0-9_] identifier filter the PDO DSN charset key uses: a
@@ -322,6 +336,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         if (($flags & 4) != 0) {
             // MYSQLI_TRANS_START_READ_ONLY (best effort: report on failure).
             if (elephc_pdo_exec($this->conn, "SET TRANSACTION READ ONLY") < 0) {
@@ -360,6 +377,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         if ($name !== null) {
             if ($name === "") {
                 throw new ValueError("mysqli::commit(): Argument #2 (\$name) cannot be empty");
@@ -381,6 +401,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         if ($name !== null) {
             if ($name === "") {
                 throw new ValueError("mysqli::rollback(): Argument #2 (\$name) cannot be empty");
@@ -400,6 +423,9 @@ class mysqli {
 
     public function autocommit(bool $enable): bool {
         if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
             return false;
         }
         if (elephc_pdo_set_autocommit($this->conn, $enable ? 1 : 0) != 1) {
@@ -611,6 +637,9 @@ class mysqli {
         if (!$this->requireConnection()) {
             return false;
         }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
         // The bridge's server_info is MySQL's own "Uptime: … Questions: …"
         // statistics line — exactly what mysqli::stat() returns.
         $_stat = elephc_pdo_server_info($this->conn);
@@ -627,18 +656,35 @@ class mysqli {
     // session runs NO_BACKSLASH_ESCAPES so a literal backslash cannot hide a
     // terminator), backtick identifiers, and `#`, `-- ` (MySQL requires the
     // whitespace), and `/* */` comments are skipped; a trailing `;` followed
-    // only by whitespace/comments is still a single statement. CREATE-leading
-    // statements are exempt: compound-body DDL (CREATE PROCEDURE/FUNCTION/
-    // TRIGGER/EVENT ... BEGIN ...; ... END) is one statement whose body
-    // legitimately contains semicolons.
+    // only by whitespace/comments is still a single statement. Compound-body
+    // DDL is exempt: a statement whose head words are `CREATE …
+    // PROCEDURE|FUNCTION|TRIGGER|EVENT` (covering DEFINER=... and MariaDB's
+    // OR REPLACE/AGGREGATE) is one statement whose BEGIN … END body
+    // legitimately contains semicolons. A bare `CREATE TABLE …; …` is NOT
+    // exempt.
     private function queryHasMultipleStatements(string $query): bool {
         $_len = strlen($query);
         $_backslashEscapes = elephc_pdo_no_backslash_escapes($this->conn) == 0;
         $_i = 0;
         $_afterSeparator = false;
-        $_firstWord = "";
+        $_headWords = [];
+        $_word = "";
         while ($_i < $_len) {
             $_c = substr($query, $_i, 1);
+            $_o = ord($_c);
+            if ((($_o >= 97 && $_o <= 122) || ($_o >= 65 && $_o <= 90)) && !$_afterSeparator) {
+                // Head-word accumulation (the first few words decide the
+                // compound-DDL exemption at the first separator).
+                if (strlen($_word) < 12) {
+                    $_word = $_word . $_c;
+                }
+                $_i = $_i + 1;
+                continue;
+            }
+            if ($_word !== "" && count($_headWords) < 6) {
+                $_headWords[] = strtoupper($_word);
+            }
+            $_word = "";
             if ($_c === "#") {
                 while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
                     $_i = $_i + 1;
@@ -673,7 +719,17 @@ class mysqli {
                 return true;
             }
             if ($_c === ";") {
-                if (strtoupper($_firstWord) === "CREATE") {
+                $_isCompoundDdl = false;
+                if (count($_headWords) > 1 && (string) $_headWords[0] === "CREATE") {
+                    $_hw = count($_headWords);
+                    for ($_w = 1; $_w < $_hw; $_w++) {
+                        $_kw = (string) $_headWords[$_w];
+                        if ($_kw === "PROCEDURE" || $_kw === "FUNCTION" || $_kw === "TRIGGER" || $_kw === "EVENT") {
+                            $_isCompoundDdl = true;
+                        }
+                    }
+                }
+                if ($_isCompoundDdl) {
                     return false;
                 }
                 $_afterSeparator = true;
@@ -696,12 +752,6 @@ class mysqli {
                     $_i = $_i + 1;
                 }
                 continue;
-            }
-            $_o = ord($_c);
-            if (strlen($_firstWord) < 6 && (($_o >= 97 && $_o <= 122) || ($_o >= 65 && $_o <= 90))) {
-                $_firstWord = $_firstWord . $_c;
-            } else {
-                $_firstWord = $_firstWord . "_";
             }
             $_i = $_i + 1;
         }

@@ -1,7 +1,7 @@
 //! Purpose:
 //! Assembles the complete mysqli prelude source from its PHP fragments
-//! (constants, exception, connection, and — in later tasks — result, statement,
-//! multi-query, and procedural aliases), applying `--php-version` gates.
+//! (constants, exception, connection, result, statement, and the procedural
+//! aliases), applying `--php-version` gates.
 //!
 //! Called from:
 //! - `crate::mysqli_prelude::parsed_prelude_for_version`.
