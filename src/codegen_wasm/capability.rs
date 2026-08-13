@@ -1923,13 +1923,11 @@ pub(super) fn declared_return_coercion_target(
     let matches_target = match target {
         IrType::I64 => matches!(declared, PhpType::Int | PhpType::Bool),
         IrType::F64 => declared == PhpType::Float,
-        // `string` stays out: PHP reaches `__toString` for an object at that boundary, and this
-        // backend has no such dispatch — it refuses every program declaring one, and that
-        // fail-closed behaviour is what must be preserved. Admitting the target would answer
-        // this site's `TypeError` where PHP calls the method. A compile-time gate cannot decide
-        // it either: the prelude's Throwable hierarchy declares `__toString`, so "does any class
-        // in the module have one" is always true. Closing it needs a per-class bit in
-        // `$__gc_desc_meta` so the object arm can fail LOUDLY on exactly those classes.
+        // `string` joined once `__rt_object_to_string` existed: the runtime dispatch this
+        // comment once said was missing now answers a Stringable object through its own
+        // `__toString`, and `__rt_mixed_return_string` raises php's RETURN TypeError —
+        // naming the class — for one without it (measured on php 8.5.6).
+        IrType::Str => declared == PhpType::Str,
         _ => false,
     };
     // A declared `bool` return leaves the EIR typing the cast's RESULT `int` — the two share
@@ -2066,7 +2064,12 @@ fn cast_shape_issue(
         || comparison_pair
         || (int_argument_coercion && target == IrType::I64))
         && matches!(target, IrType::I64 | IrType::F64)
-        || ((explicit || cast_feeds_string_context(function, inst) || string_argument_coercion)
+        || ((explicit
+            || cast_feeds_string_context(function, inst)
+            || string_argument_coercion
+            // The declared `: string` return, now that the boundary helper carries the
+            // full measured matrix (object through __toString, null the RETURN TypeError).
+            || return_coercion)
             && target == IrType::Str);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed

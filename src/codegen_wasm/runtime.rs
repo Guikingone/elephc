@@ -1543,6 +1543,7 @@ fn emit_return_coercion_runtime(
     wm.add_raw_func(&format!(
         r#"(func $__rt_mixed_return_string (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i32) (result i32)
   (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64)
+  (local $sptr i32) (local $slen i32) (local $sflag i32) (local $pptr i32) (local $plen i64)
   (call $__rt_mixed_unbox (local.get $cell))
   (local.set $hi)
   (local.set $lo)
@@ -1556,6 +1557,21 @@ fn emit_return_coercion_runtime(
         (i32.or (i64.eq (local.get $tag) (i64.const 1))
           (i32.or (i64.eq (local.get $tag) (i64.const 2)) (i64.eq (local.get $tag) (i64.const 3)))))
     (then (return (call $__rt_mixed_cast_string (local.get $cell)))))
+  (if (i64.eq (local.get $tag) (i64.const 6))                     ;; object: __toString CONVERTS...
+    (then
+      (call $__rt_object_to_string (i32.wrap_i64 (local.get $lo)))
+      (local.set $sflag)
+      (local.set $slen)
+      (local.set $sptr)
+      (if (local.get $sflag)
+        (then
+          (call $__rt_str_persist (local.get $sptr) (i64.extend_i32_u (local.get $slen)))
+          (local.set $plen)
+          (local.set $pptr)
+          (call $__rt_decref_any (local.get $sptr))
+          (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))))
+  ;; ...and a class WITHOUT one is the RETURN TypeError, naming the class — measured,
+  ;; NOT the cast's own could-not-be-converted Error.
   (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {string_word_ptr}) (i32.const {string_word_len}) (local.get $tag) (local.get $lo))
   unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-tostring
 "#
