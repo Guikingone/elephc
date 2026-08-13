@@ -1506,6 +1506,11 @@ echo $total;
 ///
 /// Silent, and it needs no `null` and no string anywhere — just arithmetic that leaves the
 /// integer range, which is why an accumulator is exactly the shape most likely to meet it.
+///
+/// The CONTROL is what makes the cause unambiguous, so it is part of the same fixture: the
+/// identical `+= 1` outside any closure promoted to float correctly even before the fix. The
+/// arithmetic was never wrong — only the trip through a reference cell typed from the captured
+/// `int` was, which is the same defect as the null row above reached by another pair of types.
 #[test]
 fn test_by_ref_capture_accumulator_promotes_to_float_on_overflow() {
     let out = compile_and_run(
@@ -1516,10 +1521,16 @@ $add(1);
 var_dump($total);
 $add(1);
 var_dump($total);
+$plain = PHP_INT_MAX - 1;
+$plain += 1;
+var_dump($plain);
+$plain += 1;
+var_dump($plain);
 "#,
     );
     assert_eq!(
         out,
-        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
+        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
+         int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
     );
 }
