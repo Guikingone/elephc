@@ -204,7 +204,7 @@ echo fileowner("{missing}") === false ? "missing-owner" : "bad"; echo ":";
 echo filegroup("{missing}") === false ? "missing-group" : "bad"; echo ":";
 echo fileinode("{missing}") === false ? "missing-inode" : "bad"; echo ":";
 echo filetype("{missing}") === false ? "missing-type" : "bad"; echo ":";
-echo filemtime("{missing}") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo filemtime("{missing}") === false ? "missing-mtime" : "bad"; echo ":";
 echo call_user_func("filetype", "{filename}") . ":";
 echo call_user_func_array("fileinode", ["filename" => "{filename}"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");

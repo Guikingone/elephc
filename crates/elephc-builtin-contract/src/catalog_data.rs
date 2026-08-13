@@ -5441,7 +5441,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Gets file modification time.",
         examples: &[

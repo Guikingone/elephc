@@ -50,7 +50,10 @@ pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_int(ctx, inst, "filemtime", "__rt_filemtime")
+    // The same composer `fileatime`, `filectime`, `fileinode`, `fileowner`, `filegroup` and
+    // `fileperms` go through. It read as a plain integer here, so the runtime's failure flag had
+    // nowhere to land and php's `false` was discarded at the boundary.
+    lower_unary_path_stat_int_or_false(ctx, inst, "filemtime", "__rt_filemtime")
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.

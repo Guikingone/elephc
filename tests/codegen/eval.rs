@@ -8051,7 +8051,7 @@ echo is_executable("/bin/sh") ? "exec" : "bad"; echo ":";
 echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
 echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
 echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
-echo filemtime("missing-stat.txt") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo filemtime("missing-stat.txt") === false ? "missing-mtime" : "bad"; echo ":";
 echo call_user_func("filetype", "eval-stat.txt") . ":";
 echo call_user_func_array("fileinode", ["filename" => "eval-stat.txt"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");

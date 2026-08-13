@@ -135,9 +135,21 @@ fn test_filetype_missing_is_strict_false() {
     assert_eq!(out, "false");
 }
 
-/// Verifies all scalar stat getters (`fileatime`, `filectime`, `fileperms`, `fileowner`,
-/// `filegroup`, `fileinode`) return strict `false` when the target file does not exist.
-/// Each function is checked individually and concatenated results must be "acpogi".
+/// Verifies the scalar stat getters return strict `false` when the target file does not exist.
+///
+/// THE MEMBERSHIP OF THIS LIST IS THE POINT. It used to name six — `fileatime`, `filectime`,
+/// `fileperms`, `fileowner`, `filegroup`, `fileinode` — and the two it left out, `filemtime`
+/// and `filesize`, are exactly the two that stayed broken: `filemtime` answered with whatever
+/// the stack held where `st_mtime` would have been, and `filesize` answered `0`. A family test
+/// that enumerates its members defines the family for every later reader, so an omission does
+/// not read as a gap, it reads as coverage.
+///
+/// `filemtime` and `filetype` join it here. `filesize` is still absent, and deliberately so
+/// rather than by oversight: its lowering goes through the wrapper-dispatch composer it shares
+/// with `is_file()`, which returns a plain bool, so carrying an int|false flag through that path
+/// changes a caller of a different shape and belongs in its own change. Adding it to this
+/// assertion now would simply turn the test red without fixing anything.
+/// Concatenated results must be "acpogimt".
 #[test]
 fn test_scalar_stat_getters_missing_are_strict_false() {
     let out = compile_and_run(
@@ -148,9 +160,11 @@ echo fileperms("missing.txt") === false ? "p" : "!";
 echo fileowner("missing.txt") === false ? "o" : "!";
 echo filegroup("missing.txt") === false ? "g" : "!";
 echo fileinode("missing.txt") === false ? "i" : "!";
+echo filemtime("missing.txt") === false ? "m" : "!";
+echo filetype("missing.txt") === false ? "t" : "!";
 "#,
     );
-    assert_eq!(out, "acpogi");
+    assert_eq!(out, "acpogimt");
 }
 
 /// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every
@@ -406,4 +420,54 @@ echo $info["size"];
     );
     assert_eq!(out, "10");
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// `filemtime()` answers `false` for a path it cannot stat, like its seven siblings and like php.
+///
+/// It used to answer with whatever the stack held where `st_mtime` would have been: the AArch64
+/// helper read the buffer without checking that `stat()` had written it, and the x86_64 helper
+/// checked but reported `0` — a legitimate timestamp, indistinguishable from success. Three
+/// authorities had to agree for the failure to survive the trip: the runtime helper raises the
+/// int|false flag its siblings already use, the lowering goes through the shared
+/// `int_or_false` composer instead of reading a plain integer, and the declared return type is
+/// no longer a bare `Int` — that declaration is what discarded the `false`.
+///
+/// The success half is asserted in the same fixture on purpose: a fix that reports failure
+/// correctly and breaks the ordinary read would pass a failure-only test.
+#[test]
+fn test_filemtime_returns_false_for_an_unstatable_path() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("mtime.txt", "x");
+$ok = filemtime("mtime.txt");
+$bad = @filemtime("/nonexistent/elephc/probe");
+echo var_export($bad, true), "|", ($ok > 1000000000 ? "ok" : "bad"), "|";
+echo var_export(@filemtime("also/missing"), true);
+"#,
+    );
+    assert_eq!(out, "false|ok|false");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The same read, twice in one process, from two different stack depths.
+///
+/// This is the witness for the LEAK rather than for the value: an uninitialised read tracks a
+/// stack address, so it answers differently depending on how deep the frame sits — and it
+/// changed between runs of one binary, which no single-call assertion can see. Both calls must
+/// now agree, and agree with php.
+#[test]
+fn test_filemtime_failure_does_not_depend_on_stack_depth() {
+    let out = compile_and_run(
+        r#"<?php
+function deep(int $n): string {
+    if ($n > 0) {
+        return deep($n - 1);
+    }
+    return var_export(@filemtime("/nonexistent/elephc/probe"), true);
+}
+$shallow = var_export(@filemtime("/nonexistent/elephc/probe"), true);
+echo $shallow, "|", deep(12);
+"#,
+    );
+    assert_eq!(out, "false|false");
 }
