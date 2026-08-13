@@ -1490,3 +1490,36 @@ echo $total;
     );
     assert_eq!(out, "124750");
 }
+
+/// The accumulator crossing `PHP_INT_MAX` is the SAME defect as the null write above, reached
+/// by a different pair of types — and the one that shows the widening is not a tax on a working
+/// program but the price of representing what PHP stores.
+///
+/// PHP promotes an overflowing sum to float, so `$total += $n` stores `int|float`, not `int`.
+/// A cell typed from the captured `int` cannot hold that, and the sum wrapped around instead:
+///
+/// | call | php | before |
+/// |---|---|---|
+/// | first | `int(9223372036854775807)` | `int(9223372036854775807)` |
+/// | second | `float(9.2233720368548E+18)` | `int(-9223372036854775808)` |
+/// | third | `float(9.2233720368548E+18)` | `int(-9223372036854775798)` |
+///
+/// Silent, and it needs no `null` and no string anywhere — just arithmetic that leaves the
+/// integer range, which is why an accumulator is exactly the shape most likely to meet it.
+#[test]
+fn test_by_ref_capture_accumulator_promotes_to_float_on_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$total = PHP_INT_MAX - 1;
+$add = function (int $n) use (&$total): void { $total += $n; };
+$add(1);
+var_dump($total);
+$add(1);
+var_dump($total);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
+    );
+}
