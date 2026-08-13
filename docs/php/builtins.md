@@ -137,7 +137,7 @@ sidebar:
 | [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileowner()`](./builtins/filesystem/fileowner.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileperms()`](./builtins/filesystem/fileperms.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filetype()`](./builtins/filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |

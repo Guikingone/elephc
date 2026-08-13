@@ -355,7 +355,7 @@ wrappers are documented in [Streams](streams.md).
 | `is_dir()` | `is_dir($filename): bool` | Is directory |
 | `is_readable()` | `is_readable($filename): bool` | Is readable |
 | `is_writable()` | `is_writable($filename): bool` | Is writable |
-| `filesize()` | `filesize($filename): int` | File size in bytes |
+| `filesize()` | `filesize($filename): int\|false` | File size in bytes; `false` when the path cannot be stat'ed. An empty file is `0`, not `false` |
 | `filemtime()` | `filemtime($filename): int\|false` | Modification time as a Unix timestamp; `false` when the path cannot be stat'ed |
 | `disk_free_space()` | `disk_free_space($directory): float` | Free bytes of the filesystem holding `$directory`; `0.0` on failure |
 | `disk_total_space()` | `disk_total_space($directory): float` | Total bytes of the filesystem holding `$directory`; `0.0` on failure |

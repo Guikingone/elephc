@@ -144,12 +144,10 @@ fn test_filetype_missing_is_strict_false() {
 /// that enumerates its members defines the family for every later reader, so an omission does
 /// not read as a gap, it reads as coverage.
 ///
-/// `filemtime` and `filetype` join it here. `filesize` is still absent, and deliberately so
-/// rather than by oversight: its lowering goes through the wrapper-dispatch composer it shares
-/// with `is_file()`, which returns a plain bool, so carrying an int|false flag through that path
-/// changes a caller of a different shape and belongs in its own change. Adding it to this
-/// assertion now would simply turn the test red without fixing anything.
-/// Concatenated results must be "acpogimt".
+/// All eight are named here now, `filesize` included. Its lowering goes through a
+/// wrapper-dispatch composer shared with `is_file()`, so both arms of that composer had to start
+/// carrying an int|false flag beside the payload; `is_file()` reads the payload register only, so
+/// the flag is inert for it. Concatenated results must be "acpogimts".
 #[test]
 fn test_scalar_stat_getters_missing_are_strict_false() {
     let out = compile_and_run(
@@ -162,9 +160,53 @@ echo filegroup("missing.txt") === false ? "g" : "!";
 echo fileinode("missing.txt") === false ? "i" : "!";
 echo filemtime("missing.txt") === false ? "m" : "!";
 echo filetype("missing.txt") === false ? "t" : "!";
+echo filesize("missing.txt") === false ? "s" : "!";
 "#,
     );
-    assert_eq!(out, "acpogimt");
+    assert_eq!(out, "acpogimts");
+}
+
+/// Verifies `filesize()` still answers `int(0)` for a file that genuinely holds zero bytes.
+///
+/// This is the half of the change that can silently go wrong. `filesize()` used to report every
+/// failure as `0`, so the fix has to separate "could not be measured" from "measured, and it is
+/// zero" — and an empty file is exactly the case where those two answers used to be the same
+/// value. A fix that returned `false` here would be no better than the bug.
+#[test]
+fn test_filesize_of_an_empty_file_is_zero_not_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("empty.txt", "");
+$s = filesize("empty.txt");
+echo $s === 0 ? "zero" : "!";
+echo is_int($s) ? "-int" : "-notint";
+echo $s === false ? "-false" : "-notfalse";
+"#,
+    );
+    drop(dir);
+    assert_eq!(out, "zero-int-notfalse");
+}
+
+/// Verifies a successful `filesize()` still behaves as an integer after the return type widened.
+///
+/// Declaring `int|false` changes how the value is CARRIED, not just what it can be. Arithmetic,
+/// `is_int()`, and string concatenation are the three places a boxed result diverges from a raw
+/// one, so a success-side regression would show up here rather than in the failure assertions.
+#[test]
+fn test_filesize_success_still_behaves_as_an_integer() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("seven2.txt", "1234567");
+$s = filesize("seven2.txt");
+echo $s + 1;
+echo ":";
+echo is_int($s) ? "int" : "notint";
+echo ":";
+echo "size=" . $s;
+"#,
+    );
+    drop(dir);
+    assert_eq!(out, "8:int:size=7");
 }
 
 /// Verifies `is_executable()` returns true for `/bin/sh`, which is executable on every

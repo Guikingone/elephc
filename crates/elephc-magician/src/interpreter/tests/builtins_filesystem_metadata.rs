@@ -205,6 +205,7 @@ echo filegroup("{missing}") === false ? "missing-group" : "bad"; echo ":";
 echo fileinode("{missing}") === false ? "missing-inode" : "bad"; echo ":";
 echo filetype("{missing}") === false ? "missing-type" : "bad"; echo ":";
 echo filemtime("{missing}") === false ? "missing-mtime" : "bad"; echo ":";
+echo filesize("{missing}") === false ? "missing-size" : "bad"; echo ":";
 echo call_user_func("filetype", "{filename}") . ":";
 echo call_user_func_array("fileinode", ["filename" => "{filename}"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");
@@ -228,7 +229,7 @@ return true;"#
     let _ = std::fs::remove_file(&link);
     assert_eq!(
             values.output,
-            "mtime:atime:ctime:perms:owner:group:inode:file:dir:link:noexec:link:missing-atime:missing-ctime:missing-perms:missing-owner:missing-group:missing-inode:missing-type:missing-mtime:file:callinode:1111111111"
+            "mtime:atime:ctime:perms:owner:group:inode:file:dir:link:noexec:link:missing-atime:missing-ctime:missing-perms:missing-owner:missing-group:missing-inode:missing-type:missing-mtime:missing-size:file:callinode:1111111111"
         );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
