@@ -25,12 +25,6 @@ Returns the supported OpenSSL cipher method names.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `openssl_get_cipher_methods` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/openssl_get_cipher_methods.md).

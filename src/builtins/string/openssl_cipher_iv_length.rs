@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "openssl_cipher_iv_length",
-    area: String,
-    params: [cipher_algo: Str],
-    returns: Mixed,
+    contract: "openssl_cipher_iv_length",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::OpensslCipherIvLength,
     ),
-    summary: "Returns the IV length for a supported cipher.",
-    php_manual: "https://www.php.net/manual/en/function.openssl-cipher-iv-length.php",
 }
 
 /// Returns the PHP `int|false` result contract for IV-length lookup.

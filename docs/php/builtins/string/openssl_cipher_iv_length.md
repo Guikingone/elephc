@@ -25,12 +25,6 @@ Returns the IV length for a supported cipher.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `openssl_cipher_iv_length` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/openssl_cipher_iv_length.md).

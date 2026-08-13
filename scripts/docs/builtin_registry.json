@@ -45106,7 +45106,7 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "character",
+          "name": "cipher_algo",
           "optional": false,
           "type": "string"
         }
@@ -45120,7 +45120,9 @@
     "canonical_name": "openssl_cipher_iv_length",
     "description": "Returns the IV length for a supported cipher.",
     "eval": {
+      "adapter_reason": "capability-dependent",
       "area": "string",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/openssl_cipher_iv_length.rs",
       "hooks": [
         "direct",
@@ -45132,10 +45134,13 @@
           "by_ref": false,
           "default": null,
           "name": "cipher_algo",
-          "optional": false
+          "optional": false,
+          "type": "string"
         }
       ],
       "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
@@ -45236,11 +45241,71 @@
     "sub_area": "String"
   },
   {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "passphrase",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "iv",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "tag",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "aad",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
     "area": "String",
     "canonical_name": "openssl_decrypt",
     "description": "Decrypts data with a supported AES cipher.",
     "eval": {
+      "adapter_reason": "capability-dependent",
       "area": "string",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/openssl_decrypt.rs",
       "hooks": [
         "direct",
@@ -45252,46 +45317,55 @@
           "by_ref": false,
           "default": null,
           "name": "data",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "cipher_algo",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "passphrase",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": "0",
           "name": "options",
-          "optional": true
+          "optional": true,
+          "type": "int"
         },
         {
           "by_ref": false,
           "default": "\"\"",
           "name": "iv",
-          "optional": true
+          "optional": true,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": "null",
           "name": "tag",
-          "optional": true
+          "optional": true,
+          "type": "mixed"
         },
         {
           "by_ref": false,
           "default": "\"\"",
           "name": "aad",
-          "optional": true
+          "optional": true,
+          "type": "string"
         }
       ],
       "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
@@ -45434,11 +45508,78 @@
     "sub_area": "String"
   },
   {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algo",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "passphrase",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "iv",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "tag",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "aad",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 16,
+          "name": "tag_length",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
     "area": "String",
     "canonical_name": "openssl_encrypt",
     "description": "Encrypts data with a supported AES cipher.",
     "eval": {
+      "adapter_reason": "by-reference-or-lvalue",
       "area": "string",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/openssl_encrypt.rs",
       "hooks": [
         "direct",
@@ -45450,52 +45591,62 @@
           "by_ref": false,
           "default": null,
           "name": "data",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "cipher_algo",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "passphrase",
-          "optional": false
+          "optional": false,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": "0",
           "name": "options",
-          "optional": true
+          "optional": true,
+          "type": "int"
         },
         {
           "by_ref": false,
           "default": "\"\"",
           "name": "iv",
-          "optional": true
+          "optional": true,
+          "type": "string"
         },
         {
           "by_ref": true,
           "default": "null",
           "name": "tag",
-          "optional": true
+          "optional": true,
+          "type": "mixed"
         },
         {
           "by_ref": false,
           "default": "\"\"",
           "name": "aad",
-          "optional": true
+          "optional": true,
+          "type": "string"
         },
         {
           "by_ref": false,
           "default": "16",
           "name": "tag_length",
-          "optional": true
+          "optional": true,
+          "type": "int"
         }
       ],
       "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
@@ -45645,11 +45796,29 @@
     "sub_area": "String"
   },
   {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "aliases",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
     "area": "String",
     "canonical_name": "openssl_get_cipher_methods",
     "description": "Returns the supported OpenSSL cipher method names.",
     "eval": {
+      "adapter_reason": "capability-dependent",
       "area": "string",
+      "execution": "interpreter-adapter",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/string/openssl_get_cipher_methods.rs",
       "hooks": [
         "direct",
@@ -45661,10 +45830,13 @@
           "by_ref": false,
           "default": "false",
           "name": "aliases",
-          "optional": true
+          "optional": true,
+          "type": "bool"
         }
       ],
       "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
       "supported": true,
       "variadic": null
     },
@@ -45765,6 +45937,22 @@
     "sub_area": "String"
   },
   {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "character",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
     "area": "String",
     "canonical_name": "ord",
     "description": "Returns the ASCII value of the first character of a string.",

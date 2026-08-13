@@ -35,6 +35,10 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
             "hash_init",
             "hash_update",
             "md5",
+            "openssl_cipher_iv_length",
+            "openssl_decrypt",
+            "openssl_encrypt",
+            "openssl_get_cipher_methods",
             "sha1",
         ],
     ) {
