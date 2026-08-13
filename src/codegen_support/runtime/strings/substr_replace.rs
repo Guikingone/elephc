@@ -145,11 +145,13 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_substr_replace`.
 ///
-/// Identical semantics to the ARM64 variant, but uses the x86_64 System V ABI:
-/// - `rdi/rsi`: subject string pointer/length
-/// - `rdx/rcx`: replacement string pointer/length
-/// - `r8`: replacement offset (clamped to [0, subject_len]; negative = from the end)
-/// - `r9`: replace length (negative = bytes omitted from the end; `i64::MAX` = to the end)
+/// Identical semantics to the ARM64 variant. The register assignment is elephc's own, NOT the
+/// System V argument order — read it off the caller (`lower_substr_replace_x86_64`), which pops
+/// the offset, then the replacement pair, then the subject pair:
+/// - `rax/rdx`: subject string pointer/length
+/// - `rdi/rsi`: replacement string pointer/length
+/// - `rcx`: replacement offset (clamped to [0, subject_len]; negative = from the end)
+/// - `r8`: replace length (negative = bytes omitted from the end; `i64::MAX` = to the end)
 ///
 /// ## Output
 /// - `rax`: result string pointer (concat buffer start)
