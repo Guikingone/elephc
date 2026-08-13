@@ -281,7 +281,11 @@ fn emit_literal_php_filter_file_get_contents_bytes(
 /// done-label AFTER its plain reader, so the streamed result skips it. A URL that names no
 /// usable filter falls through WITH the swapped resource, which is the unfiltered open php
 /// performs for the same URL.
-fn emit_dynamic_php_filter_read_route(ctx: &mut FunctionContext<'_>) -> Result<String> {
+fn emit_dynamic_php_filter_read_route(
+    ctx: &mut FunctionContext<'_>,
+    prefix_symbol: &str,
+    prefix_text: &str,
+) -> Result<String> {
     let fall_through = ctx.next_label("fgc_dynf_plain");
     let done = ctx.next_label("fgc_dynf_done");
     let try_data = ctx.next_label("fgc_dynf_try_data");
@@ -400,8 +404,8 @@ fn emit_dynamic_php_filter_read_route(ctx: &mut FunctionContext<'_>) -> Result<S
             ctx.emitter.instruction("cmp x9, #9");                              // a resource has nothing to warn about
             ctx.emitter.instruction(&format!("b.eq {}", opened));
             abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed false across the fragments
-            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fgc_prefix");
-            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: file_get_contents(".len()));
+            abi::emit_symbol_address(ctx.emitter, "x1", prefix_symbol);
+            ctx.emitter.instruction(&format!("mov x2, #{}", prefix_text.len()));
             abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
             ctx.emitter.instruction("ldr x1, [sp, #16]");                       // the saved full URL
             ctx.emitter.instruction("ldr x2, [sp, #24]");
@@ -419,8 +423,8 @@ fn emit_dynamic_php_filter_read_route(ctx: &mut FunctionContext<'_>) -> Result<S
             ctx.emitter.instruction("cmp r9, 9");                               // a resource has nothing to warn about
             ctx.emitter.instruction(&format!("je {}", opened));
             abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed false across the fragments
-            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fgc_prefix");
-            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: file_get_contents(".len()));
+            abi::emit_symbol_address(ctx.emitter, "rdi", prefix_symbol);
+            ctx.emitter.instruction(&format!("mov rsi, {}", prefix_text.len()));
             abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the saved full URL
             ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");

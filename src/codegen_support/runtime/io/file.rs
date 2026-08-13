@@ -53,6 +53,22 @@ pub fn emit_file(emitter: &mut Emitter) {
 
     // -- read entire file contents --
     emitter.instruction("bl __rt_file_get_contents_maybe_url");                 // read the file OR the wrapper URL, x1=ptr, x2=len
+    emitter.instruction("b __rt_file_split");                                   // and split whatever came back
+
+    // -- second entry: the caller already read the bytes (a php://filter chain read) --
+    // `file()` on a filter URL is "read through the chain, then split": the read half lives in
+    // the lowering's filter route, which cannot reach the split loop through `__rt_file`
+    // because that entry performs its own read. Same frame, same flags slot, same loop.
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("sub sp, sp, #64");                                     // the same frame the ordinary entry builds
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
+
+    // A shared label, not a local one: the plain `b` above crosses from `__rt_file`'s atom into
+    // this one, and a local label would be dropped by macOS dead-stripping (`.alt_entry` keeps
+    // it addressable; the jump is an unconditional `b`, which is what `.alt_entry` supports).
+    emitter.label_shared("__rt_file_split");
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
@@ -177,6 +193,18 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
 
     emitter.instruction("call __rt_file_get_contents_maybe_url");               // read the file OR the wrapper URL into an owned elephc string before splitting it into lines
+    emitter.instruction("jmp __rt_file_split_x");                               // and split whatever came back
+
+    // -- second entry: the caller already read the bytes; see the AArch64 counterpart --
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("push rbp");                                            // the same frame the ordinary entry builds
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
+
+    // See the AArch64 counterpart: the `jmp` crosses into this entry's section, so the label
+    // must survive section-level garbage collection.
+    emitter.label_shared("__rt_file_split_x");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
 

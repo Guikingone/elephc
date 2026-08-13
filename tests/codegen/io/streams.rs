@@ -6466,6 +6466,33 @@ var_dump(file_put_contents("php://filter/write=string.rot13/resource=/no/such/wf
     );
 }
 
+/// Verifies `readfile()` and `file()` read through a `php://filter` chain, both spellings.
+///
+/// Every path-taking reader now consults the same run-time filter route: `readfile()` streams
+/// the filtered bytes to the output sink and answers the byte count; `file()` splits the
+/// filtered bytes through `__rt_file`'s second entry — the ordinary entry performs its own
+/// read and cannot be handed bytes that were already read through a chain.
+#[test]
+fn test_readfile_and_file_read_through_a_filter_chain() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rfl.txt", "Hello World\n");
+$res = "rfl" . ".txt";
+var_dump(readfile("php://filter/read=string.toupper/resource=rfl.txt"));
+var_dump(readfile("php://filter/read=string.toupper/resource=" . $res));
+var_dump(file("php://filter/read=string.toupper/resource=rfl.txt"));
+var_dump(file("php://filter/read=string.rot13/resource=" . $res, FILE_IGNORE_NEW_LINES));
+unlink("rfl.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "HELLO WORLD\nint(12)\nHELLO WORLD\nint(12)\narray(1) {\n  [0]=>\n  \
+         string(12) \"HELLO WORLD\n\"\n}\narray(1) {\n  [0]=>\n  string(11) \"Uryyb Jbeyq\"\n}\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
 ///
 /// The direction is published from the resolved count, so this is the case that distinguishes

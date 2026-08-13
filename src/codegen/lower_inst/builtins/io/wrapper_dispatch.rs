@@ -10,10 +10,19 @@
 use super::*;
 
 /// Emits the wrapper-vs-filesystem dispatch for `readfile()`.
-pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let wrapper = ctx.next_label("readfile_wrapper");
     let after = ctx.next_label("readfile_after");
     let url_failed = ctx.next_label("readfile_url_failed");
+    let done_all = ctx.next_label("readfile_done_all");
+    // A `php://filter/...` filename reads through the chain, then streams the bytes to the
+    // output sink like any other readfile; the route's fall-through continues into the
+    // ordinary dispatch below with the path still staged.
+    let filtered = super::emit_dynamic_php_filter_read_route(
+        ctx,
+        "_diag_open_failed_readfile_prefix",
+        "Warning: readfile(",
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #16");                         // reserve path scratch storage across the wrapper probe
@@ -49,6 +58,19 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
+            ctx.emitter.instruction(&format!("b {}", done_all));
+            // -- the filter route's exit: bytes (or a null pointer) in the string registers --
+            ctx.emitter.label(&filtered);
+            ctx.emitter.instruction(&format!("cbz x1, {}_failed", filtered));   // a failed filtered open reads as -2, like any failed open
+            ctx.emitter.instruction("sub sp, sp, #16");
+            ctx.emitter.instruction("str x2, [sp, #0]");                        // readfile() returns the byte count
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the filtered bytes through the ob/web-aware sink
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            ctx.emitter.instruction("add sp, sp, #16");
+            ctx.emitter.instruction(&format!("b {}", done_all));
+            ctx.emitter.label(&format!("{}_failed", filtered));
+            ctx.emitter.instruction("mov x0, #-2");                             // the open-failure sentinel the boxing reads as false
+            ctx.emitter.label(&done_all);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 16");                             // reserve path scratch storage across the wrapper probe
@@ -85,8 +107,24 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage
+            ctx.emitter.instruction(&format!("jmp {}", done_all));
+            // -- the filter route's exit: bytes (or a null pointer) in the string registers --
+            ctx.emitter.label(&filtered);
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}_failed", filtered));        // a failed filtered open reads as -2, like any failed open
+            ctx.emitter.instruction("sub rsp, 16");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // readfile() returns the byte count
+            ctx.emitter.instruction("mov rsi, rax");                            // `__rt_vd_write` takes its buffer in rsi
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the filtered bytes through the ob/web-aware sink
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("add rsp, 16");
+            ctx.emitter.instruction(&format!("jmp {}", done_all));
+            ctx.emitter.label(&format!("{}_failed", filtered));
+            ctx.emitter.instruction("mov rax, -2");                             // the open-failure sentinel the boxing reads as false
+            ctx.emitter.label(&done_all);
         }
     }
+    Ok(())
 }
 
 /// Lowers `file_exists()` through userspace `url_stat()` before filesystem stat.

@@ -457,38 +457,72 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "file", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    let flags = inst.operands.get(1).copied();
     // Publish `$context` for this read, like fopen()/file_get_contents()/readfile().
     let explicit_context = inst.operands.get(2).copied();
     begin_fopen_context_scope(ctx, explicit_context)?;
-    match inst.operands.get(1).copied() {
-        None => {
-            load_string_to_result(ctx, path, "file")?;
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("mov x0, #0");                      // no $flags argument: request PHP's default behavior
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("xor edi, edi");                    // no $flags argument: request PHP's default behavior
-                }
+    load_string_to_result(ctx, path, "file")?;
+    // A `php://filter/...` filename reads through the chain first and only then splits into
+    // lines: `__rt_file` performs its own read, so the filtered bytes enter through the
+    // split-only second entry instead. The route's fall-through continues below with the path
+    // (or, for a chain of unknown names, the swapped RESOURCE) still in the string registers.
+    let after = ctx.next_label("file_after");
+    let filtered = emit_dynamic_php_filter_read_route(
+        ctx,
+        "_diag_open_failed_file_prefix",
+        "Warning: file(",
+    )?;
+    emit_file_flags_then_call(ctx, flags, "__rt_file")?;
+    abi::emit_jump(ctx.emitter, &after);
+    ctx.emitter.label(&filtered);
+    // The filtered bytes are in the string result registers; a failed open left a null pointer,
+    // which the splitter reads as an empty payload — the empty array php also answers when its
+    // own read fails (the route has already warned in php's words).
+    emit_file_flags_then_call(ctx, flags, "__rt_file_from_bytes")?;
+    ctx.emitter.label(&after);
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Stages `file()`'s `$flags` in the runtime argument register — preserving the string pair the
+/// caller already staged — and calls the requested `__rt_file` entry.
+fn emit_file_flags_then_call(
+    ctx: &mut FunctionContext<'_>,
+    flags: Option<ValueId>,
+    entry: &str,
+) -> Result<()> {
+    match flags {
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x0, #0");                          // no $flags argument: request PHP's default behavior
             }
-        }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor edi, edi");                        // no $flags argument: request PHP's default behavior
+            }
+        },
         Some(flags) => {
+            // Loading the flags value may pass through the string registers, so the pair the
+            // caller staged is parked on the stack around it.
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
             resolve_int_operand_to_result(ctx, flags, "file flags")?;
-            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-            load_string_to_result(ctx, path, "file")?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved $flags bitmask into the first runtime argument
+                    ctx.emitter.instruction("mov x9, x0");                      // hold the resolved $flags while the pair returns
+                    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+                    ctx.emitter.instruction("mov x0, x9");                      // the first runtime argument
                 }
                 Arch::X86_64 => {
-                    abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved $flags bitmask into the first runtime argument
+                    ctx.emitter.instruction("mov rdi, rax");                    // the first runtime argument
+                    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
                 }
             }
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_file");
-    finish_fopen_context_scope(ctx);
-    store_if_result(ctx, inst)
+    abi::emit_call_label(ctx.emitter, entry);
+    Ok(())
 }
 
 /// Lowers `realpath(path)` and boxes the owned runtime string-or-false result.

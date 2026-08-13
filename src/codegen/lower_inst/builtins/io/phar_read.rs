@@ -102,7 +102,11 @@ fn emit_file_get_contents_bytes(
     // parses first and reads through a real stream when the URL names a filter, and falls
     // through with the path swapped to the RESOURCE when it names none the runtime knows.
     let filter_done = if path_literal.is_none() {
-        Some(super::emit_dynamic_php_filter_read_route(ctx)?)
+        Some(super::emit_dynamic_php_filter_read_route(
+            ctx,
+            "_diag_open_failed_fgc_prefix",
+            "Warning: file_get_contents(",
+        )?)
     } else {
         None
     };
@@ -512,7 +516,7 @@ pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let explicit_context = inst.operands.get(2).copied();
     begin_fopen_context_scope(ctx, explicit_context)?;
     load_string_to_result(ctx, path, "readfile")?;
-    emit_readfile_wrapper_dispatch(ctx);
+    emit_readfile_wrapper_dispatch(ctx)?;
     box_readfile_result(ctx);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)
