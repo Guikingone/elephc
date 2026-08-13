@@ -43,6 +43,7 @@ Physical source (.php or .lfc)
   -> opt-post           prune constant control flow
   -> opt-norm           control-flow normalization
   -> dce                AST dead-code elimination
+  -> decl-reach         drop unreachable functions, classes, and methods
   -> ir-lower           AST -> EIR lowering + EIR validation
   -> ir-opt             EIR optimization passes (fixed-point driver)
   -> ir-print           print EIR and stop (with --emit-ir)
@@ -92,7 +93,13 @@ Physical source (.php or .lfc)
 The AST optimizer runs PHP-preserving rewrites that are naturally expressed over
 syntax: **opt-fold** (constant folding), **opt-prop** (constant propagation),
 **opt-post** (constant control-flow pruning), **opt-norm** (control-flow
-normalization), and **dce** (dead-code elimination). See
+normalization), **dce** (dead-code elimination), and **decl-reach**
+(whole-program declaration reachability). The last pass removes unreachable
+functions, classes, and methods and reconciles checked method/vtable metadata
+before EIR lowering. It remains conservative around `eval`, dynamic calls,
+`unserialize`, and Reflection. Forced preludes such as `--with-pdo`,
+`--with-tz`, and `--with-image` are roots; `--web` keeps only the web surface
+reachable from its bootstrap and user program. See
 [The Optimizer](../internals/the-optimizer.md). These always run; they are not
 behind a flag.
 
