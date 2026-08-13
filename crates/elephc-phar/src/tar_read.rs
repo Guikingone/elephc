@@ -9,24 +9,11 @@
 
 use super::*;
 
-/// Parses a POSIX tar archive and returns a regular-file entry.
-pub(super) fn parse_tar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    parse_tar_archive(data)?
-        .entries
-        .into_iter()
-        .find(|candidate| candidate.name == entry)
-        .map(|candidate| candidate.payload)
-}
-
 /// Parses a tar-based phar into regular entries plus its global metadata and stub.
 ///
 /// The reserved `.phar/stub.php` and `.phar/.metadata.bin` files become the stub and
-/// metadata; any other `.phar/*` control file is hidden from the entry listing.
-pub(super) fn parse_tar_archive(data: &[u8]) -> Option<Archive> {
-    parse_tar_archive_with_public_key(data, None)
-}
-
-/// Parses a tar-based PHAR and authenticates an OpenSSL signature with `public_key`.
+/// metadata; any other `.phar/*` control file is hidden from the entry listing. OpenSSL
+/// signatures are authenticated with `public_key` before any entry is exposed.
 pub(super) fn parse_tar_archive_with_public_key(
     data: &[u8],
     public_key: Option<&rsa::RsaPublicKey>,
@@ -53,6 +40,9 @@ pub(super) fn parse_tar_archive_with_public_key(
         }
         first_header = false;
         let size = parse_tar_octal(&header[124..136])?;
+        if size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+            return None;
+        }
         let payload_start = p.checked_add(512)?;
         let payload_end = payload_start.checked_add(size)?;
         let payload = data.get(payload_start..payload_end)?;

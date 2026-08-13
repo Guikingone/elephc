@@ -139,6 +139,80 @@ fn native_phar_actual_deflate_output_is_bounded_by_claim() {
     );
 }
 
+/// Rejects a ZIP central-directory size claim before allocating the declared
+/// output capacity, applying the same policy as native PHAR entry decoding.
+#[test]
+fn zip_payload_claim_does_not_preallocate_untrusted_capacity() {
+    const TEST_NAME: &str =
+        "tests::security::zip_payload_claim_does_not_preallocate_untrusted_capacity";
+    if std::env::var("ELEPHC_PHAR_ALLOC_PROBE").as_deref() != Ok(TEST_NAME) {
+        run_allocation_probe_in_child(TEST_NAME);
+        return;
+    }
+
+    let mut archive = build_zip(&[("bomb.txt", b"tiny", true)]);
+    let (_, central_offset) = zip_eocd_info(&archive).unwrap();
+    archive[central_offset + 24..central_offset + 28]
+        .copy_from_slice(&(16 * 1024 * 1024u32).to_le_bytes());
+
+    PHAR_TEST_LARGEST_ALLOCATION.store(0, std::sync::atomic::Ordering::Relaxed);
+    PHAR_TEST_TRACK_ALLOCATIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+    let decoded = extract_entry_bytes(&archive, b"bomb.txt");
+    PHAR_TEST_TRACK_ALLOCATIONS.store(false, std::sync::atomic::Ordering::Relaxed);
+    let largest = PHAR_TEST_LARGEST_ALLOCATION.load(std::sync::atomic::Ordering::Relaxed);
+
+    assert!(decoded.is_none(), "the implausible ZIP size claim must be rejected");
+    assert!(
+        largest <= 1024 * 1024,
+        "ZIP validation reserved an attacker-sized allocation of {largest} bytes"
+    );
+}
+
+/// Verifies targeted ZIP reads do not decode a hostile unrelated entry before
+/// locating and returning the requested payload.
+#[test]
+fn zip_targeted_extraction_skips_unrelated_bomb() {
+    let mut archive = build_zip(&[
+        ("bomb.txt", b"tiny", true),
+        ("wanted.txt", b"requested payload", true),
+    ]);
+    let (_, central_offset) = zip_eocd_info(&archive).unwrap();
+    archive[central_offset + 24..central_offset + 28]
+        .copy_from_slice(&(16 * 1024 * 1024u32).to_le_bytes());
+
+    assert_eq!(extract_entry_bytes(&archive, b"bomb.txt"), None);
+    assert_eq!(
+        extract_entry_bytes(&archive, b"wanted.txt").as_deref(),
+        Some(&b"requested payload"[..])
+    );
+}
+
+/// Verifies byte extraction dispatches a ZIP PHAR by magic and therefore cannot
+/// bypass its signature check through native-PHAR fallback parsing.
+#[test]
+fn zip_byte_extraction_rejects_tampered_signed_archive() {
+    let path = std::env::temp_dir().join(format!(
+        "elephc-phar-byte-dispatch-{}.zip",
+        std::process::id()
+    ));
+    let path_bytes = path.to_string_lossy();
+    let payload = b"authenticated byte API payload";
+    assert_eq!(
+        put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", payload),
+        Some(payload.len())
+    );
+    assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+    let mut archive = std::fs::read(&path).unwrap();
+    let offset = archive
+        .windows(payload.len())
+        .position(|window| window == payload)
+        .expect("locate signed ZIP payload");
+    archive[offset] ^= 1;
+
+    assert_eq!(extract_entry_bytes(&archive, b"payload.txt"), None);
+    std::fs::remove_file(path).ok();
+}
+
 /// Verifies ordinary unsigned entry data ending in the PHAR trailer magic is
 /// not mistaken for a malformed signature trailer.
 #[test]

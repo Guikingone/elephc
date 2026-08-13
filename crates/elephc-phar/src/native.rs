@@ -9,19 +9,11 @@
 
 use super::*;
 
-/// Parses a native PHAR archive and returns a decoded entry payload.
-pub(super) fn parse_native_phar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    parse_native_phar_archive(data)?
-        .entries
-        .into_iter()
-        .find(|candidate| candidate.name == entry)
-        .map(|candidate| candidate.payload)
-}
-
 /// Parses a native PHAR archive into entries plus its global metadata and stub.
 ///
 /// The stub is the byte prefix up to and including the `__HALT_COMPILER();` marker
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
+#[cfg(test)]
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     parse_native_phar_archive_with_public_key(data, None)
 }
@@ -119,6 +111,9 @@ pub(super) fn phar_compression_from_flags(flags: u32) -> PharCompression {
 /// Rejects implausible declared expansion and stops after one byte beyond the
 /// claimed output size so a forged header cannot drive unbounded decompression.
 pub(super) fn decode_phar_payload(stored: &[u8], flags: u32, uncompressed: usize) -> Option<Vec<u8>> {
+    if uncompressed > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+        return None;
+    }
     if flags & PHAR_FLAG_GZIP != 0 {
         if uncompressed > stored.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
             return None;
@@ -142,7 +137,7 @@ pub(super) fn decode_phar_payload(stored: &[u8], flags: u32, uncompressed: usize
             .ok()?;
         (out.len() == uncompressed).then_some(out)
     } else {
-        Some(stored.to_vec())
+        (stored.len() == uncompressed).then(|| stored.to_vec())
     }
 }
 
