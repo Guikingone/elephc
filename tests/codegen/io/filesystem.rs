@@ -395,6 +395,28 @@ unlink("sod/a.txt"); unlink("sod/b.txt"); rmdir("sod");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `array_merge()` on STRING arrays, empty-literal mixes included.
+///
+/// php reindexes list keys on merge, which is exactly what two append loops produce — unlike
+/// the set operations, there is no key divergence here. An empty literal carries a
+/// `Never`-element type whose declared slot size is moot at length zero, so it rides along
+/// with a string side rather than failing the one-common-layout rule.
+#[test]
+fn test_array_merge_on_string_arrays_matches_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo implode(",", array_merge(["a", "b"], ["c"])), "|";
+echo implode(",", array_merge([], ["x", "y"])), "|";
+mkdir("mgd");
+file_put_contents("mgd/f.txt", "1");
+echo implode(",", array_merge(scandir("mgd"), ["extra"]));
+unlink("mgd/f.txt"); rmdir("mgd");
+"#,
+    );
+    assert_eq!(out, "a,b,c|x,y|.,..,f.txt,extra");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

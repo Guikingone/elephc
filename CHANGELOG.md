@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed `array_merge()` refusing to compile for STRING arrays, empty-literal mixes included; unlike the set operations there is no key divergence, because php reindexes list keys on merge.
 - Fixed `array_diff()` and `array_intersect()` refusing to compile for STRING arrays — `array_diff(scandir($d), [".", ".."])`, the most ordinary directory idiom in PHP, now works. One parameterised string helper serves both operations through `__rt_str_eq`; values are php-identical, keys stay reindexed where php preserves them (the set-operation family's pre-existing divergence, tracked).
 - Fixed `array_reverse()` refusing to compile for STRING arrays — plain literals included: string slots are 16-byte (ptr, len) descriptors and the shared 8-byte element gate refused them since it existed. A dedicated string variant re-persists each element into the new array. The rest of the same family (array_unique, array_diff, array_merge, array_flip, array_slice, shuffle, natsort on string arrays) remains refused and tracked; the gate stays authoritative there because their 8-byte helpers would read a descriptor as two unrelated words.
 - Fixed a NESTED literal `php://filter` URL being refused where php recurses — the inner level's chain applies first, measured through double and triple nesting. Conflicting explicit directions across levels stay loudly refused, and the assembled spelling's non-recursion stays a pinned, tracked divergence.
