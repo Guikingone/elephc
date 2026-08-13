@@ -43,23 +43,26 @@ pub(super) fn lower_indexed_array_aggregate(
     store_if_result(ctx, inst)
 }
 
-/// Calls a value set-operation helper after validating compatible indexed-array layouts.
+/// Calls a key-preserving value set-operation helper after validating indexed-array layouts.
+///
+/// php keeps the FIRST operand's keys: `array_diff(["a","b","c"], ["b"])` is `{0:"a", 2:"c"}` and
+/// `array_intersect(["a","b","c"], ["b","c"])` is `{1:"b", 2:"c"}`. A dense indexed array cannot
+/// hold a gap, so both lower to `__rt_array_*_to_hash`, which inserts each survivor at its
+/// ORIGINAL index. The helper reads the element layout from the source header at runtime, so the
+/// scalar, refcounted and string element types share one entry point instead of the three-way
+/// helper split the reindexing form needed. The result carries the hash's own header, so the
+/// indexed-array value_type stamp the dense form applied would be meaningless here.
 pub(super) fn lower_indexed_array_set_op(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    scalar_helper: &str,
-    refcounted_helper: &str,
-    str_helper: Option<&str>,
+    hash_helper: &str,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let allow_strings = str_helper.is_some();
-    let first_elem_ty =
-        set_op_indexed_array_element_type(ctx.value_php_type(first)?, name, allow_strings)?;
-    let second_elem_ty =
-        set_op_indexed_array_element_type(ctx.value_php_type(second)?, name, allow_strings)?;
+    let first_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(first)?, name, true)?;
+    let second_elem_ty = set_op_indexed_array_element_type(ctx.value_php_type(second)?, name, true)?;
     require_set_op_compatible_element_types(name, &first_elem_ty, &second_elem_ty)?;
     require_set_op_result_type(name, &first_elem_ty, &inst.result_php_type.codegen_repr())?;
     match ctx.emitter.target.arch {
@@ -72,19 +75,7 @@ pub(super) fn lower_indexed_array_set_op(
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    let helper = if first_elem_ty == PhpType::Str {
-        str_helper.expect("string set-op helper is required after validation")
-    } else if first_elem_ty.is_refcounted() {
-        refcounted_helper
-    } else {
-        scalar_helper
-    };
-    abi::emit_call_label(ctx.emitter, helper);
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &first_elem_ty,
-    );
+    abi::emit_call_label(ctx.emitter, hash_helper);
     store_if_result(ctx, inst)
 }
 

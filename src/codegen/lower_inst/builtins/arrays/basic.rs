@@ -336,21 +336,28 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
+/// Lowers `array_unique()` into the key-preserving hash php returns.
+///
+/// php keeps each survivor's ORIGINAL key: `array_unique(["a","b","a","c"])` is
+/// `{0:"a", 1:"b", 3:"c"}`, whose gap a dense indexed array cannot hold, so this lowers to
+/// `__rt_array_unique_to_hash`. That helper reads the element layout from the source header at
+/// runtime, so the scalar, refcounted and string element types share one entry point instead of
+/// the three-way helper split the reindexing form needed. The checker types this call as
+/// `AssocArray { key: Int, value: T }`, which is re-verified here.
 pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_unique", 1)?;
     let array = expect_operand(inst, 0)?;
-    // String arrays take the string variant; see array_reverse above for the slot story.
     let operand_ty = ctx.value_php_type(array)?;
     let elem_ty = match operand_ty.codegen_repr() {
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => PhpType::Str,
         _ => eight_byte_indexed_array_element_type(operand_ty, "array_unique")?,
     };
+    require_set_op_result_type("array_unique", &elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the dedup helper argument
     }
-    abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
+    abi::emit_call_label(ctx.emitter, "__rt_array_unique_to_hash");
     store_if_result(ctx, inst)
 }
 

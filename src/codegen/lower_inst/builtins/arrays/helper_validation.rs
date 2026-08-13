@@ -64,14 +64,32 @@ pub(super) fn require_set_op_compatible_element_types(
     )))
 }
 
-/// Verifies the EIR result preserves the first operand element metadata.
+/// Verifies the EIR result is the key-preserving hash the checker types a value set operation as.
+///
+/// The survivors keep their source integer keys, so the result of `array_diff`, `array_intersect`
+/// and `array_unique` over an indexed array is an `AssocArray` keyed by `Int` whose value type is
+/// the first operand's element type. A dense `Array` result here would mean the checker and the
+/// backend disagree about whether the operation reindexes.
+///
+/// The value comparison is the one the dense form already used, so the accepted element layouts
+/// are unchanged. It still rejects an operand whose checker element type and EIR element type
+/// disagree — `[true, false, true]` infers `array<mixed>` from the checker (`Bool` and `False` do
+/// not merge, so the literal falls back to `Mixed`) while the EIR builds `array<bool>` — because
+/// the runtime stamps the hash with the SOURCE array's value_type, and a consumer reading it
+/// through the checker's `Mixed` would misread every entry. `array_unique` did not run this check
+/// before and so accepted that shape; the three operations now agree on it.
 pub(super) fn require_set_op_result_type(
     name: &str,
     first_elem_ty: &PhpType,
     result_ty: &PhpType,
 ) -> Result<()> {
     match result_ty {
-        PhpType::Array(elem) if elem.codegen_repr() == first_elem_ty.codegen_repr() => Ok(()),
+        PhpType::AssocArray { key, value }
+            if key.codegen_repr() == PhpType::Int
+                && value.codegen_repr() == first_elem_ty.codegen_repr() =>
+        {
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} result PHP type {:?} for first element PHP type {:?}",
             name, other, first_elem_ty

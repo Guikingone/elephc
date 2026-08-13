@@ -303,11 +303,40 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     let array_index = inst.operands.len() - 1;
     let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
+    // A hash operand was joined through a temporary indexed array of its values, built by the
+    // argument materialization above and owned by this lowering. It holds persisted string copies
+    // and retained heap payloads, so it is deep-freed once the join has read it — around the
+    // string result, which the free helper's own argument register would otherwise destroy.
+    let owns_values_temp = implode_array_is_hash(ctx, inst, array_index)?;
+    let array_arg_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdx",
+    };
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
         Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
+    if owns_values_temp {
+        abi::emit_push_reg(ctx.emitter, array_arg_reg);                         // preserve the temporary values array across the join
+    }
     abi::emit_call_label(ctx.emitter, runtime_label);
+    if owns_values_temp {
+        let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+        abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                 // preserve the joined string across the deep free
+        let free_arg_reg = abi::int_result_reg(ctx.emitter);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx
+                .emitter
+                .instruction(&format!("ldr {}, [sp, #16]", free_arg_reg)),       // reload the temporary values array pointer
+            Arch::X86_64 => ctx.emitter.instruction(&format!(
+                "mov {}, QWORD PTR [rsp + 16]",
+                free_arg_reg
+            )),                                                                 // reload the temporary values array pointer
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_array_free_deep");
+        abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);                  // restore the joined string
+        abi::emit_release_temporary_stack(ctx.emitter, 16);                     // drop the temporary values array slot
+    }
     store_if_result(ctx, inst)
 }
 /// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
@@ -563,11 +592,43 @@ pub(super) fn implode_runtime_label(
             ))),
         },
         PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
+        // php's `implode()` reads only the VALUES, in insertion order, so a hash joins exactly
+        // like the indexed array of its values — which is what the key-preserving builtins
+        // (`array_diff`, `array_intersect`, `array_unique`, `array_slice($a,$o,$l,true)`) return.
+        // The values are materialized into a temporary indexed array and the existing renderer
+        // is reused, so the element rules — bool as `"1"`/`""`, ints through `__rt_itoa` — stay
+        // in one place instead of being restated for hash storage.
+        PhpType::AssocArray { value, .. } => match value.codegen_repr() {
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int => Ok("__rt_implode_int"),
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
+            other => Err(CodegenIrError::unsupported(format!(
+                "implode hash value PHP type {:?}",
+                other
+            ))),
+        },
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Reports whether an `implode()` array operand is hash storage needing a values materialization.
+///
+/// A hash operand is joined through a TEMPORARY indexed array of its values, which this lowering
+/// owns: it holds persisted string copies and retained heap payloads, so it must be deep-freed
+/// after the join or every `implode(",", array_diff(...))` would leak its elements.
+pub(super) fn implode_array_is_hash(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<bool> {
+    let array = expect_operand(inst, array_index)?;
+    Ok(matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ))
 }
 
 /// Materializes AArch64 glue and array arguments for `implode()`.
@@ -632,6 +693,15 @@ pub(super) fn load_implode_array_aarch64(
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed array payload to implode()
             Ok(())
         }
+        // Hash storage carries its values in table entries the indexed-array renderer cannot walk,
+        // so they are copied into a temporary indexed array first; `lower_implode` deep-frees it.
+        PhpType::AssocArray { value, .. } => {
+            ctx.load_value_to_result(array)?;
+            super::super::arrays::values::emit_loaded_assoc_array_values(
+                ctx,
+                &value.codegen_repr(),
+            )
+        }
         _ => {
             ctx.load_value_to_reg(array, "x0")?;
             Ok(())
@@ -650,6 +720,15 @@ pub(super) fn load_implode_array_x86_64(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
             ctx.emitter.instruction("mov rax, rdi");                            // pass the unboxed array payload to implode()
             Ok(())
+        }
+        // Hash storage carries its values in table entries the indexed-array renderer cannot walk,
+        // so they are copied into a temporary indexed array first; `lower_implode` deep-frees it.
+        PhpType::AssocArray { value, .. } => {
+            ctx.load_value_to_result(array)?;
+            super::super::arrays::values::emit_loaded_assoc_array_values(
+                ctx,
+                &value.codegen_repr(),
+            )
         }
         _ => {
             ctx.load_value_to_reg(array, "rax")?;

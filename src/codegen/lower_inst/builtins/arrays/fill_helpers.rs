@@ -301,18 +301,9 @@ pub(super) fn array_reverse_runtime_helper(elem_ty: &PhpType) -> &'static str {
     }
 }
 
-/// Returns the runtime helper for `array_unique()` based on element ownership.
-pub(super) fn array_unique_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if *elem_ty == PhpType::Str {
-        // 16-byte (ptr, len) slots re-persisted by the string variant.
-        return "__rt_array_unique_str";
-    }
-    if elem_ty.is_refcounted() {
-        "__rt_array_unique_refcounted"
-    } else {
-        "__rt_array_unique"
-    }
-}
+// `array_unique()` no longer selects a helper by element ownership: php preserves the source keys,
+// so every element layout goes through `__rt_array_unique_to_hash`, which reads the layout from the
+// source header at runtime. The same is true of `array_diff` and `array_intersect`.
 
 /// Returns the runtime helper for `array_merge()` based on element ownership.
 pub(super) fn array_merge_runtime_helper(elem_ty: &PhpType) -> &'static str {

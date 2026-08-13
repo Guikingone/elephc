@@ -105,6 +105,23 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_diff(emitter);
     arrays::emit_array_set_op_str(emitter, "__rt_array_diff_str", false);
     arrays::emit_array_set_op_str(emitter, "__rt_array_intersect_str", true);
+    // php preserves the first operand's keys in all three value set operations, which a dense
+    // indexed array cannot represent; these build the int-keyed hash php actually returns.
+    arrays::emit_array_set_op_to_hash(
+        emitter,
+        "__rt_array_diff_to_hash",
+        arrays::SetOpToHash::Diff,
+    );
+    arrays::emit_array_set_op_to_hash(
+        emitter,
+        "__rt_array_intersect_to_hash",
+        arrays::SetOpToHash::Intersect,
+    );
+    arrays::emit_array_set_op_to_hash(
+        emitter,
+        "__rt_array_unique_to_hash",
+        arrays::SetOpToHash::Unique,
+    );
     arrays::emit_array_merge_str(emitter);
     arrays::emit_array_unique_str(emitter);
     arrays::emit_array_diff_refcounted(emitter);

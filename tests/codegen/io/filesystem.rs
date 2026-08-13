@@ -424,9 +424,9 @@ unlink("rvd/a.txt"); unlink("rvd/z.txt"); rmdir("rvd");
 /// identical, only the keep-on-match sense differs), comparing through `__rt_str_eq` and
 /// re-persisting survivors.
 ///
-/// The assertions are VALUE-based (implode) on purpose: the whole set-operation family
-/// reindexes its result where php preserves the source keys, a pre-existing divergence the
-/// string variants share with the Int helpers and which is tracked separately.
+/// The survivors also keep their SOURCE keys, as php does, so the KEYS are asserted beside the
+/// values: `implode()` alone cannot tell `{0:"a", 2:"c"}` from the reindexed `["a", "c"]` that
+/// this family used to return, and the keys are the half that was wrong.
 #[test]
 fn test_string_array_set_operations_keep_the_right_values()
 {
@@ -434,14 +434,20 @@ fn test_string_array_set_operations_keep_the_right_values()
         r#"<?php
 echo implode(",", array_diff(["a", "b", "c"], ["b"])), "|";
 echo implode(",", array_intersect(["a", "b", "c"], ["b", "c", "z"])), "|";
+echo json_encode(array_diff(["a", "b", "c"], ["b"])), "|";
+echo json_encode(array_intersect(["a", "b", "c"], ["b", "c", "z"])), "|";
 mkdir("sod");
 file_put_contents("sod/a.txt", "1");
 file_put_contents("sod/b.txt", "2");
-echo implode(",", array_diff(scandir("sod"), [".", ".."]));
+echo implode(",", array_diff(scandir("sod"), [".", ".."])), "|";
+echo json_encode(array_diff(scandir("sod"), [".", ".."]));
 unlink("sod/a.txt"); unlink("sod/b.txt"); rmdir("sod");
 "#,
     );
-    assert_eq!(out, "a,c|b,c|a.txt,b.txt");
+    assert_eq!(
+        out,
+        "a,c|b,c|{\"0\":\"a\",\"2\":\"c\"}|{\"1\":\"b\",\"2\":\"c\"}|a.txt,b.txt|{\"2\":\"a.txt\",\"3\":\"b.txt\"}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -582,21 +588,29 @@ unlink("sld/f.txt"); rmdir("sld");
 
 /// Verifies `array_unique()` on STRING arrays keeps the first occurrences, in order.
 ///
-/// The inner loop compares against the RESULT built so far, which is equivalent to comparing
-/// against the source's own prefix. Value-based assertions, like the rest of the family: the
-/// result is reindexed where php preserves the source keys, the family's tracked divergence.
+/// The inner loop compares the candidate against the source's own `0..i` prefix, which keeps
+/// php's FIRST occurrence. Each survivor also keeps its SOURCE key, as php does, so the KEYS are
+/// asserted beside the values: `implode()` alone cannot tell `{0:"a", 1:"b", 3:"c"}` from the
+/// reindexed `["a", "b", "c"]` this returned before, and the keys are the half that was wrong.
 #[test]
 fn test_array_unique_on_a_string_array_keeps_first_occurrences() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 echo implode(",", array_unique(["a", "b", "a", "c", "b"])), "|";
+echo json_encode(array_unique(["a", "b", "a", "c", "b"])), "|";
 mkdir("uqd");
 file_put_contents("uqd/f.txt", "1");
-echo implode(",", array_unique(array_merge(scandir("uqd"), scandir("uqd"))));
+echo implode(",", array_unique(array_merge(scandir("uqd"), scandir("uqd")))), "|";
+echo json_encode(array_unique(array_merge(scandir("uqd"), scandir("uqd"))));
 unlink("uqd/f.txt"); rmdir("uqd");
 "#,
     );
-    assert_eq!(out, "a,b,c|.,..,f.txt");
+    assert_eq!(
+        out,
+        // The merged scandir case keeps keys 0..2, contiguous from zero, so `json_encode` renders
+        // it as a JSON array — the deduplication dropped only the second copy's keys 3..5.
+        "a,b,c|{\"0\":\"a\",\"1\":\"b\",\"3\":\"c\"}|.,..,f.txt|[\".\",\"..\",\"f.txt\"]"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 

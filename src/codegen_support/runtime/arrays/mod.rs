@@ -77,6 +77,7 @@ mod array_replace;
 mod array_replace_recursive;
 mod array_reverse;
 mod array_set_op_str;
+mod array_set_op_to_hash;
 mod array_reverse_refcounted;
 mod array_search;
 mod array_shift;
@@ -329,6 +330,7 @@ pub use array_reverse::emit_array_reverse_str;
 pub use array_set_op_str::emit_array_merge_str;
 pub use array_set_op_str::emit_array_unique_str;
 pub use array_set_op_str::emit_array_set_op_str;
+pub use array_set_op_to_hash::{emit_array_set_op_to_hash, SetOpToHash};
 /// Emit array reverse helper.
 pub use array_reverse_refcounted::emit_array_reverse_refcounted;
 /// Emit refcounted array reverse helper.

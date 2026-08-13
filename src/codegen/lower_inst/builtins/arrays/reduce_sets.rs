@@ -205,31 +205,17 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
-/// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_diff()` into the key-preserving hash php returns.
 pub(crate) fn lower_array_diff(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_set_op(
-        ctx,
-        inst,
-        "array_diff",
-        "__rt_array_diff",
-        "__rt_array_diff_refcounted",
-        Some("__rt_array_diff_str"),
-    )
+    lower_indexed_array_set_op(ctx, inst, "array_diff", "__rt_array_diff_to_hash")
 }
 
-/// Lowers `array_intersect()` for two compatible indexed arrays with pointer-sized payload slots.
+/// Lowers `array_intersect()` into the key-preserving hash php returns.
 pub(crate) fn lower_array_intersect(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_indexed_array_set_op(
-        ctx,
-        inst,
-        "array_intersect",
-        "__rt_array_intersect",
-        "__rt_array_intersect_refcounted",
-        Some("__rt_array_intersect_str"),
-    )
+    lower_indexed_array_set_op(ctx, inst, "array_intersect", "__rt_array_intersect_to_hash")
 }
 
 /// Lowers `array_diff_key()` for two associative arrays by filtering first-operand keys.

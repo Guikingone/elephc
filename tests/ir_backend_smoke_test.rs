@@ -4811,9 +4811,13 @@ fn ir_backend_handles_indexed_array_reverse() {
 }
 
 /// Verifies indexed-array deduplication returns first occurrences without mutating the source.
+///
+/// The survivors keep their SOURCE keys, as php does — `array_unique([1,2,1,3,2])` is
+/// `{0:1, 1:2, 3:3}` — so the third survivor is read at `[3]`, not at the `[2]` a reindexed
+/// result used to put it at.
 #[test]
 fn ir_backend_handles_indexed_array_unique() {
-    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
+    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
     assert_eq!(
         compile_and_run_ir_backend("array_unique_indexed", source),
         "3:123:5:12132"
@@ -4845,13 +4849,17 @@ fn ir_backend_handles_indexed_array_merge_empty_left() {
 fn ir_backend_handles_indexed_array_set_operations() {
     for (name, source, expected) in [
         (
+            // The survivors keep their SOURCE keys, as php does: `array_diff([1,2,3,4], [2,4])`
+            // is `{0:1, 2:3}`, so the second survivor is read at `[2]`.
             "array_diff_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[2];",
             "2:1:3",
         ),
         (
+            // Likewise `array_intersect([1,2,3,4], [2,4,6])` is `{1:2, 3:4}` — neither survivor
+            // sits at key 0, which is exactly what a reindexed result got wrong.
             "array_intersect_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[1]; echo ':'; echo $c[3];",
             "2:2:4",
         ),
     ] {
