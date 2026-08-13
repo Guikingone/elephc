@@ -6392,6 +6392,45 @@ unlink("rtchain.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `file_get_contents()` reads a RUN-TIME `php://filter` URL through the chain.
+///
+/// The literal spelling worked and `fopen()` on the same dynamic URL worked; the byte reader
+/// was the one consumer left out, because it never creates a stream and a filter chain has
+/// nowhere to attach. The route opens the RESOURCE through the same runtime openers `fopen()`
+/// dispatches to — a plain file and a data:// URI are both covered here — attaches the parked
+/// chain, and reads through it.
+///
+/// The failure wording is part of the assertion: php names `file_get_contents` and the WHOLE
+/// URL with the wrapper's generic `operation failed`, not the inner opener and the bare
+/// resource path — the inner warning is suppressed through the same depth counter `@` uses,
+/// so the `@`-suppressed probe must print nothing at all.
+#[test]
+fn test_file_get_contents_reads_a_run_time_filter_url() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("fgcrt.txt", "Hello World");
+$res = "fgcrt" . ".txt";
+echo file_get_contents("php://filter/read=string.toupper|string.rot13/resource=" . $res), "|";
+echo file_get_contents("php://filter/read=string.toupper/resource=data://text/plain," . "abc"), "|";
+var_dump(@file_get_contents("php://filter/read=string.toupper/resource=" . "absent.txt"));
+echo file_get_contents("php://filter/read=no.such|missing.too/resource=" . $res), "|";
+var_dump(file_get_contents("php://filter/read=string.toupper/resource=" . "absent.txt"));
+unlink("fgcrt.txt");
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "URYYB JBEYQ|ABC|bool(false)\nHello World|bool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: file_get_contents(php://filter/read=string.toupper/resource=absent.txt): \
+         Failed to open stream: operation failed\n",
+        "one warning, php's wording, from the unsuppressed failure only"
+    );
+}
+
 /// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
 ///
 /// The direction is published from the resolved count, so this is the case that distinguishes

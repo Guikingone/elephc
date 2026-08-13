@@ -97,7 +97,19 @@ fn emit_file_get_contents_bytes(
     let explicit_context = inst.operands.get(2).copied();
     begin_fopen_context_scope(ctx, explicit_context)?;
     load_string_to_result(ctx, path, "file_get_contents filename")?;
+    // A filename assembled at run time may be a `php://filter/...` URL. The plain byte reader
+    // below never creates a stream, so a filter chain would have nowhere to attach: the route
+    // parses first and reads through a real stream when the URL names a filter, and falls
+    // through with the path swapped to the RESOURCE when it names none the runtime knows.
+    let filter_done = if path_literal.is_none() {
+        Some(super::emit_dynamic_php_filter_read_route(ctx)?)
+    } else {
+        None
+    };
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+    if let Some(done) = filter_done {
+        ctx.emitter.label(&done);
+    }
     Ok(true)
 }
 

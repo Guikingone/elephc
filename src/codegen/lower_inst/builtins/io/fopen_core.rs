@@ -78,7 +78,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is
 /// parked by the parse and attached after boxing, which is why nothing here needs to know how to
 /// open the resource itself.
-fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
     let unchanged = ctx.next_label("fopen_dynamic_not_filter");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

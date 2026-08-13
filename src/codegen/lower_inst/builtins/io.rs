@@ -212,8 +212,235 @@ fn emit_literal_php_filter_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,
 ) -> Result<()> {
+    // php names `file_get_contents` and the WHOLE URL when a filtered open fails, with the
+    // wrapper's generic `operation failed`; the literal resource open underneath would name
+    // `fopen` and the bare resource path with its own errno. Its warnings are suppressed
+    // through the same depth counter `@` uses, and the php-worded line is composed from the
+    // literal URL when the boxed result is not a resource — the same shape the dynamic route
+    // gives an assembled URL, so the two spellings cannot drift apart.
+    abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
     emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::ReadOnly, path)?;
+    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    let opened = ctx.next_label("fgc_filter_lit_opened");
+    let (url_label, url_len) = ctx.data.add_string(path.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("b.eq {}", opened));
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fgc_prefix");
+            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: file_get_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", &url_label);            // the literal URL
+            abi::emit_load_int_immediate(ctx.emitter, "x2", url_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("je {}", opened));
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fgc_prefix");
+            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: file_get_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", &url_label);           // the literal URL
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", url_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov rsi, {}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&opened);
     emit_open_read_close_tail(ctx, "fgc_filter")
+}
+
+/// Gives a RUN-TIME `php://filter/...` filename the read `fopen()` already performs.
+///
+/// The literal spelling is resolved during lowering above; a URL assembled at run time reached
+/// the plain byte reader, which never creates a stream, so the filter chain had nowhere to
+/// attach and the read failed loudly naming the whole URL as a path. This route mirrors the
+/// dynamic `fopen()` shape instead: the parse publishes the filter list and swaps the path to
+/// the RESOURCE, the resource is opened read-only through the same runtime openers `fopen()`
+/// dispatches to, the pending chain is attached once the stream is boxed, and the bytes come
+/// back through the shared open-read-close tail.
+///
+/// Emits everything up to and including the fall-through label; the caller places the returned
+/// done-label AFTER its plain reader, so the streamed result skips it. A URL that names no
+/// usable filter falls through WITH the swapped resource, which is the unfiltered open php
+/// performs for the same URL.
+fn emit_dynamic_php_filter_read_route(ctx: &mut FunctionContext<'_>) -> Result<String> {
+    let fall_through = ctx.next_label("fgc_dynf_plain");
+    let done = ctx.next_label("fgc_dynf_done");
+    let try_data = ctx.next_label("fgc_dynf_try_data");
+    let try_http = ctx.next_label("fgc_dynf_try_http");
+    let open_file = ctx.next_label("fgc_dynf_file");
+    let boxed = ctx.next_label("fgc_dynf_boxed");
+    // The full URL is what php names in the failure warning, and the parse is about to swap the
+    // registers to the RESOURCE, so the pair is saved first. Every exit releases it.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+        Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+    }
+    fopen_core::emit_dynamic_php_filter_swap(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_pending_mode");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // did the URL park a filter to attach?
+            ctx.emitter.instruction(&format!("cbz x9, {}", fall_through));      // no: the plain reader handles the (possibly swapped) path
+            // The openers name themselves and the RESOURCE when they fail; php names
+            // `file_get_contents` and the whole URL, so their warnings are suppressed and the
+            // php-worded one is composed below once the outcome is known.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // -- the resource decides the opener, exactly as it does for fopen() --
+            ctx.emitter.instruction("cmp x2, #6");                              // long enough for php://?
+            ctx.emitter.instruction(&format!("b.lt {}", try_data));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // one candidate scheme byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", try_data));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // the wrapper opener takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+            ctx.emitter.instruction(&format!("b {}", boxed));
+            ctx.emitter.label(&try_data);
+            ctx.emitter.instruction("cmp x2, #8");                              // data:// plus at least a comma
+            ctx.emitter.instruction(&format!("b.lt {}", try_http));
+            for (offset, byte) in b"data://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", try_http));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // the data decoder takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");
+            ctx.emitter.instruction(&format!("b {}", boxed));
+            ctx.emitter.label(&try_http);
+            ctx.emitter.instruction("cmp x2, #7");                              // long enough for http://?
+            ctx.emitter.instruction(&format!("b.lt {}", open_file));
+            for (offset, byte) in b"http://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", open_file));
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_http_open_url");            // takes the pair in x1/x2 as staged
+            ctx.emitter.instruction(&format!("b {}", boxed));
+            ctx.emitter.label(&open_file);
+            abi::emit_symbol_address(ctx.emitter, "x3", "_fgc_mode_r");         // file_get_contents opens read-only
+            ctx.emitter.instruction("mov x4, #1");                              // one mode byte
+            abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_pending_mode");
+            ctx.emitter.instruction("mov r9, QWORD PTR [r9]");                  // did the URL park a filter to attach?
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", fall_through));           // no: the plain reader handles the (possibly swapped) path
+            // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            ctx.emitter.instruction("cmp rdx, 6");                              // long enough for php://?
+            ctx.emitter.instruction(&format!("jl {}", try_data));
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", try_data));
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // the wrapper opener takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+            ctx.emitter.instruction(&format!("jmp {}", boxed));
+            ctx.emitter.label(&try_data);
+            ctx.emitter.instruction("cmp rdx, 8");                              // data:// plus at least a comma
+            ctx.emitter.instruction(&format!("jl {}", try_http));
+            for (offset, byte) in b"data://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", try_http));
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // the data decoder takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");
+            ctx.emitter.instruction(&format!("jmp {}", boxed));
+            ctx.emitter.label(&try_http);
+            ctx.emitter.instruction("cmp rdx, 7");                              // long enough for http://?
+            ctx.emitter.instruction(&format!("jl {}", open_file));
+            for (offset, byte) in b"http://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", open_file));
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_http_open_url");            // takes the pair in rax/rdx as staged
+            ctx.emitter.instruction(&format!("jmp {}", boxed));
+            ctx.emitter.label(&open_file);
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fgc_mode_r");        // file_get_contents opens read-only
+            ctx.emitter.instruction("mov rsi, 1");                              // one mode byte
+            abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
+        }
+    }
+    ctx.emitter.label(&boxed);
+    box_stream_fd_or_false_result(ctx, "fgc_dynf");
+    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");        // the parked chain, now the stream exists
+    // A failed filtered open warns in php's own words: the function, the WHOLE URL, and the
+    // wrapper's generic reason — `file_get_contents(<url>): Failed to open stream: operation
+    // failed` — not the inner opener's name and the bare resource path.
+    let opened = ctx.next_label("fgc_dynf_opened");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("b.eq {}", opened));
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fgc_prefix");
+            ctx.emitter.instruction(&format!("mov x2, #{}", "Warning: file_get_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // the saved full URL
+            ctx.emitter.instruction("ldr x2, [sp, #24]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov x2, #{}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // a resource has nothing to warn about
+            ctx.emitter.instruction(&format!("je {}", opened));
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed false across the fragments
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fgc_prefix");
+            ctx.emitter.instruction(&format!("mov rsi, {}", "Warning: file_get_contents(".len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the saved full URL
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_fgc_filter_fail_tail");
+            ctx.emitter.instruction(&format!(
+                "mov rsi, {}",
+                crate::codegen_support::runtime::data::FGC_FILTER_FAIL_TAIL.len()
+            ));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&opened);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the saved URL
+    emit_open_read_close_tail(ctx, "fgc_dynf")?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&fall_through);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // the plain path drops the saved URL too
+    Ok(done)
 }
 
 /// Turns a boxed `fopen()` result already in the result register into the bytes it holds.

@@ -132,6 +132,14 @@ pub(crate) const DISK_FREE_SPACE_WARNING: &str = "Warning: disk_free_space(): ";
 /// The `disk_total_space()` form of [`DISK_FREE_SPACE_WARNING`].
 pub(crate) const DISK_TOTAL_SPACE_WARNING: &str = "Warning: disk_total_space(): ";
 
+/// Tail of the warning a failed run-time `php://filter` read composes.
+///
+/// The wrapper reports the generic `operation failed` rather than the inner opener's errno,
+/// and php names `file_get_contents` and the WHOLE URL ahead of it; the inner opener's own
+/// warning — which would name `fopen` and the bare resource path — is suppressed around the
+/// open.
+pub(crate) const FGC_FILTER_FAIL_TAIL: &str = "): Failed to open stream: operation failed\n";
+
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///
 /// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No
