@@ -552,6 +552,121 @@ const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $
 /// warns about — from a present null, which it does not. `__rt_mixed_from_value` persists a
 /// string payload and increfs a refcounted child on its own, so nothing is increfed here except
 /// the already-boxed cell of `value_type` 7, which is handed back as a share.
+/// `__rt_str_canonical_int`: php's ZEND_HANDLE_NUMERIC — a string is an INT key only in
+/// canonical decimal form: `0`, or `-?[1-9][0-9]*`, within i64. `"01"`, `" 9"`, `"+1"`
+/// and `"1.0"` are all STRING keys (measured php 8.5.6: `$a["01"]` misses on a list).
+/// Returns (ok, value); overflow during accumulation answers not-canonical.
+pub(super) const RT_STR_CANONICAL_INT: &str = r#"(func $__rt_str_canonical_int (param $ptr i32) (param $len i64) (result i32 i64)
+  (local $i i64) (local $c i32) (local $neg i32) (local $acc i64) (local $digits i64)
+  (if (i64.eqz (local.get $len))
+    (then (return (i32.const 0) (i64.const 0))))
+  (local.set $c (i32.load8_u (local.get $ptr)))
+  (if (i32.eq (local.get $c) (i32.const 45))                      ;; '-'
+    (then
+      (local.set $neg (i32.const 1))
+      (local.set $i (i64.const 1))))
+  (if (i64.ge_u (local.get $i) (local.get $len))                  ;; "-" alone
+    (then (return (i32.const 0) (i64.const 0))))
+  ;; A leading zero is canonical ONLY as the single byte "0".
+  (if (i32.eq (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))) (i32.const 48))
+    (then
+      (if (i32.and (i32.eqz (local.get $neg)) (i64.eq (local.get $len) (i64.const 1)))
+        (then (return (i32.const 1) (i64.const 0))))
+      (return (i32.const 0) (i64.const 0))))
+  (block $done (loop $scan
+    (br_if $done (i64.ge_u (local.get $i) (local.get $len)))
+    (local.set $c (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.or (i32.lt_u (local.get $c) (i32.const 48)) (i32.gt_u (local.get $c) (i32.const 57)))
+      (then (return (i32.const 0) (i64.const 0))))
+    ;; acc*10+d with a pre-multiply overflow check, unsigned so i64::MIN's magnitude fits
+    (if (i64.gt_u (local.get $acc) (i64.div_u (i64.const -1) (i64.const 10)))
+      (then (return (i32.const 0) (i64.const 0))))
+    (local.set $acc (i64.add (i64.mul (local.get $acc) (i64.const 10))
+      (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48)))))
+    (local.set $digits (i64.add (local.get $digits) (i64.const 1)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $scan)))
+  (if (i64.eqz (local.get $digits))
+    (then (return (i32.const 0) (i64.const 0))))
+  (if (local.get $neg)
+    (then
+      (if (i64.gt_u (local.get $acc) (i64.const 9223372036854775808))
+        (then (return (i32.const 0) (i64.const 0))))
+      (return (i32.const 1) (i64.sub (i64.const 0) (local.get $acc)))))
+  (if (i64.lt_s (local.get $acc) (i64.const 0))                   ;; past i64::MAX
+    (then (return (i32.const 0) (i64.const 0))))
+  (i32.const 1)
+  (local.get $acc))
+"#;
+
+/// `__rt_array_get_mixed_index`: an indexed-array read whose KEY is a boxed cell.
+///
+/// php's key coercion is NOT `is_numeric` (see `__rt_str_canonical_int`), and the case
+/// matrix was measured on php 8.5.6, diagnostics included:
+///
+///   * a lossy float key deprecates EVEN on the silent path (`$a[2.5] ?? ...` still
+///     reports the precision loss); only the undefined-key WARNING is silenced;
+///   * a null key raises TWO diagnostics on the warning path: the null-offset
+///     deprecation, then `Undefined array key ""`;
+///   * every non-canonical string is a string KEY, which a list never holds — a miss.
+///
+/// Answers an OWNED boxed cell: the element boxed by the array's own value-type stamp,
+/// or a null cell for a miss. The key cell is BORROWED.
+pub(super) fn rt_array_get_mixed_index() -> String {
+    r#"(func $__rt_array_get_mixed_index (param $array i32) (param $key i32) (param $warn i32) (result i32)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (local $ok i32) (local $idx i64) (local $cell i32) (local $f f64)
+  (call $__rt_mixed_unbox (local.get $key))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (block $string_key
+    (if (i64.eqz (local.get $tag))                                ;; int key
+      (then
+        (local.set $idx (local.get $lo))
+        (br $string_key)))
+    (if (i64.eq (local.get $tag) (i64.const 3))                   ;; bool -> 0/1
+      (then
+        (local.set $idx (i64.extend_i32_u (i64.ne (local.get $lo) (i64.const 0))))
+        (br $string_key)))
+    (if (i64.eq (local.get $tag) (i64.const 2))                   ;; float: trunc, deprecate loss
+      (then
+        (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+        (local.set $idx (i64.trunc_sat_f64_s (local.get $f)))
+        (if (f64.ne (local.get $f) (f64.convert_i64_s (local.get $idx)))
+          (then (call $__rt_depr_float_key (local.get $lo))))
+        (br $string_key)))
+    (if (i64.eq (local.get $tag) (i64.const 8))                   ;; null: the "" string key
+      (then
+        (call $__rt_depr_null_key)
+        (if (local.get $warn)
+          (then (call $__rt_warn_undefined_array_key_str (i32.const 0) (i32.const 0))))
+        (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+    (if (i64.eq (local.get $tag) (i64.const 1))                   ;; string: canonical or miss
+      (then
+        (call $__rt_str_canonical_int (i32.wrap_i64 (local.get $lo)) (local.get $hi))
+        (local.set $idx)
+        (local.set $ok)
+        (if (local.get $ok) (then (br $string_key)))
+        (if (local.get $warn)
+          (then (call $__rt_warn_undefined_array_key_str
+            (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))))
+        (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+    ;; array/object/resource as a key: php's TypeError; not modelled past scalars
+    (call $__rt_fail (i32.const 9))
+    (unreachable) ;; elephc-trap:post-noreturn:mixed-key-heap-operand
+  )
+  (local.set $cell (call $__rt_array_elem_to_mixed (local.get $array) (local.get $idx)))
+  (if (i32.eqz (local.get $cell))
+    (then
+      (if (local.get $warn)
+        (then (call $__rt_warn_undefined_array_key_int (local.get $idx))))
+      (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.get $cell))
+"#
+    .to_string()
+}
+
 const RT_ARRAY_ELEM_TO_MIXED: &str = r#"(func $__rt_array_elem_to_mixed (param $array i32) (param $index i64) (result i32)
   (local $vt i64)
   (local $slot i32)

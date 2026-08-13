@@ -95,6 +95,9 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::ArrayNew => &["indexed array literal"],
         Op::ArrayLen => &["`count()` on an indexed array"],
         Op::ArrayGet => &["indexed array offset read"],
+        Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => {
+            &["indexed array read whose key is a string or boxed value"]
+        }
         Op::ArrayGetSilent => &["silent indexed array offset read"],
         Op::ArraySet => &["indexed array offset assignment"],
         Op::ArrayPush => &["indexed array append (`$array[] = ...`)"],
@@ -224,6 +227,9 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::StrConcat => &["codegen_wasm::tests::chained_concat_echoes_correctly"],
         Op::StrIncDec => &["codegen_wasm::tests::str_inc_dec_carries_and_wraps_like_php"],
+        Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => {
+            &["codegen_wasm::tests::mixed_key_reads_apply_php_key_coercion"]
+        }
         Op::StrLen => &["codegen_wasm::tests::strlen_of_literal_invokes_correctly"],
         Op::StrPersist => &[
             "codegen_wasm::tests::str_persist_copies_a_literal_into_owned_heap_bytes",
@@ -319,6 +325,9 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ConstNull => "codegen_wasm::inst::lower_const_null",
         Op::ConstStr => "codegen_wasm::inst::lower_const_str",
         Op::StrIncDec => "codegen_wasm::inst::lower_str_inc_dec",
+        Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => {
+            "codegen_wasm::inst::lower_array_get"
+        }
         Op::StrLen => "codegen_wasm::inst::lower_strlen",
         Op::StrPersist => "codegen_wasm::inst::lower_str_persist",
         Op::StrConcat => "codegen_wasm::inst::lower_str_concat",
@@ -488,6 +497,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::MixedNumericBinop
         | Op::HashToMixed => "mixed",
         Op::StrConcat | Op::ConcatReset | Op::StrLen | Op::StrPersist | Op::StrIncDec => "string",
+        Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => "array_indexed",
         Op::ArrayNew
         | Op::ArrayLen
         | Op::ArrayGet

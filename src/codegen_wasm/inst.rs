@@ -116,7 +116,9 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::Move | Op::Borrow => lower_forward(ctx, &inst),
         Op::ArrayNew => lower_array_new(ctx, &inst),
         Op::ArrayLen => lower_array_len(ctx, &inst),
-        Op::ArrayGet | Op::ArrayGetSilent => lower_array_get(ctx, &inst),
+        Op::ArrayGet | Op::ArrayGetSilent | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent => {
+            lower_array_get(ctx, &inst)
+        }
         Op::ArrayPush => lower_array_push(ctx, &inst),
         Op::ArraySet => lower_array_set(ctx, &inst),
         Op::ArrayToHash => super::inst_hash::lower_array_to_hash(ctx, &inst),
@@ -3730,6 +3732,66 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let result = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("array_get without a result".to_string()))?;
+    // A BOXED key goes through php's key coercion — canonical-decimal strings only,
+    // floats truncating under a deprecation, null as the "" string key — which is a
+    // different contract from every scalar conversion this file lowers. The helper
+    // answers an owned cell (the element by the array's stamp, or null on a miss).
+    if matches!(
+        ctx.function.value(index).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed) | IrType::Str)
+    ) {
+        let warn = if matches!(inst.op, Op::ArrayGet | Op::ArrayGetMixedKey) { 1 } else { 0 };
+        ctx.emit_load_value(array)?;
+        // A concrete string key is boxed for the call; the helper borrows it and the
+        // temporary is released right after.
+        let key_temp = if matches!(ctx.function.value(index).map(|v| v.ir_type), Some(IrType::Str)) {
+            let repr = ctx.value_repr(index)?.clone();
+            let cell = box_value_into_mixed_cell(ctx, index, &repr)?;
+            ctx.fb.ins(&format!("local.get {cell}"), "boxed string key");
+            Some(cell)
+        } else {
+            ctx.emit_load_value(index)?;
+            None
+        };
+        ctx.fb
+            .ins(&format!("i32.const {warn}"), "warn on a miss? (silent reads do not)");
+        ctx.fb.ins(
+            "call $__rt_array_get_mixed_index",
+            "indexed read through php's boxed-key coercion",
+        );
+        if let Some(cell) = key_temp {
+            ctx.fb.ins(
+                &format!("(call $__rt_decref_any (local.get {cell}))"),
+                "release the boxing temporary",
+            );
+        }
+        // An `array<int>` read answers the int|null TAGGED pair: unbox the helper's cell
+        // into (payload, tag) and give the cell back — the pair carries no reference.
+        if matches!(ctx.value_repr(result)?, WasmRepr::Tagged { .. }) {
+            let cell = ctx.fresh_temp(ValType::I32);
+            ctx.fb
+                .ins(&format!("local.set {cell}"), "the helper's owned cell");
+            ctx.fb.ins(
+                &format!("(call $__rt_mixed_unbox (local.get {cell}))"),
+                "read (tag, lo, hi) out of the cell",
+            );
+            ctx.fb.ins("drop", "hi is unused for int|null");
+            let lo = ctx.fresh_temp(ValType::I64);
+            let tag = ctx.fresh_temp(ValType::I64);
+            ctx.fb.ins(&format!("local.set {lo}"), "payload");
+            ctx.fb.ins(&format!("local.set {tag}"), "tag");
+            ctx.fb.ins(
+                &format!("(call $__rt_decref_any (local.get {cell}))"),
+                "the pair carries no reference",
+            );
+            ctx.fb.ins(&format!("local.get {lo}"), "tagged payload");
+            ctx.fb.ins(
+                &format!("(i32.wrap_i64 (local.get {tag}))"),
+                "tagged tag (0 int, 8 null)",
+            );
+        }
+        return ctx.emit_store_value(result);
+    }
     let source_php_type = ctx.value_php_type(array)?;
     let element_type = match &source_php_type {
         PhpType::Array(element) => element.codegen_repr(),

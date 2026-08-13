@@ -466,7 +466,10 @@ fn check_instruction_shape(
         Op::IterStart => iter_start_shape_issue(module, function, inst),
         Op::IncludeOnceMark => include_once_mark_shape_issue(module),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
-        Op::ArrayGet | Op::ArrayGetSilent => {
+        Op::ArrayGet
+        | Op::ArrayGetSilent
+        | Op::ArrayGetMixedKey
+        | Op::ArrayGetMixedKeySilent => {
             array_get_shape_issue(module, function, block, inst)
         }
         Op::HashGet | Op::HashGetSilent => {
@@ -3384,6 +3387,34 @@ fn array_get_shape_issue(
     let Some(index_value) = function.value(*index) else {
         return Some("index operand is missing from the value table".to_string());
     };
+    // A BOXED key is admitted through php's key-coercion helper, which can deprecate
+    // and warn — a command-module rule — and always answers a BOXED cell, so the read's
+    // result must be one for the storage to line up.
+    // A concrete STRING key rides the same coercion (boxed at the call site): a literal
+    // "01" is a string KEY php never converts, exactly like its boxed counterpart.
+    let boxed_key = (index_value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && index_value.php_type.codegen_repr() == PhpType::Mixed)
+        || (index_value.ir_type == IrType::Str
+            && index_value.php_type.codegen_repr() == PhpType::Str);
+    if boxed_key {
+        if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+            return Some("boxed array key diagnostics need the command entry point".to_string());
+        }
+        // An `array<int>` read comes back as the allocation-free int|null TAGGED pair;
+        // everything else stays a boxed cell. Both are exact storages the lowering builds.
+        let tagged = inst.result_type == IrType::TaggedScalar
+            && inst.result_php_type.codegen_repr() == PhpType::TaggedScalar;
+        let cell = inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+            && inst.result_php_type.codegen_repr() == PhpType::Mixed;
+        if !tagged && !cell {
+            return Some(format!(
+                "boxed-key read result is {:?}/{:?}, expected a boxed cell or int|null pair",
+                inst.result_type,
+                inst.result_php_type.codegen_repr()
+            ));
+        }
+        return None;
+    }
     if index_value.ir_type != IrType::I64
         || index_value.php_type.codegen_repr() != PhpType::Int
     {
@@ -8000,6 +8031,8 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::MixedTagOf
         | Op::StrConcat
         | Op::StrIncDec
+        | Op::ArrayGetMixedKey
+        | Op::ArrayGetMixedKeySilent
         | Op::StrLen
         | Op::StrPersist
         | Op::ArrayToMixed
@@ -8116,8 +8149,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::HashCloneShallow
         | Op::HashSpread
         | Op::ArraySetMixedKey
-        | Op::ArrayGetMixedKey
-        | Op::ArrayGetMixedKeySilent
         | Op::ArrayKeyExists
         | Op::OffsetExists
         | Op::OffsetUnset

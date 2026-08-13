@@ -337,7 +337,10 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_DEC_NULL.len() as u32
     + DEPRECATED_INC_STR.len() as u32
     + DEPRECATED_DEC_STR.len() as u32
-    + DEPRECATED_DEC_EMPTY.len() as u32;
+    + DEPRECATED_DEC_EMPTY.len() as u32
+    + DEPRECATED_FLOAT_KEY_PREFIX.len() as u32
+    + DEPRECATED_FLOAT_KEY_SUFFIX.len() as u32
+    + DEPRECATED_NULL_KEY.len() as u32;
 
 /// PHP's `++`/`--` diagnostics, measured on php-src 8.5.6. A bool or null operand
 /// keeps its value and WARNS; a non-numeric string keeps (or perl-increments) its
@@ -354,6 +357,14 @@ const DEPRECATED_DEC_STR: &[u8] =
     b"Deprecated: Decrement on non-numeric string has no effect and is deprecated\n";
 const DEPRECATED_DEC_EMPTY: &[u8] =
     b"Deprecated: Decrement on empty string is deprecated as non-numeric\n";
+
+/// Array-key conversion deprecations, measured on php 8.5.6. The float one carries the
+/// rendered value between its fragments; BOTH fire even on the silent read path — only
+/// the undefined-key warning is silenced there.
+const DEPRECATED_FLOAT_KEY_PREFIX: &[u8] = b"Deprecated: Implicit conversion from float ";
+const DEPRECATED_FLOAT_KEY_SUFFIX: &[u8] = b" to int loses precision\n";
+const DEPRECATED_NULL_KEY: &[u8] =
+    b"Deprecated: Using null as an array offset is deprecated, use an empty string instead\n";
 
 /// Name of the mutable global holding the `@` suppression DEPTH.
 pub(super) const DIAG_SUPPRESS_GLOBAL: &str = "__diag_suppress";
@@ -716,6 +727,10 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         DEPRECATED_INC_STR,
         DEPRECATED_DEC_STR,
         DEPRECATED_DEC_EMPTY,
+        // Appended LAST for the same reason as every group above it.
+        DEPRECATED_FLOAT_KEY_PREFIX,
+        DEPRECATED_FLOAT_KEY_SUFFIX,
+        DEPRECATED_NULL_KEY,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -779,12 +794,44 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     emit_foreach_warning_runtime(wm, &warning_offsets[53..55]);
     emit_constant_redefinition_warning(wm, &warning_offsets[57..60]);
     emit_inc_dec_diag_runtime(wm, &warning_offsets[60..66]);
+    emit_mixed_key_diag_runtime(wm, &warning_offsets[66..69]);
+    // The boxed-key getter calls those two deprecations, so it is emitted with them.
+    wm.add_raw_func(super::arrays::RT_STR_CANONICAL_INT);
+    wm.add_raw_func(&super::arrays::rt_array_get_mixed_index());
     emit_arithmetic_coercion_runtime(
         wm,
         &warning_offsets[55..57],
         &warning_offsets[5..7],
         warning_offsets[33],
     );
+}
+
+/// Emits the two array-key conversion deprecations. The float one renders the key
+/// through `__rt_ftoa` between its fragments, exactly as php prints it.
+fn emit_mixed_key_diag_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 3);
+    let (fp, fl) = offsets[0];
+    let (sp, sl) = offsets[1];
+    let (np, nl) = offsets[2];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_depr_float_key (param $bits i64)
+  (local $ptr i32) (local $len i32)
+  (if (global.get $__diag_suppress) (then (return)))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {fp}) (i32.const {fl}))
+  (call $__rt_ftoa (local.get $bits)
+    (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80)
+    (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792)
+    (i32.add (global.get $__float_scratch) (i32.const 4096)))
+  (local.set $len)
+  (local.set $ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {sp}) (i32.const {sl})))"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_depr_null_key
+  (if (global.get $__diag_suppress) (then (return)))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {np}) (i32.const {nl})))"#
+    ));
 }
 
 /// Emits the six `++`/`--` diagnostic helpers, one per measured PHP message.

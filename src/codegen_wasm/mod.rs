@@ -3832,6 +3832,55 @@ mod tests {
         }
     }
 
+    /// Verifies a boxed key routes through php's key coercion helper and, for an
+    /// `array<int>` read, unwraps the helper's cell into the int|null TAGGED pair.
+    ///
+    /// Execution truth is held by the countdown/mkey probes (byte-identical to
+    /// `php -n` under node AND wasmer); this pins the emitted lowering so a
+    /// regression is visible without a runtime.
+    #[test]
+    fn mixed_key_reads_apply_php_key_coercion() {
+        let mut module = Module::new(Target::wasm());
+        let key = module.data.intern_string("01");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(Op::ArrayNew, vec![], Some(Immediate::Capacity(1)),
+                      IrType::Heap(IrHeapKind::Array),
+                      PhpType::Array(Box::new(PhpType::Int)), Ownership::Owned)
+                .unwrap();
+            let ten = b.emit_const_i64(10);
+            let arr = b
+                .emit(Op::ArrayPush, vec![arr, ten], None, IrType::Heap(IrHeapKind::Array),
+                      PhpType::Array(Box::new(PhpType::Int)), Ownership::Owned)
+                .unwrap();
+            let ks = b.emit_const_str(key);
+            let hit = b
+                .emit(Op::ArrayGetMixedKeySilent, vec![arr, ks], None,
+                      IrType::TaggedScalar, PhpType::TaggedScalar, Ownership::NonHeap)
+                .unwrap();
+            let _ = b.emit(Op::IsNull, vec![hit], None, IrType::I64, PhpType::Bool,
+                           Ownership::NonHeap);
+            let _ = b.emit(Op::Release, vec![arr], None, IrType::Void, PhpType::Void,
+                           Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        let wat = generate(&module, Emit::Executable).expect("boxed-key read should lower");
+        assert!(wat.contains("call $__rt_array_get_mixed_index"), "{wat}");
+        assert!(wat.contains("boxed string key"), "{wat}");
+        assert!(
+            wat.contains("tagged tag (0 int, 8 null)"),
+            "the array<int> result must unwrap to the tagged pair: {wat}"
+        );
+        assert!(wat.contains("$__rt_str_canonical_int"), "{wat}");
+    }
+
     /// Verifies `++` on strings carries and wraps the way php does: `"z"` wraps to a
     /// prepended `"aa"`, `"9"` converts numerically to int 10, and `"Zz9"` carries
     /// through all three character classes to `"AAa0"`.
