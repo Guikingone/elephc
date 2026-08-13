@@ -146,6 +146,7 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
 mod min_max_container;
+mod filter_truthy;
 mod natcmp;
 mod natsort;
 mod object_free_deep;
@@ -517,6 +518,7 @@ pub use shuffle::{emit_shuffle, emit_shuffle_str};
 /// Emit array shuffle helper.
 pub use sort_int::emit_sort_int;
 /// Emit string sort helper.
+pub use filter_truthy::emit_filter_truthy_predicates;
 pub use natcmp::emit_natcmp;
 pub use sort_str::{emit_natsort_str, emit_sort_str};
 /// Emit undefined integer array key warning helper.

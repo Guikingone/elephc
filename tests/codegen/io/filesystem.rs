@@ -467,6 +467,35 @@ unlink("mgd/f.txt"); rmdir("mgd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `array_filter($array)` with NO callback, which php defines as "keep the truthy".
+///
+/// php-src declares `array_filter(array $array, ?callable $callback = null, int $mode = 0)`,
+/// so one argument is valid — but the registry carried `min_args: 2`, reproducing a legacy
+/// check arm that refused `array_filter($rows)` outright at compile time. The implicit
+/// predicate carries the callback wrapper's own ABI, so the existing filter loops drive it
+/// unchanged rather than a second loop being grown alongside them.
+///
+/// The string cases are the ones worth pinning: php's ONLY falsy strings are `""` and `"0"`,
+/// so `"00"` and `"0.0"` survive. An explicit `null` callback is asserted too — php accepts it
+/// identically to omitting the argument.
+#[test]
+fn test_array_filter_without_a_callback_keeps_phps_truthy_values() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+echo implode(",", array_filter(["a", "", "c", "0", "00", "0.0"])), "|";
+echo implode(",", array_filter([1, 0, 2, -1])), "|";
+echo implode(",", array_filter(["x", "y"], null)), "|";
+echo count(array_filter([])), "|";
+mkdir("fld");
+file_put_contents("fld/f.txt", "1");
+echo implode(",", array_filter(scandir("fld")));
+unlink("fld/f.txt"); rmdir("fld");
+"#,
+    );
+    assert_eq!(out, "a,c,00,0.0|1,2,-1|x,y|0|.,..,f.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `natsort()` and `natcasesort()` on STRING arrays against php's natural order.
 ///
 /// The comparator is a from-scratch `strnatcmp_ex`: whitespace skipped before a field

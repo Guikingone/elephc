@@ -46,6 +46,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_sort_int(emitter, true);
     arrays::emit_sort_str(emitter, false);
     arrays::emit_sort_str(emitter, true);
+    arrays::emit_filter_truthy_predicates(emitter);
     arrays::emit_natcmp(emitter, "__rt_natcmp", false);
     arrays::emit_natcmp(emitter, "__rt_natcasecmp", true);
     arrays::emit_natsort_str(emitter);
