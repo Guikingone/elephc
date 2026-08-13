@@ -632,12 +632,11 @@ impl RuntimeFnId {
             // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
             // checked call-site type — read the boxed Mixed cell as a raw array pointer and
             // hand back its header words as integers.
-            // `Scandir` left this list when its result became a boxed `array|false`, the same
-            // exit `Fgetcsv` made: the boxed cell IS the representation the lowering builds.
+            // `Scandir`, `File` and `Glob` left this list when their results became boxed
+            // `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation
+            // the lowering builds.
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
-            | RuntimeFnId::File
-            | RuntimeFnId::Glob
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),

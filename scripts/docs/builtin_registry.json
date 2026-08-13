@@ -18081,7 +18081,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "file",
@@ -24444,7 +24444,7 @@
           "type": "string"
         }
       ],
-      "return_type": "array",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "glob",

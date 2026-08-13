@@ -836,15 +836,14 @@ mod tests {
 
     /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
     ///
-    /// `Scandir` left this list when its result became a boxed `array|false`, the same exit
-    /// `Fgetcsv` made: the boxed cell IS the representation the lowering builds, and refining
-    /// it to a raw array here made a synthesized call read the box as an array header.
+    /// `Scandir`, `File` and `Glob` left this list when their results became boxed
+    /// `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation the
+    /// lowering builds, and refining it to a raw array here made a synthesized call read the
+    /// box as an array header.
     #[test]
     fn array_runtime_fallbacks_preserve_backend_container_layout() {
         for target in [
             crate::ir::RuntimeFnId::Explode,
-            crate::ir::RuntimeFnId::File,
-            crate::ir::RuntimeFnId::Glob,
             crate::ir::RuntimeFnId::SplClasses,
         ] {
             assert_eq!(
@@ -854,10 +853,17 @@ mod tests {
                 target.as_eir(),
             );
         }
-        assert_eq!(
-            crate::ir::RuntimeFnId::Scandir.fallback_result_type(&[], &PhpType::Mixed),
-            PhpType::Mixed,
-            "scandir's boxed array|false must NOT be refined to a raw array",
-        );
+        for target in [
+            crate::ir::RuntimeFnId::Scandir,
+            crate::ir::RuntimeFnId::File,
+            crate::ir::RuntimeFnId::Glob,
+        ] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Mixed,
+                "{}'s boxed array|false must NOT be refined to a raw array",
+                target.as_eir(),
+            );
+        }
     }
 }

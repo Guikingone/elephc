@@ -105,41 +105,23 @@ pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_scandir");
-    // The box RETAINS a tag-4 payload, and the runtime's own creation reference was never
-    // released, so the listing sat at refcount 2: `sort($d)`'s copy-on-write split then sorted
-    // a COPY while the box kept pointing at the unsorted original. The box is the sole owner.
-    let no_release = ctx.next_label("scandir_no_release");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_push_reg(ctx.emitter, "x0");                              // the creator's raw listing (or null)
-            box_indexed_array_or_false_result(ctx, "scandir");
-            abi::emit_pop_reg(ctx.emitter, "x9");
-            ctx.emitter.instruction(&format!("cbz x9, {}", no_release));        // a failed listing has nothing to release
-            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed result across the release
-            ctx.emitter.instruction("mov x0, x9");
-            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-            abi::emit_pop_reg(ctx.emitter, "x0");
-            ctx.emitter.label(&no_release);
-        }
-        Arch::X86_64 => {
-            abi::emit_push_reg(ctx.emitter, "rax");                             // the creator's raw listing (or null)
-            box_indexed_array_or_false_result(ctx, "scandir");
-            abi::emit_pop_reg(ctx.emitter, "r9");
-            ctx.emitter.instruction("test r9, r9");
-            ctx.emitter.instruction(&format!("jz {}", no_release));             // a failed listing has nothing to release
-            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed result across the release
-            ctx.emitter.instruction("mov rax, r9");                             // the decref family reads rax
-            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-            abi::emit_pop_reg(ctx.emitter, "rax");
-            ctx.emitter.label(&no_release);
-        }
-    }
+    // The shared helper makes the box the listing's sole owner; see its doc for the
+    // copy-on-write consequence of leaving the creation reference alive.
+    box_listing_or_false_result(ctx, "scandir");
     store_if_result(ctx, inst)
 }
 
 /// Lowers `glob(pattern)` through the target-aware runtime glob expansion helper.
 pub(crate) fn lower_glob(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "glob", "__rt_glob")
+    // php's signature is array|false, so the listing is boxed like scandir's. The runtime
+    // never produces the false today — a pattern with no matches answers the empty array,
+    // exactly as php does — but the union is what the checker now declares.
+    super::super::ensure_arg_count(inst, "glob", 1)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "glob")?;
+    abi::emit_call_label(ctx.emitter, "__rt_glob");
+    box_listing_or_false_result(ctx, "glob");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `chmod(path, mode)` through the target-aware runtime helper.

@@ -583,6 +583,42 @@ pub(super) fn box_indexed_array_or_false_result(
     }
 }
 
+/// Boxes a raw listing pointer as `array|false` and makes the box the listing's SOLE owner.
+///
+/// The plain boxer leaves the creation reference alive: the tag-4 box RETAINS its payload, so
+/// the listing sat at refcount 2 and `sort($d)`'s copy-on-write split sorted a COPY while the
+/// box kept pointing at the unsorted original. Callers whose runtime helper hands back a
+/// freshly created array (scandir, glob, file) release that creation reference here, right
+/// after the box takes its own.
+pub(super) fn box_listing_or_false_result(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    let no_release = ctx.next_label(&format!("{}_no_release", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the creator's raw listing (or null)
+            box_indexed_array_or_false_result(ctx, label_prefix);
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            ctx.emitter.instruction(&format!("cbz x9, {}", no_release));        // a failed listing has nothing to release
+            abi::emit_push_reg(ctx.emitter, "x0");                              // hold the boxed result across the release
+            ctx.emitter.instruction("mov x0, x9");
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            ctx.emitter.label(&no_release);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the creator's raw listing (or null)
+            box_indexed_array_or_false_result(ctx, label_prefix);
+            abi::emit_pop_reg(ctx.emitter, "r9");
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", no_release));             // a failed listing has nothing to release
+            abi::emit_push_reg(ctx.emitter, "rax");                             // hold the boxed result across the release
+            ctx.emitter.instruction("mov rax, r9");                             // the decref family reads rax
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.label(&no_release);
+        }
+    }
+}
+
 /// Boxes the raw stat hash payload into PHP `array|false` Mixed form.
 pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("stat_array_false");

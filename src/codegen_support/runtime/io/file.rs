@@ -69,6 +69,10 @@ pub fn emit_file(emitter: &mut Emitter) {
     // this one, and a local label would be dropped by macOS dead-stripping (`.alt_entry` keeps
     // it addressable; the jump is an unconditional `b`, which is what `.alt_entry` supports).
     emitter.label_shared("__rt_file_split");
+    // A null payload pointer is the reader's failure signal — php answers FALSE for a file it
+    // cannot read, and a null return is what the caller's boxing turns into that false. An
+    // EMPTY file arrives as a non-null pointer with length zero and still answers `[]`.
+    emitter.instruction("cbz x1, __rt_file_failed");
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
@@ -129,9 +133,14 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
 
     // -- restore frame and return --
+    emitter.label("__rt_file_out");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label("__rt_file_failed");
+    emitter.instruction("mov x0, #0");                                          // the caller boxes the null as PHP false
+    emitter.instruction("b __rt_file_out");
 }
 
 /// Emits the ARM64 `$flags` handling applied to one complete `file()` line before it is pushed.
@@ -205,6 +214,9 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     // See the AArch64 counterpart: the `jmp` crosses into this entry's section, so the label
     // must survive section-level garbage collection.
     emitter.label_shared("__rt_file_split_x");
+    // See the AArch64 counterpart: a null payload pointer answers null, which boxes to false.
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_file_failed_x");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
 
@@ -257,9 +269,14 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_file_cleanup");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result array pointer in the canonical x86_64 integer result register
+    emitter.label("__rt_file_out_x");
     emitter.instruction("add rsp, 64");                                         // release the temporary file payload and scan-state spill slots used by file()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the line array
     emitter.instruction("ret");                                                 // return the array of file lines to the caller
+
+    emitter.label("__rt_file_failed_x");
+    emitter.instruction("xor eax, eax");                                        // the caller boxes the null as PHP false
+    emitter.instruction("jmp __rt_file_out_x");
 }
 
 /// Emits the x86_64 `$flags` handling applied to one complete `file()` line before it is pushed.

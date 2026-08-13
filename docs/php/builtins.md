@@ -142,7 +142,7 @@ sidebar:
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
 | [`getenv()`](./builtins/filesystem/getenv.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
-| [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern): array` | `array` | ✓ | ✓ |
+| [`glob()`](./builtins/filesystem/glob.md) | `(string $pattern): mixed` | `mixed` | ✓ | ✓ |
 | [`is_dir()`](./builtins/filesystem/is_dir.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_executable()`](./builtins/filesystem/is_executable.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`is_file()`](./builtins/filesystem/is_file.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
@@ -183,7 +183,7 @@ sidebar:
 | [`fgetc()`](./builtins/io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`fgetcsv()`](./builtins/io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./builtins/io/fgets.md) | `(resource $stream, int $length = null): mixed` | `mixed` | ✓ | ✓ |
-| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0, mixed $context = null): array` | `array` | ✓ | ✓ |
+| [`file()`](./builtins/io/file.md) | `(string $filename, int $flags = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_get_contents()`](./builtins/io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file_put_contents()`](./builtins/io/file_put_contents.md) | `(string $filename, mixed $data, int $flags = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`flock()`](./builtins/io/flock.md) | `(resource $stream, int $operation, bool $would_block = null): bool` | `bool` | ✓ | ✓ |

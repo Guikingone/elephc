@@ -97,7 +97,8 @@ pub(in crate::interpreter) fn eval_file_result(
             "Warning: file({path}): Failed to open stream: {}\n",
             crate::stream_resources::EVAL_OPEN_DEFAULT_REASON
         ))?;
-        return values.array_new(0);
+        // php answers false for a file it cannot read, and the compiled runtime agrees.
+        return values.bool_value(false);
     }
     let bytes = match super::file_get_contents::eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => bytes,
@@ -105,7 +106,8 @@ pub(in crate::interpreter) fn eval_file_result(
             values.warning(&format!(
                 "Warning: file({path}): Failed to open stream: {reason}\n"
             ))?;
-            return values.array_new(0);
+            // php answers false for a file it cannot read, and the compiled runtime agrees.
+        return values.bool_value(false);
         }
     };
     eval_file_lines_array(&bytes, flags, values)

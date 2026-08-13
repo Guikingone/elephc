@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function file(string $filename, int $flags = 0, mixed $context = null): array
+function file(string $filename, int $flags = 0, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces

@@ -480,6 +480,9 @@ pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     // own read fails (the route has already warned in php's words).
     emit_file_flags_then_call(ctx, flags, "__rt_file_from_bytes")?;
     ctx.emitter.label(&after);
+    // php's signature is array|false: the runtime answers NULL for a file it cannot read, and
+    // the shared boxer turns that into PHP false while making the box the listing's sole owner.
+    box_listing_or_false_result(ctx, "file");
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)
 }

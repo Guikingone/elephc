@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function glob(string $pattern): array
+function glob(string $pattern): mixed
 ```
 
 ## What the type checker enforces
