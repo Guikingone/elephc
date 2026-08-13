@@ -15,7 +15,7 @@ use crate::support::*;
 /// A hello-world program should still produce correct output after dead stripping.
 #[test]
 fn test_hello_world_after_dead_strip() {
-    let out = compile_and_run(r#"<?php echo "hello\n";"#);
+    let out = compile_cli_file_and_run(r#"<?php echo "hello\n";"#, &[]);
     assert_eq!(out, "hello\n");
 }
 
@@ -41,12 +41,13 @@ fn test_hash_program_after_dead_strip() {
 /// A program that uses classes should keep object/vtable helpers and run correctly.
 #[test]
 fn test_class_program_after_dead_strip() {
-    let out = compile_and_run(
+    let out = compile_cli_file_and_run(
         r#"<?php
 class Foo { public int $x = 42; }
 $f = new Foo();
 echo $f->x;
 "#,
+        &[],
     );
     assert_eq!(out, "42");
 }

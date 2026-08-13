@@ -31,7 +31,7 @@ pub struct Emitter {
     /// footer that keeps each `__rt_*` helper a single atom (local labels never
     /// start an atom) while remaining valid conditional-branch targets on every
     /// toolchain, so the linker's `-dead_strip` drops whole unreferenced helpers.
-    /// Only set for the macOS executable runtime object; Linux uses per-section
+    /// Set for macOS executable runtime and user objects; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
@@ -87,7 +87,8 @@ impl Emitter {
     }
 
     /// Takes ownership of the recorded internal-label names, clearing the set.
-    /// Called once after runtime emission to drive `localize_internal_labels`.
+    /// Called once after runtime or user-text emission to drive
+    /// `localize_internal_labels`.
     pub fn take_internal_labels(&mut self) -> HashSet<String> {
         std::mem::take(&mut self.internal_labels)
     }
@@ -281,9 +282,9 @@ impl Emitter {
 /// assembler-local labels, and `L`-prefixed labels also do not start a new atom,
 /// so each `__rt_*` helper stays a single dead-strippable unit. Matching is
 /// whole-token (identifier runs of `[A-Za-z0-9_$]`), so a name is never rewritten
-/// inside a longer identifier; non-identifier text (including UTF-8 in comments)
-/// is copied verbatim. Apply to the runtime text only — the runtime `.data` never
-/// references internal labels, and skipping it avoids touching string literals.
+/// inside a longer identifier. Quoted assembly strings are copied verbatim, so
+/// user string constants cannot be changed when user metadata references one of
+/// the localized labels.
 pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String {
     if internal.is_empty() {
         return asm.to_string();
@@ -293,7 +294,23 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
     let mut out = String::with_capacity(asm.len());
     let mut i = 0;
     while i < bytes.len() {
-        if is_ident(bytes[i]) {
+        if bytes[i] == b'"' {
+            let start = i;
+            i += 1;
+            let mut escaped = false;
+            while i < bytes.len() {
+                let byte = bytes[i];
+                i += 1;
+                if escaped {
+                    escaped = false;
+                } else if byte == b'\\' {
+                    escaped = true;
+                } else if byte == b'"' {
+                    break;
+                }
+            }
+            out.push_str(&asm[start..i]);
+        } else if is_ident(bytes[i]) {
             let start = i;
             while i < bytes.len() && is_ident(bytes[i]) {
                 i += 1;
@@ -305,13 +322,35 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
             out.push_str(token);
         } else {
             let start = i;
-            while i < bytes.len() && !is_ident(bytes[i]) {
+            while i < bytes.len() && !is_ident(bytes[i]) && bytes[i] != b'"' {
                 i += 1;
             }
             out.push_str(&asm[start..i]);
         }
     }
     out
+}
+
+/// Emits Mach-O directives that preserve every global atom in a generated data fragment.
+///
+/// User metadata contains tables whose entries are addressed by base pointer and offset rather
+/// than one relocation per entry. Under `.subsections_via_symbols`, marking only the table head
+/// live lets `-dead_strip` discard later global entry atoms and corrupt that contiguous layout.
+/// Call this only for generated data fragments; function symbols must remain independently
+/// strippable.
+pub fn macos_no_dead_strip_global_data(asm: &str) -> String {
+    let mut seen = HashSet::new();
+    let mut directives = String::new();
+    for line in asm.lines() {
+        let Some(symbol) = line.trim().strip_prefix(".globl ") else {
+            continue;
+        };
+        let symbol = symbol.trim();
+        if !symbol.is_empty() && seen.insert(symbol) {
+            let _ = writeln!(directives, ".no_dead_strip {symbol}");
+        }
+    }
+    directives
 }
 
 #[cfg(test)]
@@ -344,5 +383,26 @@ mod tests {
         let mut linux_x86 = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         linux_x86.emit_text_prelude();
         assert_eq!(linux_x86.output(), ".intel_syntax noprefix\n.text\n");
+    }
+
+    /// Verifies internal symbol references are localized without rewriting quoted user bytes.
+    #[test]
+    fn test_localize_internal_labels_preserves_assembly_strings() {
+        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let asm = "    b _eir_branch_1\n_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n";
+        assert_eq!(
+            localize_internal_labels(asm, &internal),
+            "    b L_eir_branch_1\nL_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n"
+        );
+    }
+
+    /// Verifies data preservation directives retain unique globals without rooting local labels.
+    #[test]
+    fn test_macos_no_dead_strip_global_data_deduplicates_symbols() {
+        let asm = ".data\n.globl _table\n_table:\nLentry:\n.globl _table\n.globl _rows\n_rows:\n";
+        assert_eq!(
+            macos_no_dead_strip_global_data(asm),
+            ".no_dead_strip _table\n.no_dead_strip _rows\n"
+        );
     }
 }
