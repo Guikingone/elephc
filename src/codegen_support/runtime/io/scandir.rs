@@ -85,13 +85,13 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("b __rt_scandir_strlen");                               // continue scanning the filename
     emitter.label("__rt_scandir_name_ready");
 
-    // -- copy name to concat_buf so it persists after next readdir call --
-    emitter.instruction("str x0, [sp, #16]");                                   // save dirent pointer (will be clobbered)
-    emitter.instruction("bl __rt_str_persist");                                 // copy string to heap, x1=new ptr, x2=len
-
     // -- push name string to array --
+    // `__rt_array_push_str` persists the (pointer, length) pair itself, so persisting the
+    // entry name here first allocated a SECOND owned block that nothing ever stored or
+    // freed: one orphan per directory entry, every call. The x86_64 path below always
+    // pushed the raw `d_name` pair directly, which is why this leaked on AArch64 alone.
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload array pointer
-    emitter.instruction("bl __rt_array_push_str");                              // push name to array
+    emitter.instruction("bl __rt_array_push_str");                              // persist and push the name (x1 = d_name, x2 = its length)
     emitter.instruction("str x0, [sp, #8]");                                    // update array pointer after possible realloc
     emitter.instruction("b __rt_scandir_loop");                                 // continue reading entries
 
