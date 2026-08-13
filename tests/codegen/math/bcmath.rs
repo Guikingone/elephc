@@ -77,6 +77,19 @@ echo bcround('12.345', 2, 3), '|', bcround('12.355', 2, 4);
     assert_eq!(out, "-1|-2|10|9|12.34|12.35");
 }
 
+/// Verifies directional rounding modes 5 through 8 use PHP's integer mapping.
+#[test]
+fn test_bcround_directional_modes_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([5, 6, 7, 8] as $mode) {
+    echo bcround('9.5', 0, $mode), ':', bcround('-9.5', 0, $mode), '|';
+}
+"#,
+    );
+    assert_eq!(out, "10:-9|9:-10|9:-9|10:-10|");
+}
+
 /// Verifies `bcscale()` setter/getter state and omitted-scale arithmetic in one process.
 #[test]
 fn test_bcscale_then_omitted_scale() {

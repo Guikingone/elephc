@@ -75,6 +75,26 @@ return bcscale();"#,
     assert_eq!(values.get(result), FakeValue::Int(4));
 }
 
+/// Verifies eval maps directional rounding mode integers exactly like PHP 8.4.
+#[test]
+fn execute_program_dispatches_bcround_directional_modes() {
+    let _guard = BcmathScaleTestGuard::acquire();
+    let program = parse_fragment(
+        br#"foreach ([5, 6, 7, 8] as $mode) {
+    echo bcround("9.5", 0, $mode), ":", bcround("-9.5", 0, $mode), "|";
+}
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "10:-9|9:-10|9:-9|10:-10|");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval follows PHP's digitless-zero and verbatim-whitespace numeric grammar.
 #[test]
 fn execute_program_dispatches_bcmath_numeric_grammar() {

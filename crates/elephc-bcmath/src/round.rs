@@ -126,10 +126,10 @@ fn should_increment(
         2 => cmp_half > 0,
         3 => cmp_half > 0 || (cmp_half == 0 && retained_last % 2 == 1),
         4 => cmp_half > 0 || (cmp_half == 0 && retained_last % 2 == 0),
-        5 => false,
-        6 => discarded_nonzero,
-        7 => negative && discarded_nonzero,
-        8 => !negative && discarded_nonzero,
+        5 => !negative && discarded_nonzero,
+        6 => negative && discarded_nonzero,
+        7 => false,
+        8 => discarded_nonzero,
         _ => false,
     }
 }
@@ -163,10 +163,10 @@ mod tests {
             (2, "9", "-9"),
             (3, "10", "-10"),
             (4, "9", "-9"),
-            (5, "9", "-9"),
-            (6, "10", "-10"),
-            (7, "9", "-10"),
-            (8, "10", "-9"),
+            (5, "10", "-9"),
+            (6, "9", "-10"),
+            (7, "9", "-9"),
+            (8, "10", "-10"),
         ];
         for (mode, positive, negative) in expected {
             assert_eq!(bc_round("9.5", 0, mode).expect("round"), positive);
