@@ -212,7 +212,11 @@ pub fn emit_pdo_call_agg_final(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (surfaced as a SQL error)
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
+    emitter.instruction("cbz x0, __rt_pdo_call_agg_final_threw_released");      // tolerate a defensive null exception slot
+    emitter.instruction("bl __rt_decref_any");                                  // release the caught Throwable object
+    emitter.label("__rt_pdo_call_agg_final_threw_released");
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #-1");                                        // ElephcResult tag -1 = ERROR
     emitter.instruction("str x10, [x11, #0]");                                  // out.tag = -1
@@ -394,7 +398,12 @@ fn emit_pdo_call_agg_final_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
+    emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
+    emitter.instruction("jz __rt_pdo_call_agg_final_threw_released_x86");      // tolerate a defensive null exception slot
+    emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
+    emitter.label("__rt_pdo_call_agg_final_threw_released_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], -1");                             // out.tag = -1 (ERROR)
 

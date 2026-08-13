@@ -31,10 +31,11 @@
 //!   pushes its own `setjmp` handler record (identical 240-byte layout to the EIR
 //!   try/catch slot) around the invoke: on a normal return it pops the handler and
 //!   returns the comparator sign; on a `longjmp` it pops the handler, swallows the
-//!   pending exception (SQLite's `xCompare` has no error channel), and returns 0
-//!   (equal). Surfacing the exception at the query boundary is a later hardening
-//!   step; the load-bearing guarantee here is that the `throw` never unwinds past
-//!   this C boundary.
+//!   pending exception, releases the owned Throwable, and returns `i64::MIN`.
+//!   The bridge recognizes that sentinel, interrupts the active SQLite operation,
+//!   and returns a neutral comparison value only while SQLite unwinds to the query
+//!   boundary. The load-bearing guarantee is that the `throw` never crosses this C
+//!   boundary and is never silently treated as a successful equality comparison.
 
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
@@ -174,8 +175,14 @@ pub fn emit_pdo_call_collation(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (no xCompare error channel)
-    emitter.instruction("str xzr, [sp, #304]");                                 // comparator sign = 0 (treat as equal)
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the slot before releasing the caught Throwable
+    emitter.instruction("cbz x0, __rt_pdo_call_collation_threw_released");      // tolerate a defensive null exception slot
+    emitter.instruction("bl __rt_decref_any");                                  // release the swallowed Throwable object
+    emitter.label("__rt_pdo_call_collation_threw_released");
+    emitter.instruction("mov x10, #1");                                         // materialize the callback-error sentinel high bit
+    emitter.instruction("lsl x10, x10, #63");                                   // i64::MIN tells the bridge to interrupt SQLite
+    emitter.instruction("str x10, [sp, #304]");                                // preserve the callback-error sentinel through cleanup
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_pdo_call_collation_cleanup");
@@ -304,8 +311,14 @@ fn emit_pdo_call_collation_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("mov r10, QWORD PTR [rbp - 296]");                      // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (no xCompare error channel)
-    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // comparator sign = 0 (treat as equal)
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the slot before releasing the caught Throwable
+    emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
+    emitter.instruction("jz __rt_pdo_call_collation_threw_released_x86");       // tolerate a defensive null exception slot
+    emitter.instruction("call __rt_decref_any");                                // release the swallowed Throwable object
+    emitter.label("__rt_pdo_call_collation_threw_released_x86");
+    emitter.instruction("movabs r10, 0x8000000000000000");                     // i64::MIN tells the bridge to interrupt SQLite
+    emitter.instruction("mov QWORD PTR [rbp - 72], r10");                      // preserve the callback-error sentinel through cleanup
 
     // -- shared cleanup: release the argument container --
     emitter.label("__rt_pdo_call_collation_cleanup_x86");

@@ -251,7 +251,11 @@ pub fn emit_pdo_call_agg_step(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (surfaced as a SQL error)
+    abi::emit_load_symbol_to_reg(emitter, "x0", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
+    emitter.instruction("cbz x0, __rt_pdo_call_agg_step_threw_released");       // tolerate a defensive null exception slot
+    emitter.instruction("bl __rt_decref_any");                                  // release the caught Throwable object
+    emitter.label("__rt_pdo_call_agg_step_threw_released");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
     emitter.instruction("ldr x0, [sp, #296]");                                  // boxed Mixed argument cell
     emitter.instruction("bl __rt_decref_mixed");                                // release the cell
@@ -457,7 +461,12 @@ fn emit_pdo_call_agg_step_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("mov r10, QWORD PTR [rbp - 304]");                      // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception
+    abi::emit_load_symbol_to_reg(emitter, "rax", "_exc_value", 0); // take ownership of the pending Throwable
+    abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // clear the exception slot before release
+    emitter.instruction("test rax, rax");                                       // was a Throwable actually published?
+    emitter.instruction("jz __rt_pdo_call_agg_step_threw_released_x86");       // tolerate a defensive null exception slot
+    emitter.instruction("call __rt_decref_any");                                // release the caught Throwable object
+    emitter.label("__rt_pdo_call_agg_step_threw_released_x86");
     // release the args container (drops the slot-0 incref) but PRESERVE the accumulator
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // boxed Mixed argument cell
     emitter.instruction("call __rt_decref_mixed");                              // release the cell

@@ -1203,9 +1203,11 @@ echo $db->query("SELECT shout('hi')")->fetchColumn();          // HI!
 Closures, function-name strings, static/instance callable arrays, invokable objects, and
 first-class callables are accepted. A callback that throws never crashes or unwinds
 across SQLite's engine: the exception is caught at the C boundary and the statement fails
-with a `PDOException` (a throwing *collation* comparator is instead treated as "equal",
-since SQLite's comparison has no error channel). A UDF/aggregate returning a **non-scalar**
-value is reported as a callback error instead of being silently converted to SQL `NULL`.
+with a `PDOException`. A throwing collation comparator uses an internal sentinel to
+interrupt the active SQLite operation, rather than silently treating the values as equal.
+The caught `Throwable` is released before control returns to SQLite. A UDF/aggregate
+returning a **non-scalar** value is reported as a callback error instead of being silently
+converted to SQL `NULL`.
 Callbacks may register/replace another callback and execute nested statements on the same
 SQLite connection. The bridge releases its global connection/statement table locks before
 SQLite invokes PHP, while SQLite's own serialized connection mutex remains authoritative.
