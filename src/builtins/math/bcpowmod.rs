@@ -7,21 +7,9 @@
 //! Key details:
 //! - Base, exponent, and modulus are validated as integral decimal strings at runtime.
 
-use crate::builtins::spec::DefaultSpec;
-
 builtin! {
-    name: "bcpowmod",
-    area: Math,
-    params: [
-        num: Str,
-        exponent: Str,
-        modulus: Str,
-        scale: Int = DefaultSpec::Null
-    ],
-    returns: Str,
+    contract: "bcpowmod",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BcPowmod,
     ),
-    summary: "Returns an arbitrary-precision integral modular power.",
-    php_manual: "https://www.php.net/manual/en/function.bcpowmod.php",
 }

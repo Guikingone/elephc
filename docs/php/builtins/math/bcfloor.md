@@ -25,12 +25,6 @@ Rounds an arbitrary-precision decimal number down to an integer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcfloor` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcfloor.md).

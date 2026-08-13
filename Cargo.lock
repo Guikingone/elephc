@@ -662,8 +662,8 @@ dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
  "console",
- "elephc-builtin-contract",
  "elephc-bcmath",
+ "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-image",
  "elephc-magician",
@@ -689,11 +689,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "elephc-builtin-contract"
+name = "elephc-bcmath"
 version = "0.1.0"
 
 [[package]]
-name = "elephc-bcmath"
+name = "elephc-builtin-contract"
 version = "0.1.0"
 
 [[package]]
@@ -733,8 +733,8 @@ dependencies = [
 name = "elephc-magician"
 version = "0.1.0"
 dependencies = [
- "elephc-builtin-contract",
  "elephc-bcmath",
+ "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-phar",
  "flate2",

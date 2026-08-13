@@ -7,12 +7,9 @@
 //! Key details:
 //! - The shared hook returns PHP integer `-1`, `0`, or `1`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bccomp",
+    contract: "bccomp",
     area: Math,
-    params: [num1, num2, scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }

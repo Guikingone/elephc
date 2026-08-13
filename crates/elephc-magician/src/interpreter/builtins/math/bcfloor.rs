@@ -8,9 +8,8 @@
 //! - Exact decimal floor returns a PHP string.
 
 eval_builtin! {
-    name: "bcfloor",
+    contract: "bcfloor",
     area: Math,
-    params: [num],
     direct: Bcmath,
     values: Bcmath,
 }

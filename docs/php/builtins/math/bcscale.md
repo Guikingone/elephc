@@ -25,12 +25,6 @@ Gets or sets the process-wide default BCMath scale.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcscale` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcscale.md).

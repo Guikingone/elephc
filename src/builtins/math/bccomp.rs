@@ -7,16 +7,9 @@
 //! Key details:
 //! - Comparison truncates both operands to the explicit or process-default scale.
 
-use crate::builtins::spec::DefaultSpec;
-
 builtin! {
-    name: "bccomp",
-    area: Math,
-    params: [num1: Str, num2: Str, scale: Int = DefaultSpec::Null],
-    returns: Int,
+    contract: "bccomp",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BcComp,
     ),
-    summary: "Compares two arbitrary-precision decimal numbers.",
-    php_manual: "https://www.php.net/manual/en/function.bccomp.php",
 }

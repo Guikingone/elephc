@@ -62,7 +62,6 @@ pub fn format_bcmath_number(number: &BcNum, result_scale: i32) -> Result<String,
     }
     Ok(output)
 }
-
 /// Appends decimal digits to one output string.
 fn push_digits(output: &mut String, digits: &[u8]) {
     output.extend(digits.iter().map(|digit| char::from(b'0' + *digit)));
@@ -90,4 +89,3 @@ mod tests {
         );
     }
 }
-

@@ -28,12 +28,6 @@ Returns an arbitrary-precision integral modular power.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcpowmod` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcpowmod.md).

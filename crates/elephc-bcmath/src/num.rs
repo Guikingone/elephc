@@ -21,7 +21,6 @@ pub struct BcNum {
     /// Number of coefficient digits after the decimal point.
     pub scale: i32,
 }
-
 impl BcNum {
     /// Constructs a normalized decimal number from a sign, coefficient, and scale.
     pub(crate) fn new(negative: bool, digits: Vec<u8>, scale: i32) -> Self {
@@ -252,4 +251,3 @@ mod tests {
         assert_eq!(mul_digits(&[9, 9, 9], &[9, 9]), vec![9, 8, 9, 0, 1]);
     }
 }
-

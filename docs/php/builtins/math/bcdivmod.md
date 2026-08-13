@@ -27,12 +27,6 @@ Returns the quotient and remainder of arbitrary-precision division.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcdivmod` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcdivmod.md).

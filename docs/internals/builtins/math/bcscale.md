@@ -49,6 +49,8 @@ function bcscale(int $scale = null): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/bcscale.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bcscale.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

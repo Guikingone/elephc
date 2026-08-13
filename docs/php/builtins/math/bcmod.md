@@ -27,12 +27,6 @@ Returns the remainder of arbitrary-precision decimal division.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcmod` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcmod.md).

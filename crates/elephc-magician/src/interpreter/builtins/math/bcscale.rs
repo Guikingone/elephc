@@ -7,12 +7,9 @@
 //! Key details:
 //! - Missing or null scale reads state; an integer sets it and returns the previous value.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcscale",
+    contract: "bcscale",
     area: Math,
-    params: [scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }

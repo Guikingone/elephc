@@ -27,12 +27,6 @@ Adds two arbitrary-precision decimal numbers.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcadd` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcadd.md).

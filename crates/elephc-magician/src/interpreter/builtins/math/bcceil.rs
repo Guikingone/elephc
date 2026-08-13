@@ -8,9 +8,8 @@
 //! - Exact decimal ceiling returns a PHP string.
 
 eval_builtin! {
-    name: "bcceil",
+    contract: "bcceil",
     area: Math,
-    params: [num],
     direct: Bcmath,
     values: Bcmath,
 }

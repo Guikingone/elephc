@@ -8,13 +8,8 @@
 //! - The result is a freshly allocated scale-zero decimal string.
 
 builtin! {
-    name: "bcfloor",
-    area: Math,
-    params: [num: Str],
-    returns: Str,
+    contract: "bcfloor",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BcFloor,
     ),
-    summary: "Rounds an arbitrary-precision decimal number down to an integer.",
-    php_manual: "https://www.php.net/manual/en/function.bcfloor.php",
 }

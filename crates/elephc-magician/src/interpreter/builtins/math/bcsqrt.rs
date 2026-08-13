@@ -7,12 +7,9 @@
 //! Key details:
 //! - Null scale selects the crate-owned process scale.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcsqrt",
+    contract: "bcsqrt",
     area: Math,
-    params: [num, scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }

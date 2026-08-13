@@ -27,12 +27,6 @@ Raises an arbitrary-precision decimal number to an integral power.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `bcpow` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/bcpow.md).

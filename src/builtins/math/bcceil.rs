@@ -8,13 +8,8 @@
 //! - The result is a freshly allocated scale-zero decimal string.
 
 builtin! {
-    name: "bcceil",
-    area: Math,
-    params: [num: Str],
-    returns: Str,
+    contract: "bcceil",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BcCeil,
     ),
-    summary: "Rounds an arbitrary-precision decimal number up to an integer.",
-    php_manual: "https://www.php.net/manual/en/function.bcceil.php",
 }

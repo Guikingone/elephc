@@ -7,12 +7,9 @@
 //! Key details:
 //! - The shared hook returns a two-element quotient/remainder array.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcdivmod",
+    contract: "bcdivmod",
     area: Math,
-    params: [num1, num2, scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }

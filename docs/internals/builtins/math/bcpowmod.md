@@ -49,6 +49,8 @@ function bcpowmod(string $num, string $exponent, string $modulus, int $scale = n
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/bcpowmod.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/bcpowmod.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

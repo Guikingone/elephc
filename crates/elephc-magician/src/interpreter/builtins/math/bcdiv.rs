@@ -7,12 +7,9 @@
 //! Key details:
 //! - Division failures become catchable `DivisionByZeroError` objects.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcdiv",
+    contract: "bcdiv",
     area: Math,
-    params: [num1, num2, scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }

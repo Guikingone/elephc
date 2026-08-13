@@ -7,16 +7,9 @@
 //! Key details:
 //! - Precision defaults to zero and integer mode one is half away from zero.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcround",
+    contract: "bcround",
     area: Math,
-    params: [
-        num,
-        precision = EvalBuiltinDefaultValue::Int(0),
-        mode = EvalBuiltinDefaultValue::Int(1)
-    ],
     direct: Bcmath,
     values: Bcmath,
 }

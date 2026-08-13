@@ -7,12 +7,9 @@
 //! Key details:
 //! - Decimal operands stay strings until the crate validates integral values.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "bcpowmod",
+    contract: "bcpowmod",
     area: Math,
-    params: [num, exponent, modulus, scale = EvalBuiltinDefaultValue::Null],
     direct: Bcmath,
     values: Bcmath,
 }
