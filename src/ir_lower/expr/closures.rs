@@ -134,6 +134,16 @@ pub(super) fn lower_closure_with_context(
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if by_ref {
+                // A PHP reference has no type: whatever the closure stores through it is what
+                // the caller reads back. The cell used to carry the type the variable happened
+                // to hold at CAPTURE time, so a write of any other type was reinterpreted
+                // through it — `$b = 5; (function () use (&$b) { $b = null; })();` left `$b`
+                // as 9223372036854775806, the raw null sentinel read as an int, and a string
+                // capture came back as garbage bytes. The `eval` arm above is the same rule for
+                // the case where the written type cannot be seen at all.
+                ctx.set_local_type(capture, PhpType::Mixed);
+                Some(PhpType::Mixed)
             } else {
                 None
             };
