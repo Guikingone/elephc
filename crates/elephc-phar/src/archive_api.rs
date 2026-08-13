@@ -37,8 +37,8 @@ pub fn extract_entry_bytes(archive: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
 
 /// Extracts one entry after authenticating and dispatching the archive family.
 ///
-/// ZIP extraction scans the central directory but decodes only the requested
-/// payload, preventing unrelated entries from consuming decompression budget.
+/// Each container parser authenticates and scans archive structure globally but
+/// copies or decompresses only the requested payload.
 fn extract_archive_entry(
     archive: &[u8],
     entry: &[u8],
@@ -54,17 +54,9 @@ fn extract_archive_entry(
     if archive.starts_with(b"PK\x03\x04") || archive.starts_with(b"PK\x05\x06") {
         parse_zip_entry_with_public_key(archive, entry, public_key)
     } else if archive.get(257..262) == Some(b"ustar") {
-        parse_tar_archive_with_public_key(archive, public_key)?
-            .entries
-            .into_iter()
-            .find(|candidate| candidate.name == entry)
-            .map(|candidate| candidate.payload)
+        parse_tar_entry_with_public_key(archive, entry, public_key)
     } else {
-        parse_native_phar_archive_with_public_key(archive, public_key)?
-            .entries
-            .into_iter()
-            .find(|candidate| candidate.name == entry)
-            .map(|candidate| candidate.payload)
+        parse_native_phar_entry_with_public_key(archive, entry, public_key)
     }
 }
 

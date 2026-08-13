@@ -187,6 +187,61 @@ fn zip_targeted_extraction_skips_unrelated_bomb() {
     );
 }
 
+/// Verifies targeted native-PHAR reads do not decode a hostile unrelated entry.
+#[test]
+fn native_phar_targeted_extraction_skips_unrelated_bomb() {
+    let bomb = deflate_payload(b"tiny");
+    let wanted = b"requested native payload";
+    let archive = build_native_phar_with_flags(&[
+        (
+            "bomb.txt",
+            bomb.as_slice(),
+            16 * 1024 * 1024,
+            PHAR_FILE_MODE_0644 | PHAR_FLAG_GZIP,
+        ),
+        (
+            "wanted.txt",
+            wanted,
+            wanted.len() as u32,
+            PHAR_FILE_MODE_0644,
+        ),
+    ]);
+
+    assert_eq!(extract_entry_bytes(&archive, b"bomb.txt"), None);
+    assert_eq!(
+        extract_entry_bytes(&archive, b"wanted.txt").as_deref(),
+        Some(&wanted[..])
+    );
+}
+
+/// Verifies a targeted tar read does not copy a large unrelated payload.
+#[test]
+fn tar_targeted_extraction_does_not_copy_unrelated_payload() {
+    const TEST_NAME: &str =
+        "tests::security::tar_targeted_extraction_does_not_copy_unrelated_payload";
+    if std::env::var("ELEPHC_PHAR_ALLOC_PROBE").as_deref() != Ok(TEST_NAME) {
+        run_allocation_probe_in_child(TEST_NAME);
+        return;
+    }
+
+    let unrelated = vec![b'A'; 2 * 1024 * 1024];
+    let wanted = b"requested tar payload";
+    let archive = build_tar(&[("large.bin", unrelated.as_slice()), ("wanted.txt", wanted)]);
+    drop(unrelated);
+
+    PHAR_TEST_LARGEST_ALLOCATION.store(0, std::sync::atomic::Ordering::Relaxed);
+    PHAR_TEST_TRACK_ALLOCATIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+    let decoded = extract_entry_bytes(&archive, b"wanted.txt");
+    PHAR_TEST_TRACK_ALLOCATIONS.store(false, std::sync::atomic::Ordering::Relaxed);
+    let largest = PHAR_TEST_LARGEST_ALLOCATION.load(std::sync::atomic::Ordering::Relaxed);
+
+    assert_eq!(decoded.as_deref(), Some(&wanted[..]));
+    assert!(
+        largest <= 1024 * 1024,
+        "targeted tar extraction copied an unrelated allocation of {largest} bytes"
+    );
+}
+
 /// Verifies byte extraction dispatches a ZIP PHAR by magic and therefore cannot
 /// bypass its signature check through native-PHAR fallback parsing.
 #[test]

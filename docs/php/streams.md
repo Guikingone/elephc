@@ -133,8 +133,9 @@ archives are read transparently (and are interchangeable with the PHP interprete
 When reading a whole-archive gzip or bzip2 wrapper, Elephc limits decompressed output
 to the smaller of 1024x the compressed size and 64 MiB. The same 1024x ratio and
 64 MiB absolute ceiling apply independently to every compressed native PHAR or ZIP
-entry. ZIP lookup decodes only the requested entry, so unrelated entries do not spend
-its decompression budget. These Elephc-specific safety ceilings intentionally diverge
+entry. Native PHAR, tar, and ZIP lookup scan and authenticate the container but materialize
+only the requested entry, so unrelated payloads are not copied or decompressed. These
+Elephc-specific safety ceilings intentionally diverge
 from PHP: PHP may accept a highly expanding or larger archive that Elephc rejects.
 Per-entry compression for native PHAR / zip stays on `compressFiles()` /
 `decompressFiles()`.

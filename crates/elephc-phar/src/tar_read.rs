@@ -79,6 +79,46 @@ pub(super) fn parse_tar_archive_with_public_key(
     })
 }
 
+/// Authenticates and scans a tar PHAR while copying only `entry`.
+///
+/// The complete header chain remains validated so malformed trailing records are
+/// rejected, while unrelated payload bodies stay borrowed from the archive buffer.
+pub(super) fn parse_tar_entry_with_public_key(
+    data: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
+    verify_tar_phar_signature(data, public_key)?;
+    let mut p = 0usize;
+    let mut first_header = true;
+    let mut selected: Option<&[u8]> = None;
+    while p.checked_add(512)? <= data.len() {
+        let header = &data[p..p + 512];
+        if header.iter().all(|&byte| byte == 0) {
+            break;
+        }
+        if first_header && header.get(257..262) != Some(b"ustar") {
+            return None;
+        }
+        first_header = false;
+        let size = parse_tar_octal(&header[124..136])?;
+        if size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+            return None;
+        }
+        let payload_start = p.checked_add(512)?;
+        let payload = data.get(payload_start..payload_start.checked_add(size)?)?;
+        let typeflag = header[156];
+        if selected.is_none() && (typeflag == 0 || typeflag == b'0') {
+            let name = tar_entry_name(header)?;
+            if name == entry && !is_phar_control_entry(&name) {
+                selected = Some(payload);
+            }
+        }
+        p = payload_start.checked_add(round_up_to_512(size)?)?;
+    }
+    selected.map(<[u8]>::to_vec)
+}
+
 /// If `name` is a `.phar/.metadata/<path>/.metadata.bin` side entry, returns the
 /// target entry path `<path>`; otherwise returns `None`.
 pub(super) fn tar_file_metadata_target(name: &[u8]) -> Option<Vec<u8>> {

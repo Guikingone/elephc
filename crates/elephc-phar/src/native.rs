@@ -96,6 +96,73 @@ pub(super) fn parse_native_phar_archive_with_public_key(
     })
 }
 
+/// Authenticates and scans a native PHAR while decoding only `entry`.
+///
+/// Every manifest record and stored-data extent is validated before the selected
+/// payload is decoded. Unrelated compressed entries therefore cannot consume the
+/// requested entry's decompression budget or force a second payload allocation.
+pub(super) fn parse_native_phar_entry_with_public_key(
+    data: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
+    let halt = b"__HALT_COMPILER();";
+    let halt_idx = find_subslice(data, halt)?;
+    let mut p = halt_idx.checked_add(halt.len())?;
+    for &ch in &[b' ', b'?', b'>', b'\r', b'\n'] {
+        if data.get(p) == Some(&ch) {
+            p = p.checked_add(1)?;
+        }
+    }
+
+    let manifest_start = p;
+    let manifest_len = le32(data, manifest_start)? as usize;
+    let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
+    data.get(..data_section)?;
+    let num_files = le32(data, manifest_start.checked_add(4)?)?;
+    let global_flags = le32(data, manifest_start.checked_add(10)?)?;
+    verify_native_phar_signature(
+        data,
+        global_flags & PHAR_HDR_SIGNATURE != 0,
+        public_key,
+    )?;
+    let mut q = manifest_start.checked_add(8 + 2 + 4)?;
+    let alias_len = le32(data, q)? as usize;
+    q = q.checked_add(4)?.checked_add(alias_len)?;
+    let metadata_len = le32(data, q)? as usize;
+    q = q.checked_add(4)?.checked_add(metadata_len)?;
+
+    let manifest_remaining = data_section.checked_sub(q)?;
+    if usize::try_from(num_files).ok()? > manifest_remaining / 28 {
+        return None;
+    }
+    let mut data_offset = 0usize;
+    let mut selected: Option<(&[u8], u32, usize)> = None;
+    for _ in 0..num_files {
+        let name_len = le32(data, q)? as usize;
+        q = q.checked_add(4)?;
+        let name = data.get(q..q.checked_add(name_len)?)?;
+        q = q.checked_add(name_len)?;
+        let uncompressed = le32(data, q)? as usize;
+        q = q.checked_add(8)?; // uncompressed size and timestamp
+        let compressed = le32(data, q)? as usize;
+        q = q.checked_add(8)?; // compressed size and CRC32
+        let flags = le32(data, q)?;
+        q = q.checked_add(4)?;
+        let entry_metadata_len = le32(data, q)? as usize;
+        q = q.checked_add(4)?.checked_add(entry_metadata_len)?;
+
+        let start = data_section.checked_add(data_offset)?;
+        let stored = data.get(start..start.checked_add(compressed)?)?;
+        if selected.is_none() && name == entry {
+            selected = Some((stored, flags, uncompressed));
+        }
+        data_offset = data_offset.checked_add(compressed)?;
+    }
+    let (stored, flags, uncompressed) = selected?;
+    decode_phar_payload(stored, flags, uncompressed)
+}
+
 /// Extracts the PHAR compression mode from per-entry flags.
 pub(super) fn phar_compression_from_flags(flags: u32) -> PharCompression {
     if flags & PHAR_FLAG_GZIP != 0 {
