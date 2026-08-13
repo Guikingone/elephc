@@ -4340,6 +4340,37 @@ fn lower_loose_eq(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     let lhs = ctx.value_repr(left)?.clone();
     let rhs = ctx.value_repr(right)?.clone();
+    // The int|null TAGGED pair against an int: payload equality when the tag is int,
+    // and null equals only 0 — php's bool rule folded to one comparison each way.
+    let tagged_int = match (&lhs, &rhs) {
+        (WasmRepr::Tagged { payload, tag }, WasmRepr::I64(_)) => {
+            Some((payload.clone(), tag.clone(), right))
+        }
+        (WasmRepr::I64(_), WasmRepr::Tagged { payload, tag }) => {
+            Some((payload.clone(), tag.clone(), left))
+        }
+        _ => None,
+    };
+    if let Some((payload, tag, int_side)) = tagged_int {
+        ctx.fb.ins(&format!("local.get {tag}"), "int|null tag");
+        ctx.fb.ins("i32.const 8", "the null tag");
+        ctx.fb.ins("i32.eq", "is the pair null?");
+        ctx.fb.ins("if (result i64)", "null: equal only to 0");
+        ctx.emit_load_value(int_side)?;
+        ctx.fb.ins("i64.eqz", "null == int is the bool rule");
+        ctx.fb.ins("i64.extend_i32_u", "bool to i64");
+        ctx.fb.ins("else", "int payload: compare the longs");
+        ctx.fb.ins(&format!("local.get {payload}"), "tagged payload");
+        ctx.emit_load_value(int_side)?;
+        ctx.fb.ins("i64.eq", "long equality");
+        ctx.fb.ins("i64.extend_i32_u", "bool to i64");
+        ctx.fb.ins("end", "either way an i64 bool");
+        if inst.op == Op::LooseNotEq {
+            ctx.fb.ins("i64.eqz", "!= is the negation of ==");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        return store_result(ctx, inst);
+    }
     match (&lhs, &rhs) {
         (WasmRepr::I64(_), WasmRepr::I64(_)) => {
             ctx.emit_load_value(left)?;

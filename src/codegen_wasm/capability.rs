@@ -2498,6 +2498,10 @@ fn loose_eq_shape_issue(
         | ((IrType::I64, PhpType::Int), (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)) => {
             module.functions.iter().any(|candidate| candidate.flags.is_main)
         }
+        // The int|null TAGGED pair against a genuine int: an int payload compares the
+        // longs, and null equals only 0 (php's bool rule). Both are exact and warn-free.
+        ((IrType::TaggedScalar, PhpType::TaggedScalar), (IrType::I64, PhpType::Int))
+        | ((IrType::I64, PhpType::Int), (IrType::TaggedScalar, PhpType::TaggedScalar)) => true,
         _ => false,
     };
     if !admitted {
