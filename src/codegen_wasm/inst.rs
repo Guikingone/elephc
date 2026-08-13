@@ -2175,7 +2175,25 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // A cast that exists only to feed integer arithmetic is not a conversion either: PHP coerces
     // the operand under its own contract, which diagnoses differently from every other boundary.
     if super::capability::cast_feeds_integer_arithmetic(ctx.function, inst).is_some() {
-        let (op_ptr, op_len) = ctx.default_str_literal("%")?;
+        // php names the operator in its TypeError, so the symbol follows the consumer.
+        let symbol = inst
+            .result
+            .and_then(|result| {
+                ctx.function
+                    .instructions
+                    .iter()
+                    .find(|candidate| candidate.operands.contains(&result))
+            })
+            .map(|consumer| match consumer.op {
+                Op::IShl => "<<",
+                Op::IShrA => ">>",
+                Op::IBitAnd => "&",
+                Op::IBitOr => "|",
+                Op::IBitXor => "^",
+                _ => "%",
+            })
+            .unwrap_or("%");
+        let (op_ptr, op_len) = ctx.default_str_literal(symbol)?;
         let (right_ptr, right_len) = ctx.default_str_literal("int")?;
         ctx.emit_load_value(value)?;
         ctx.fb

@@ -1697,14 +1697,21 @@ pub(super) fn cast_feeds_integer_arithmetic(
         return None;
     }
     let result = inst.result?;
-    // The integer must be wanted by exactly one modulo and by nothing else: any other reader
+    // The integer must be wanted by exactly one int-coercing operator and nothing else: any
     // would be handed a value produced under a contract it did not ask for.
     let mut arithmetic = None;
     for candidate in &function.instructions {
         if !candidate.operands.contains(&result) {
             continue;
         }
-        if candidate.op != Op::ISMod || arithmetic.is_some() {
+        // All six convert their operand under the same php contract: TypeError for a
+        // non-numeric operand, the leading-numeric warning otherwise. Only the SYMBOL
+        // in the diagnostic differs, which the lowering picks from the consumer.
+        if !matches!(
+            candidate.op,
+            Op::ISMod | Op::IShl | Op::IShrA | Op::IBitAnd | Op::IBitOr | Op::IBitXor
+        ) || arithmetic.is_some()
+        {
             return None;
         }
         arithmetic = Some(candidate);
