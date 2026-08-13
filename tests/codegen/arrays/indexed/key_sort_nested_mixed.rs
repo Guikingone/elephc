@@ -27,6 +27,24 @@ echo "|" . $grid[1];
     assert_eq!(out, "true|a:1,b:2,|sentinel");
 }
 
+/// Verifies both key-sort directions accept a nested hash stored in a Mixed
+/// value cell of a heterogeneous associative parent.
+#[test]
+fn test_key_sorts_nested_hash_of_mixed_associative_parent() {
+    let out = compile_and_run(
+        r#"<?php
+$matrix = ["row" => ["b" => 2, "a" => 1], "sentinel" => 7];
+echo ksort($matrix["row"]) ? "true|" : "false|";
+foreach ($matrix["row"] as $key => $value) { echo $key . $value; }
+echo "|";
+echo krsort($matrix["row"]) ? "true|" : "false|";
+foreach ($matrix["row"] as $key => $value) { echo $key . $value; }
+echo "|" . $matrix["sentinel"];
+"#,
+    );
+    assert_eq!(out, "true|a1b2|true|b2a1|7");
+}
+
 /// Verifies `ksort()` treats a nested packed child as an ascending-key no-op returning true.
 #[test]
 fn test_ksort_nested_packed_child_of_mixed_parent_is_noop() {

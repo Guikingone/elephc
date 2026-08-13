@@ -6186,6 +6186,26 @@ echo function_exists("asort") && function_exists("arsort") && function_exists("k
     );
 }
 
+/// Verifies Magician key sorting delegates mixed-key `SORT_REGULAR` comparison
+/// to the same PHP comparator as AOT instead of ordering by an internal tag rank.
+#[test]
+fn test_eval_key_sort_mixed_keys_matches_aot() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$dynamic = [10 => "a", "9" => "b", "apple" => "c", "Banana" => "d", 2 => "e", "" => "f"];
+ksort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }
+echo "|";
+krsort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "=f;2=e;9=b;10=a;Banana=d;apple=c;|apple=c;Banana=d;10=a;9=b;2=e;=f;"
+    );
+}
+
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
 #[test]
 fn test_eval_dispatches_natural_sort_builtin_calls() {

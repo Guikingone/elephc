@@ -593,6 +593,13 @@ pub trait RuntimeValueOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Compares two normalized PHP array keys with native `SORT_REGULAR` semantics.
+    fn regular_key_compare(
+        &mut self,
+        left: RuntimeCellHandle,
+        right: RuntimeCellHandle,
+    ) -> Result<i64, EvalStatus>;
+
     /// Emits one runtime cell to stdout using PHP echo semantics.
     fn echo(&mut self, value: RuntimeCellHandle) -> Result<(), EvalStatus>;
 
