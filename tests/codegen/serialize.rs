@@ -143,6 +143,24 @@ echo unserialize('O:5:"Probe":0:{') === false ? 'false' : 'accepted';
     assert_eq!(out, "false");
 }
 
+/// Verifies semantically invalid nested values fail the containing object parse
+/// without dereferencing a null child box or invoking object lifecycle hooks.
+#[test]
+fn test_unserialize_rejects_invalid_nested_object_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public $value; }
+class Magic {
+    public function __unserialize(array $data): void { echo "HOOK"; }
+}
+
+echo unserialize('O:5:"Plain":1:{s:5:"value";d:nope;}') === false ? 'false' : 'accepted', "|";
+echo unserialize('O:5:"Magic":1:{s:5:"value";d:nope;}') === false ? 'false' : 'accepted';
+"#,
+    );
+    assert_eq!(out, "false|false");
+}
+
 /// Verifies `serialize()` of indexed and associative arrays matches PHP's a:n:{...} form.
 #[test]
 fn test_serialize_arrays_match_php_wire_format() {
@@ -1145,5 +1163,42 @@ echo serialize($arr), "\n";
     assert_eq!(
         out,
         "77\nsame\na:2:{i:0;O:1:\"P\":1:{s:1:\"v\";i:7;}i:1;r:2;}\n",
+    );
+}
+
+/// Verifies object boxes enter the value registry before their bodies are
+/// decoded, preserving direct self-references for both hydration paths.
+#[test]
+fn test_unserialize_object_self_references() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public $self; }
+$plain = unserialize('O:5:"Plain":1:{s:4:"self";r:1;}');
+echo serialize($plain), "|";
+
+class Magic {
+    public $self;
+    public function __unserialize(array $data): void { $this->self = $data['self']; }
+}
+$magic = unserialize('O:5:"Magic":1:{s:4:"self";r:1;}');
+echo $magic->self === $magic ? "magic-same" : "magic-diff";
+"#,
+    );
+    assert_eq!(out, "O:5:\"Plain\":1:{s:4:\"self\";r:1;}|magic-same");
+}
+
+/// Verifies unknown serialized classes use PHP's incomplete-object container
+/// and can still resolve references to the object currently being decoded.
+#[test]
+fn test_unserialize_unknown_class_becomes_incomplete_object() {
+    let out = compile_and_run(
+        r#"<?php
+$value = unserialize('O:7:"Missing":1:{s:4:"self";r:1;}');
+echo get_class($value), "|", serialize($value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
 }

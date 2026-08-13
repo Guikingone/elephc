@@ -80,10 +80,11 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: unser_at (recursive serialize() value parser) ---");
     emitter.label_global("__rt_unser_at");
-    // [sp+0]=base [8]=pos [16]=end [24]=hash [32]=count [40]=index [48]=key_lo [56]=key_hi [64]=scratch
-    emitter.instruction("sub sp, sp, #112");                                    // recursive parser frame
-    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #96");                                    // establish the new frame pointer
+    // [sp+0]=base [8]=pos [16]=end [24]=container [32]=count [40]=index [48]=key_lo [56]=key_hi
+    // [sp+64]=scratch [72]=hook/name length [80]=policy/data hash [88]=registry index [96]=object box
+    emitter.instruction("sub sp, sp, #128");                                    // recursive parser frame
+    emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
+    emitter.instruction("add x29, sp, #112");                                   // establish the new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the base pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the current position
     emitter.instruction("str x2, [sp, #16]");                                   // save the end position
@@ -392,8 +393,9 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x10");                                         // class-name pointer (new_by_name arg)
     emitter.instruction("mov x2, x11");                                         // class-name length (new_by_name arg)
     emitter.instruction("bl __rt_new_by_name");                                 // instantiate the class by name (0 on unknown class)
-    emitter.instruction("cbz x0, __rt_unser_at_fail");                          // unknown class fails the parse
-    emitter.instruction("b __rt_unser_obj_allocated");                          // skip incomplete-object allocation
+    emitter.instruction("cbnz x0, __rt_unser_obj_allocated");                   // known classes use their declared layout
+    emitter.instruction("str xzr, [sp, #80]");                                  // unknown classes suppress hooks and use opaque properties
+    emitter.instruction("b __rt_unser_obj_incomplete");                         // match PHP's __PHP_Incomplete_Class fallback
     emitter.label("__rt_unser_obj_incomplete");
     emitter.instruction("mov x0, #32");                                         // class id, original class name, and opaque property hash
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the incomplete-object payload
@@ -412,6 +414,23 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [x0, #24]");                                  // property hash is created after its count is parsed
     emitter.label("__rt_unser_obj_allocated");
     emitter.instruction("str x0, [sp, #24]");                                   // save the new object pointer
+    emitter.instruction("mov x0, #24");                                         // allocate the object's stable boxed Mixed cell
+    emitter.instruction("bl __rt_heap_alloc");                                  // create the box before decoding any property values
+    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the box header
+    emitter.instruction("mov x9, #6");                                          // value tag 6 = object
+    emitter.instruction("str x9, [x0]");                                        // publish the object tag
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the object pointer
+    emitter.instruction("str x9, [x0, #8]");                                    // transfer the object ownership into the box
+    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
+    emitter.instruction("str x0, [sp, #96]");                                   // retain the stable result box through hooks and parsing
+    emitter.instruction("ldr x9, [sp, #88]");                                   // reserved value index for this object
+    emitter.instruction("mov x10, #65536");                                     // value-registry capacity
+    emitter.instruction("cmp x9, x10");                                         // is the reserved slot inside the registry?
+    emitter.instruction("b.hs __rt_unser_obj_registered");                      // overflow values cannot participate in back-references
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
+    emitter.instruction("str x0, [x10, x9, lsl #3]");                           // publish before parsing so r: can resolve self-references
+    emitter.label("__rt_unser_obj_registered");
     emitter.instruction("ldr x12, [sp, #64]");                                  // reload the class-name end
     emitter.instruction("add x12, x12, #2");                                    // skip closing '\"' and ':' to the property count
     emitter.instruction("mov x11, #0");                                         // property-count accumulator
@@ -465,6 +484,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // end
     emitter.instruction("bl __rt_unser_at");                                    // recursively parse the value -> x0=box, x1=newpos
     emitter.instruction("str x1, [sp, #8]");                                    // advance past the value
+    emitter.instruction("cbz x0, __rt_unser_obj_data_fail");                    // propagate semantic child-decoder failures safely
     emitter.instruction("mov x3, x0");                                          // value_lo = parsed value box
     emitter.instruction("ldr x0, [sp, #80]");                                   // $data hash pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // key_lo
@@ -510,6 +530,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // end
     emitter.instruction("bl __rt_unser_at");                                    // recursively parse the value -> x0=box, x1=newpos
     emitter.instruction("str x1, [sp, #8]");                                    // advance past the value
+    emitter.instruction("cbz x0, __rt_unser_obj_fail");                         // never pass a failed child box to property storage
     emitter.instruction("mov x3, x0");                                          // value box
     emitter.instruction("ldr x0, [sp, #24]");                                   // object pointer
     emitter.instruction("ldr x1, [sp, #48]");                                   // key pointer
@@ -546,27 +567,28 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // $this receiver
     emitter.instruction("blr x10");                                             // call __wakeup($this)
     emitter.label("__rt_unser_at_obj_box");
-    emitter.instruction("mov x0, #24");                                         // box the object: Mixed cell = tag + two payload words
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the boxed Mixed cell
-    emitter.instruction("mov x9, #5");                                          // heap kind 5 = boxed Mixed cell
-    emitter.instruction("str x9, [x0, #-8]");                                   // stamp the heap header
-    emitter.instruction("mov x9, #6");                                          // value tag 6 = object
-    emitter.instruction("str x9, [x0]");                                        // store the value tag
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the object pointer
-    emitter.instruction("str x9, [x0, #8]");                                    // store the object pointer (ownership transferred)
-    emitter.instruction("str xzr, [x0, #16]");                                  // clear the high payload word
-    // -- register this object box so a later r:<index>; resolves to the same
-    //    object (its index was reserved before its properties were parsed) --
-    emitter.instruction("ldr x9, [sp, #88]");                                   // reserved value index for this object
-    emitter.instruction("mov x10, #65536");                                     // value-registry capacity
-    emitter.instruction("cmp x9, x10");                                         // is the registry full?
-    emitter.instruction("b.ge __rt_unser_obj_box_noreg");                       // overflow → skip registration
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
-    emitter.instruction("str x0, [x10, x9, lsl #3]");                           // values[index] = this object box
-    emitter.label("__rt_unser_obj_box_noreg");
+    emitter.instruction("ldr x0, [sp, #96]");                                   // return the stable box published before body parsing
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload position (at the closing '}')
     emitter.instruction("add x1, x1, #1");                                      // newpos skips the '}'
     emitter.instruction("b __rt_unser_at_ret");                                 // return the box and new position
+
+    emitter.label("__rt_unser_obj_data_fail");
+    emitter.instruction("ldr x0, [sp, #80]");                                   // partially built __unserialize data hash
+    emitter.instruction("bl __rt_hash_free_deep");                              // release keys and transferred child boxes
+    emitter.instruction("b __rt_unser_obj_fail");                               // release the partially hydrated object too
+    emitter.label("__rt_unser_obj_fail");
+    emitter.instruction("ldr x9, [sp, #88]");                                   // reserved registry slot for the failed object
+    emitter.instruction("mov x10, #65536");                                     // value-registry capacity
+    emitter.instruction("cmp x9, x10");                                         // was the object published in the fixed registry?
+    emitter.instruction("b.hs __rt_unser_obj_fail_noreg");                      // skip clearing an out-of-capacity slot
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_unser_values");
+    emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // remove the failed object from future reference lookup
+    emitter.label("__rt_unser_obj_fail_noreg");
+    emitter.instruction("ldr x0, [sp, #96]");                                   // partially hydrated object's owning Mixed box
+    emitter.instruction("bl __rt_decref_mixed");                                // release the box and its object ownership
+    emitter.instruction("mov x0, #0");                                          // report parse failure
+    emitter.instruction("ldr x1, [sp, #8]");                                    // preserve the child decoder's current cursor
+    emitter.instruction("b __rt_unser_at_ret");                                 // only the shared return decrements parser depth
 
     // -- failure: null box, position unchanged --
     emitter.label("__rt_unser_at_fail");
@@ -578,8 +600,8 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load parser depth before returning to the caller
     emitter.instruction("sub x10, x10, #1");                                    // release this completed recursive parser frame
     emitter.instruction("str x10, [x9]");                                       // keep sibling parses independent
-    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #112");                                    // deallocate the parser frame
+    emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #128");                                    // deallocate the parser frame
     emitter.instruction("ret");                                                 // return x0=box, x1=newpos
 
     emitter.label_shared("__rt_unser_depth_fatal");
@@ -627,7 +649,7 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("b.hs __rt_unser_at_ref_fail");                         // fail closed instead of reading beyond the fixed registry
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_unser_values");
     emitter.instruction("ldr x13, [x9, x12, lsl #3]");                          // the registered value box (0 if none)
-    emitter.instruction("cbz x13, __rt_unser_at_ref_fail");                     // nothing registered (e.g. a cycle) → null
+    emitter.instruction("cbz x13, __rt_unser_at_ref_fail");                     // reserved but unpublished registry slot → null
     emitter.instruction("str x13, [sp, #64]");                                  // save the source box across the alloc
     emitter.instruction("mov x0, #24");                                         // a fresh boxed Mixed cell
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate it
