@@ -5,6 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
+//! - The element type is `Mixed`, not `Str`, because php's return is `?string[]`: a blank line
+//!   yields `[null]`, not `[""]`. Only a boxed cell can hold that null.
 //! - `check` validates the `stream` argument is a stream resource and returns `Mixed`, which is
 //!   how the registry spells PHP's `array|false`. Declaring `Array<Str>` left the runtime's
 //!   end-of-input answer — a null array pointer — reading as `null`, and `null !== false`, so
@@ -36,13 +38,18 @@ builtin! {
     php_manual: "function.fgetcsv",
 }
 
-/// Validates the stream argument is a stream resource and returns `array<string>|false`.
+/// Validates the stream argument is a stream resource and returns `array<mixed>|false`.
 ///
 /// The union is spelled out rather than collapsed to `Mixed` so that `!== false` narrows it
 /// back to the array: `while (($row = fgetcsv($h)) !== false) { fputcsv($out, $row); }` has to
 /// keep compiling, and an array-taking builtin cannot accept a bare `Mixed`. `False` is the
 /// exact member the narrowing removes — `Bool` would not match. Storage is unchanged: a union
 /// uses the same boxed payload as `Mixed`.
+///
+/// The element is `Mixed`, not `Str`, because php's row is `?string[]`: a BLANK LINE reads back
+/// as `[null]`, not `[""]`. Only a boxed cell can hold that null, so this has to agree with the
+/// `array<mixed>` layout `__rt_fgetcsv_row_to_mixed` builds — a `Str` element would read the box
+/// pointer as a raw string pointer/length pair.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -51,7 +58,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.env,
     )?;
     Ok(PhpType::Union(vec![
-        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::False,
     ]))
 }

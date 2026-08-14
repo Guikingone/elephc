@@ -19,11 +19,62 @@ pub fn emit_fgetcsv(emitter: &mut Emitter) {
         emit_fgetcsv_linux_x86_64(emitter);
         emit_str_getcsv_x86_64(emitter);
         emit_csv_row_to_mixed_x86_64(emitter);
+        emit_fgetcsv_row_to_mixed_x86_64(emitter);
         return;
     }
     emit_fgetcsv_aarch64(emitter);
     emit_str_getcsv_aarch64(emitter);
     emit_csv_row_to_mixed_aarch64(emitter);
+    emit_fgetcsv_row_to_mixed_aarch64(emitter);
+}
+
+/// Emits `__rt_fgetcsv_row_to_mixed(x0 = eof_or_blank_or_row) -> array<mixed>|null: x0`.
+///
+/// `fgetcsv()` needs TWO "no row" answers where `str_getcsv()` needs one, because php-src
+/// decides them in two different places. `PHP_FUNCTION(fgetcsv)` (ext/standard/file.c:1867)
+/// answers `false` when `php_stream_get_line()` reports no line at all, and only then calls
+/// `php_fgetcsv()`, whose own `NULL` — `first_field && bptr == line_end` at file.c:1939 — is a
+/// BLANK LINE and becomes `php_bc_fgetcsv_empty_line()`, the one-element `[null]` array.
+///
+/// A single null pointer cannot carry both, so `__rt_fgetcsv` returns `0` for end of input and
+/// the non-pointer sentinel `1` for a blank record. This helper is where the two separate again:
+/// `0` passes straight through for `box_listing_or_false_result` to turn into `false`, and `1`
+/// becomes the null pointer that the shared `__rt_csv_row_to_mixed` — `str_getcsv()`'s
+/// substitution, unchanged — reads as "no record" and answers with `[null]`.
+fn emit_fgetcsv_row_to_mixed_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fgetcsv_row_to_mixed ---");
+    emitter.label_global("__rt_fgetcsv_row_to_mixed");
+
+    emitter.instruction("cbz x0, __rt_fgetcsv_row_to_mixed_eof");               // 0 = end of input: php answers false
+    emitter.instruction("cmp x0, #1");                                          // 1 = the blank-record sentinel
+    emitter.instruction("b.ne __rt_fgetcsv_row_to_mixed_row");
+    emitter.instruction("mov x0, #0");                                          // a blank record IS php_fgetcsv()'s NULL
+    emitter.label("__rt_fgetcsv_row_to_mixed_row");
+    emitter.instruction("b __rt_csv_row_to_mixed");                             // tail call: [null], or the widened row
+
+    emitter.label("__rt_fgetcsv_row_to_mixed_eof");
+    emitter.instruction("ret");                                                 // x0 is already the null pointer
+}
+
+/// x86_64 form of [`emit_fgetcsv_row_to_mixed_aarch64`]:
+/// `__rt_fgetcsv_row_to_mixed(rdi = eof_or_blank_or_row) -> array<mixed>|null: rax`.
+fn emit_fgetcsv_row_to_mixed_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fgetcsv_row_to_mixed ---");
+    emitter.label_global("__rt_fgetcsv_row_to_mixed");
+
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_fgetcsv_row_to_mixed_x_eof");                  // 0 = end of input: php answers false
+    emitter.instruction("cmp rdi, 1");                                          // 1 = the blank-record sentinel
+    emitter.instruction("jne __rt_fgetcsv_row_to_mixed_x_row");
+    emitter.instruction("xor edi, edi");                                        // a blank record IS php_fgetcsv()'s NULL
+    emitter.label("__rt_fgetcsv_row_to_mixed_x_row");
+    emitter.instruction("jmp __rt_csv_row_to_mixed");                           // tail call: [null], or the widened row
+
+    emitter.label("__rt_fgetcsv_row_to_mixed_x_eof");
+    emitter.instruction("xor eax, eax");                                        // the result register carries the null pointer
+    emitter.instruction("ret");
 }
 
 /// Emits `__rt_csv_row_to_mixed(x0 = row_or_null) -> array<mixed>: x0`.
@@ -122,8 +173,18 @@ fn emit_csv_row_to_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // the box transfers into the row
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the row again
     emitter.instruction("call __rt_array_push_int");                            // store the cell pointer without retaining it
+    // The x86_64 kind word carries the heap MARKER in its high half, and `__rt_decref_array`
+    // refuses to touch an allocation whose marker does not match — it reads the word as a
+    // foreign/static pointer and returns without freeing. Masking with `0x80ff` alone wiped that
+    // marker, so this `[null]` array was UNFREEABLE on x86_64 while AArch64, which has no such
+    // marker, stayed clean: measured, `fgetcsv()` over blank lines leaked two blocks per record
+    // there and none here. `str_getcsv("")` reaches this same arm. `__rt_array_to_mixed` preserves
+    // the marker exactly this way, which is why the widened rows never showed the defect.
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // the packed array kind word
+    emitter.instruction("mov r11, r10");                                        // copy it so the heap marker can be preserved
     emitter.instruction("and r10, 0x80ff");                                     // preserve heap kind and the persistent COW flag
+    emitter.instruction("and r11, -65536");                                     // preserve the x86_64 heap marker bits
+    emitter.instruction("or r10, r11");                                         // recombine the marker with the low metadata
     emitter.instruction("or r10, 0x700");                                       // runtime value_type 7 = boxed Mixed
     emitter.instruction("mov QWORD PTR [rax - 8], r10");
 
@@ -251,8 +312,10 @@ fn emit_strip_one_terminator_aarch64(emitter: &mut Emitter, tag: &str) {
 
 /// ARM64 variant of `__rt_fgetcsv`.
 ///
-/// Signature: `__rt_fgetcsv(fd: x0, csv_opts: x1) -> array_ptr: x0`.
-/// Returns `0` on EOF (PHP false), otherwise a heap array of owned string fields.
+/// Signature: `__rt_fgetcsv(fd: x0, csv_opts: x1) -> eof_or_blank_or_row: x0`.
+/// Returns `0` on EOF (PHP false), the sentinel `1` for a BLANK LINE (php's `[null]` record,
+/// which is not EOF), otherwise a heap array of owned string fields.
+/// `__rt_fgetcsv_row_to_mixed` is what turns those three answers into php's.
 /// Supports RFC 4180 doubling mode (`esc == 0`) and escape-char mode (`esc != 0`).
 fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.blank();
@@ -296,6 +359,23 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbnz x2, __rt_fgetcsv_have_line");                     // a real line: parse it
     emitter.instruction("b __rt_fgetcsv_eof");                                  // len == 0 -> EOF, return 0
     emitter.label("__rt_fgetcsv_have_line");
+
+    // -- blank-record check: a line that is nothing but its terminator has NO FIELDS --
+    //
+    // php-src decides this before any field is read: `php_fgetcsv()` sets `line_end` past one
+    // stripped terminator (`php_fgetcsv_lookup_trailing_spaces`, file.c:1618, which drops `\r\n`,
+    // `\n` or `\r` and NOTHING else despite its name) and bails with `values = NULL` on
+    // `first_field && bptr == line_end` (file.c:1939). So the rule is exactly the one
+    // `__rt_str_getcsv` already applies to its subject: strip ONE terminator, and an empty
+    // remainder is no record. Measured on `php -n` 8.5.6, `"   \n"` and `"\t\n"` are NOT blank —
+    // they are one field of whitespace — so only the terminator may be stripped.
+    emitter.instruction("mov x11, x2");                                         // keep the true length; the strip mutates x2
+    emit_strip_one_terminator_aarch64(emitter, "f");
+    emitter.instruction("cmp x2, #0");                                          // nothing but a terminator?
+    emitter.instruction("mov x2, x11");                                         // restore the full line; `mov` leaves the flags alone
+    emitter.instruction("b.ne __rt_fgetcsv_not_blank");                         // a real record: parse it
+    emitter.instruction("b __rt_fgetcsv_blank");                                // unconditional: the exit is in a later atom
+    emitter.label("__rt_fgetcsv_not_blank");
 
     // -- set up scan pointers into the line buffer --
     //
@@ -489,6 +569,13 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x20");                                         // x0 = array_ptr (return value)
     emitter.instruction("b __rt_fgetcsv_epilogue");                             // -> common epilogue
 
+    // -- blank line: php_fgetcsv() reports NO RECORD, which is NOT end of input --
+    // Shared for the same reason as the EOF exit below: it is reached from `__rt_fgetcsv`'s own
+    // atom, across the `__rt_csv_parse_buffer` boundary.
+    emitter.label_shared("__rt_fgetcsv_blank");
+    emitter.instruction("mov x0, #1");                                         // sentinel 1: a blank record, not EOF's 0
+    emitter.instruction("b __rt_fgetcsv_epilogue");                            // -> common epilogue
+
     // -- EOF: return 0 (false) --
     // Shared, not local: `__rt_fgetcsv` reaches it from its own atom, and only a real symbol keeps
     // this one alive under `-dead_strip`.
@@ -611,7 +698,8 @@ fn emit_strip_one_terminator_x86_64(emitter: &mut Emitter, tag: &str) {
 
 /// x86_64 Linux variant of `__rt_fgetcsv` using the System V ABI.
 ///
-/// Signature: `__rt_fgetcsv(fd: rdi, csv_opts: rsi) -> array_ptr: rax`.
+/// Signature: `__rt_fgetcsv(fd: rdi, csv_opts: rsi) -> eof_or_blank_or_row: rax`, with the same
+/// `0` / `1` / row answers as the ARM64 form.
 /// Mirrors the ARM64 state machine; spills parser state to a rbp-relative frame.
 fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -660,6 +748,18 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     // -- EOF check: len == 0 -> return 0 (false) --
     emitter.instruction("test rdx, rdx");                                       // len == 0?
     emitter.instruction("jz __rt_fgetcsv_x_eof");                               // -> EOF, return 0
+
+    // -- blank-record check: a line that is nothing but its terminator has NO FIELDS --
+    // Mirrors the AArch64 path; see there for the php-src rule. The strip helper reads its
+    // slice from `(rsi, rdx)` and CLOBBERS rax, which is holding the line pointer here.
+    emitter.instruction("mov r9, rax");                                         // save the line pointer across the strip
+    emitter.instruction("mov r8, rdx");                                         // and the true length
+    emitter.instruction("mov rsi, rax");                                        // the strip reads its slice from rsi/rdx
+    emit_strip_one_terminator_x86_64(emitter, "f");
+    emitter.instruction("test rdx, rdx");                                       // nothing but a terminator?
+    emitter.instruction("mov rax, r9");                                         // restore the line pointer; `mov` leaves the flags alone
+    emitter.instruction("mov rdx, r8");                                         // and the full length, for the parser
+    emitter.instruction("jz __rt_fgetcsv_x_blank");                             // -> blank record, return the sentinel
 
     // -- set up scan pointers --
     //
@@ -878,6 +978,11 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     // -- done: return array_ptr in rax --
     emitter.label("__rt_fgetcsv_x_done");
     emitter.instruction("mov rax, rbx");                                        // rax = array_ptr (return value)
+    emitter.instruction("jmp __rt_fgetcsv_x_epilogue");                         // -> common epilogue
+
+    // -- blank line: php_fgetcsv() reports NO RECORD, which is NOT end of input --
+    emitter.label("__rt_fgetcsv_x_blank");
+    emitter.instruction("mov eax, 1");                                          // sentinel 1: a blank record, not EOF's 0
     emitter.instruction("jmp __rt_fgetcsv_x_epilogue");                         // -> common epilogue
 
     // -- EOF: return 0 (false) --

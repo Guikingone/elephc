@@ -705,6 +705,182 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a BLANK LINE reads back as php's `[null]` record rather than `[""]`.
+///
+/// php-src decides "no line at all" and "a line with no fields" in two different places:
+/// `PHP_FUNCTION(fgetcsv)` answers `false` when `php_stream_get_line()` returns NULL, and only
+/// then calls `php_fgetcsv()`, whose own NULL (`first_field && bptr == line_end`) becomes
+/// `php_bc_fgetcsv_empty_line()` — one element holding null. elephc collapsed both onto one null
+/// pointer, so a blank line came back as a one-element array holding the EMPTY STRING. The
+/// record COUNT is half the point: `[""]` and `[null]` both have one element, so a test that
+/// only counted rows passed throughout. Measured on `php -n` 8.5.6.
+#[test]
+fn test_fgetcsv_reads_a_blank_line_as_a_null_record() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("blank_mid.csv", "a,b\n\nc,d\n");
+$f = fopen("blank_mid.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("blank_mid.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];|3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file ENDING in a blank line yields a trailing `[null]`, then `false`.
+///
+/// This is the case that proves the two markers stayed apart: the blank record and end of input
+/// arrive back to back, so collapsing them either loses the last row or spins the manual's loop.
+#[test]
+fn test_fgetcsv_blank_last_line_is_a_null_record_then_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("blank_end.csv", "a,b\nc,d\n\n");
+$f = fopen("blank_end.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("blank_end.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[\"c\",\"d\"];[null];|3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies only the LINE TERMINATOR is stripped before the blank test — whitespace is a field.
+///
+/// `php_fgetcsv_lookup_trailing_spaces()` drops one `\r\n`, `\n` or `\r` and nothing else despite
+/// its name, so `"   \n"` and `"\t\n"` are one field of whitespace while `"\n"` and `"\r\n"` are
+/// no record at all. Without this control a "trim the line" rule looks equally correct and
+/// silently turns every whitespace-only row into `[null]`.
+#[test]
+fn test_fgetcsv_treats_a_whitespace_only_line_as_a_field_not_a_blank() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ws.csv", "a,b\n   \n\t\n\nc,d\n");
+$f = fopen("ws.csv", "r");
+$seen = "";
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $seen, "|", $rows;
+unlink("ws.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[\"   \"];[\"\\t\"];[null];[\"c\",\"d\"];|5");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file of nothing but one blank line yields ONE `[null]` row, not zero and not two.
+///
+/// The sharpest test of the split markers: the very first read is a blank record and the very
+/// next is end of input, so a single marker answers one of them wrongly whichever way it leans.
+/// A `\r\n` blank line is the same record, since one terminator is stripped as a unit.
+#[test]
+fn test_fgetcsv_separates_a_blank_record_from_end_of_input() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("only_blank.csv", "\n");
+file_put_contents("empty.csv", "");
+file_put_contents("crlf.csv", "a,b\n\r\nc,d\n");
+$seen = "";
+foreach (["only_blank.csv", "empty.csv", "crlf.csv"] as $name) {
+    $f = fopen($name, "r");
+    $rows = 0;
+    while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+        $seen = $seen . json_encode($row) . ";";
+        $rows = $rows + 1;
+        if ($rows > 8) { echo "RUNAWAY"; break; }
+    }
+    fclose($f);
+    $seen = $seen . "|" . $rows . " ";
+    unlink($name);
+}
+echo $seen;
+"#,
+    );
+    assert_eq!(
+        out,
+        "[null];|1 |0 [\"a\",\"b\"];[null];[\"c\",\"d\"];|3 "
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fputcsv()` writes a `[null]` row back as the blank line it came from.
+///
+/// The round-trip is the pair's whole point and the consumer most exposed to the row's element
+/// type changing from `string` to `mixed`: the writer now receives a boxed cell holding null
+/// where it used to receive a string slot, and php writes that as an empty line.
+#[test]
+fn test_fputcsv_writes_back_a_null_record_read_by_fgetcsv() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("bp_in.csv", "a,b\n\nc,d\n");
+$in = fopen("bp_in.csv", "r");
+$out = fopen("bp_out.csv", "w");
+while (($rec = fgetcsv($in, 0, ",", "\"", "\\")) !== false) {
+    fputcsv($out, $rec, ",", "\"", "\\");
+}
+fclose($in);
+fclose($out);
+echo json_encode(file_get_contents("bp_out.csv"));
+unlink("bp_in.csv");
+unlink("bp_out.csv");
+"#,
+    );
+    assert_eq!(out, "\"a,b\\n\\nc,d\\n\"");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fgetcsv()` reports a blank line as `[null]` too.
+///
+/// The SPL method body is synthesized and has no checked call-site type, so it reads the row
+/// through the EIR fallback rather than the checker's union — a second authority that has to
+/// agree about the boxed-`Mixed` cells, and the one that silently handed back header words as
+/// integers the last time `fgetcsv()`'s representation moved.
+#[test]
+fn test_spl_file_object_fgetcsv_reads_a_blank_line_as_null() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("spl_blank.csv", "a,b\n\nc,d\n");
+$f = new SplFileObject("spl_blank.csv");
+$seen = "";
+$rows = 0;
+while (!$f->eof()) {
+    $row = $f->fgetcsv(",", "\"", "\\");
+    if ($row === false) { break; }
+    $seen = $seen . json_encode($row) . ";";
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+unset($f);
+echo $seen;
+unlink("spl_blank.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\"];[null];[\"c\",\"d\"];");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an UNTYPED `public $context;` receives its context — the spelling the manual shows.
 ///
 /// `public mixed $context;` already worked. The untyped form was read as declaring nothing, so

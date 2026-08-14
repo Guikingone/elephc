@@ -560,7 +560,19 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");                           // call the CSV row parser runtime
-    box_indexed_array_or_false_result(ctx, "fgetcsv");                           // EOF is the null pointer, and PHP calls that false
+    if arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                 // 0 (EOF), 1 (blank record), or the parsed row
+    }
+    // php-src splits "no line at all" from "a line with no fields": the first is `false`, the
+    // second is `php_bc_fgetcsv_empty_line()` — `[null]`. This helper keeps the EOF null pointer
+    // for the boxer below and turns the blank sentinel into that `[null]`, widening every other
+    // row to boxed Mixed cells so the null is representable at all.
+    abi::emit_call_label(ctx.emitter, "__rt_fgetcsv_row_to_mixed");
+    // The OWNED boxer, as scandir/glob/file use: every non-null answer here is a FRESHLY created
+    // array — the widened row, or the substituted `[null]` — so the box must become its sole
+    // owner. The plain boxer only retains, leaving the creation reference alive; that leaked the
+    // whole row per call, and boxing the cells made each leaked row one block per field heavier.
+    box_listing_or_false_result(ctx, "fgetcsv");                                 // EOF is the null pointer, and PHP calls that false
     store_if_result(ctx, inst)
 }
 
@@ -698,7 +710,11 @@ const FPUTCSV_FIELDS_NOT_ARRAY_MESSAGE: &str =
     "fputcsv(): Argument #2 ($fields) must be of type array, false given";
 
 /// Reports whether a declared type is a boxed union whose only non-`false` member is a
-/// string array — the shape `fgetcsv()` returns.
+/// string array — the shape `scandir()`, `glob()` and `file()` return.
+///
+/// `fgetcsv()` no longer qualifies: its rows are `array<mixed>|false`, because php answers
+/// `[null]` for a blank line. Those take the branch below that reads the element lane from the
+/// array HEADER at run time, which is what an `array<mixed>` needs anyway.
 fn boxed_string_array_union(ty: &PhpType) -> bool {
     let PhpType::Union(members) = ty else {
         return false;
@@ -824,11 +840,13 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save stream fd on stack
-    // `fgetcsv()` answers `array<string>|false`, which is stored boxed. Its rows are exactly
-    // what gets written back — `while (($row = fgetcsv($in)) !== false) fputcsv($out, $row);`
-    // is the whole point of the pair — so the boxed form is unwrapped here rather than
-    // rejected. The union guarantees the payload IS a string array, so the existing writer
-    // works on it unchanged once the box is off.
+    // `scandir()`, `glob()` and `file()` answer `array<string>|false`, which is stored boxed, so
+    // the boxed form is unwrapped here rather than rejected: the union guarantees the payload IS
+    // a string array and the existing writer works on it unchanged once the box is off.
+    // `fgetcsv()` reaches the `else` arm instead — its rows are `array<mixed>|false` so that a
+    // blank line can come back as php's `[null]` — and the element lane is then read from the
+    // array header at run time. `while (($row = fgetcsv($in)) !== false) fputcsv($out, $row);`
+    // is the whole point of the pair and still round-trips, blank lines included.
     let field_tag = if boxed_string_array_union(&ctx.raw_value_php_type(fields)?) {
         ctx.load_value_to_result(fields)?;
         emit_unwrap_boxed_string_array(ctx, "fputcsv");
