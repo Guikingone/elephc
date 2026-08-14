@@ -36,7 +36,19 @@ const STREAM_META_GROUP_NAME: usize = 4;
 const STREAM_META_GROUP: usize = 5;
 const STREAM_META_ACCESS: usize = 6;
 const STREAM_OPTION_BLOCKING: usize = 1;
+const STREAM_OPTION_READ_BUFFER: usize = 2;
+const STREAM_OPTION_WRITE_BUFFER: usize = 3;
 const STREAM_OPTION_READ_TIMEOUT: usize = 4;
+/// `PHP_STREAM_BUFFER_NONE`, the mode php sends for a requested size of zero.
+const STREAM_BUFFER_NONE: usize = 0;
+/// `PHP_STREAM_BUFFER_FULL`, the mode php sends for any non-zero size.
+const STREAM_BUFFER_FULL: usize = 2;
+/// The chunk size php passes as `$arg2` when the requested buffer size is zero.
+const DEFAULT_CHUNK_SIZE: usize = 1024;
+/// `stream_set_write_buffer()`'s answer for a stream that is not a userspace wrapper.
+const NATIVE_WRITE_BUFFER_RESULT: i64 = -1;
+/// `stream_set_read_buffer()`'s answer for a stream that is not a userspace wrapper.
+const NATIVE_READ_BUFFER_RESULT: i64 = 0;
 /// `STREAM_REPORT_ERRORS`, the `$options` bit php sets on every wrapper path operation.
 const STREAM_REPORT_ERRORS: usize = 8;
 /// `mkdir()`'s documented default permissions, `0777`.
@@ -128,7 +140,8 @@ pub(crate) use stream_buckets::{
     lower_stream_is_local, lower_stream_supports_lock,
 };
 pub(crate) use stream_options::{
-    lower_stream_isatty, lower_stream_set_blocking, lower_stream_set_chunk_size, lower_stream_set_buffer,
+    lower_stream_isatty, lower_stream_set_blocking, lower_stream_set_chunk_size,
+    lower_stream_set_read_buffer, lower_stream_set_write_buffer,
     lower_stream_set_timeout, lower_stream_select, lower_stream_resolve_include_path,
 };
 pub(crate) use stream_sockets::{

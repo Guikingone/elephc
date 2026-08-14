@@ -6650,12 +6650,14 @@ echo count(stream_context_get_options($d));
     assert_eq!(out, "0");
 }
 
-/// Verifies compiled PHP output for stream set buffer stubs.
+/// Verifies compiled PHP output for the stream buffer setters on a non-wrapper stream.
 #[test]
 fn test_stream_set_buffer_stubs() {
     // stream_set_chunk_size returns the previous chunk size (8192 default on the
-    // first call); the read/write buffer setters return 0 ("success" — elephc
-    // streams are unbuffered, so the size has no effect).
+    // first call). The buffer setters do NOT both answer 0: measured on php 8.5.6,
+    // `php://memory` answers 0 for the read buffer and -1 for the write buffer, the
+    // same split a real file gives. This assertion used to read "8192|0|0", which was
+    // the no-op lowering writing down its own return value.
     let out = compile_and_run(
         r#"<?php
 $m = fopen("php://memory", "r+");
@@ -6667,7 +6669,7 @@ echo stream_set_write_buffer($m, 0);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "8192|0|0");
+    assert_eq!(out, "8192|0|-1");
 }
 
 /// `stream_set_chunk_size` returns the PREVIOUS per-fd chunk size (PHP's
@@ -10223,6 +10225,46 @@ echo ($r ? "ok" : "no") . "\n";
 "#,
     );
     assert_eq!(out, "p=pow://f o=6 t=integer\n1\np=pow://g o=1 t=array\nok\n");
+}
+
+/// `stream_set_write_buffer()`/`stream_set_read_buffer()` reach the wrapper's `stream_set_option()`.
+///
+/// Both were lowered as a no-op that always returned 0, so a userspace wrapper never learned the
+/// buffer changed and every stream claimed success. Measured on php 8.5.6: `$option` is 3 for write
+/// and 2 for read, `$arg1` is `PHP_STREAM_BUFFER_NONE` (0) for size 0 and `_FULL` (2) otherwise,
+/// and `$arg2` is the size — except for size 0, where php substitutes the default chunk size 1024.
+/// The call answers 0 when the hook returns true and -1 otherwise. A stream that is not a wrapper
+/// never reaches the hook at all: `php://memory` answers -1 for write and 0 for read.
+#[test]
+fn test_stream_set_buffer_dispatches_to_the_wrapper_option_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class BufW {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    public function stream_set_option($option, $arg1, $arg2) {
+        echo "opt=" . $option . " mode=" . $arg1 . " size=" . $arg2 . "\n";
+        return $option === 3;
+    }
+}
+stream_wrapper_register("buf", "BufW");
+$f = fopen("buf://x", "r");
+var_dump(stream_set_write_buffer($f, 0));
+var_dump(stream_set_write_buffer($f, 512));
+var_dump(stream_set_read_buffer($f, 0));
+var_dump(stream_set_read_buffer($f, 256));
+fclose($f);
+$m = fopen("php://memory", "r+");
+var_dump(stream_set_write_buffer($m, 0));
+var_dump(stream_set_read_buffer($m, 0));
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "opt=3 mode=0 size=1024\nint(0)\nopt=3 mode=2 size=512\nint(0)\n\
+         opt=2 mode=0 size=1024\nint(-1)\nopt=2 mode=2 size=256\nint(-1)\nint(-1)\nint(0)\n"
+    );
 }
 
 /// The wrapper marker must NOT fire on a class that merely owns generic names.
