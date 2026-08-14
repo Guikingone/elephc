@@ -482,6 +482,125 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
+/// One CSV control argument, as the three CSV builtins each spell it.
+///
+/// php-src validates every one of them BEFORE it reads a byte: a separator or enclosure has to
+/// be exactly one character, an escape has to be empty or one character, and anything else is a
+/// catchable `ValueError` naming that function's own argument position. elephc used to take the
+/// first byte and drop the rest in silence, so `fgetcsv($h, 0, "::")` quietly parsed on `:`.
+struct CsvControl {
+    /// Operand index of this control in the lowered instruction.
+    operand: usize,
+    /// Byte handed to the runtime when the argument is ABSENT.
+    ///
+    /// The runtime reads a zero separator/enclosure as "use my default" and a zero escape as
+    /// RFC 4180 doubling mode, which is what php reaches through an EMPTY `$escape` — never
+    /// through an omitted one. The default therefore has to be spelled out here.
+    default: u8,
+    /// Context string for the string-load diagnostic.
+    context: &'static str,
+    /// php-src's `Argument #N` position for this function.
+    position: usize,
+    /// The php parameter name, without its `$`.
+    parameter: &'static str,
+    /// Whether an EMPTY string is accepted (true only for `$escape`).
+    empty_allowed: bool,
+}
+
+/// Materializes the three CSV control bytes on the stack, in `separator, enclosure, escape`
+/// order, rejecting any that is not the single character php-src requires.
+///
+/// Each byte is pushed as it is produced; the packing step that follows pops them in reverse.
+fn emit_csv_control_bytes(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    function: &str,
+    controls: &[CsvControl; 3],
+) -> Result<()> {
+    let arch = ctx.emitter.target.arch;
+    for control in controls {
+        if inst.operands.len() > control.operand {
+            let value = expect_operand(inst, control.operand)?;
+            load_string_to_result(ctx, value, control.context)?;
+            // The length is still in the string ABI's second register, which is exactly what
+            // php-src measures: it counts CHARACTERS, so a two-byte separator and an empty one
+            // are the same rejection. `$escape` alone accepts the empty string, because that is
+            // how a caller asks for RFC 4180 doubling.
+            let (minimum, message) = if control.empty_allowed {
+                (
+                    0,
+                    format!(
+                        "{function}(): Argument #{} (${}) must be empty or a single character",
+                        control.position, control.parameter
+                    ),
+                )
+            } else {
+                (
+                    1,
+                    format!(
+                        "{function}(): Argument #{} (${}) must be a single character",
+                        control.position, control.parameter
+                    ),
+                )
+            };
+            let length_reg = abi::string_result_regs(ctx.emitter).1;
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedInRange(length_reg, minimum, 1),
+                &message,
+            );
+            let empty_label = ctx.next_label("csv_empty");
+            let done_label = ctx.next_label("csv_done");
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // only `$escape` can still be empty here
+                    ctx.emitter.instruction("ldrb w0, [x1]");                   // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov w0, #0");                      // an empty $escape is the runtime's doubling mode
+                    ctx.emitter.label(&done_label);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rdx, rdx");                   // only `$escape` can still be empty here
+                    ctx.emitter.instruction(&format!("jz {}", empty_label));    // branch if string is empty
+                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");       // load first byte of the CSV delimiter string
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip the empty-string fallback
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov eax, 0");                      // an empty $escape is the runtime's doubling mode
+                    ctx.emitter.label(&done_label);
+                }
+            }
+        } else {
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter
+                        .instruction(&format!("mov w0, #{}", control.default)); // use default CSV delimiter byte
+                }
+                Arch::X86_64 => {
+                    ctx.emitter
+                        .instruction(&format!("mov eax, {}", control.default)); // use default CSV delimiter byte
+                }
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));        // save extracted delimiter byte
+    }
+    Ok(())
+}
+
+/// The `fgetcsv()` and `fputcsv()` control arguments — both name them `#3`, `#4` and `#5`.
+const STREAM_CSV_CONTROLS: [CsvControl; 3] = [
+    CsvControl { operand: 2, default: b',', context: "csv separator", position: 3, parameter: "separator", empty_allowed: false },
+    CsvControl { operand: 3, default: b'"', context: "csv enclosure", position: 4, parameter: "enclosure", empty_allowed: false },
+    CsvControl { operand: 4, default: b'\\', context: "csv escape", position: 5, parameter: "escape", empty_allowed: true },
+];
+
+/// The `str_getcsv()` control arguments, one position earlier: it has no `$length`.
+const STRING_CSV_CONTROLS: [CsvControl; 3] = [
+    CsvControl { operand: 1, default: b',', context: "str_getcsv separator", position: 2, parameter: "separator", empty_allowed: false },
+    CsvControl { operand: 2, default: b'"', context: "str_getcsv enclosure", position: 3, parameter: "enclosure", empty_allowed: false },
+    CsvControl { operand: 3, default: b'\\', context: "str_getcsv escape", position: 4, parameter: "escape", empty_allowed: true },
+];
+
 /// Lowers `fgetcsv(stream, length?, separator?, enclosure?, escape?)` through the CSV row
 /// runtime helper, passing separator/enclosure/escape as a packed `csv_opts` word.
 pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -493,48 +612,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save the opaque stream handle on stack
 
     // -- extract first byte of separator / enclosure / escape (or default) --
-    let csv_indices: [(usize, u8, &str); 3] = [
-        (2, b',', "fgetcsv separator"),
-        (3, b'"', "fgetcsv enclosure"),
-        (4, b'\\', "fgetcsv escape"),
-    ];
-    for (idx, default, name) in csv_indices {
-        if inst.operands.len() > idx {
-            let v = expect_operand(inst, idx)?;
-            load_string_to_result(ctx, v, name)?;
-            let empty_label = ctx.next_label("csv_empty");
-            let done_label = ctx.next_label("csv_done");
-            match arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // branch if string is empty
-                    ctx.emitter.instruction("ldrb w0, [x1]");                   // load first byte of the CSV delimiter string
-                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip the empty-string fallback
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("mov w0, #0");                      // use zero byte when the string is empty
-                    ctx.emitter.label(&done_label);
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("test rdx, rdx");                   // check string length for the CSV delimiter
-                    ctx.emitter.instruction(&format!("jz {}", empty_label));    // branch if string is empty
-                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");       // load first byte of the CSV delimiter string
-                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip the empty-string fallback
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("mov eax, 0");                      // use zero byte when the string is empty
-                    ctx.emitter.label(&done_label);
-                }
-            }
-        } else {
-            match arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("mov w0, #{}", default));  // use default CSV delimiter byte
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("mov eax, {}", default));  // use default CSV delimiter byte
-                }
-            }
-        }
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));        // save extracted delimiter byte
-    }
+    emit_csv_control_bytes(ctx, inst, "fgetcsv", &STREAM_CSV_CONTROLS)?;
 
     // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
     match arch {
@@ -588,45 +666,12 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let subject = expect_operand(inst, 0)?;
     let arch = ctx.emitter.target.arch;
 
-    // -- pack csv_opts: (esc << 16) | (enc << 8) | sep, zero selecting each default --
-    let csv_indices: [(usize, &str); 3] = [
-        (1, "str_getcsv separator"),
-        (2, "str_getcsv enclosure"),
-        (3, "str_getcsv escape"),
-    ];
-    for (idx, name) in csv_indices {
-        if inst.operands.len() > idx {
-            let value = expect_operand(inst, idx)?;
-            load_string_to_result(ctx, value, name)?;
-            let empty_label = ctx.next_label("sgc_empty");
-            let done_label = ctx.next_label("sgc_done");
-            match arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // an empty string selects the default
-                    ctx.emitter.instruction("ldrb w0, [x1]");                    // the first byte is the delimiter
-                    ctx.emitter.instruction(&format!("b {}", done_label));
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("mov w0, #0");
-                    ctx.emitter.label(&done_label);
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("test rdx, rdx");                    // an empty string selects the default
-                    ctx.emitter.instruction(&format!("jz {}", empty_label));
-                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");        // the first byte is the delimiter
-                    ctx.emitter.instruction(&format!("jmp {}", done_label));
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("xor eax, eax");
-                    ctx.emitter.label(&done_label);
-                }
-            }
-        } else {
-            match arch {
-                Arch::AArch64 => ctx.emitter.instruction("mov w0, #0"),          // absent: the runtime picks the default
-                Arch::X86_64 => ctx.emitter.instruction("xor eax, eax"),         // absent: the runtime picks the default
-            }
-        }
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    }
+    // -- pack csv_opts: (esc << 16) | (enc << 8) | sep --
+    //
+    // The DEFAULT escape is spelled out rather than left as the zero the runtime reads as RFC
+    // 4180 doubling: php's `str_getcsv($s)` uses `"\\"`, the same byte `fgetcsv()` defaults to,
+    // and only an explicitly EMPTY `$escape` asks for doubling.
+    emit_csv_control_bytes(ctx, inst, "str_getcsv", &STRING_CSV_CONTROLS)?;
     match arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x0");                                // escape byte
@@ -875,48 +920,11 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
 
     // -- extract first byte of separator / enclosure / escape (or default) --
-    let csv_indices: [(usize, u8, &str); 3] = [
-        (2, b',', "fputcsv separator"),
-        (3, b'"', "fputcsv enclosure"),
-        (4, 0, "fputcsv escape"),
-    ];
-    for (idx, default, name) in csv_indices {
-        if inst.operands.len() > idx {
-            let v = expect_operand(inst, idx)?;
-            load_string_to_result(ctx, v, name)?;
-            let empty_label = ctx.next_label("csv_empty");
-            let done_label = ctx.next_label("csv_done");
-            match arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // branch if string is empty
-                    ctx.emitter.instruction("ldrb w0, [x1]");                   // load first byte of the CSV delimiter string
-                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip the empty-string fallback
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("mov w0, #0");                      // use zero byte when the string is empty
-                    ctx.emitter.label(&done_label);
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("test rdx, rdx");                   // check string length for the CSV delimiter
-                    ctx.emitter.instruction(&format!("jz {}", empty_label));    // branch if string is empty
-                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");       // load first byte of the CSV delimiter string
-                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip the empty-string fallback
-                    ctx.emitter.label(&empty_label);
-                    ctx.emitter.instruction("mov eax, 0");                      // use zero byte when the string is empty
-                    ctx.emitter.label(&done_label);
-                }
-            }
-        } else {
-            match arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("mov w0, #{}", default));  // use default CSV delimiter byte
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("mov eax, {}", default));  // use default CSV delimiter byte
-                }
-            }
-        }
-        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));        // save extracted delimiter byte
-    }
+    //
+    // The DEFAULT escape is `"\\"`, not the zero byte that means RFC 4180 doubling. Defaulting
+    // to doubling made `fputcsv($h, ['a\\"b'])` write `"a\""b"` where php writes `"a\"b"`: the
+    // escape already neutralizes the quote, so php never doubles it.
+    emit_csv_control_bytes(ctx, inst, "fputcsv", &STREAM_CSV_CONTROLS)?;
 
     // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
     match arch {
@@ -980,15 +988,22 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             }
         }
     } else {
+        // An ABSENT `$eol` is php's `"\n"`, but an EMPTY one writes no terminator at all —
+        // `fputcsv($h, ["a", "b"], ",", '"', "\\", "")` answers 3, not 4. A zero LENGTH cannot
+        // tell the two apart, and neither can the pointer: a materialized empty string leaves
+        // it undefined. The absent case is therefore marked by a NEGATIVE length, which no
+        // real string can have, and the helper reads the sign rather than the pointer.
         match arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction("mov x0, #0");                          // null eol pointer signals default newline
+                ctx.emitter.instruction("mov x0, #0");                          // no eol string to point at
                 abi::emit_push_reg(ctx.emitter, "x0");                          // push eol ptr
+                ctx.emitter.instruction("mov x0, #-1");                         // a negative length means the ARGUMENT was absent
                 abi::emit_push_reg(ctx.emitter, "x0");                          // push eol len
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction("mov rax, 0");                          // null eol pointer signals default newline
+                ctx.emitter.instruction("mov rax, 0");                          // no eol string to point at
                 abi::emit_push_reg(ctx.emitter, "rax");                         // push eol ptr
+                ctx.emitter.instruction("mov rax, -1");                         // a negative length means the ARGUMENT was absent
                 abi::emit_push_reg(ctx.emitter, "rax");                         // push eol len
             }
         }

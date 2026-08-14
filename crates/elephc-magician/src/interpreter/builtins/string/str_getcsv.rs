@@ -37,30 +37,56 @@ pub(in crate::interpreter) fn eval_builtin_str_getcsv(
     for arg in &args[1..] {
         controls.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_str_getcsv_result(subject, &controls, values)
+    eval_str_getcsv_result(subject, &controls, context, values)
 }
 
 /// Parses one CSV record out of an evaluated string.
 pub(in crate::interpreter) fn eval_str_getcsv_result(
     subject: RuntimeCellHandle,
     controls: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let control_byte = |values: &mut dyn FnMut(usize) -> Result<Option<u8>, EvalStatus>,
-                        index: usize|
-     -> Result<Option<u8>, EvalStatus> { values(index) };
-    let mut read_control = |index: usize| -> Result<Option<u8>, EvalStatus> {
-        match controls.get(index) {
-            None => Ok(None),
-            Some(handle) => {
-                let bytes = values.string_bytes(*handle)?;
-                Ok(bytes.first().copied())
-            }
-        }
-    };
-    let separator = control_byte(&mut read_control, 0)?.unwrap_or(b',');
-    let enclosure = control_byte(&mut read_control, 1)?.unwrap_or(b'"');
-    let escape = control_byte(&mut read_control, 2)?.unwrap_or(b'\\');
+    // php validates each control BEFORE it parses: exactly one character for the separator and
+    // the enclosure, empty or one for the escape. An empty escape is doubling mode, which the
+    // parser below spells as a ZERO escape byte — it is not a way to reach the `"\\"` default.
+    use crate::interpreter::{eval_csv_control_byte, CsvControlArgument};
+    let separator = eval_csv_control_byte(
+        controls.first().copied(),
+        b',',
+        CsvControlArgument {
+            function: "str_getcsv",
+            position: 2,
+            parameter: "separator",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
+    let enclosure = eval_csv_control_byte(
+        controls.get(1).copied(),
+        b'"',
+        CsvControlArgument {
+            function: "str_getcsv",
+            position: 3,
+            parameter: "enclosure",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
+    let escape = eval_csv_control_byte(
+        controls.get(2).copied(),
+        b'\\',
+        CsvControlArgument {
+            function: "str_getcsv",
+            position: 4,
+            parameter: "escape",
+            empty_allowed: true,
+        },
+        context,
+        values,
+    )?;
 
     let subject = values.string_bytes(subject)?;
     let trimmed = strip_one_terminator(&subject);

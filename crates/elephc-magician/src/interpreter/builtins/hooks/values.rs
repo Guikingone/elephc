@@ -349,7 +349,7 @@ impl EvalValuesHook {
                     return Err(EvalStatus::RuntimeFatal);
                 };
                 crate::interpreter::builtins::string::str_getcsv::eval_str_getcsv_result(
-                    *subject, controls, values,
+                    *subject, controls, context, values,
                 )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),

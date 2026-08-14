@@ -73,7 +73,18 @@ pub(in crate::interpreter) fn eval_fgetcsv_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
     let length = eval_optional_stream_length(length, values)?.unwrap_or(usize::MAX);
-    let separator = eval_optional_delimiter(separator, b',', values)?;
+    let separator = eval_csv_control_byte(
+        separator,
+        b',',
+        CsvControlArgument {
+            function: "fgetcsv",
+            position: 3,
+            parameter: "separator",
+            empty_allowed: false,
+        },
+        context,
+        values,
+    )?;
     let Some(mut line) = context
         .stream_resources_mut()
         .read_line(id, length, None, true, true)

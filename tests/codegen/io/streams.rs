@@ -1252,6 +1252,138 @@ unlink("dep_out.csv");
     }
 }
 
+/// Verifies an OMITTED `$escape` writes with `"\\"`, not with RFC 4180 doubling.
+///
+/// `fgetcsv()` and `str_getcsv()` already defaulted to the backslash; `fputcsv()` defaulted to
+/// the zero byte the helper reads as doubling mode, so the very row `fgetcsv()` would read back
+/// came out differently depending on whether the argument was spelled. Measured on `php -n`
+/// 8.5.6: with an escape in force the quote is NOT doubled, because the escape already
+/// neutralizes it. The bytes are compared in hex because the difference is one `"` character.
+#[test]
+fn test_fputcsv_default_escape_is_the_backslash_not_doubling() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b']);
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b'], ",", "\"", "\\");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ['a\\"b'], ",", "\"", "");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "22615c2262220a|7\n22615c2262220a|7\n22615c222262220a|8\n",
+        "an omitted $escape must write exactly what the explicit backslash writes"
+    );
+}
+
+/// Verifies `str_getcsv()`'s omitted `$escape` is the backslash the manual documents.
+///
+/// The lowering pushed a zero byte for every absent control and let the runtime pick, which is
+/// right for the separator and the enclosure and WRONG for the escape: zero is doubling mode
+/// there, php's 9.0 default, not today's `"\\"`.
+#[test]
+fn test_str_getcsv_default_escape_matches_the_explicit_backslash() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "\"a\\\"b\",c";
+echo json_encode(str_getcsv($s)), "|", json_encode(str_getcsv($s, ",", "\"", "\\")), "\n";
+"#,
+    );
+    let (omitted, explicit) = out.trim_end().split_once('|').expect("two records");
+    assert_eq!(
+        omitted, explicit,
+        "an omitted $escape must parse exactly like the explicit backslash"
+    );
+}
+
+/// Verifies an EMPTY `$eol` writes no terminator, while an ABSENT one still writes `"\n"`.
+///
+/// Measured on `php -n` 8.5.6: `fputcsv($h, ["a", "b"], ",", '"', "\\", "")` answers 3 and
+/// leaves `a,b`; omitting the argument answers 4 and leaves `a,b\n`. A zero LENGTH cannot tell
+/// the two apart, so the helper used to substitute the newline for both.
+#[test]
+fn test_fputcsv_empty_eol_writes_no_terminator() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\", "");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+fclose($h);
+$h = fopen("php://memory", "r+");
+$n = fputcsv($h, ["a", "b"], ",", "\"", "\\", "\r\n");
+rewind($h);
+echo bin2hex(stream_get_contents($h)), "|", $n, "\n";
+"#,
+    );
+    assert_eq!(out, "612c62|3\n612c620a|4\n612c620d0a|5\n");
+}
+
+/// Verifies every CSV control argument raises php-src's own `ValueError` unless it is one byte.
+///
+/// elephc read the first byte and dropped the rest in silence, so `fgetcsv($h, 0, "::")` parsed
+/// on `:`; an EMPTY separator or enclosure quietly selected the default. php rejects all of
+/// them, and only `$escape` accepts the empty string. Each function names its OWN argument
+/// position, which is why one rule cannot cover the three: the reader counts a `$length` first.
+/// Every message below is `php -n` 8.5.6 verbatim.
+#[test]
+fn test_csv_controls_must_be_a_single_character() {
+    let out = compile_and_run(
+        r#"<?php
+function t(callable $c): void {
+    try { $c(); echo "NO-THROW\n"; }
+    catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+}
+$r = fopen("php://memory", "r+");
+fwrite($r, "a,b,c\n");
+rewind($r);
+$w = fopen("php://memory", "r+");
+t(fn() => str_getcsv("a,b", ",,", "\"", "\\"));
+t(fn() => str_getcsv("a,b", "", "\"", "\\"));
+t(fn() => str_getcsv("a,b", ",", "''", "\\"));
+t(fn() => str_getcsv("a,b", ",", "", "\\"));
+t(fn() => str_getcsv("a,b", ",", "\"", "\\\\"));
+t(fn() => fgetcsv($r, 0, ",,", "\"", "\\"));
+t(fn() => fgetcsv($r, 0, ",", "", "\\"));
+t(fn() => fgetcsv($r, 0, ",", "\"", "ab"));
+t(fn() => fputcsv($w, ["a"], ",,", "\"", "\\"));
+t(fn() => fputcsv($w, ["a"], ",", "", "\\"));
+t(fn() => fputcsv($w, ["a"], ",", "\"", "\\\\"));
+echo json_encode(str_getcsv("a,b", ",", "\"", "")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "str_getcsv(): Argument #2 ($separator) must be a single character\n\
+         str_getcsv(): Argument #2 ($separator) must be a single character\n\
+         str_getcsv(): Argument #3 ($enclosure) must be a single character\n\
+         str_getcsv(): Argument #3 ($enclosure) must be a single character\n\
+         str_getcsv(): Argument #4 ($escape) must be empty or a single character\n\
+         fgetcsv(): Argument #3 ($separator) must be a single character\n\
+         fgetcsv(): Argument #4 ($enclosure) must be a single character\n\
+         fgetcsv(): Argument #5 ($escape) must be empty or a single character\n\
+         fputcsv(): Argument #3 ($separator) must be a single character\n\
+         fputcsv(): Argument #4 ($enclosure) must be a single character\n\
+         fputcsv(): Argument #5 ($escape) must be empty or a single character\n\
+         [\"a\",\"b\"]\n"
+    );
+}
+
 /// Verifies `str_getcsv()` parses one record, with a newline as DATA rather than a break.
 ///
 /// It is not `fgetcsv()` over a line, and the difference is not obvious: only a trailing

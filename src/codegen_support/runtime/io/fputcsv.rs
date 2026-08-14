@@ -10,7 +10,9 @@
 //! Key details:
 //! - `csv_opts = (esc << 16) | (enc << 8) | sep`; zero bytes select defaults
 //!   (sep → ',', enc → '"', esc → 0 means RFC 4180 doubling mode).
-//! - `eol_ptr == 0` (or `eol_len == 0`) selects the default `"\n"` terminator.
+//! - `eol_len < 0` marks an ABSENT `$eol` and selects the default `"\n"`; `eol_len == 0` is an
+//!   EMPTY `$eol`, which php writes as no terminator at all. The pointer cannot decide this —
+//!   an empty string materializes with an undefined one.
 //! - ARM64 and x86_64 variants mirror the same quoting and escaping logic.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -309,8 +311,8 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_eol");
     emitter.instruction("ldr x3, [sp, #56]");                                         // reload eol_ptr
     emitter.instruction("ldr x4, [sp, #64]");                                         // reload eol_len
-    emitter.instruction("cbz x3, __rt_fputcsv_eol_default");                           // eol_ptr == 0 -> default "\n"
-    emitter.instruction("cbz x4, __rt_fputcsv_eol_default");                           // eol_len == 0 -> default "\n"
+    emitter.instruction("tbnz x4, #63, __rt_fputcsv_eol_default");                     // a NEGATIVE length is the absent argument -> "\n"
+    emitter.instruction("cbz x4, __rt_fputcsv_ret");                                   // an EMPTY $eol writes no terminator at all
     // -- write custom eol --
     emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
     emitter.instruction("mov x1, x3");                                                // eol pointer
@@ -606,11 +608,10 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     // -- write trailing eol (custom or default "\n") --
     emitter.label("__rt_fputcsv_x_eol");
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                      // reload eol_ptr
-    emitter.instruction("test rax, rax");                                      // eol_ptr == 0?
-    emitter.instruction("jz __rt_fputcsv_x_eol_default");                      // use default "\n"
     emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                      // reload eol_len
-    emitter.instruction("test rcx, rcx");                                     // eol_len == 0?
-    emitter.instruction("jz __rt_fputcsv_x_eol_default");                      // use default "\n"
+    emitter.instruction("test rcx, rcx");                                      // classify the eol length
+    emitter.instruction("js __rt_fputcsv_x_eol_default");                      // a NEGATIVE length is the absent argument -> "\n"
+    emitter.instruction("jz __rt_fputcsv_x_ret");                              // an EMPTY $eol writes no terminator at all
     // -- write custom eol --
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                      // pass the destination fd
     emitter.instruction("mov rsi, rax");                                      // pass eol pointer

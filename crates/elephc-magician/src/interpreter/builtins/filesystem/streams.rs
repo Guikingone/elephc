@@ -76,10 +76,34 @@ pub(in crate::interpreter) fn eval_stream_string(
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Converts an optional one-byte delimiter argument to a byte value.
-pub(in crate::interpreter) fn eval_optional_delimiter(
+/// One CSV control argument, as php-src names it in the `ValueError` an ill-sized value raises.
+///
+/// The position is that function's OWN `Argument #N`: `fgetcsv()` and `fputcsv()` count a
+/// `$stream` and (for the reader) a `$length` first, so their separator is `#3` while
+/// `str_getcsv()`'s is `#2`.
+pub(in crate::interpreter) struct CsvControlArgument {
+    /// The php function name the message opens with.
+    pub function: &'static str,
+    /// php-src's `Argument #N` position for this control.
+    pub position: usize,
+    /// The php parameter name, without its `$`.
+    pub parameter: &'static str,
+    /// Whether an EMPTY string is accepted — true only for `$escape`.
+    pub empty_allowed: bool,
+}
+
+/// Converts an optional one-byte CSV control argument, applying php-src's own size rule.
+///
+/// php validates the CONTROL before it reads a record: a separator or enclosure has to be
+/// exactly one character, an escape has to be empty or one character, and anything else is a
+/// catchable `ValueError`. Taking the first byte and dropping the rest — what this used to do —
+/// let `str_getcsv($s, "::")` parse on `:` in silence, and made an EMPTY `$escape` select the
+/// `"\\"` default rather than the RFC 4180 doubling mode php reaches through it.
+pub(in crate::interpreter) fn eval_csv_control_byte(
     value: Option<RuntimeCellHandle>,
     default: u8,
+    control: CsvControlArgument,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<u8, EvalStatus> {
     let Some(value) = value else {
@@ -88,5 +112,37 @@ pub(in crate::interpreter) fn eval_optional_delimiter(
     if values.type_tag(value)? == EVAL_TAG_NULL {
         return Ok(default);
     }
-    Ok(values.string_bytes(value)?.first().copied().unwrap_or(default))
+    let bytes = values.string_bytes(value)?;
+    match bytes.len() {
+        1 => Ok(bytes[0]),
+        // The parsers spell doubling mode as a ZERO escape byte, which is exactly what an empty
+        // `$escape` asks for; a zero separator or enclosure never reaches them.
+        0 if control.empty_allowed => Ok(0),
+        _ => eval_csv_control_error(&control, context, values),
+    }
+}
+
+/// Raises PHP's catchable `ValueError` for a CSV control that is not a single character.
+fn eval_csv_control_error<T>(
+    control: &CsvControlArgument,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let text = if control.empty_allowed {
+        format!(
+            "{}(): Argument #{} (${}) must be empty or a single character",
+            control.function, control.position, control.parameter
+        )
+    } else {
+        format!(
+            "{}(): Argument #{} (${}) must be a single character",
+            control.function, control.position, control.parameter
+        )
+    };
+    let exception = values.new_object("ValueError")?;
+    let message = values.string(&text)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
 }
