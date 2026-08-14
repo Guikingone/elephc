@@ -260,7 +260,7 @@ sidebar:
 | [`stream_set_timeout()`](./builtins/io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./builtins/io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_socket_accept()`](./builtins/io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_client()`](./builtins/io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 1, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_client()`](./builtins/io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_enable_crypto()`](./builtins/io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./builtins/io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./builtins/io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |
@@ -404,8 +404,8 @@ sidebar:
 | [`pfsockopen()`](./builtins/streams/pfsockopen.md) | `(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_append()`](./builtins/streams/stream_bucket_append.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
 | [`stream_bucket_prepend()`](./builtins/streams/stream_bucket_prepend.md) | `(mixed $brigade, mixed $bucket): void` | `void` | ✓ | ✓ |
-| [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_filter_prepend()`](./builtins/streams/stream_filter_prepend.md) | `(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_filter_append()`](./builtins/streams/stream_filter_append.md) | `(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_filter_prepend()`](./builtins/streams/stream_filter_prepend.md) | `(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed` | `mixed` | ✓ | ✓ |
 | [`addslashes()`](./builtins/string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`base64_decode()`](./builtins/string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./builtins/string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |

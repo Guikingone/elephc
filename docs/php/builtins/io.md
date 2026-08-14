@@ -95,7 +95,7 @@ sidebar:
 | [`stream_set_timeout()`](./io/stream_set_timeout.md) | `(resource $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_set_write_buffer()`](./io/stream_set_write_buffer.md) | `(resource $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`stream_socket_accept()`](./io/stream_socket_accept.md) | `(resource $socket, float $timeout = null, string $peer_name = null): mixed` | `mixed` | ✓ | ✓ |
-| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 1, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
+| [`stream_socket_client()`](./io/stream_socket_client.md) | `(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_enable_crypto()`](./io/stream_socket_enable_crypto.md) | `(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | `bool` | ✓ | ✓ |
 | [`stream_socket_get_name()`](./io/stream_socket_get_name.md) | `(resource $socket, bool $remote): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_socket_pair()`](./io/stream_socket_pair.md) | `(int $domain, int $type, int $protocol): mixed` | `mixed` | ✓ | ✓ |

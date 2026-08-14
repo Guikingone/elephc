@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_client(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 1, mixed $context = null): mixed
+function stream_socket_client(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 4, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces

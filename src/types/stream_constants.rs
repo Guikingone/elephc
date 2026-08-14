@@ -16,18 +16,23 @@
 //! - The configured wrapper/transport/filter slices are shared by lowering and
 //!   Gate 0 compliance export so advertised capabilities cannot drift silently.
 
+/// The wrappers `stream_get_wrappers()` advertises, in php-src's own
+/// registration order (measured on php 8.5.6).
+///
+/// php's twelfth entry is `zip`, which elephc has no wrapper for: advertising a
+/// scheme `fopen()` cannot open would move the lie rather than remove it.
 pub(crate) const STREAM_WRAPPERS: &[&str] = &[
-    "file",
-    "php",
-    "data",
-    "ftp",
-    "http",
     "https",
     "ftps",
     "compress.zlib",
     "compress.bzip2",
-    "phar",
+    "php",
+    "file",
     "glob",
+    "data",
+    "http",
+    "ftp",
+    "phar",
 ];
 
 /// The transports `stream_get_transports()` advertises, in php-src's own order.
@@ -47,21 +52,23 @@ pub(crate) const STREAM_TRANSPORTS: &[&str] = &[
     "tlsv1.3",
 ];
 
+/// The filters `stream_get_filters()` advertises, in php-src's own order
+/// (measured on php 8.5.6).
+///
+/// php publishes filter FAMILIES, not concrete names: `zlib.*` stands for
+/// `zlib.deflate`/`zlib.inflate`, `bzip2.*` for the bzip2 pair, and `convert.*`
+/// for the base64 and quoted-printable pairs. `string.strip_tags` is absent
+/// because php removed that filter in 8.0.
 pub(crate) const STREAM_FILTERS: &[&str] = &[
+    "zlib.*",
+    "bzip2.*",
+    "convert.iconv.*",
+    "string.rot13",
     "string.toupper",
     "string.tolower",
-    "string.rot13",
-    "string.strip_tags",
-    "convert.base64-encode",
-    "convert.base64-decode",
-    "convert.quoted-printable-encode",
-    "convert.quoted-printable-decode",
-    "convert.iconv.*",
+    "convert.*",
+    "consumed",
     "dechunk",
-    "zlib.deflate",
-    "zlib.inflate",
-    "bzip2.compress",
-    "bzip2.decompress",
 ];
 
 /// `STREAM_SERVER_BIND`: give the socket its address.
@@ -75,10 +82,12 @@ pub(crate) const STREAM_SERVER_LISTEN: i64 = 8;
 pub(crate) const STREAM_SERVER_DEFAULT_FLAGS: i64 = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN;
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
-    // Client / server connection flags.
-    ("STREAM_CLIENT_CONNECT", 1),
-    ("STREAM_CLIENT_PERSISTENT", 2),
-    ("STREAM_CLIENT_ASYNC_CONNECT", 4),
+    // Client / server connection flags. php-src orders the client bits
+    // PERSISTENT, ASYNC_CONNECT, CONNECT (ext/standard/file.stub.php:126-140,
+    // measured: `php -n -r 'var_dump(STREAM_CLIENT_CONNECT);'` = 4).
+    ("STREAM_CLIENT_PERSISTENT", 1),
+    ("STREAM_CLIENT_ASYNC_CONNECT", 2),
+    ("STREAM_CLIENT_CONNECT", 4),
     ("STREAM_SERVER_BIND", STREAM_SERVER_BIND),
     ("STREAM_SERVER_LISTEN", STREAM_SERVER_LISTEN),
     // Shutdown directions for stream_socket_shutdown().
@@ -158,13 +167,11 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("STREAM_META_GROUP_NAME", 4),
     ("STREAM_META_GROUP", 5),
     ("STREAM_META_ACCESS", 6),
-    ("STREAM_META_MODIFIED", 7),
     ("STREAM_MKDIR_RECURSIVE", 1),
     ("STREAM_OPTION_BLOCKING", 1),
     ("STREAM_OPTION_READ_BUFFER", 2),
     ("STREAM_OPTION_WRITE_BUFFER", 3),
     ("STREAM_OPTION_READ_TIMEOUT", 4),
-    ("STREAM_OPTION_CHUNK_SIZE", 5),
     ("STREAM_BUFFER_NONE", 0),
     ("STREAM_BUFFER_LINE", 1),
     ("STREAM_BUFFER_FULL", 2),
@@ -193,11 +200,10 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("SEEK_SET", 0),
     ("SEEK_CUR", 1),
     ("SEEK_END", 2),
-    // stream_seek() whence aliases (PHP does not expose STREAM_FROM_* publicly,
-    // but they are documented in some references; kept here for completeness).
-    ("STREAM_FROM_START", 0),
-    ("STREAM_FROM_CUR", 1),
-    ("STREAM_FROM_END", 2),
+    // STREAM_FROM_START / _CUR / _END are php-src *internal* whence names, not
+    // PHP constants: `php -n -r 'var_dump(defined("STREAM_FROM_START"));'` is
+    // false. Declaring them let a program name a constant php does not have and
+    // still compile. Same for STREAM_META_MODIFIED and STREAM_OPTION_CHUNK_SIZE.
     // glob() flags (POSIX-portable values).
     ("GLOB_ERR", 4),
     ("GLOB_MARK", 8),
@@ -222,14 +228,87 @@ mod tests {
         assert_eq!(entry.1, 3);
     }
 
-    /// Verifies the stream constant invariant for stream client connect is one.
+    /// Verifies the three `STREAM_CLIENT_*` bits carry php-src's values.
+    ///
+    /// This test used to read `stream_client_connect_is_one` and assert `1`,
+    /// pinning a permutation: php orders the bits PERSISTENT, ASYNC_CONNECT,
+    /// CONNECT, so `STREAM_CLIENT_CONNECT` is 4. Measured on php 8.5.6 —
+    /// `var_dump(STREAM_CLIENT_CONNECT, STREAM_CLIENT_PERSISTENT,
+    /// STREAM_CLIENT_ASYNC_CONNECT)` = `int(4) int(1) int(2)` — and confirmed
+    /// by the frozen oracle in `tests/php_oracle/manifests/streams`.
     #[test]
-    fn stream_client_connect_is_one() {
-        let entry = STREAM_INT_CONSTANTS
-            .iter()
-            .find(|(name, _)| *name == "STREAM_CLIENT_CONNECT")
-            .expect("STREAM_CLIENT_CONNECT defined");
-        assert_eq!(entry.1, 1);
+    fn stream_client_flags_match_php_src_order() {
+        for (name, expected) in [
+            ("STREAM_CLIENT_PERSISTENT", 1),
+            ("STREAM_CLIENT_ASYNC_CONNECT", 2),
+            ("STREAM_CLIENT_CONNECT", 4),
+        ] {
+            let entry = STREAM_INT_CONSTANTS
+                .iter()
+                .find(|(entry_name, _)| *entry_name == name)
+                .unwrap_or_else(|| panic!("{name} defined"));
+            assert_eq!(entry.1, expected, "{name}");
+        }
+    }
+
+    /// Verifies php-src's internal-only names stay out of the PHP constant table.
+    ///
+    /// `php -n -r 'var_dump(defined("STREAM_FROM_START"));'` and the other four
+    /// all report `false`; declaring them let a program name a constant php does
+    /// not have and still compile.
+    #[test]
+    fn does_not_declare_php_src_internal_constants() {
+        for name in [
+            "STREAM_FROM_START",
+            "STREAM_FROM_CUR",
+            "STREAM_FROM_END",
+            "STREAM_META_MODIFIED",
+            "STREAM_OPTION_CHUNK_SIZE",
+        ] {
+            assert!(
+                !STREAM_INT_CONSTANTS.iter().any(|(entry, _)| *entry == name),
+                "{name} is not a PHP constant",
+            );
+        }
+    }
+
+    /// Verifies the published surfaces stay in php-src's own order.
+    ///
+    /// Measured on php 8.5.6 with `var_export(stream_get_wrappers())` and
+    /// `var_export(stream_get_filters())`; php's twelfth wrapper is `zip`, which
+    /// elephc has no wrapper for and therefore does not advertise.
+    #[test]
+    fn published_surfaces_follow_php_order() {
+        assert_eq!(
+            STREAM_WRAPPERS,
+            [
+                "https",
+                "ftps",
+                "compress.zlib",
+                "compress.bzip2",
+                "php",
+                "file",
+                "glob",
+                "data",
+                "http",
+                "ftp",
+                "phar",
+            ]
+        );
+        assert_eq!(
+            STREAM_FILTERS,
+            [
+                "zlib.*",
+                "bzip2.*",
+                "convert.iconv.*",
+                "string.rot13",
+                "string.toupper",
+                "string.tolower",
+                "convert.*",
+                "consumed",
+                "dechunk",
+            ]
+        );
     }
 
     /// Verifies the stream constant invariant for no duplicate constant names.

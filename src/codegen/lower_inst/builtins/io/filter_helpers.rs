@@ -10,17 +10,30 @@
 use super::*;
 
 /// Maps runtime-supported built-in stream filter names to byte-table ids.
+///
+/// `string.strip_tags` is deliberately absent: php removed that filter in 8.0
+/// (php-src ext/standard/filters.c registers no `strip_tags` factory), so an
+/// attach must miss here and report `Unable to locate filter`.
+///
+/// `consumed` takes 13 because `__rt_fwrite` claims 4, 10 and 12 for the
+/// zlib/bzip2/iconv write paths, and an id no arm claims is left byte-for-byte
+/// alone by `__rt_apply_stream_filter` — which is exactly php's `consumed`
+/// transform: it appends every bucket to its output brigade unchanged and only
+/// counts bytes (php-src ext/standard/filters.c:1649-1653).
+///
+/// Kept in step with `BUILTIN_FILTER_NAMES`, the run-time table the dynamic
+/// name path scans.
 pub(super) fn stream_filter_id(name: &str) -> Option<u8> {
     match name {
         "string.toupper" => Some(1),
         "string.tolower" => Some(2),
         "string.rot13" => Some(3),
-        "string.strip_tags" => Some(4),
         "dechunk" => Some(5),
         "convert.base64-encode" => Some(6),
         "convert.base64-decode" => Some(7),
         "convert.quoted-printable-encode" => Some(8),
         "convert.quoted-printable-decode" => Some(9),
+        "consumed" => Some(13),
         _ => None,
     }
 }
@@ -77,7 +90,7 @@ pub(super) fn lower_builtin_stream_filter_attach(
     let stream = expect_operand(inst, 0)?;
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    materialize_stream_filter_mode(ctx, inst)?;
+    materialize_stream_filter_mode(ctx, inst, Some(0))?;
     emit_attach_filter_node(ctx, Some(filter_id), prepend, false);
     // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
     // display id, which the legacy design could afford because its "filter
@@ -216,18 +229,77 @@ fn emit_attach_filter_node(
     }
 }
 
-/// Materializes the stream-filter mode operand, defaulting to STREAM_FILTER_ALL.
-pub(super) fn materialize_stream_filter_mode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() >= 3 {
-        let mode = expect_operand(inst, 2)?;
-        require_int_or_bool(
-            ctx.load_value_to_result(mode)?.codegen_repr(),
-            "stream_filter_append mode",
-        )?;
+/// Materializes the stream-filter mode operand, deducing php's `$mode = 0`
+/// default from the stream's own open mode.
+///
+/// php's default is `0`, not `STREAM_FILTER_ALL`, and `0` does not mean "no
+/// chain": php reads `stream->mode` and enables the chains that mode can use
+/// (php-src streamsfuncs.c:1202-1214). The same rule covers any mode with no
+/// `STREAM_FILTER_ALL` bit set, which is why the test is `mode & 3` rather than
+/// `mode == 0` — php's own guard is `(read_write & PHP_STREAM_FILTER_ALL) == 0`.
+///
+/// One measured gap remains: a mode naming no direction (`x`, `c`) deduces 0
+/// here and the node joins no chain, while php refuses the attach and returns
+/// `false` (`fopen($f,"x"); var_dump(stream_filter_append($h,"string.toupper"))`
+/// prints `bool(false)` on 8.5.6). Both leave the bytes unfiltered; only the
+/// return value differs, and it differed the same way before this default
+/// existed.
+///
+/// `handle_sp_offset` is where the caller parked the stream HANDLE on the
+/// temporary stack — the attach paths stage different amounts before calling.
+/// `None` means the caller holds a raw descriptor rather than a handle (the
+/// `convert.iconv.*` and legacy paths), and there the default stays
+/// `STREAM_FILTER_ALL`: the deduction reads the mode string off the stream
+/// state, which only a handle can reach.
+pub(super) fn materialize_stream_filter_mode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    handle_sp_offset: Option<usize>,
+) -> Result<()> {
+    if inst.operands.len() < 3 {
+        match handle_sp_offset {
+            Some(offset) => emit_stream_filter_deduced_mode(ctx, offset),
+            None => emit_fd_result(ctx, 3),
+        }
         return Ok(());
     }
-    emit_fd_result(ctx, 3);
+    let mode = expect_operand(inst, 2)?;
+    require_int_or_bool(
+        ctx.load_value_to_result(mode)?.codegen_repr(),
+        "stream_filter_append mode",
+    )?;
+    let Some(offset) = handle_sp_offset else {
+        return Ok(());
+    };
+    let keep = ctx.next_label("sf_mode_explicit");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("tst x0, #3");                              // did the caller name at least one chain?
+            ctx.emitter.instruction(&format!("b.ne {}", keep));                 // an explicit READ/WRITE/ALL wins over the stream's own mode
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, 3");                             // did the caller name at least one chain?
+            ctx.emitter.instruction(&format!("jnz {}", keep));                  // an explicit READ/WRITE/ALL wins over the stream's own mode
+        }
+    }
+    emit_stream_filter_deduced_mode(ctx, offset);
+    ctx.emitter.label(&keep);
     Ok(())
+}
+
+/// Leaves php's stream-mode-deduced filter direction in the integer result.
+fn emit_stream_filter_deduced_mode(ctx: &mut FunctionContext<'_>, handle_sp_offset: usize) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x0, [sp, #{}]", handle_sp_offset));  // reload the stream handle the caller parked
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_sp_offset)); // reload the stream handle the caller parked
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filter_default_mode");
 }
 
 /// Materializes the optional stream-filter params operand as an owned boxed
@@ -329,7 +401,7 @@ pub(super) fn lower_user_stream_filter_attach(
     }
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    materialize_stream_filter_mode(ctx, inst)?;
+    materialize_stream_filter_mode(ctx, inst, Some(0))?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // The node creator reads the run-time id from x9 and pops the handle itself.
@@ -392,7 +464,7 @@ fn lower_user_stream_filter_attach_node(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // name pointer/length
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, Some(16))?;
             abi::emit_push_reg(ctx.emitter, "x0");                              // requested direction bits
             materialize_stream_filter_params(ctx, inst)?;
             ctx.emitter.instruction("mov x4, x0");                              // boxed stream-filter params
@@ -407,7 +479,7 @@ fn lower_user_stream_filter_attach_node(
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // name pointer/length
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, Some(16))?;
             abi::emit_push_reg(ctx.emitter, "rax");                             // requested direction bits
             materialize_stream_filter_params(ctx, inst)?;
             ctx.emitter.instruction("mov r8, rax");                             // boxed stream-filter params
@@ -422,7 +494,7 @@ fn lower_user_stream_filter_attach_node(
             abi::emit_push_reg(ctx.emitter, "r9");                              // handle on top, instance beneath
         }
     }
-    materialize_stream_filter_mode(ctx, inst)?;                                 // direction bits for the node
+    materialize_stream_filter_mode(ctx, inst, Some(0))?;                                 // direction bits for the node
     emit_attach_filter_node(ctx, None, prepend, true);
     emit_boxed_filter_handle(ctx);
     abi::emit_jump(ctx.emitter, &done);
@@ -453,7 +525,7 @@ fn lower_user_stream_filter_attach_legacy(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, None)?;
             abi::emit_push_reg(ctx.emitter, "x0");
             materialize_stream_filter_params(ctx, inst)?;
             ctx.emitter.instruction("mov x4, x0");                              // pass the boxed stream-filter params to the attach helper
@@ -463,7 +535,7 @@ fn lower_user_stream_filter_attach_legacy(
         }
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, None)?;
             abi::emit_push_reg(ctx.emitter, "rax");
             materialize_stream_filter_params(ctx, inst)?;
             ctx.emitter.instruction("mov r8, rax");                             // pass the boxed stream-filter params to the attach helper

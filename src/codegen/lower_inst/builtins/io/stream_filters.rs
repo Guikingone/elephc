@@ -359,7 +359,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the descriptor across mode evaluation
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, None)?;
             ctx.emitter.instruction("mov x9, x0");                              // hold the selected stream-filter mode
             ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
             ctx.emitter.instruction("cmp x9, #2");                              // test for STREAM_FILTER_WRITE-only mode
@@ -372,7 +372,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
-            materialize_stream_filter_mode(ctx, inst)?;
+            materialize_stream_filter_mode(ctx, inst, None)?;
             ctx.emitter.instruction("mov r9, rax");                             // hold the selected stream-filter mode
             abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp r9, 2");                               // test for STREAM_FILTER_WRITE-only mode

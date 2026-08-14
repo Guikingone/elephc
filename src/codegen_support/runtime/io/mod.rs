@@ -218,7 +218,7 @@ pub(crate) use builtin_filter_id::{emit_builtin_filter_id, emit_builtin_filter_t
 pub(crate) use builtin_wrapper_index::{
     emit_builtin_wrapper_index, emit_builtin_wrapper_table, emit_stream_wrapper_restore_diag,
 };
-pub(crate) use stream_filter::emit_apply_stream_filter;
+pub(crate) use stream_filter::{emit_apply_stream_filter, emit_stream_filter_default_mode};
 pub(crate) use fsockopen::emit_fsockopen;
 pub(crate) use ftp::emit_ftp;
 pub(crate) use http::emit_http;

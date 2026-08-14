@@ -64825,14 +64825,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": 3,
-          "name": "read_write",
+          "default": 0,
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -64873,14 +64873,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": "3",
-          "name": "read_write",
+          "default": "0",
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -64984,14 +64984,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": "3",
-          "name": "read_write",
+          "default": "0",
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -65023,14 +65023,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": 3,
-          "name": "read_write",
+          "default": 0,
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -65071,14 +65071,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": "3",
-          "name": "read_write",
+          "default": "0",
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -65182,14 +65182,14 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "filtername",
+          "name": "filter_name",
           "optional": false,
           "type": "string"
         },
         {
           "by_ref": false,
-          "default": "3",
-          "name": "read_write",
+          "default": "0",
+          "name": "mode",
           "optional": true,
           "type": "int"
         },
@@ -68143,7 +68143,7 @@
         },
         {
           "by_ref": false,
-          "default": 1,
+          "default": 4,
           "name": "flags",
           "optional": true,
           "type": "int"
@@ -68205,7 +68205,7 @@
         },
         {
           "by_ref": false,
-          "default": "1",
+          "default": "4",
           "name": "flags",
           "optional": true,
           "type": "int"
@@ -68331,7 +68331,7 @@
         },
         {
           "by_ref": false,
-          "default": "1",
+          "default": "4",
           "name": "flags",
           "optional": true,
           "type": "int"

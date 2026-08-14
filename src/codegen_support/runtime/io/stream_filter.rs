@@ -9,11 +9,139 @@
 //! Key details:
 //! - Filter ids: 1 = `string.toupper`, 2 = `string.tolower`, 3 = `string.rot13`.
 //!   All three are 1:1 byte transforms, so the buffer length never changes.
+//! - No arm claims id 13 (`consumed`): php's `consumed` filter appends every
+//!   bucket to its output brigade unchanged and only counts bytes (php-src
+//!   ext/standard/filters.c:1649-1653), so the unknown-id fallthrough — leave
+//!   the byte alone — *is* its transform.
+//! - `string.strip_tags` has no id: php removed the filter in 8.0, so an attach
+//!   must miss and report `Unable to locate filter` instead.
 //! - This is a leaf helper: it transforms the buffer in place and preserves the
 //!   pointer/length registers so callers can return them unchanged.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
+};
+
+/// stream_filter_default_mode: php's `$mode = 0` filter-direction default.
+///
+/// php does not default to both chains — it reads the stream's OWN open mode and
+/// enables the chains that mode can use (php-src streamsfuncs.c:1202-1214):
+///   `r` or `+` → `STREAM_FILTER_READ`, `w`, `a` or `+` → `STREAM_FILTER_WRITE`.
+/// The recorded mode string is php's own input, so the rule is transcribed
+/// literally rather than reconstructed from the descriptor's access bits, which
+/// collapse `a` into `w` and lose the distinction php tests.
+///
+/// A handle whose state has gone (a closed stream) answers `STREAM_FILTER_ALL`,
+/// which is what every attach used before this default existed. A mode naming no
+/// direction at all (`x`, `c`) answers 0, and the node then joins no chain —
+/// php refuses the attach outright in that case and returns false, a remaining
+/// gap recorded on `materialize_stream_filter_mode`.
+///
+/// Input:  AArch64 x0 = stream handle. x86_64 rdi = stream handle.
+/// Output: 1 = READ, 2 = WRITE, 3 = ALL, 0 = neither.
+pub fn emit_stream_filter_default_mode(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_stream_filter_default_mode_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: stream_filter_default_mode ---");
+    emitter.label_global("__rt_stream_filter_default_mode");
+    emitter.instruction("sub sp, sp, #16");                                     // frame for the saved linkage
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_sfdm_all");                               // no live stream: keep both chains
+    emitter.instruction(&format!("ldr x1, [x0, #{STREAM_MODE_PTR_OFFSET}]"));   // the mode string php recorded at open
+    emitter.instruction(&format!("ldr x2, [x0, #{STREAM_MODE_LEN_OFFSET}]"));   // its byte length
+    emitter.instruction("cbz x1, __rt_sfdm_all");                               // no recorded mode: keep both chains
+    emitter.instruction("mov x3, #0");                                          // accumulated direction bits
+    emitter.instruction("mov x4, #0");                                          // scan cursor
+    emitter.label("__rt_sfdm_scan");
+    emitter.instruction("cmp x4, x2");                                          // scanned every byte?
+    emitter.instruction("b.ge __rt_sfdm_done");                                 // the mode is fully classified
+    emitter.instruction("ldrb w5, [x1, x4]");                                   // the next mode byte
+    emitter.instruction("add x4, x4, #1");                                      // advance the cursor
+    emitter.instruction("cmp w5, #0x72");                                       // 'r' — php enables the read chain
+    emitter.instruction("b.eq __rt_sfdm_read");
+    emitter.instruction("cmp w5, #0x2B");                                       // '+' — php enables both chains
+    emitter.instruction("b.eq __rt_sfdm_both");
+    emitter.instruction("cmp w5, #0x77");                                       // 'w' — php enables the write chain
+    emitter.instruction("b.eq __rt_sfdm_write");
+    emitter.instruction("cmp w5, #0x61");                                       // 'a' — php enables the write chain
+    emitter.instruction("b.eq __rt_sfdm_write");
+    emitter.instruction("b __rt_sfdm_scan");                                    // `b`, `t`, `x`, `c` name no direction
+    emitter.label("__rt_sfdm_read");
+    emitter.instruction("orr x3, x3, #1");                                      // STREAM_FILTER_READ
+    emitter.instruction("b __rt_sfdm_scan");
+    emitter.label("__rt_sfdm_write");
+    emitter.instruction("orr x3, x3, #2");                                      // STREAM_FILTER_WRITE
+    emitter.instruction("b __rt_sfdm_scan");
+    emitter.label("__rt_sfdm_both");
+    emitter.instruction("orr x3, x3, #3");                                      // STREAM_FILTER_ALL
+    emitter.instruction("b __rt_sfdm_scan");
+    emitter.label("__rt_sfdm_done");
+    emitter.instruction("mov x0, x3");                                          // return the deduced direction bits
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the frame
+    emitter.instruction("ret");                                                 // return to the attach lowering
+    emitter.label("__rt_sfdm_all");
+    emitter.instruction("mov x0, #3");                                          // STREAM_FILTER_ALL
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the frame
+    emitter.instruction("ret");                                                 // return to the attach lowering
+}
+
+/// Emits the Linux x86_64 stream runtime helper for stream filter default mode.
+fn emit_stream_filter_default_mode_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stream_filter_default_mode ---");
+    emitter.label_global("__rt_stream_filter_default_mode");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
+    emitter.instruction("test rax, rax");                                       // no live stream?
+    emitter.instruction("jz __rt_sfdm_all_x86");                                // keep both chains
+    emitter.instruction(&format!("mov rsi, QWORD PTR [rax + {STREAM_MODE_PTR_OFFSET}]")); // the mode string php recorded at open
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rax + {STREAM_MODE_LEN_OFFSET}]")); // its byte length
+    emitter.instruction("test rsi, rsi");                                       // no recorded mode?
+    emitter.instruction("jz __rt_sfdm_all_x86");                                // keep both chains
+    emitter.instruction("xor r8, r8");                                          // accumulated direction bits
+    emitter.instruction("xor r9, r9");                                          // scan cursor
+    emitter.label("__rt_sfdm_scan_x86");
+    emitter.instruction("cmp r9, rdx");                                         // scanned every byte?
+    emitter.instruction("jge __rt_sfdm_done_x86");                              // the mode is fully classified
+    emitter.instruction("movzx ecx, BYTE PTR [rsi + r9]");                      // the next mode byte
+    emitter.instruction("add r9, 1");                                           // advance the cursor
+    emitter.instruction("cmp cl, 0x72");                                        // 'r' — php enables the read chain
+    emitter.instruction("je __rt_sfdm_read_x86");
+    emitter.instruction("cmp cl, 0x2B");                                        // '+' — php enables both chains
+    emitter.instruction("je __rt_sfdm_both_x86");
+    emitter.instruction("cmp cl, 0x77");                                        // 'w' — php enables the write chain
+    emitter.instruction("je __rt_sfdm_write_x86");
+    emitter.instruction("cmp cl, 0x61");                                        // 'a' — php enables the write chain
+    emitter.instruction("je __rt_sfdm_write_x86");
+    emitter.instruction("jmp __rt_sfdm_scan_x86");                              // `b`, `t`, `x`, `c` name no direction
+    emitter.label("__rt_sfdm_read_x86");
+    emitter.instruction("or r8, 1");                                            // STREAM_FILTER_READ
+    emitter.instruction("jmp __rt_sfdm_scan_x86");
+    emitter.label("__rt_sfdm_write_x86");
+    emitter.instruction("or r8, 2");                                            // STREAM_FILTER_WRITE
+    emitter.instruction("jmp __rt_sfdm_scan_x86");
+    emitter.label("__rt_sfdm_both_x86");
+    emitter.instruction("or r8, 3");                                            // STREAM_FILTER_ALL
+    emitter.instruction("jmp __rt_sfdm_scan_x86");
+    emitter.label("__rt_sfdm_done_x86");
+    emitter.instruction("mov rax, r8");                                         // return the deduced direction bits
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the attach lowering
+    emitter.label("__rt_sfdm_all_x86");
+    emitter.instruction("mov eax, 3");                                          // STREAM_FILTER_ALL
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the attach lowering
+}
 
 /// apply_stream_filter: transform a buffer in place with a built-in filter.
 /// Input:  AArch64 x1 = pointer, x2 = length, x3 = filter id
@@ -40,8 +168,6 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_asf_lower");                                 // dispatch to the lowercase transform
     emitter.instruction("cmp x3, #3");                                          // filter id 3 = string.rot13
     emitter.instruction("b.eq __rt_asf_rot13");                                 // dispatch to the rot13 transform
-    emitter.instruction("cmp x3, #4");                                          // filter id 4 = string.strip_tags
-    emitter.instruction("b.eq __rt_asf_strip_tags");                            // dispatch to the strip-tags state machine
     emitter.instruction("cmp x3, #7");                                          // filter id 7 = convert.base64-decode
     emitter.instruction("b.eq __rt_asf_b64_decode");                            // dispatch to the base64-decode state machine
     emitter.instruction("cmp x3, #5");                                          // filter id 5 = dechunk
@@ -98,38 +224,6 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("b __rt_asf_loop");                                     // continue the transform loop
     emitter.label("__rt_asf_done");
     // x2 already holds the input (and output) length for stateless transforms.
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
-
-    // -- string.strip_tags: state-machine compaction. Output ≤ input;
-    //    returns the compacted length in x0 so fread/fwrite can use it. --
-    emitter.label("__rt_asf_strip_tags");
-    emitter.instruction("mov x5, #0");                                          // read index
-    emitter.instruction("mov x6, #0");                                          // write index
-    emitter.instruction("mov x7, #0");                                          // in_tag flag (0 = outside tag, 1 = inside)
-    emitter.label("__rt_asf_strip_loop");
-    emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_strip_done");                            // finish the strip-tags operation when the bound is reached
-    emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
-    emitter.instruction("cbnz x7, __rt_asf_strip_in_tag");                      // use the active-state path when the flag is set
-    // not in tag: '<' enters tag; everything else is written.
-    emitter.instruction("cmp w8, #60");                                         // test for '<' to enter an HTML tag
-    emitter.instruction("b.eq __rt_asf_strip_enter");                           // dispatch to __rt_asf_strip_enter when the comparison matches
-    emitter.instruction("strb w8, [x1, x6]");                                   // write byte
-    emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
-    emitter.instruction("b __rt_asf_strip_advance");                            // continue at __rt_asf_strip_advance
-    emitter.label("__rt_asf_strip_enter");
-    emitter.instruction("mov x7, #1");                                          // initialize the filter accumulator or state flag
-    emitter.instruction("b __rt_asf_strip_advance");                            // continue at __rt_asf_strip_advance
-    emitter.label("__rt_asf_strip_in_tag");
-    // inside tag: '>' exits; otherwise skip the byte.
-    emitter.instruction("cmp w8, #62");                                         // test for '>' to leave an HTML tag
-    emitter.instruction("b.ne __rt_asf_strip_advance");                         // continue scanning when the delimiter was not found
-    emitter.instruction("mov x7, #0");                                          // initialize the filter accumulator or state flag
-    emitter.label("__rt_asf_strip_advance");
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_strip_loop");                               // continue the strip-tags loop
-    emitter.label("__rt_asf_strip_done");
-    emitter.instruction("mov x2, x6");                                          // return compacted length via the same register fread/fwrite use for length
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.base64-decode: walk 4-char groups, emit 3 bytes each.
@@ -603,8 +697,6 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_asf_lower_x86");                               // dispatch to the lowercase transform
     emitter.instruction("cmp rcx, 3");                                          // filter id 3 = string.rot13
     emitter.instruction("je __rt_asf_rot13_x86");                               // dispatch to the rot13 transform
-    emitter.instruction("cmp rcx, 4");                                          // filter id 4 = string.strip_tags
-    emitter.instruction("je __rt_asf_strip_tags_x86");                          // dispatch to the strip-tags state machine
     emitter.instruction("cmp rcx, 7");                                          // filter id 7 = convert.base64-decode
     emitter.instruction("je __rt_asf_b64_decode_x86");                          // dispatch to the base64-decode state machine
     emitter.instruction("cmp rcx, 5");                                          // filter id 5 = dechunk
@@ -661,36 +753,6 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_loop_x86");                               // continue the transform loop
     emitter.label("__rt_asf_done_x86");
     // rdx already holds the input (and output) length for stateless transforms.
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
-
-    // -- string.strip_tags: state-machine compaction. --
-    emitter.label("__rt_asf_strip_tags_x86");
-    emitter.instruction("xor r9, r9");                                          // read index
-    emitter.instruction("xor r10, r10");                                        // write index
-    emitter.instruction("xor r11, r11");                                        // in_tag flag
-    emitter.label("__rt_asf_strip_loop_x86");
-    emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_strip_done_x86");                         // finish the strip-tags operation when the bound is reached
-    emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
-    emitter.instruction("test r11, r11");                                       // check whether the current counter or flag is zero
-    emitter.instruction("jnz __rt_asf_strip_in_tag_x86");                       // use the active-state path when the flag is set
-    emitter.instruction("cmp r8b, 60");                                         // test for '<' to enter an HTML tag
-    emitter.instruction("je __rt_asf_strip_enter_x86");                         // dispatch to __rt_asf_strip_enter_x86 when the comparison matches
-    emitter.instruction("mov BYTE PTR [rax + r10], r8b");                       // write output back into the stream buffer
-    emitter.instruction("inc r10");                                             // advance the write cursor
-    emitter.instruction("jmp __rt_asf_strip_advance_x86");                      // continue at __rt_asf_strip_advance_x86
-    emitter.label("__rt_asf_strip_enter_x86");
-    emitter.instruction("mov r11, 1");                                          // initialize the filter accumulator or state flag
-    emitter.instruction("jmp __rt_asf_strip_advance_x86");                      // continue at __rt_asf_strip_advance_x86
-    emitter.label("__rt_asf_strip_in_tag_x86");
-    emitter.instruction("cmp r8b, 62");                                         // test for '>' to leave an HTML tag
-    emitter.instruction("jne __rt_asf_strip_advance_x86");                      // continue scanning when the delimiter was not found
-    emitter.instruction("xor r11, r11");                                        // initialize the filter accumulator or state flag
-    emitter.label("__rt_asf_strip_advance_x86");
-    emitter.instruction("inc r9");                                              // advance the read cursor
-    emitter.instruction("jmp __rt_asf_strip_loop_x86");                         // continue the strip-tags loop
-    emitter.label("__rt_asf_strip_done_x86");
-    emitter.instruction("mov rdx, r10");                                        // return compacted length via the same register fread/fwrite use for length
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.base64-decode (x86_64) --

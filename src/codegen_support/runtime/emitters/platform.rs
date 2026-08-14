@@ -49,6 +49,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_format_sockaddr_unix(emitter);
     io::emit_data_stream(emitter);
     io::emit_apply_stream_filter(emitter);
+    io::emit_stream_filter_default_mode(emitter);
     io::emit_ftp(emitter);
     io::emit_http(emitter);
     io::emit_https(emitter);

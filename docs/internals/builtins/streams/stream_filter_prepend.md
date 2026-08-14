@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_filter_prepend(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_prepend(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed
 ```
 
 ## What the type checker enforces

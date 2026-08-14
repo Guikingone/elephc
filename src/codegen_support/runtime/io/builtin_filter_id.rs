@@ -18,16 +18,29 @@
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Built-in filter names paired with the ids the lowering already uses.
+///
+/// This table lists exactly the filters a CHAIN NODE can apply, because that is
+/// what a resolved id becomes: `__rt_stream_apply_filter_chain` hands the id to
+/// `__rt_apply_stream_filter`, a byte-transform helper. `zlib.*`, `bzip2.*` and
+/// `convert.iconv.*` are not entries here and must not be added as such — they
+/// are per-call-site attach sequences that install a per-fd handle and a
+/// program-local helper thunk (`_zlib_fwrite_fn` and friends), which no
+/// run-time name lookup can reconstruct. Naming them here would mint a node
+/// carrying an id the chain then hands to a byte transform that does not exist
+/// for deflate: the attach would report success and filter nothing.
+///
+/// `string.strip_tags` is absent for the opposite reason: php has no such
+/// filter since 8.0, so it must miss and warn.
 pub(crate) const BUILTIN_FILTER_NAMES: &[(&str, u8)] = &[
     ("string.toupper", 1),
     ("string.tolower", 2),
     ("string.rot13", 3),
-    ("string.strip_tags", 4),
     ("dechunk", 5),
     ("convert.base64-encode", 6),
     ("convert.base64-decode", 7),
     ("convert.quoted-printable-encode", 8),
     ("convert.quoted-printable-decode", 9),
+    ("consumed", 13),
 ];
 
 /// Emits the built-in filter name table into the runtime data section.

@@ -273,9 +273,9 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_filters()` | `stream_get_filters(): array` | Return built-in filters: `string.toupper`, `string.tolower`, `string.rot13`, `string.strip_tags`, `convert.base64-encode`, `convert.base64-decode`, `convert.quoted-printable-encode`, `convert.quoted-printable-decode`, `convert.iconv.*`, `dechunk`, `zlib.deflate`, `zlib.inflate`, `bzip2.compress`, and `bzip2.decompress`, followed by every name `stream_filter_register()` added. PHP collapses its compression and conversion families into wildcard entries (`zlib.*`, `bzip2.*`, `convert.*`) where elephc lists each concrete name, so an `in_array()` availability check succeeds here on names PHP does not list. |
-| `stream_filter_append()` | `stream_filter_append(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource\|false` | Attach a built-in or user-registered filter. `STREAM_FILTER_READ`, `STREAM_FILTER_WRITE`, and `STREAM_FILTER_ALL` select directions. |
-| `stream_filter_prepend()` | `stream_filter_prepend(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource` | Same behavior as append in v1's one-filter-per-direction model. |
+| `stream_get_filters()` | `stream_get_filters(): array` | Return PHP's built-in filter families in PHP's own order — `zlib.*`, `bzip2.*`, `convert.iconv.*`, `string.rot13`, `string.toupper`, `string.tolower`, `convert.*`, `consumed`, `dechunk` — followed by every name `stream_filter_register()` added. `string.strip_tags` is not listed and cannot be attached: PHP removed that filter in 8.0. |
+| `stream_filter_append()` | `stream_filter_append(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): resource\|false` | Attach a built-in or user-registered filter. `STREAM_FILTER_READ`, `STREAM_FILTER_WRITE`, and `STREAM_FILTER_ALL` select directions. The default `0` (and any mode with no direction bit set) is resolved from the stream's own open mode, as PHP does: `r` → read, `w`/`a` → write, any `+` mode → both. An unknown filter name warns `Unable to locate filter "…"` and returns `false`. |
+| `stream_filter_prepend()` | `stream_filter_prepend(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): resource\|false` | Same rules as append; the node joins the head of each selected chain. |
 | `stream_filter_remove()` | `stream_filter_remove(resource $filter): bool` | Detach the filter from its chain. The filter is flushed first with `$closing = true`; if that flush answers `PSFS_ERR_FATAL`, the filter stays attached and the call returns `false`. |
 | `stream_filter_register()` | `stream_filter_register(string $filter_name, string $class): bool` | Register a user filter class. Up to 128 registrations are stored; a literal class name is validated at compile time. |
 | `stream_bucket_new()` | `stream_bucket_new(resource $stream, string $data): object` | Create a stdClass-backed bucket with public `data` and `datalen` properties. |
@@ -290,6 +290,21 @@ uses libc `iconv` and auto-links `-liconv` on macOS.
 Compression filter params can be a bare integer or a literal array. `zlib.deflate`
 reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`
 (`0..250`). Non-literal params keep defaults.
+
+A filter name held in a variable resolves against the string, conversion and
+`consumed` filters, and against user-registered names. `zlib.*`, `bzip2.*` and
+`convert.iconv.*` are the exception: they are not table entries but per-call-site
+attach sequences that install a per-fd handle (and, for iconv, compile the
+charset pair into the binary), so a name that only exists at run time cannot
+reach them. `$n = "zlib.deflate"; stream_filter_append($s, $n)` warns
+`Unable to locate filter "zlib.deflate"` and returns `false` where the literal
+spelling works.
+
+`consumed` counts the bytes it passes and forwards every one of them, as PHP's
+filter does. PHP additionally rewinds the stream when the filter chain closes,
+which discards the bytes PHP had read ahead into its own buffer — so PHP's
+`fread($s, 100)` on an 11-byte file returns `""` where elephc returns the 11
+bytes.
 
 User filters can implement either `filter(string $data): string` or PHP's
 four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
@@ -322,7 +337,7 @@ its own closing dispatch.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers: `file`, `php`, `data`, `ftp`, `http`, `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `phar`, and `glob`, followed by every scheme `stream_wrapper_register()` added. PHP also lists `zip`, which elephc does not implement. |
+| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers in PHP's registration order: `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `php`, `file`, `glob`, `data`, `http`, and `ftp`, then `phar`, followed by every scheme `stream_wrapper_register()` added. PHP also lists `zip`, which elephc does not implement. |
 | `stream_wrapper_register()` | `stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool` | Register a userspace wrapper class for `$protocol://` URLs. Up to 16 registrations are stored. |
 | `stream_wrapper_unregister()` | `stream_wrapper_unregister(string $protocol): bool` | Remove a user-registered wrapper; built-in wrappers cannot be unregistered in v1. |
 | `stream_wrapper_restore()` | `stream_wrapper_restore(string $protocol): bool` | Clears the disabled bit `stream_wrapper_unregister()` set on a built-in wrapper, and answers PHP's three cases. A wrapper that really was unregistered is restored silently and reports `true`. One that was never unregistered reports `true` with `Notice: stream_wrapper_restore(): <proto>:// was never changed, nothing to restore`. A scheme that never existed reports `false` with `Warning: stream_wrapper_restore(): <proto>:// never existed, nothing to restore`, which `@` suppresses. Following elephc's convention for every diagnostic, the Notice goes to stdout through the output-buffer funnel and the Warning to stderr; PHP CLI puts both on stdout, a repo-wide divergence rather than one specific to this builtin. |

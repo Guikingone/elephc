@@ -7537,7 +7537,7 @@ echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
 echo $call_transports[11] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
-echo $call_filters[13] . ":";
+echo $call_filters[8] . ":";
 $tmp = tmpfile();
 echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
 echo stream_supports_lock($tmp) ? "lock" : "bad"; echo ":";
@@ -7547,9 +7547,16 @@ echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_tr
 echo function_exists("stream_is_local"); echo function_exists("stream_supports_lock");');
 "#,
     );
+    // php 8.5.6 answers `https` / `file` / `phar` at wrapper indices 0/5/10 and
+    // `convert.iconv.*` / `dechunk` at filter indices 2/8 over nine families.
+    // The eval tables mirror the native lists, so this pins both. The old
+    // expectation read `11:file:https:...:14:string.rot13:...` off the pre-php
+    // wrapper order and the fourteen-concrete-name filter list. The transport
+    // half still reads the eval table's twelve entries, which have not been
+    // trimmed to php's ten the way the native list was.
     assert_eq!(
         out,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
+        "11:https:file:12:tcp:tlsv1.0:9:convert.iconv.*:phar:tlsv1.3:dechunk:local:lock:calllocal:calllock:11111"
     );
 }
 

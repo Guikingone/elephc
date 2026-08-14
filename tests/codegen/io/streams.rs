@@ -1617,13 +1617,18 @@ unlink("lk.txt");
 /// Verifies compiled PHP output for stream get wrappers lists known wrappers.
 #[test]
 fn test_stream_get_wrappers_lists_known_wrappers() {
-    // Full PHP-published wrapper list (Phase D: surface 100%). ftps,
-    // compress.*, phar, glob are accepted at runtime but currently
-    // return false from fopen — the listing is the PHP-spec surface.
+    // php's registration order, measured on php 8.5.6 and frozen in
+    // `tests/php_oracle/manifests/streams`:
+    //   https, ftps, compress.zlib, compress.bzip2, php, file, glob, data,
+    //   http, ftp, phar, zip
+    // php's probe reads `12:https,compress.bzip2,file`; only the count differs,
+    // because php's twelfth entry is `zip`, which elephc has no wrapper for and
+    // does not advertise. The list used to start at `file` and this probe read
+    // `11:file,ftp,https`.
     let out = compile_and_run(
         r#"<?php $w = stream_get_wrappers(); echo count($w) . ":" . $w[0] . "," . $w[3] . "," . $w[5];"#,
     );
-    assert_eq!(out, "11:file,ftp,https");
+    assert_eq!(out, "11:https,compress.bzip2,file");
 }
 
 /// Verifies compiled PHP output for stream get transports and filters.
@@ -1633,13 +1638,26 @@ fn test_stream_get_transports_and_filters() {
     // through the same enable_crypto path. `sslv2`/`sslv3` used to be listed and are not
     // any more — PHP 8.5.6 does not publish them and the protocols are dead.
     //
-    // The filter list still diverges deliberately: PHP publishes nine WILDCARD names
-    // (`zlib.*`, `convert.*`, …) while elephc publishes the fourteen concrete filters it
-    // actually registers, so `stream_filter_append()` on any listed name succeeds.
+    // The filter list is now php's too: php publishes nine FAMILIES (`zlib.*`,
+    // `bzip2.*`, `convert.*`, `convert.iconv.*`) rather than the concrete names
+    // behind them. Publishing fourteen concrete names both over-promised
+    // (`string.strip_tags` has not existed since php 8.0) and mis-shaped the
+    // list. Measured `10,9`; this assertion read `10,14`.
     let out = compile_and_run(
         r#"<?php echo count(stream_get_transports()) . "," . count(stream_get_filters());"#,
     );
-    assert_eq!(out, "10,14");
+    assert_eq!(out, "10,9");
+}
+
+/// Verifies the published filter list matches php's families, in php's order.
+#[test]
+fn test_stream_get_filters_publishes_php_families_in_order() {
+    // `php -n -r 'var_export(stream_get_filters());'` on 8.5.6.
+    let out = compile_and_run(r#"<?php echo implode(",", stream_get_filters());"#);
+    assert_eq!(
+        out,
+        "zlib.*,bzip2.*,convert.iconv.*,string.rot13,string.toupper,string.tolower,convert.*,consumed,dechunk"
+    );
 }
 
 /// Verifies compiled PHP output for stream filter rot13 on read.
@@ -2360,21 +2378,138 @@ echo "'" . $s . "' len=" . strlen($s);
     assert_eq!(out, "'Café brûlé' len=13");
 }
 
-/// Verifies compiled PHP output for stream filter strip tags removes html.
+/// Verifies `string.strip_tags` is refused: php removed the filter in 8.0.
 #[test]
-fn test_stream_filter_strip_tags_removes_html() {
-    // The string.strip_tags read filter elides everything between '<' and '>'.
-    let out = compile_and_run(
+fn test_stream_filter_strip_tags_is_not_a_php_filter() {
+    // This test used to pin the opposite — `assert_eq!(out, "Hello World")` —
+    // because elephc shipped a strip-tags state machine php has not had since
+    // 8.0. php-src ext/standard/filters.c registers no `strip_tags` factory, so
+    // the name must miss like any other unknown one.
+    //
+    // php 8.5.6 on this exact program:
+    //   Warning: stream_filter_append(): Unable to locate filter "string.strip_tags" in ... on line 5
+    //   bool(false)
+    //   <p>Hello <b>World</b></p>
+    // i.e. false, nothing attached, and the read comes back untouched.
+    let out = compile_and_run_capture(
         r#"<?php
 $m = fopen("php://memory", "r+");
 fwrite($m, "<p>Hello <b>World</b></p>");
 rewind($m);
-stream_filter_append($m, "string.strip_tags", STREAM_FILTER_READ);
+var_dump(stream_filter_append($m, "string.strip_tags", STREAM_FILTER_READ));
 echo fread($m, 64);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "Hello World");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n<p>Hello <b>World</b></p>");
+    assert!(
+        out.stderr
+            .contains("Unable to locate filter \"string.strip_tags\""),
+        "expected php's unknown-filter warning, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies `consumed` attaches and passes every byte through, like php's filter.
+#[test]
+fn test_stream_filter_consumed_passes_bytes_through() {
+    // php's `consumed` filter appends each bucket to its output brigade
+    // unchanged and only counts bytes (php-src ext/standard/filters.c:1649-1653),
+    // so a read that does not out-run the file comes back byte-for-byte. Before
+    // this landed the attach warned `Unable to locate filter "consumed"` and
+    // returned false, while `stream_get_filters()` advertised the name.
+    //
+    // php 8.5.6 on this exact program: `hel|lo |abcdef`.
+    //
+    // `ftell()` is deliberately not probed here: on a filtered stream elephc
+    // reports the descriptor's own position (11) where php subtracts what it
+    // still holds buffered (6). That gap is the chain's read-ahead, not this
+    // filter's — `string.toupper` reproduces it identically — so it belongs to
+    // its own fix.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "cns");
+file_put_contents($f, "hello world");
+$s = fopen($f, "r");
+stream_filter_append($s, "consumed", STREAM_FILTER_READ);
+echo fread($s, 3), "|", fread($s, 3), "|";
+fclose($s);
+unlink($f);
+$o = tempnam(sys_get_temp_dir(), "cnw");
+$w = fopen($o, "w");
+stream_filter_append($w, "consumed", STREAM_FILTER_WRITE);
+fwrite($w, "abcdef");
+fclose($w);
+echo file_get_contents($o);
+unlink($o);
+"#,
+    );
+    assert_eq!(out, "hel|lo |abcdef");
+}
+
+/// Verifies php's `$mode = 0` default reads the direction off the stream itself.
+#[test]
+fn test_stream_filter_mode_zero_deduces_direction_from_the_stream() {
+    // php's default is 0, and 0 is not "no chain": php examines `stream->mode`
+    // and enables the chains the stream can use (php-src
+    // streamsfuncs.c:1202-1214). elephc passed 0 straight through, so an
+    // explicit 0 linked the node into neither chain and this program printed
+    // `abc|abc|xyz|` — the unfiltered bytes.
+    //
+    // php 8.5.6 on this exact program: `ABC|ABC|XYZ|`.
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "abc");
+rewind($m);
+stream_filter_append($m, "string.toupper", 0);
+echo fread($m, 10), "|";
+fclose($m);
+$f = tempnam(sys_get_temp_dir(), "md0");
+file_put_contents($f, "abc");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", 0);
+echo fread($s, 10), "|";
+fclose($s);
+unlink($f);
+$o = tempnam(sys_get_temp_dir(), "md0w");
+$w = fopen($o, "w");
+stream_filter_append($w, "string.toupper", 0);
+fwrite($w, "xyz");
+fclose($w);
+echo file_get_contents($o), "|";
+unlink($o);
+"#,
+    );
+    assert_eq!(out, "ABC|ABC|XYZ|");
+}
+
+/// Verifies the deduced default follows the mode string, not the descriptor.
+#[test]
+fn test_stream_filter_default_mode_follows_the_open_mode_string() {
+    // php reads `stream->mode`, so `a` selects the WRITE chain and `rb` the READ
+    // chain even though both spellings collapse under `fcntl(F_GETFL)`.
+    //
+    // php 8.5.6 on this exact program: `APPENDED|rb-read|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "dms");
+file_put_contents($f, "");
+$a = fopen($f, "a");
+stream_filter_append($a, "string.toupper");
+fwrite($a, "appended");
+fclose($a);
+echo file_get_contents($f), "|";
+file_put_contents($f, "RB-READ");
+$r = fopen($f, "rb");
+stream_filter_append($r, "string.tolower");
+echo fread($r, 32), "|";
+fclose($r);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "APPENDED|rb-read|");
 }
 
 /// Verifies compiled PHP output for stream filter dechunk parses chunked encoding.
