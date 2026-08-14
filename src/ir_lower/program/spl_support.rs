@@ -70,8 +70,15 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getmaxlinelen"
                 | "setmaxlinelen"
                 | "setcsvcontrol"
+                | "getcsvcontrol"
                 | "fgetcsv"
                 | "fputcsv"
+                // The READ_CSV record builder. A prelude body that is DECLARED but missing
+                // from this list is never lowered, and its vtable slot stays null: the call
+                // branches to address 0 rather than failing to compile, so an omission here
+                // shows up as a segfault at the first call and nowhere earlier.
+                | "__elephccsvbuild"
+                | "__elephccsvskipblank"
         ),
         "SplTempFileObject" => matches!(
             method_key,

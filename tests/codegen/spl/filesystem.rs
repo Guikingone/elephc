@@ -556,6 +556,76 @@ rmdir("root");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies READ_CSV iteration reads CSV RECORDS rather than exploding the raw line.
+///
+/// `current()` used to answer `explode($delimiter, $line)`, which is not CSV: an enclosure was
+/// ordinary text, so `a,"b,c",d` came back as `["a", "\"b", "c\"", "d\n"]` — four fields, quotes
+/// attached, the terminator glued to the last one. A quoted field holding a newline was cut in
+/// half across two iterations, and a blank line answered `["\n"]` where php answers `[null]`.
+/// Every expectation below is `php -n` 8.5.6 on the same file, including the final `[null]`
+/// php yields because it reads until a read fails rather than until the lines run out.
+#[test]
+fn test_spl_file_object_read_csv_parses_records_not_exploded_lines() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rec.csv", "a,\"b,c\",d\n\n\"x\ny\",z\n");
+$f = new SplFileObject("rec.csv");
+$f->setFlags(SplFileObject::READ_CSV);
+foreach ($f as $i => $row) {
+    echo $i, "=", json_encode($row), ";";
+}
+echo "\n";
+unset($f);
+unlink("rec.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=[\"a\",\"b,c\",\"d\"];1=[null];2=[\"x\\ny\",\"z\"];3=[null];\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies READ_CSV honors the flags it is combined with, as php does.
+///
+/// SKIP_EMPTY turns the end-of-input record into `false` instead of `[null]`, and — only when
+/// DROP_NEW_LINE is set too, which is php's own rule — steps OVER a blank record without
+/// renumbering the ones after it: the keys run 0, 2, 3, not 0, 1, 2. A record spanning three
+/// physical lines counts as ONE key, so the key is a record index and not a line index.
+#[test]
+fn test_spl_file_object_read_csv_flag_combinations() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function walk(string $content, int $flags): void {
+    file_put_contents("flags.csv", $content);
+    $f = new SplFileObject("flags.csv");
+    $f->setFlags($flags);
+    foreach ($f as $i => $row) {
+        echo $i, "=", json_encode($row), ";";
+    }
+    echo "\n";
+    unset($f);
+    unlink("flags.csv");
+}
+$c = "a,\"b,c\",d\n\n\"x\ny\",z\n";
+walk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY);
+walk($c, SplFileObject::READ_CSV | SplFileObject::SKIP_EMPTY | SplFileObject::DROP_NEW_LINE);
+walk("\"a\nb\nc\",z\nq,r\n", SplFileObject::READ_CSV);
+walk("a,b\nc,d", SplFileObject::READ_CSV);
+walk("", SplFileObject::READ_CSV);
+"#,
+    );
+    assert_eq!(
+        out,
+        "0=[\"a\",\"b,c\",\"d\"];1=[null];2=[\"x\\ny\",\"z\"];3=false;\n\
+         0=[\"a\",\"b,c\",\"d\"];2=[\"x\\ny\",\"z\"];3=false;\n\
+         0=[\"a\\nb\\nc\",\"z\"];1=[\"q\",\"r\"];2=[null];\n\
+         0=[\"a\",\"b\"];1=[\"c\",\"d\"];\n\
+         0=[null];\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `SplFileObject::fputcsv()` forwards its `$eol` instead of dropping it.
 ///
 /// The method declared the parameter and then called `fputcsv()` with five arguments, so the
