@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
     AttributeGroup, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
     TraitUse, TypeExpr,
@@ -33,6 +33,7 @@ pub struct Usage {
     pub(crate) scoped_methods: HashSet<(String, String, bool)>,
     pub(crate) wildcard_methods: HashSet<(String, bool)>,
     pub(crate) instantiated_classes: HashSet<String>,
+    pub(crate) instantiated_subclass_roots: HashSet<String>,
     pub(crate) required_libraries: HashSet<String>,
     pub(crate) global_aliases: HashSet<String>,
     pub(crate) dynamic_global_alias: bool,
@@ -57,6 +58,8 @@ impl Usage {
         self.scoped_methods.extend(other.scoped_methods);
         self.wildcard_methods.extend(other.wildcard_methods);
         self.instantiated_classes.extend(other.instantiated_classes);
+        self.instantiated_subclass_roots
+            .extend(other.instantiated_subclass_roots);
         self.required_libraries.extend(other.required_libraries);
         self.global_aliases.extend(other.global_aliases);
         self.dynamic_global_alias |= other.dynamic_global_alias;
@@ -227,11 +230,12 @@ struct Scanner<'a> {
     variable_classes: HashMap<String, HashSet<String>>,
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,
+    current_method: Option<String>,
     parent_class: Option<String>,
     call_signatures: Option<&'a CallSignatureIndex>,
 }
 
-/// Checker-validated signatures used only to recognize caller storage passed by reference.
+/// Checker-validated signatures used to recognize callable and by-reference arguments.
 #[derive(Debug, Default)]
 pub(super) struct CallSignatureIndex {
     functions: HashMap<String, FunctionSig>,
@@ -241,11 +245,26 @@ pub(super) struct CallSignatureIndex {
 impl CallSignatureIndex {
     /// Builds case-insensitive free-function and class-method signature indexes.
     pub(super) fn from_check_result(check_result: &CheckResult) -> Self {
-        let functions = check_result
+        let mut functions: HashMap<_, _> = check_result
             .functions
             .iter()
             .map(|(name, signature)| (php_symbol_key(name), signature.clone()))
             .collect();
+        for (name, signature) in &check_result.extern_functions {
+            functions.entry(php_symbol_key(name)).or_insert_with(|| FunctionSig {
+                params: signature.params.clone(),
+                param_type_exprs: vec![None; signature.params.len()],
+                param_attributes: vec![Vec::new(); signature.params.len()],
+                defaults: vec![None; signature.params.len()],
+                return_type: signature.return_type.clone(),
+                by_ref_return: false,
+                ref_params: vec![false; signature.params.len()],
+                declared_params: vec![true; signature.params.len()],
+                variadic: None,
+                deprecation: None,
+                declared_return: true,
+            });
+        }
         let methods = check_result
             .classes
             .iter()
@@ -277,8 +296,11 @@ impl CallSignatureIndex {
     }
 
     /// Returns the signature of one direct free-function call.
-    fn function(&self, name: &str) -> Option<&FunctionSig> {
-        self.functions.get(name)
+    fn function(&self, name: &str) -> Option<FunctionSig> {
+        self.functions
+            .get(name)
+            .cloned()
+            .or_else(|| crate::builtins::registry::function_sig(name))
     }
 
     /// Returns every possible signature for a method call over the known receiver set.
@@ -371,15 +393,37 @@ impl Scanner<'_> {
                 self.scan_expr(value);
             }
             StmtKind::NestedArrayAssign { target, value } => {
+                self.scan_assignment_target(target);
                 self.scan_expr(target);
                 self.scan_expr(value);
             }
-            StmtKind::PropertyAssign { object, value, .. }
-            | StmtKind::PropertyArrayPush { object, value, .. } => {
+            StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            } => {
+                self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
                 self.scan_expr(value);
             }
-            StmtKind::PropertyArrayAssign { object, index, value, .. } => {
+            StmtKind::PropertyArrayPush {
+                object,
+                property,
+                value,
+            } => {
+                self.record_instance_method(object, &property_hook_get_method(property));
+                self.record_instance_method(object, &property_hook_set_method(property));
+                self.scan_expr(object);
+                self.scan_expr(value);
+            }
+            StmtKind::PropertyArrayAssign {
+                object,
+                property,
+                index,
+                value,
+            } => {
+                self.record_instance_method(object, &property_hook_get_method(property));
+                self.record_instance_method(object, &property_hook_set_method(property));
                 self.scan_expr(object);
                 self.scan_expr(index);
                 self.scan_expr(value);
@@ -493,9 +537,11 @@ impl Scanner<'_> {
 
     /// Scans one class method contract and body.
     fn scan_method(&mut self, method: &ClassMethod) {
+        let prior_method = self.current_method.replace(method.name.clone());
         self.scan_attributes(&method.attributes);
         self.scan_params(&method.params, method.variadic_type.as_ref(), method.return_type.as_ref());
         self.scan_nested(&method.body, true);
+        self.current_method = prior_method;
     }
 
     /// Scans parameter defaults and declared class types.
@@ -537,7 +583,8 @@ impl Scanner<'_> {
     fn scan_attributes(&mut self, groups: &[AttributeGroup]) {
         for group in groups {
             for attribute in &group.attributes {
-                self.record_class(attribute.name.as_str());
+                let class = self.record_class(attribute.name.as_str());
+                self.usage.instantiated_classes.insert(class);
                 for argument in &attribute.args { self.scan_expr(argument); }
             }
         }

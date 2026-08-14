@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver, TypeExpr,
 };
@@ -37,19 +37,19 @@ impl Scanner<'_> {
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
                 self.usage.instantiated_classes.insert(key.clone());
-                self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(
-                    &[key].into_iter().collect(),
+                self.scan_method_signature_arguments(
+                    &[key.clone()].into_iter().collect(),
                     "__construct",
                     false,
                     args,
                 );
+                self.scan_exprs(args);
             }
             ExprKind::NewDynamic { name_expr, args } => {
                 self.usage.hazards.dynamic_class = true;
                 self.scan_expr(name_expr);
                 self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(
+                self.scan_method_signature_arguments(
                     &HashSet::new(),
                     "__construct",
                     false,
@@ -60,7 +60,7 @@ impl Scanner<'_> {
                 self.usage.hazards.dynamic_class = true;
                 self.record_class(fallback_class.as_str()); self.record_class(required_parent.as_str());
                 self.scan_expr(class_name); self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(
+                self.scan_method_signature_arguments(
                     &HashSet::new(),
                     "__construct",
                     false,
@@ -74,21 +74,16 @@ impl Scanner<'_> {
                 } else if matches!(receiver, StaticReceiver::Parent) {
                     self.usage.hazards.dynamic_method = true;
                 }
+                self.scan_method_signature_arguments(&classes, "__construct", false, args);
                 self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(
-                    &classes,
-                    "__construct",
-                    false,
-                    args,
-                );
             }
             ExprKind::MethodCall { object, method, args }
             | ExprKind::NullsafeMethodCall { object, method, args } => {
                 let classes = self.expr_classes(object);
                 self.record_instance_method(object, method);
+                self.scan_method_signature_arguments(&classes, method, false, args);
                 self.scan_expr(object);
                 self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(&classes, method, false, args);
             }
             ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
                 self.usage.hazards.dynamic_method = true;
@@ -97,8 +92,8 @@ impl Scanner<'_> {
             ExprKind::StaticMethodCall { receiver, method, args } => {
                 let classes = self.receiver_class(receiver).into_iter().collect();
                 self.record_static_method(receiver, method);
+                self.scan_method_signature_arguments(&classes, method, true, args);
                 self.scan_exprs(args);
-                self.invalidate_method_ref_arguments(&classes, method, true, args);
             }
             ExprKind::InstanceOf { value, target } => {
                 self.scan_expr(value);
@@ -106,10 +101,18 @@ impl Scanner<'_> {
             }
             ExprKind::ClassConstant { receiver } | ExprKind::ScopedConstantAccess { receiver, .. }
             | ExprKind::StaticPropertyAccess { receiver, .. } => self.scan_receiver(receiver),
-            ExprKind::PropertyAccess { object, .. } | ExprKind::NullsafePropertyAccess { object, .. }
-            | ExprKind::ObjectClassName { object } => self.scan_expr(object),
+            ExprKind::PropertyAccess { object, property }
+            | ExprKind::NullsafePropertyAccess { object, property } => {
+                self.record_instance_method(object, &property_hook_get_method(property));
+                self.scan_expr(object);
+            }
+            ExprKind::ObjectClassName { object } => self.scan_expr(object),
             ExprKind::DynamicPropertyAccess { object, property }
-            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => { self.scan_expr(object); self.scan_expr(property); }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                self.usage.hazards.dynamic_method = true;
+                self.scan_expr(object);
+                self.scan_expr(property);
+            }
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
             ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
@@ -118,6 +121,7 @@ impl Scanner<'_> {
             ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default }
             | ExprKind::Pipe { value, callable: default } => { self.scan_expr(value); self.scan_expr(default); }
             ExprKind::Assignment { target, value, result_target, prelude, .. } => {
+                self.scan_assignment_target(target);
                 self.scan_expr(target); self.scan_expr(value);
                 if let ExprKind::Variable(name) = &target.kind { self.remember_assignment(name, value); }
                 if let Some(target) = result_target { self.scan_expr(target); }
@@ -155,7 +159,15 @@ impl Scanner<'_> {
             | ExprKind::PreDecrement(name) | ExprKind::PostDecrement(name) => {
                 self.forget_variable(name);
             }
-            ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
+            ExprKind::StringLiteral(name) => {
+                if let Some((class, method)) = name.rsplit_once("::") {
+                    let class = self.record_class(class);
+                    self.usage
+                        .methods
+                        .insert((class, php_symbol_key(method), true));
+                }
+            }
+            ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
             | ExprKind::Variable(_) | ExprKind::BoolLiteral(_) | ExprKind::Null
             | ExprKind::ConstRef(_) | ExprKind::This
             | ExprKind::MagicConstant(_) => {}
@@ -167,6 +179,8 @@ impl Scanner<'_> {
         let key = self.record_callable(name);
         self.record_builtin_requirements(name, args);
         self.scan_builtin_callback_arguments(&key, args);
+        self.scan_declaration_arguments(&key, args);
+        self.scan_function_signature_arguments(&key, args);
         // The backend lowering calls this private PDOStatement method directly. Keep the
         // reachability edge next to that lowering contract until it becomes registry metadata.
         if key == "__elephc_initialize_pdo_statement" {
@@ -192,7 +206,90 @@ impl Scanner<'_> {
             _ => {}
         }
         self.scan_exprs(args);
-        self.invalidate_function_ref_arguments(&key, args);
+    }
+
+    /// Records class-like declarations and runtime protocols selected by builtin arguments.
+    fn scan_declaration_arguments(&mut self, name: &str, args: &[Expr]) {
+        match name {
+            "class_attribute_args" | "class_attribute_names" | "class_get_attributes"
+            | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses"
+            | "get_parent_class" | "spl_autoload" | "spl_autoload_call" => {
+                self.scan_class_argument(name, args, 0, false);
+            }
+            "is_a" | "is_subclass_of" => {
+                self.scan_class_argument(name, args, 0, false);
+                self.scan_class_argument(name, args, 1, false);
+            }
+            "stream_wrapper_register" | "stream_filter_register" => {
+                self.scan_class_argument(name, args, 1, true);
+                self.usage.hazards.dynamic_method = true;
+            }
+            "__elephc_new_without_constructor" => {
+                // `PDO::prepare` validates the driver-selected runtime class against
+                // `PDOStatement` before this internal allocation. Keep that compatible
+                // subclass family without rooting unrelated dynamically named classes.
+                if self
+                    .current_class
+                    .as_deref()
+                    .is_some_and(|class| php_symbol_key(class) == php_symbol_key("PDO"))
+                    && self
+                        .current_method
+                        .as_deref()
+                        .is_some_and(|method| php_symbol_key(method) == php_symbol_key("prepare"))
+                {
+                    self.usage
+                        .instantiated_subclass_roots
+                        .insert(php_symbol_key("PDOStatement"));
+                } else {
+                    self.scan_class_argument(name, args, 0, true);
+                }
+            }
+            "__elephc_class_has_constructor" => {
+                if let Some(class) = self.scan_class_argument(name, args, 0, false) {
+                    self.usage.methods.insert((
+                        class,
+                        php_symbol_key("__construct"),
+                        false,
+                    ));
+                } else {
+                    self.usage
+                        .wildcard_methods
+                        .insert((php_symbol_key("__construct"), false));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Resolves one normalized class-name argument and optionally marks it runtime-instantiated.
+    fn scan_class_argument(
+        &mut self,
+        function: &str,
+        args: &[Expr],
+        index: usize,
+        instantiated: bool,
+    ) -> Option<String> {
+        let argument = self.normalized_function_arguments(function, args).get(index).cloned();
+        let Some(argument) = argument.as_ref().map(unwrap_named_arg) else {
+            self.usage.hazards.dynamic_class = true;
+            return None;
+        };
+        let classes = self.expr_classes(argument);
+        if classes.is_empty() {
+            self.usage.hazards.dynamic_class = true;
+            return None;
+        }
+        let mut first = None;
+        for class in classes {
+            self.usage.classes.insert(class.clone());
+            if instantiated {
+                self.usage.instantiated_classes.insert(class.clone());
+            }
+            if first.is_none() {
+                first = Some(class);
+            }
+        }
+        first
     }
 
     /// Records arguments bound to registry parameters named `callback`.
@@ -296,6 +393,22 @@ impl Scanner<'_> {
         }
     }
 
+    /// Scans one argument whose checker-validated parameter type permits a callable.
+    fn scan_callable_argument(&mut self, argument: &Expr) {
+        let argument = unwrap_named_arg(argument);
+        match &argument.kind {
+            ExprKind::Closure { .. } | ExprKind::Null => {}
+            ExprKind::FirstClassCallable(target) => self.scan_callable_target(target),
+            ExprKind::StringLiteral(_) | ExprKind::ArrayLiteral(_) => {
+                self.callable_or_hazard(Some(argument));
+            }
+            _ => {
+                self.usage.hazards.dynamic_function = true;
+                self.usage.hazards.dynamic_method = true;
+            }
+        }
+    }
+
     /// Records `method_exists` literal method probes without treating them as dynamic lookup.
     pub(super) fn method_exists(&mut self, args: &[Expr]) {
         let Some(method) = args.get(1).map(unwrap_named_arg) else { self.usage.hazards.dynamic_method = true; return; };
@@ -336,6 +449,8 @@ impl Scanner<'_> {
     pub(super) fn scan_array_callable(&mut self, values: &[Expr]) {
         if values.len() != 2 { return; }
         let ExprKind::StringLiteral(method) = &unwrap_named_arg(&values[1]).kind else {
+            let receiver_classes = self.expr_classes(unwrap_named_arg(&values[0]));
+            self.usage.classes.extend(receiver_classes);
             self.usage.hazards.dynamic_method = true;
             return;
         };
@@ -414,7 +529,7 @@ impl Scanner<'_> {
     }
 
     /// Resolves a static receiver to its named, current, or immediate parent class.
-    pub(super) fn receiver_class(&mut self, receiver: &StaticReceiver) -> Option<String> {
+    pub(super) fn receiver_class(&self, receiver: &StaticReceiver) -> Option<String> {
         match receiver {
             StaticReceiver::Named(name) => Some(self.class_key(name.as_str())),
             StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.as_deref().map(php_symbol_key),
@@ -467,6 +582,25 @@ impl Scanner<'_> {
             ExprKind::This => self.current_class.iter().map(|name| php_symbol_key(name)).collect(),
             ExprKind::NewObject { class_name, .. } => [php_symbol_key(class_name.as_str())].into_iter().collect(),
             ExprKind::StringLiteral(name) => [php_symbol_key(name.trim_start_matches('\\'))].into_iter().collect(),
+            ExprKind::ClassConstant { receiver } => {
+                self.receiver_class(receiver).into_iter().collect()
+            }
+            ExprKind::ObjectClassName { object } => self.expr_classes(object),
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let mut classes = self.expr_classes(then_expr);
+                classes.extend(self.expr_classes(else_expr));
+                classes
+            }
+            ExprKind::NullCoalesce { value, default }
+            | ExprKind::ShortTernary { value, default } => {
+                let mut classes = self.expr_classes(value);
+                classes.extend(self.expr_classes(default));
+                classes
+            }
             _ => HashSet::new(),
         }
     }
@@ -488,19 +622,18 @@ impl Scanner<'_> {
         }
     }
 
-    /// Invalidates caller variables bound to by-reference parameters of a direct function call.
-    fn invalidate_function_ref_arguments(&mut self, function: &str, args: &[Expr]) {
-        let signature = self
+    /// Applies callable and by-reference parameter effects of a direct function call.
+    fn scan_function_signature_arguments(&mut self, function: &str, args: &[Expr]) {
+        let signatures: Vec<_> = self
             .call_signatures
             .and_then(|signatures| signatures.function(function))
-            .cloned();
-        if let Some(signature) = signature {
-            self.invalidate_ref_arguments(std::slice::from_ref(&signature), args);
-        }
+            .into_iter()
+            .collect();
+        self.scan_signature_arguments(&signatures, args);
     }
 
-    /// Invalidates caller variables bound to by-reference parameters of a direct method call.
-    fn invalidate_method_ref_arguments(
+    /// Applies callable and by-reference parameter effects of a direct method call.
+    fn scan_method_signature_arguments(
         &mut self,
         classes: &HashSet<String>,
         method: &str,
@@ -512,7 +645,56 @@ impl Scanner<'_> {
             .call_signatures
             .map(|index| index.method(classes, &method, is_static))
             .unwrap_or_default();
-        self.invalidate_ref_arguments(&signatures, args);
+        self.scan_signature_arguments(&signatures, args);
+    }
+
+    /// Applies every reachability-relevant parameter contract shared by calls.
+    fn scan_signature_arguments(&mut self, signatures: &[FunctionSig], args: &[Expr]) {
+        for signature in signatures {
+            let callable_indices: Vec<_> = signature
+                .params
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (_, ty))| php_type_may_be_callable(ty).then_some(index))
+                .collect();
+            if callable_indices.is_empty() {
+                continue;
+            }
+            let normalized = self.normalized_arguments(signature, args);
+            if normalized.is_empty() && !args.is_empty() {
+                self.usage.hazards.dynamic_function = true;
+                self.usage.hazards.dynamic_method = true;
+                continue;
+            }
+            for index in callable_indices {
+                if let Some(argument) = normalized.get(index) {
+                    self.scan_callable_argument(argument);
+                } else if args.iter().any(|argument| matches!(argument.kind, ExprKind::Spread(_))) {
+                    self.usage.hazards.dynamic_function = true;
+                    self.usage.hazards.dynamic_method = true;
+                }
+            }
+        }
+        self.invalidate_ref_arguments(signatures, args);
+    }
+
+    /// Normalizes one call against a known signature, preserving named and static-spread mapping.
+    fn normalized_arguments(&self, signature: &FunctionSig, args: &[Expr]) -> Vec<Expr> {
+        let call_span = args
+            .first()
+            .map(|argument| argument.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        crate::types::call_args::plan_call_args(signature, args, call_span, false, true)
+            .map(|plan| plan.normalized_args())
+            .unwrap_or_default()
+    }
+
+    /// Normalizes arguments using the checker, extern, or registry signature for a function.
+    fn normalized_function_arguments(&self, function: &str, args: &[Expr]) -> Vec<Expr> {
+        self.call_signatures
+            .and_then(|signatures| signatures.function(function))
+            .map(|signature| self.normalized_arguments(&signature, args))
+            .unwrap_or_else(|| args.to_vec())
     }
 
     /// Uses the shared argument planner to find storage that a reachable callable may rebind.
@@ -567,7 +749,11 @@ impl Scanner<'_> {
     /// Records a class key and applies conservative Reflection hazards.
     pub(super) fn record_class(&mut self, name: &str) -> String {
         let key = self.class_key(name);
-        if matches!(key.rsplit('\\').next(), Some("reflectionclass" | "reflectionmethod" | "reflectionfunction" | "reflectionobject")) {
+        if key
+            .rsplit('\\')
+            .next()
+            .is_some_and(|name| name.starts_with("reflection"))
+        {
             self.usage.hazards.dynamic_function = true;
             self.usage.hazards.dynamic_method = true;
             self.usage.hazards.dynamic_class = true;
@@ -589,6 +775,31 @@ impl Scanner<'_> {
         for expression in expressions { self.scan_expr(expression); }
     }
 
+    /// Records setter hooks reachable through an assignment target before scanning its value shape.
+    pub(super) fn scan_assignment_target(&mut self, target: &Expr) {
+        match &target.kind {
+            ExprKind::PropertyAccess { object, property }
+            | ExprKind::NullsafePropertyAccess { object, property } => {
+                self.record_instance_method(object, &property_hook_set_method(property));
+            }
+            ExprKind::DynamicPropertyAccess { .. }
+            | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
+                self.usage.hazards.dynamic_method = true;
+            }
+            ExprKind::ArrayAccess { array, .. } => self.scan_assignment_target(array),
+            _ => {}
+        }
+    }
+
+}
+
+/// Returns whether a declared PHP parameter type can receive a callable descriptor.
+fn php_type_may_be_callable(ty: &crate::types::PhpType) -> bool {
+    match ty {
+        crate::types::PhpType::Callable => true,
+        crate::types::PhpType::Union(types) => types.iter().any(php_type_may_be_callable),
+        _ => false,
+    }
 }
 
 /// Removes a named-argument wrapper when inspecting builtin control arguments.

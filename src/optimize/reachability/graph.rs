@@ -36,6 +36,7 @@ pub struct Reachability {
 pub(crate) struct DeclarationIndex {
     pub(crate) functions: HashMap<String, Usage>,
     pub(crate) classes: HashMap<String, ClassNode>,
+    pub(crate) checker_methods: HashMap<(String, String, bool), Usage>,
     pub(crate) externs: HashSet<String>,
     pub(crate) packed_classes: HashSet<String>,
     pub(crate) extern_classes: HashSet<String>,
@@ -366,10 +367,15 @@ impl GraphState {
             let Some(node) = self.index.classes.get(&class) else {
                 continue;
             };
+            let has_runtime_owned_parent = node
+                .parent
+                .as_ref()
+                .is_some_and(|parent| !self.index.classes.contains_key(parent));
             for (method, is_static) in node.methods.keys() {
                 let key = (class.clone(), method.clone(), *is_static);
                 let reference = (method.clone(), *is_static);
                 if self.reach.hazards.dynamic_method
+                    || has_runtime_owned_parent
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)
                 {
@@ -425,6 +431,26 @@ impl GraphState {
         let instantiated: Vec<_> = self.instantiated_classes.iter().cloned().collect();
         for class in instantiated {
             let behavioral = self.behavioral.instantiated_classes.contains(&class);
+            let checker_magic: Vec<_> = self
+                .checker_method_implementations
+                .iter()
+                .filter_map(|((visible_class, method, is_static), owner)| {
+                    (visible_class == &class && is_magic_method(method)).then(|| {
+                        (
+                            (visible_class.clone(), method.clone(), *is_static),
+                            (owner.clone(), method.clone(), *is_static),
+                        )
+                    })
+                })
+                .collect();
+            for (visible_method, owner_method) in checker_magic {
+                self.reach.methods.insert(visible_method.clone());
+                self.reach.methods.insert(owner_method.clone());
+                if behavioral {
+                    self.behavioral.methods.insert(visible_method);
+                    self.behavioral.methods.insert(owner_method);
+                }
+            }
             let mut current = Some(class.clone());
             let mut seen_classes = HashSet::new();
             let mut found_methods = HashSet::new();
@@ -536,7 +562,13 @@ impl GraphState {
                 .classes
                 .get(&class)
                 .and_then(|node| node.methods.get(&(method.clone(), is_static)))
-                .cloned();
+                .cloned()
+                .or_else(|| {
+                    self.index
+                        .checker_methods
+                        .get(&(class.clone(), method.clone(), is_static))
+                        .cloned()
+                });
             if let Some(usage) = usage.as_mut() {
                 if behavioral && self.internal_callable_methods.contains(&key) {
                     usage.hazards.dynamic_function = false;
@@ -557,6 +589,9 @@ impl GraphState {
 
     /// Applies one usage summary, propagating hazards only from behaviorally reachable bodies.
     fn apply_usage(&mut self, usage: Usage, behavioral: bool) {
+        for root in &usage.instantiated_subclass_roots {
+            self.keep_instantiable_subclasses(root, behavioral);
+        }
         if behavioral {
             self.reach.hazards.dynamic_function |= usage.hazards.dynamic_function;
             self.reach.hazards.dynamic_method |= usage.hazards.dynamic_method;
@@ -619,6 +654,41 @@ impl GraphState {
                 .extend(usage.wildcard_methods);
         }
         self.apply_global_hazards();
+    }
+
+    /// Retains every indexed class that is equal to or descends from one runtime-selected base.
+    fn keep_instantiable_subclasses(&mut self, root: &str, behavioral: bool) {
+        let root = php_symbol_key(root);
+        let classes: Vec<_> = self
+            .index
+            .classes
+            .keys()
+            .filter(|class| {
+                let mut current = Some((*class).clone());
+                let mut seen = HashSet::new();
+                while let Some(candidate) = current {
+                    if !seen.insert(candidate.clone()) {
+                        return false;
+                    }
+                    if candidate == root {
+                        return true;
+                    }
+                    current = self
+                        .index
+                        .classes
+                        .get(&candidate)
+                        .and_then(|node| node.parent.clone());
+                }
+                false
+            })
+            .cloned()
+            .collect();
+        self.reach.classes.extend(classes.iter().cloned());
+        self.instantiated_classes.extend(classes.iter().cloned());
+        if behavioral {
+            self.behavioral.classes.extend(classes.iter().cloned());
+            self.behavioral.instantiated_classes.extend(classes);
+        }
     }
 
     /// Turns method calls on interprocedurally aliased variable names into wildcard edges.

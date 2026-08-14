@@ -42,11 +42,9 @@ impl DeclarationIndex {
         call_signatures: &CallSignatureIndex,
     ) {
         for (class_name, info) in &check_result.classes {
-            let Some(node) = self.classes.get_mut(&php_symbol_key(class_name)) else {
-                continue;
-            };
-            let parent = node.parent.clone();
-            node.methods = info
+            let class_key = php_symbol_key(class_name);
+            let parent = info.parent.as_deref().map(php_symbol_key);
+            let mut methods: std::collections::HashMap<_, _> = info
                 .method_decls
                 .iter()
                 .map(|method| {
@@ -61,6 +59,64 @@ impl DeclarationIndex {
                     )
                 })
                 .collect();
+            let has_runtime_owned_parent = info
+                .parent
+                .as_deref()
+                .map(php_symbol_key)
+                .is_some_and(|parent| !self.classes.contains_key(&parent));
+            for method in info.methods.keys() {
+                let implemented_here = info
+                    .method_impl_classes
+                    .get(method)
+                    .is_some_and(|owner| php_symbol_key(owner) == class_key);
+                if has_runtime_owned_parent || implemented_here {
+                    methods
+                        .entry((php_symbol_key(method), false))
+                        .or_default();
+                }
+            }
+            for method in info.static_methods.keys() {
+                let implemented_here = info
+                    .static_method_impl_classes
+                    .get(method)
+                    .is_some_and(|owner| php_symbol_key(owner) == class_key);
+                if has_runtime_owned_parent || implemented_here {
+                    methods
+                        .entry((php_symbol_key(method), true))
+                        .or_default();
+                }
+            }
+            if let Some(node) = self.classes.get_mut(&class_key) {
+                let attribute_classes: Vec<_> = info
+                    .attribute_names
+                    .iter()
+                    .chain(info.method_attribute_names.values().flatten())
+                    .chain(info.property_attribute_names.values().flatten())
+                    .chain(info.constant_attribute_names.values().flatten())
+                    .map(|name| php_symbol_key(name))
+                    .collect();
+                node.usage
+                    .classes
+                    .extend(attribute_classes.iter().cloned());
+                node.usage
+                    .instantiated_classes
+                    .extend(attribute_classes);
+                node.interfaces
+                    .extend(info.interfaces.iter().map(|name| php_symbol_key(name)));
+                node.interfaces.sort_unstable();
+                node.interfaces.dedup();
+                node.traits
+                    .extend(info.used_traits.iter().map(|name| php_symbol_key(name)));
+                node.traits.sort_unstable();
+                node.traits.dedup();
+                node.methods = methods;
+            } else {
+                self.checker_methods.extend(methods.into_iter().map(
+                    |((method, is_static), usage)| {
+                        ((class_key.clone(), method, is_static), usage)
+                    },
+                ));
+            }
         }
     }
 

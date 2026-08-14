@@ -9,7 +9,7 @@
 
 use std::collections::HashSet;
 
-use crate::names::php_symbol_key;
+use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{Program, StmtKind};
 
 use super::usage::scan_program;
@@ -239,6 +239,86 @@ fn scan_records_builtin_callback_parameters() {
     }
 }
 
+/// Verifies a user function's typed callable parameter retains a literal free-function target.
+#[test]
+fn prune_keeps_callable_bound_to_typed_user_parameter() {
+    let (program, _) = prune(
+        "<?php function format_value(): string { return 'ok'; } function invoke(callable $handler): string { return $handler(); } echo invoke(handler: 'format_value');",
+    );
+    assert!(has_function(&program, "invoke"));
+    assert!(has_function(&program, "format_value"));
+}
+
+/// Verifies property reads and writes retain the parser-generated hook method bodies.
+#[test]
+fn prune_keeps_property_hook_accessors() {
+    let (program, _) = prune(
+        "<?php class Name { public string $value { get => $this->value; set => trim($value); } } $name = new Name(); $name->value = ' Ada '; echo $name->value;",
+    );
+    assert!(has_method(
+        &program,
+        "Name",
+        &property_hook_get_method("value")
+    ));
+    assert!(has_method(
+        &program,
+        "Name",
+        &property_hook_set_method("value")
+    ));
+}
+
+/// Verifies reflection-style class-string builtins keep the inspected source class metadata.
+#[test]
+fn prune_keeps_class_named_by_attribute_introspection() {
+    let (program, _) = prune(
+        "<?php class Author { public function __construct(public string $name) {} } #[Author('Ada')] class Greeter {} foreach (class_attribute_names(class_name: 'Greeter') as $name) { echo $name; }",
+    );
+    assert!(has_class(&program, "Greeter"));
+    assert!(has_class(&program, "Author"));
+    assert!(has_method(&program, "Author", "__construct"));
+}
+
+/// Verifies a class-string size query keeps its extern-class layout metadata.
+#[test]
+fn prune_keeps_extern_class_named_by_ptr_sizeof() {
+    let (program, check) = prune(
+        "<?php extern class Point { public int $x; public int $y; } echo ptr_sizeof('Point');",
+    );
+    assert!(program.iter().any(|statement| {
+        matches!(&statement.kind, StmtKind::ExternClassDecl { name, .. } if php_symbol_key(name) == php_symbol_key("Point"))
+    }));
+    assert!(check
+        .extern_classes
+        .keys()
+        .any(|name| php_symbol_key(name) == php_symbol_key("Point")));
+}
+
+/// Verifies a literal stream protocol registration retains every runtime-dispatched method.
+#[test]
+fn prune_keeps_registered_stream_wrapper_protocol() {
+    let (program, _) = prune(
+        "<?php class Wrapper { public function stream_open($path, $mode, $options, &$opened): bool { return true; } public function stream_read($count): string { return ''; } public function stream_close(): void {} public function ordinary(): void {} } stream_wrapper_register('test', 'Wrapper'); fopen('test://value', 'r');",
+    );
+    for method in ["stream_open", "stream_read", "stream_close", "ordinary"] {
+        assert!(
+            has_method(&program, "Wrapper", method),
+            "dynamic runtime protocol registration must retain {method}"
+        );
+    }
+}
+
+/// Verifies PDO's validated dynamic statement allocation keeps only compatible subclasses.
+#[test]
+fn prune_constrains_pdo_prepare_dynamic_allocation_to_statement_subclasses() {
+    let (program, _) = prune(
+        "<?php class PDOStatement {} class CustomStatement extends PDOStatement { public function __construct() {} } class Unrelated { public function __construct() {} } class PDO { public function prepare(string $class): mixed { return __elephc_new_without_constructor($class); } } echo (new PDO())->prepare('CustomStatement');",
+    );
+    assert!(has_class(&program, "PDOStatement"));
+    assert!(has_class(&program, "CustomStatement"));
+    assert!(has_method(&program, "CustomStatement", "__construct"));
+    assert!(!has_class(&program, "Unrelated"));
+}
+
 /// Verifies a literal `function_exists` probe adds one edge without widening dynamic calls.
 #[test]
 fn scan_literal_function_exists_is_a_reference_not_a_hazard() {
@@ -350,6 +430,26 @@ fn scan_reflection_reference_widens_all_declaration_hazards() {
     assert!(usage.hazards.dynamic_function);
     assert!(usage.hazards.dynamic_method);
     assert!(usage.hazards.dynamic_class);
+}
+
+/// Verifies Reflection retains checker-synthesized enum methods absent from the source AST.
+#[test]
+fn prune_keeps_synthetic_enum_methods_for_reflection() {
+    let (_, check) = prune(
+        "<?php enum Pure { case Ready; } enum Backed: string { case Ready = 'ready'; } new ReflectionClass(Pure::class); new ReflectionClass(Backed::class);",
+    );
+    let pure = check.classes.get("Pure").expect("Pure metadata must survive");
+    assert!(pure.static_methods.contains_key("cases"));
+    let backed = check
+        .classes
+        .get("Backed")
+        .expect("Backed metadata must survive");
+    for method in ["cases", "from", "tryfrom"] {
+        assert!(
+            backed.static_methods.contains_key(method),
+            "synthetic enum method {method} must survive Reflection"
+        );
+    }
 }
 
 /// Verifies fixed-point pruning keeps a called function and removes an unused sibling.
