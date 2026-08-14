@@ -717,9 +717,13 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?, escape?, eol?)` for string arrays,
 /// The `$escape` argument index for each CSV function that takes one.
 ///
-/// PHP 8.5 deprecates omitting it, because 9.0 changes the default from `"\\"` to `""` —
+/// PHP 8.4 deprecates omitting it, because 9.0 changes the default from `"\\"` to `""` —
 /// a silent behaviour change for anyone relying on today's value. The notice fires on the
 /// ARGUMENT being absent, not on its value, so passing the default explicitly is quiet.
+///
+/// It is also VERSION-GATED, which the rest of the diagnostic surface already is and this was
+/// not: PHP 8.2 and 8.3 print nothing here, so `--php-version 8.3` printing the notice made
+/// elephc noisier than the interpreter it is asked to imitate.
 fn emit_csv_escape_deprecation(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -727,6 +731,9 @@ fn emit_csv_escape_deprecation(
     escape_index: usize,
 ) {
     if inst.operands.len() > escape_index {
+        return;
+    }
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php84 {
         return;
     }
     let symbol = format!("_diag_csv_escape_deprecated_{function}_msg");

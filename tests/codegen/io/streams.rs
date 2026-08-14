@@ -1252,6 +1252,49 @@ unlink("dep_out.csv");
     }
 }
 
+/// Verifies the `$escape` deprecation is VERSION-GATED, as the rest of the notice surface is.
+///
+/// PHP 8.4 introduced it; 8.2 and 8.3 print nothing. elephc emitted it at every
+/// `--php-version`, which makes a program built for 8.3 noisier than the interpreter it is
+/// asked to imitate. stderr is what has to be inspected — the notice never touches stdout, so
+/// a stdout-only check reads the same for a gate that works and a gate that is missing.
+#[test]
+fn test_csv_escape_deprecation_is_gated_by_php_version() {
+    let source = r#"<?php
+$h = fopen("php://memory", "r+");
+fputcsv($h, ["a"]);
+str_getcsv("a,b");
+echo "done";
+"#;
+    let modern =
+        compile_and_run_capture_with_php_version(source, elephc::php_version::PhpVersion::Php84);
+    assert!(modern.success, "8.4 run failed: {}", modern.stderr);
+    assert_eq!(modern.stdout, "done");
+    assert_eq!(
+        modern
+            .stderr
+            .matches("the $escape parameter must be provided")
+            .count(),
+        2,
+        "8.4 must still raise both notices, got stderr={}",
+        modern.stderr
+    );
+
+    for version in [
+        elephc::php_version::PhpVersion::Php82,
+        elephc::php_version::PhpVersion::Php83,
+    ] {
+        let old = compile_and_run_capture_with_php_version(source, version);
+        assert!(old.success, "{version:?} run failed: {}", old.stderr);
+        assert_eq!(old.stdout, "done");
+        assert!(
+            !old.stderr.contains("$escape parameter"),
+            "{version:?} must print nothing, got stderr={}",
+            old.stderr
+        );
+    }
+}
+
 /// Verifies an OMITTED `$escape` writes with `"\\"`, not with RFC 4180 doubling.
 ///
 /// `fgetcsv()` and `str_getcsv()` already defaulted to the backslash; `fputcsv()` defaulted to

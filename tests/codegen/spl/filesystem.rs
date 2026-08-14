@@ -555,3 +555,51 @@ rmdir("root");
     assert_eq!(out, "child:wrapped:leaf.txt=root/child/leaf.txt\nhas|leaf=7\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `SplFileObject::fputcsv()` forwards its `$eol` instead of dropping it.
+///
+/// The method declared the parameter and then called `fputcsv()` with five arguments, so the
+/// sixth never left the prelude: every row ended in `"\n"` whatever the caller asked for, and
+/// the return count reported the newline it did not write. Measured on `php -n` 8.5.6, the
+/// three rows below leave `a,b\nc,de,f|EOL|` and answer 4, 3, 8.
+#[test]
+fn test_spl_file_object_fputcsv_forwards_its_eol() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$w = new SplFileObject("eol.csv", "w");
+echo $w->fputcsv(["a", "b"]), "|";
+echo $w->fputcsv(["c", "d"], ",", "\"", "\\", ""), "|";
+echo $w->fputcsv(["e", "f"], ",", "\"", "\\", "|EOL|"), "\n";
+unset($w);
+echo bin2hex(file_get_contents("eol.csv")), "\n";
+unlink("eol.csv");
+"#,
+    );
+    assert_eq!(out, "4|3|8\n612c620a632c64652c667c454f4c7c\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an omitted CSV control falls back on `setCsvControl()` state, not on a literal.
+///
+/// php resolves `$separator`, `$enclosure` and `$escape` against the object when the call
+/// leaves them out — that is what `setCsvControl()` is for, and what the 8.4 deprecation text
+/// points at. elephc spelled `","` as the parameter default, so the state was ignored and
+/// `$f->setCsvControl(";"); $f->fgetcsv()` came back as one field.
+#[test]
+fn test_spl_file_object_csv_controls_fall_back_on_set_csv_control() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ctl.csv", "a;b;c\n");
+$f = new SplFileObject("ctl.csv", "r");
+$f->setCsvControl(";", "\"", "\\");
+echo json_encode($f->fgetcsv()), "|";
+$g = new SplFileObject("ctl.csv", "r");
+echo json_encode($g->fgetcsv(";", "\"", "\\")), "|";
+$h = new SplFileObject("ctl.csv", "r");
+echo json_encode($h->fgetcsv(",", "\"", "\\")), "\n";
+unlink("ctl.csv");
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b\",\"c\"]|[\"a\",\"b\",\"c\"]|[\"a;b;c\"]\n");
+    let _ = fs::remove_dir_all(&dir);
+}

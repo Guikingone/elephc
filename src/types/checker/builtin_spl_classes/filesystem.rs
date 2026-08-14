@@ -433,12 +433,15 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             spl_file_object_set_csv_control_body(),
         ),
         method_with_body("getCsvControl", Vec::new(), Some(array_type()), spl_file_object_get_csv_control_body()),
+        // The three controls default to NULL rather than to `","` / `'"'` / `"\\"`, because
+        // php resolves an omitted one against the object's own `setCsvControl()` state, not
+        // against a literal: `$f->setCsvControl(";"); $f->fgetcsv()` splits on `;`.
         method_with_body(
             "fgetcsv",
             vec![
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", nullable_string_type(), null_expr()),
+                param_default("enclosure", nullable_string_type(), null_expr()),
+                param_default("escape", nullable_string_type(), null_expr()),
             ],
             Some(mixed_type()),
             spl_file_object_fgetcsv_body(),
@@ -447,9 +450,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             "fputcsv",
             vec![
                 param("fields", string_array_type()),
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", nullable_string_type(), null_expr()),
+                param_default("enclosure", nullable_string_type(), null_expr()),
+                param_default("escape", nullable_string_type(), null_expr()),
                 param_default("eol", TypeExpr::Str, string_expr("\n")),
             ],
             Some(TypeExpr::Int),
@@ -654,6 +657,14 @@ fn file_backing_path_arg_expr() -> Expr {
 /// Builds a string copy expression by concatenating an empty string.
 fn string_copy_expr(value: Expr) -> Expr {
     binary_expr(value, BinOp::Concat, string_expr(""))
+}
+
+/// Returns the `?string` type the CSV control parameters declare.
+///
+/// The null is not a value a caller passes for its own sake: it is how an OMITTED control is
+/// told apart from a spelled one, so the body can fall back on `setCsvControl()` state.
+fn nullable_string_type() -> TypeExpr {
+    TypeExpr::Nullable(Box::new(TypeExpr::Str))
 }
 
 /// Returns `$this->lines`.
@@ -1370,6 +1381,18 @@ fn spl_file_object_get_csv_control_body() -> Vec<Stmt> {
     ])))
 }
 
+/// Returns `$<name> ?? $this-><property>`, the fallback php applies to an omitted CSV control.
+///
+/// php-src reads the object's `setCsvControl()` state for anything the call left out, so the
+/// parameter defaults are null and the STATE supplies the byte. Spelling `","` in the signature
+/// instead made `$f->setCsvControl(";"); $f->fgetcsv()` split on a comma.
+fn csv_control_or_state_expr(name: &str, property: &str) -> Expr {
+    null_coalesce_expr(
+        var_expr(name),
+        string_copy_expr(property_access(this_expr(), property)),
+    )
+}
+
 /// Builds SplFileObject fgetcsv().
 fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
     vec![
@@ -1380,9 +1403,9 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
                 vec![
                     file_stream_expr(),
                     int_expr(0),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
-                    var_expr("escape"),
+                    csv_control_or_state_expr("separator", "delimiter"),
+                    csv_control_or_state_expr("enclosure", "enclosure"),
+                    csv_control_or_state_expr("escape", "escape"),
                 ],
             ),
         ),
@@ -1396,6 +1419,11 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fputcsv().
+///
+/// `$eol` is FORWARDED. The method declared it and then called the function with five
+/// arguments, so `$f->fputcsv(["a", "b"], ",", '"', "\\", "")` — php's "write no terminator",
+/// which answers 3 — still wrote a newline and answered 4, and a custom terminator was
+/// silently discarded.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
     let mut body = vec![
         assign_stmt(
@@ -1405,9 +1433,10 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
                 vec![
                     file_stream_expr(),
                     var_expr("fields"),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
-                    var_expr("escape"),
+                    csv_control_or_state_expr("separator", "delimiter"),
+                    csv_control_or_state_expr("enclosure", "enclosure"),
+                    csv_control_or_state_expr("escape", "escape"),
+                    string_copy_expr(var_expr("eol")),
                 ],
             ),
         ),
