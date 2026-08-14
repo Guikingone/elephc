@@ -153,12 +153,13 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_stdclass_new");                         // x0 = out_brigade obj
     emitter.instruction("str x0, [sp, #40]");                                   // save out_brigade
 
-    // -- Create consumed Mixed(int=0) --
-    emitter.instruction("mov x1, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x0, #0");                                          // tag = int
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("str x0, [sp, #48]");                                   // save consumed mixed cell
+    // -- Point &$consumed at a zeroed scratch slot --
+    // An untyped by-ref parameter is an Int by-ref, so the method writes a plain i64 through the
+    // address it receives — the same shape `stream_open`'s `&$opened_path` scratch uses. A Mixed
+    // cell was passed here before, and the method wrote its count over the cell's TAG word.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_consumed_scratch");
+    emitter.instruction("str xzr, [x9]");                                       // php starts every dispatch at 0
+    emitter.instruction("str x9, [sp, #48]");                                   // save the address the method binds to
 
     // -- Load $closing as a PLAIN int, not a Mixed cell --
     // An untyped `$closing` parameter is typed Int by the checker, so the method reads
@@ -189,6 +190,15 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #64]");                                   // save PSFS code (reuse bucket slot, now free)
     abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
     emitter.instruction("str x0, [x9]");                                        // publish it: the pair this returns cannot carry it
+
+    // -- publish whatever the method left in `&$consumed` --
+    // php reports it as `fwrite()`'s answer on a filtered write stream, so a filter that never
+    // assigns the parameter makes `fwrite()` return 0 even though the bytes were written.
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_consumed_scratch");
+    emitter.instruction("ldr x10, [x11]");                                      // whatever the method wrote through the by-ref
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_consumed");
+    emitter.instruction("str x10, [x9]");                                       // publish it beside the PSFS code
+    emitter.instruction("ldr x0, [sp, #64]");                                   // restore the PSFS code for the branches below
     emitter.instruction("cmp x0, #0");                                          // ERR_FATAL?
     emitter.instruction("b.eq __rt_ufbi_fatal");                                 // -> empty result (error signal)
     emitter.instruction("cmp x0, #1");                                          // FEED_ME?
@@ -398,12 +408,12 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_stdclass_new");
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // out_brigade
 
-    // -- consumed Mixed(int=0) --
-    emitter.instruction("xor edi, edi");                                        // clear register value
-    emitter.instruction("xor esi, esi");                                        // clear register value
-    emitter.instruction("mov rax, 0");                                          // prepare runtime result value
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
+    // -- Point &$consumed at a zeroed scratch slot --
+    // See the AArch64 counterpart: an untyped by-ref parameter is an Int by-ref, so the method
+    // writes a plain i64 through the address it receives, not into a Mixed cell.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_consumed_scratch");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // php starts every dispatch at 0
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // save the address the method binds to
 
     // -- $closing as a PLAIN int, not a Mixed cell --
     // See the AArch64 counterpart: the method reads this register as a number, so a
@@ -429,6 +439,16 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                        // save PSFS code (reuse bucket slot, now free)
     abi::emit_symbol_address(emitter, "r10", "_user_filter_last_psfs");
     emitter.instruction("mov QWORD PTR [r10], rax");                            // publish it: the pair this returns cannot carry it
+
+    // -- publish whatever the method left in `&$consumed` --
+    // php reports it as `fwrite()`'s answer on a filtered write stream, so a filter that never
+    // assigns the parameter makes `fwrite()` return 0 even though the bytes were written.
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_consumed_scratch");
+    emitter.instruction("mov r9, QWORD PTR [r11]");                             // whatever the method wrote through the by-ref
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_last_consumed");
+    emitter.instruction("mov QWORD PTR [r10], r9");                             // publish it beside the PSFS code
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // restore the PSFS code for the branches below
+
     emitter.instruction("test rax, rax");                                       // ERR_FATAL?
     emitter.instruction("jz __rt_ufbi_fatal_x");                                 // -> empty result (error signal)
     emitter.instruction("cmp rax, 1");                                          // FEED_ME?

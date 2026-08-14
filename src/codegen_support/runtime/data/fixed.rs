@@ -1140,6 +1140,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // dispatcher itself answers with a buffer/length pair, so the code — which decides
     // whether a closing flush failed — has nowhere else to travel.
     out.push_str(&comm_directive("_user_filter_last_psfs", 8, target));
+    // _user_filter_consumed_scratch: the storage `filter()`'s by-reference `&$consumed` binds to.
+    // An untyped by-ref parameter is an Int by-ref, so the method writes a plain i64 THROUGH the
+    // address it is handed — exactly like `stream_open`'s `&$opened_path` scratch. It used to be
+    // handed a Mixed cell instead, whose first word is the tag: the method read 0 (the int tag)
+    // as the starting value, which looked right, and then wrote its count OVER the tag.
+    out.push_str(&comm_directive("_user_filter_consumed_scratch", 8, target));
+    // _user_filter_last_consumed: the value `filter()` left in its by-reference `&$consumed`.
+    // php reports it as `fwrite()`'s return on a filtered write stream — a filter that never
+    // touches the parameter makes `fwrite()` answer 0 even though the bytes reached the file —
+    // and, like the PSFS code, it cannot travel in the buffer/length pair the dispatcher answers
+    // with.
+    out.push_str(&comm_directive("_user_filter_last_consumed", 8, target));
     // _stream_context_options: transient scratch used while constructing or
     // selecting a registry-backed ContextState for legacy wrapper consumers.
     out.push_str(&comm_directive("_stream_context_options", 8, target));

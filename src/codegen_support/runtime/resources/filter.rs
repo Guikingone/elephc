@@ -446,6 +446,26 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the filtered buffer/length pair
 }
 
+/// Stores the "no user filter ran" sentinel into `_user_filter_last_consumed` (AArch64).
+///
+/// `i64::MIN` is the sentinel because it is not a byte count any filter could plausibly claim,
+/// and a plain 0 would be indistinguishable from the very case that matters: a user filter that
+/// never assigned `&$consumed`, which php reports as `fwrite()` returning 0.
+fn emit_arm_user_filter_consumed_sentinel_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("lsl x9, x9, #63");                                     // i64::MIN
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_last_consumed");
+    emitter.instruction("str x9, [x10]");                                       // no user filter has published yet
+}
+
+/// x86_64 variant of [`emit_arm_user_filter_consumed_sentinel_aarch64`].
+fn emit_arm_user_filter_consumed_sentinel_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, 1");
+    emitter.instruction("shl r10, 63");                                         // i64::MIN
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_last_consumed");
+    emitter.instruction("mov QWORD PTR [r11], r10");                            // no user filter has published yet
+}
+
 /// `__rt_fwrite_filtered(stream, ptr, len) -> written` (AArch64).
 ///
 /// Applies the write chain to a private copy of the payload and hands the result
@@ -503,6 +523,12 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fwrite_filtered_copy");
     emitter.label("__rt_fwrite_filtered_copied");
 
+    // -- arm the "no user filter ran" sentinel before the chain --
+    // A user filter's `filter()` publishes whatever it left in `&$consumed`; a chain of built-ins
+    // publishes nothing, and php reports the payload length for those. The sentinel is what tells
+    // the two apart on the way out.
+    emit_arm_user_filter_consumed_sentinel_aarch64(emitter);
+
     // -- run the chain over the copy --
     emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
     emitter.instruction("ldr x1, [sp, #24]");                                   // scratch buffer
@@ -526,6 +552,21 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // scratch pointer
     emitter.instruction("bl __rt_heap_free");                                   // the copy never escapes this helper
     emitter.instruction("ldr x0, [sp, #16]");                                   // PHP reports payload bytes consumed
+    // ...for a chain of built-ins. A USER filter reports whatever it left in `&$consumed`:
+    // measured on php 8.5.6, a filter that never assigns the parameter makes `fwrite()` answer 0
+    // even though the bytes reached the file, one that adds a wrong number answers that number,
+    // and a negative leaves `fwrite()` false.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_consumed");
+    emitter.instruction("ldr x10, [x9]");                                       // what the chain published, if anything
+    emitter.instruction("mov x11, #1");
+    emitter.instruction("lsl x11, x11, #63");                                   // the untouched "no user filter ran" sentinel
+    emitter.instruction("cmp x10, x11");
+    emitter.instruction("b.eq __rt_fwrite_filtered_ret");                       // built-ins only: keep the payload length
+    emitter.instruction("mov x0, x10");                                         // the count the user filter claimed
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.ge __rt_fwrite_filtered_ret");
+    emitter.instruction("mov x0, #-1");                                         // a negative claim is a failure, like php
+    emitter.label("__rt_fwrite_filtered_ret");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the filtered-write frame
     emitter.instruction("ret");                                                 // return the consumed byte count
@@ -588,6 +629,11 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fwrite_filtered_copy_x");
     emitter.label("__rt_fwrite_filtered_copied_x");
 
+    // -- arm the "no user filter ran" sentinel before the chain --
+    // See the AArch64 counterpart: it is what tells a user filter's published `&$consumed` apart
+    // from a chain of built-ins, which publishes nothing.
+    emit_arm_user_filter_consumed_sentinel_x86_64(emitter);
+
     // -- run the chain over the copy --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // scratch buffer
@@ -612,6 +658,19 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // scratch pointer
     emitter.instruction("call __rt_heap_free");                                 // the copy never escapes this helper
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // PHP reports payload bytes consumed
+    // ...for a chain of built-ins; a USER filter reports its `&$consumed` instead. See the
+    // AArch64 counterpart for the measurement.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_last_consumed");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // what the chain published, if anything
+    emitter.instruction("mov r10, 1");
+    emitter.instruction("shl r10, 63");                                         // the untouched "no user filter ran" sentinel
+    emitter.instruction("cmp r11, r10");
+    emitter.instruction("je __rt_fwrite_filtered_ret_x");                       // built-ins only: keep the payload length
+    emitter.instruction("mov rax, r11");                                        // the count the user filter claimed
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jge __rt_fwrite_filtered_ret_x");
+    emitter.instruction("mov rax, -1");                                         // a negative claim is a failure, like php
+    emitter.label("__rt_fwrite_filtered_ret_x");
     emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return the consumed byte count
 

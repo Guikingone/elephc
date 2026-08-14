@@ -10267,6 +10267,69 @@ fclose($m);
     );
 }
 
+/// `fwrite()` on a user-filtered write stream answers with the filter's `&$consumed`.
+///
+/// Two bugs met here. The dispatcher handed `&$consumed` a Mixed CELL, but an untyped by-ref
+/// parameter is an Int by-ref, so the method read the cell's tag word as its starting value —
+/// which is 0 for an int, so it looked right — and then wrote its count straight over that tag.
+/// And the filtered-write helper ignored the parameter regardless, always reporting the payload
+/// length. Measured on php 8.5.6: a filter maintaining `$consumed` answers 10, one that assigns 7
+/// answers 7, and one that never touches the parameter answers 0 even though the bytes were
+/// written. Built-in filters are unaffected — they publish nothing, and php reports the payload
+/// length for them, which is what the sentinel preserves.
+#[test]
+fn test_fwrite_reports_the_user_filters_consumed_count() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Maintains extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $consumed += $bucket->datalen;
+            $bucket->data = strtoupper($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+class Assigns extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) { stream_bucket_append($out, $bucket); }
+        $consumed = 7;
+        return PSFS_PASS_ON;
+    }
+}
+class Ignores extends php_user_filter {
+    function filter($in, $out, &$consumed, $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("maintains", "Maintains");
+stream_filter_register("assigns", "Assigns");
+stream_filter_register("ignores", "Ignores");
+foreach (["maintains", "assigns", "ignores"] as $name) {
+    $f = fopen("out_$name", "w");
+    stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+    var_dump(fwrite($f, "abcdefghij"));
+    fclose($f);
+    echo file_get_contents("out_$name"), "\n";
+}
+$b = fopen("out_builtin", "w");
+stream_filter_append($b, "string.toupper", STREAM_FILTER_WRITE);
+var_dump(fwrite($b, "abcdefghij"));
+fclose($b);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(10)\nABCDEFGHIJ\nint(7)\nabcdefghij\nint(0)\nABCDEFGHIJ\nint(10)\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// The wrapper marker must NOT fire on a class that merely owns generic names.
 ///
 /// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary
