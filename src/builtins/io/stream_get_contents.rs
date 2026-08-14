@@ -10,27 +10,18 @@
 //! - `length` and `offset` are optional with defaults `null` and `-1` respectively.
 //! - `returns: Mixed` is used because the union cannot be expressed through the scalar field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::io::stream_support;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 use crate::types::checker::builtins::io::common;
 
 builtin! {
-    name: "stream_get_contents",
-    area: Io,
-    params: [
-        stream: Mixed,
-        length: Int = DefaultSpec::Null,
-        offset: Int = DefaultSpec::Int(-1)
-    ],
-    returns: Mixed,
+    contract: "stream_get_contents",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetContents,
     ),
-    summary: "Reads remainder of a stream into a string.",
-    php_manual: "function.stream-get-contents",
 }
 
 /// Validates the stream resource, optional length (int|null), and optional offset (int).

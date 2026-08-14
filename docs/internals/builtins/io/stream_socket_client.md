@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_client(string $address, int $error_code = null, int $error_message = null, string $timeout = null, int $flags = 1, mixed $context = null): mixed
+function stream_socket_client(string $address, mixed $error_code = null, mixed $error_message = null, mixed $timeout = null, int $flags = 1, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
@@ -50,6 +50,8 @@ function stream_socket_client(string $address, int $error_code = null, int $erro
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_client.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `by-reference-or-lvalue`.
 - **Dispatch hooks**: `direct`, `values`
 - **By-reference parameters**: `$error_code`, `$error_message`.
 

@@ -2,7 +2,7 @@
 title: "quoted_printable_encode()"
 description: "Encodes a string with the MIME quoted-printable transfer encoding."
 sidebar:
-  order: 430
+  order: 444
 ---
 
 ## quoted_printable_encode()
@@ -24,12 +24,6 @@ Encodes a string with the MIME quoted-printable transfer encoding.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/quoted_printable_encode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/quoted_printable_encode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

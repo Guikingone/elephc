@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing repeat hook.
 
 eval_builtin! {
-    name: "str_repeat",
+    contract: "str_repeat",
     area: String,
-    params: [string, times],
     direct: StrRepeat,
     values: StrRepeat,
 }

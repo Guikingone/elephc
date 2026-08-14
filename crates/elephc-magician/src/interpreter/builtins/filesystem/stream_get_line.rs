@@ -7,15 +7,12 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the delimiter-aware stream line helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 /// php-src reads `PHP_SOCK_CHUNK_SIZE` bytes when the caller passes `$length` as zero.
 const STREAM_GET_LINE_DEFAULT_CHUNK: usize = 8192;
 
 eval_builtin! {
-    name: "stream_get_line",
+    contract: "stream_get_line",
     area: Filesystem,
-    params: [stream, length, ending = EvalBuiltinDefaultValue::String("")],
     direct: Filesystem,
     values: Filesystem,
 }

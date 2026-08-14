@@ -8,13 +8,8 @@
 //! - `diskfreespace` is an alias for `disk_free_space`.
 
 builtin! {
-    name: "diskfreespace",
-    area: Io,
-    params: [directory: Str],
-    returns: Float,
+    contract: "diskfreespace",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DiskFreeSpace,
     ),
-    summary: "Returns available space in filesystem or disk partition (alias of disk_free_space).",
-    php_manual: "function.disk-free-space",
 }

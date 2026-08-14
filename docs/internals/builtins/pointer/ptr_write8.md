@@ -2,7 +2,7 @@
 title: "ptr_write8() — internals"
 description: "Compiler internals for ptr_write8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 343
+  order: 357
 ---
 
 ## `ptr_write8()` — internals
@@ -49,6 +49,8 @@ function ptr_write8(pointer $pointer, int $value): void
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write8.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr_write8.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -9,21 +9,16 @@
 //!   returns `Mixed` (reflecting PHP's `string|false` on EOF). `returns: Mixed` is used
 //!   because the precise union cannot be expressed through the scalar `returns:` field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fgets",
-    area: Io,
-    params: [stream: Mixed, length: Mixed = DefaultSpec::Null],
-    returns: Mixed,
+    contract: "fgets",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fgets,
     ),
-    summary: "Gets line from file pointer.",
-    php_manual: "function.fgets",
 }
 
 /// Validates the stream argument and returns `Mixed` for the `string|false` EOF pattern.

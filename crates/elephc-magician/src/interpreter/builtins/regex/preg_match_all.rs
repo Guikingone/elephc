@@ -8,20 +8,12 @@
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //! - capture-matrix assembly for `preg_match_all()`.
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_match_all",
+    contract: "preg_match_all",
     area: Regex,
-    params: [
-        pattern,
-        subject,
-        matches: by_ref = EvalBuiltinDefaultValue::EmptyArray,
-        flags = EvalBuiltinDefaultValue::Int(0),
-    ],
-    by_ref: [matches],
     direct: PregMatchAll,
     values: PregMatchAll,
 }

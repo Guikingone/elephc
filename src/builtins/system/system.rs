@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "system",
-    area: System,
-    params: [command: Str],
-    returns: Str,
+    contract: "system",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::System,
     ),
-    summary: "Executes an external program and displays the output.",
 }

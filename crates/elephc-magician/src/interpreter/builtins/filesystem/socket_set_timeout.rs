@@ -12,9 +12,8 @@
 //! - Both dispatch arms delegate straight to the canonical implementation.
 
 eval_builtin! {
-    name: "socket_set_timeout",
+    contract: "socket_set_timeout",
     area: Filesystem,
-    params: [stream, seconds, microseconds = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

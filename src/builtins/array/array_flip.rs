@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 builtin! {
-    name: "array_flip",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_flip",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFlip,
     ),
-    summary: "Exchanges all keys with their associated values in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-flip.php",
 }
 
 /// Returns the flipped associative-array type for an `array_flip` call.

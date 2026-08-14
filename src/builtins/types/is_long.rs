@@ -8,13 +8,8 @@
 //! - The alias uses the same typed EIR target as `is_int`.
 
 builtin! {
-    name: "is_long",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_long",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Int,
     ),
-    summary: "Alias of is_int().",
-    php_manual: "function.is-long",
 }

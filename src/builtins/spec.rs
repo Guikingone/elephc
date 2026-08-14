@@ -17,97 +17,9 @@
 // checker implementation rather than exposing compiler internals as public API.
 #![allow(private_interfaces)]
 
-/// Categorises a builtin by functional area, used for documentation grouping
-/// and future area-scoped registry queries.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Area {
-    /// String manipulation builtins (`strlen`, `substr`, …).
-    String,
-    /// Array manipulation builtins (`count`, `array_map`, …).
-    Array,
-    /// Mathematical builtins (`abs`, `pow`, …).
-    Math,
-    /// I/O builtins (`echo`, `file_put_contents`, …).
-    Io,
-    /// System / process builtins (`exit`, `getenv`, …).
-    System,
-    /// Type-inspection and conversion builtins (is_int, gettype, settype, …).
-    Types,
-    /// Callable / closure builtins (`call_user_func`, …).
-    Callables,
-    /// SPL data-structure builtins.
-    Spl,
-    /// Pointer and buffer builtins (elephc extensions).
-    Pointers,
-}
-
-/// Describes the PHP-level type of a parameter or return value at the `BuiltinSpec`
-/// level. Uses only `'static` storage so it can appear in `const` items.
-///
-/// Add variants here only as the builtin migration surfaces the need; do not
-/// pre-populate variants that are not yet referenced by any registered builtin.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TypeSpec {
-    /// PHP `int`.
-    Int,
-    /// PHP `float`.
-    Float,
-    /// PHP `string`.
-    Str,
-    /// PHP `bool`.
-    Bool,
-    /// PHP `mixed`.
-    Mixed,
-    /// PHP `void` (return position only).
-    Void,
-}
-
-/// Describes the default value for an optional parameter at the `BuiltinSpec`
-/// level. Uses only `'static` and `Copy` types so it can appear in `const` items.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum DefaultSpec {
-    /// PHP `null` default.
-    Null,
-    /// A literal integer default.
-    Int(i64),
-    /// A literal boolean default.
-    Bool(bool),
-    /// A literal float default.
-    Float(f64),
-    /// A literal string default.
-    Str(&'static str),
-    /// `PHP_INT_MAX` sentinel.
-    IntMax,
-    /// An empty array `[]` default.
-    EmptyArray,
-}
-
-/// Describes a single named parameter of a PHP builtin function.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct ParamSpec {
-    /// The PHP-level parameter name (used for named-argument matching).
-    pub name: &'static str,
-    /// The PHP-level type of the parameter.
-    pub ty: TypeSpec,
-    /// The default value for optional parameters, or `None` for required parameters.
-    pub default: Option<DefaultSpec>,
-    /// Whether the parameter is passed by reference (mutating builtins).
-    pub by_ref: bool,
-    /// For a by-reference parameter the builtin only ever WRITES, the type the caller's
-    /// variable holds once the call returns — `stream_socket_client()`'s `$error_code` is
-    /// `Int`, its `$error_message` is `Str`.
-    ///
-    /// PHP binds an undeclared variable to a by-reference parameter by auto-vivifying it to
-    /// `null`, so the manual's own idiom passes those variables without ever declaring them.
-    /// This field is what lets the checker treat such an argument as a DEFINITION instead of a
-    /// use, and what tells codegen the slot's representation. Because both consumers read this
-    /// one declaration, the type a builtin writes and the slot it writes into cannot drift.
-    ///
-    /// `None` for an in-out parameter the builtin also reads (`sort()`'s array,
-    /// `stream_select()`'s three arrays, `preg_match()`'s `$matches`): those are ordinary uses
-    /// and keep the ordinary `Undefined variable` diagnostic.
-    pub writes: Option<TypeSpec>,
-}
+pub use elephc_builtin_contract::{Area, DefaultSpec, TypeSpec};
+#[cfg(test)]
+pub use elephc_builtin_contract::ParamSpec;
 
 /// Context passed to a builtin's optional `check` hook during type-checking.
 ///
@@ -135,69 +47,51 @@ pub type CheckFn = for<'ctx, 'a> fn(
     &'ctx mut BuiltinCheckCtx<'a>,
 ) -> Result<crate::types::PhpType, crate::errors::CompileError>;
 
+/// Contract source used by one AOT implementation binding.
+pub enum BuiltinContractRef {
+    /// Production binding joined to the canonical shared catalog.
+    Shared(elephc_builtin_contract::BuiltinId),
+    /// Test-only inline contract used by focused registry probes.
+    #[cfg(test)]
+    Inline(elephc_builtin_contract::BuiltinContract),
+}
+
 /// Complete static descriptor for one PHP builtin function.
 ///
 /// All fields are `'static` so the spec can be declared as a `const` item and
 /// collected into the inventory-based registry at link time without heap allocation.
 pub struct BuiltinSpec {
-    /// The canonical PHP function name (case-preserved, no leading backslash).
-    pub name: &'static str,
-    /// The functional area this builtin belongs to.
-    pub area: Area,
-    /// The declared parameter list, in PHP source order.
-    pub params: &'static [ParamSpec],
-    /// The PHP-level name of the variadic parameter, if any.
-    pub variadic: Option<&'static str>,
-    /// An optional override for the maximum argument count enforced by the
-    /// registry's `check_arity`. When `Some(n)`, `check_arity` rejects calls with
-    /// more than `n` arguments even though the declared parameter list (including
-    /// optional params) would otherwise permit more. This affects ONLY
-    /// `check_arity`; it does not change `function_sig`, `arity_bounds`, or the
-    /// parity gate, which all keep the full param-derived bounds. It exists for a
-    /// builtin whose supported compiler contract enforces a tighter arity than its
-    /// declared golden signature allows.
-    pub max_args: Option<usize>,
-    /// An optional override for the minimum argument count enforced by the
-    /// registry's `check_arity`. When `Some(n)`, `check_arity` rejects calls
-    /// with fewer than `n` arguments even though the declared parameter list
-    /// would otherwise permit fewer (e.g. a variadic golden with min=0 but the
-    /// supported compiler contract requires at least two). This affects ONLY `check_arity`; it does
-    /// not change `function_sig`, `arity_bounds`, or the parity gate.
-    pub min_args: Option<usize>,
-    /// A verbatim error message used by `check_arity` instead of the standard
-    /// derived `"<name>() takes …"` phrasing when an arity mismatch is detected.
-    /// When `None`, `check_arity` uses the standard derived message.
-    /// Affects ONLY `check_arity`; `function_sig`, `arity_bounds`, and the parity
-    /// gate are unaffected.
-    pub arity_error: Option<&'static str>,
-
-    /// The declared PHP-level return type. The shared semantic descriptor decides
-    /// whether checker and EIR consumers use this declaration, a checked call-site
-    /// type, or one shared argument-sensitive resolver.
-    pub returns: TypeSpec,
-    /// Whether the function returns by reference.
-    pub by_ref_return: bool,
+    /// Shared production contract or an inline focused-test probe contract.
+    pub contract: BuiltinContractRef,
     /// Shared backend-neutral semantics consumed by checker, optimizer, EIR, ownership,
     /// requirements, and callable paths.
     pub semantics: crate::builtins::semantics::BuiltinSemantics,
-    /// A short one-line summary for generated documentation.
-    pub summary: &'static str,
-    /// Example PHP snippets demonstrating the builtin, for generated documentation.
-    pub examples: &'static [&'static str],
-    /// The PHP manual URL fragment (e.g. `"function.strlen"`), if applicable.
-    pub php_manual: Option<&'static str>,
-    /// A deprecation message, or `None` if the builtin is not deprecated.
-    pub deprecation: Option<&'static str>,
-    /// When `true`, the builtin is an elephc extension with no PHP equivalent
-    /// (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`, …). `--strict-php`
-    /// hides extension builtins from user programs: they stop resolving as
-    /// builtins, and user code may declare functions with these names, exactly
-    /// as under the PHP interpreter. The set is pinned by
-    /// `parity_tests::extension_builtin_set_is_pinned`.
-    pub extension: bool,
-    /// When `true`, the builtin is not PHP-visible and is not emitted in catalogs
-    /// or documentation; it is only used internally by the compiler.
-    pub internal: bool,
+}
+
+impl std::ops::Deref for BuiltinSpec {
+    type Target = elephc_builtin_contract::BuiltinContract;
+
+    /// Exposes neutral contract fields through the existing `BuiltinSpec` view.
+    fn deref(&self) -> &Self::Target {
+        match &self.contract {
+            BuiltinContractRef::Shared(id) => elephc_builtin_contract::lookup_id(*id)
+                .expect("AOT builtin implementation must reference a shared contract"),
+            #[cfg(test)]
+            BuiltinContractRef::Inline(contract) => contract,
+        }
+    }
+}
+
+impl BuiltinSpec {
+    /// Returns the stable identity of the joined shared or inline test contract.
+    pub fn id(&self) -> elephc_builtin_contract::BuiltinId {
+        std::ops::Deref::deref(self).id
+    }
+
+    /// Returns the boxed-runtime ABI identity when this contract has one.
+    pub fn runtime_builtin_id(&self) -> Option<elephc_builtin_contract::RuntimeBuiltinId> {
+        elephc_builtin_contract::runtime_builtin_id(self.id())
+    }
 }
 
 inventory::collect!(BuiltinSpec);
@@ -208,33 +102,36 @@ mod macro_tests {
     builtin! { name: "__macro_probe", area: Types, params: [x: Int], returns: Int, semantics: crate::builtins::semantics::test_probe_semantics(), summary: "probe", internal: true }
     builtin! { name: "__macro_ext_probe", area: Types, params: [], returns: Void, semantics: crate::builtins::semantics::test_probe_semantics(), summary: "extension probe", extension: true, internal: true }
 
-    /// Verifies the macro registers a builtin with its semantic descriptor.
+    /// Verifies macro-generated bindings join a shared contract to AOT semantics.
     #[test]
     fn macro_registers_builtin() {
-        let default_spec = inventory::iter::<BuiltinSpec>
+        let strlen = inventory::iter::<BuiltinSpec>
             .into_iter()
-            .find(|s| s.name == "__macro_probe")
-            .expect("macro probe must be registered");
+            .find(|spec| spec.name == "strlen")
+            .expect("strlen AOT binding must be registered");
+        assert_eq!(
+            strlen.id(),
+            elephc_builtin_contract::BuiltinId::from_canonical_name("strlen")
+        );
         assert!(matches!(
-            default_spec.semantics.result_ownership,
-            crate::builtins::semantics::BuiltinResultOwnership::MayAliasArguments
+            strlen.semantics.result_ownership,
+            crate::builtins::semantics::BuiltinResultOwnership::NonHeap
         ));
     }
 
-    /// Verifies the `extension` flag defaults to false and is set by the macro arm,
-    /// so `--strict-php` classification is opt-in per builtin declaration.
+    /// Verifies extension visibility now comes from the joined shared contract.
     #[test]
     fn macro_registers_extension_flag() {
-        let default_spec = inventory::iter::<BuiltinSpec>
+        let strlen = inventory::iter::<BuiltinSpec>
             .into_iter()
-            .find(|s| s.name == "__macro_probe")
-            .expect("macro probe must be registered");
-        let ext_spec = inventory::iter::<BuiltinSpec>
+            .find(|spec| spec.name == "strlen")
+            .expect("strlen AOT binding must be registered");
+        let pointer = inventory::iter::<BuiltinSpec>
             .into_iter()
-            .find(|s| s.name == "__macro_ext_probe")
-            .expect("extension probe must be registered");
-        assert!(!default_spec.extension);
-        assert!(ext_spec.extension);
+            .find(|spec| spec.name == "ptr")
+            .expect("ptr AOT binding must be registered");
+        assert!(!strlen.extension);
+        assert!(pointer.extension);
     }
 }
 
@@ -245,16 +142,11 @@ mod tests {
     /// Verifies a const BuiltinSpec can be built and read (const-friendly shape).
     #[test]
     fn const_spec_is_constructible() {
-        const P: &[ParamSpec] =
-            &[ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false, writes: None }];
         const S: BuiltinSpec = BuiltinSpec {
-            name: "strlen", area: Area::String, params: P, variadic: None,
-            max_args: None, min_args: None, arity_error: None,
-            returns: TypeSpec::Int,
-            by_ref_return: false,
+            contract: BuiltinContractRef::Shared(
+                elephc_builtin_contract::BuiltinId::from_canonical_name("strlen"),
+            ),
             semantics: crate::builtins::semantics::test_probe_semantics(),
-            summary: "len", examples: &[], php_manual: None,
-            deprecation: None, extension: false, internal: false,
         };
         assert_eq!(S.name, "strlen");
         assert_eq!(S.params.len(), 1);

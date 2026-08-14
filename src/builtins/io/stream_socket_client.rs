@@ -10,28 +10,16 @@
 //! - `error_code` and `error_message` are declared `ref(Int)` / `ref(Str)`: the runtime writes
 //!   them on failure, so the caller may pass them undeclared as PHP's own idiom does.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_client",
-    area: Io,
-    params: [
-        address: Str,
-        ref(Int) error_code: Mixed = DefaultSpec::Null,
-        ref(Str) error_message: Mixed = DefaultSpec::Null,
-        timeout: Mixed = DefaultSpec::Null,
-        flags: Int = DefaultSpec::Int(1),
-        context: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "stream_socket_client",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketClient,
     ),
-    summary: "Open Internet or Unix domain socket connection.",
-    php_manual: "function.stream-socket-client",
 }
 
 /// Returns PHP's `resource|false` result. The by-reference outputs need no check here: their

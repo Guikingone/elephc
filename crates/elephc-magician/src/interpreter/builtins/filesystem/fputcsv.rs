@@ -7,19 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the CSV stream write helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "fputcsv",
+    contract: "fputcsv",
     area: Filesystem,
-    params: [
-        stream,
-        fields,
-        separator = EvalBuiltinDefaultValue::String(","),
-        enclosure = EvalBuiltinDefaultValue::String("\""),
-        escape = EvalBuiltinDefaultValue::String("\\"),
-        eol = EvalBuiltinDefaultValue::String("\n")
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

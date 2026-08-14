@@ -9,14 +9,9 @@
 
 
 builtin! {
-    name: "get_declared_traits",
-    area: Callables,
-    params: [],
-    returns: Mixed,
+    contract: "get_declared_traits",
     check: crate::builtins::callables::support::check_declared_names,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetDeclaredTraits,
     ),
-    summary: "Returns an array of all declared traits.",
-    php_manual: "function.get-declared-traits",
 }

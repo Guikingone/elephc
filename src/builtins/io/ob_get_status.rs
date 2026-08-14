@@ -12,19 +12,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_get_status",
-    area: Io,
-    params: [full_status: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "ob_get_status",
     check: check,
     semantics: ob_get_status_semantics(),
-    summary: "Gets status of output buffers.",
-    php_manual: "function.ob-get-status",
 }
 
 /// Builds semantics whose EIR result matches the backend's boxed status container.

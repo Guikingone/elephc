@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "str_starts_with",
-    area: String,
-    params: [haystack: Str, needle: Str],
-    returns: Bool,
+    contract: "str_starts_with",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrStartsWith,
     ),
-    summary: "Checks if a string starts with a given substring.",
-    php_manual: "https://www.php.net/manual/en/function.str-starts-with.php",
 }

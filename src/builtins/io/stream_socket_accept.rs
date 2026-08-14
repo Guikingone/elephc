@@ -10,25 +10,16 @@
 //! - Arguments are pre-inferred by the registry before the hook runs, except `peer_name`, which
 //!   is written rather than read.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_accept",
-    area: Io,
-    params: [
-        socket: Mixed,
-        timeout: Mixed = DefaultSpec::Null,
-        ref(Str) peer_name: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "stream_socket_accept",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketAccept,
     ),
-    summary: "Accept a connection on a socket created by stream_socket_server().",
-    php_manual: "function.stream-socket-accept",
 }
 
 /// Validates arg[0] is a stream resource, then returns PHP's `resource|false` result.

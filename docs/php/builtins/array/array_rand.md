@@ -25,12 +25,6 @@ Pick one or more random keys out of an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_rand` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_rand.md).

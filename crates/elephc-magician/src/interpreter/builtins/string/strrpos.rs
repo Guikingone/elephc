@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the string-position hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "strrpos",
+    contract: "strrpos",
     area: String,
-    params: [haystack, needle, offset = EvalBuiltinDefaultValue::Int(0)],
     direct: StringPosition,
     values: StringPosition,
 }

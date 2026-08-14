@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_write32",
-    area: Pointers,
-    params: [pointer: Mixed, value: Mixed],
-    returns: Void,
+    contract: "ptr_write32",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrWrite32,
     ),
-    summary: "Writes one 32-bit word through a raw pointer.",
-    extension: true,
 }
 
 /// Validates pointer and integer value arguments and returns `PhpType::Void`.

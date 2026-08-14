@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "readlink",
-    area: Io,
-    params: [path: Str],
-    returns: Mixed,
+    contract: "readlink",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Readlink,
     ),
-    summary: "Returns the target of a symbolic link.",
-    php_manual: "function.readlink",
 }
 
 /// Returns `Union(Str, Bool)` reflecting the link target on success or `false` on failure.

@@ -26,12 +26,6 @@ Parses an English textual datetime description into a Unix timestamp.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strtotime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/strtotime.md).

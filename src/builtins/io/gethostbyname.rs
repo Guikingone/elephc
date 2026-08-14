@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "gethostbyname",
-    area: Io,
-    params: [hostname: Str],
-    returns: Str,
+    contract: "gethostbyname",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gethostbyname,
     ),
-    summary: "Gets the IPv4 address corresponding to the given Internet host name.",
-    php_manual: "function.gethostbyname",
 }

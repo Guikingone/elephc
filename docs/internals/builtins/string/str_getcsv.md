@@ -2,7 +2,7 @@
 title: "str_getcsv() — internals"
 description: "Compiler internals for str_getcsv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 440
+  order: 454
 ---
 
 ## `str_getcsv()` — internals
@@ -49,6 +49,8 @@ function str_getcsv(string $string, string $separator = ',', string $enclosure =
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/str_getcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/str_getcsv.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

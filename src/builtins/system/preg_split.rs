@@ -11,7 +11,7 @@
 //! - The registry pre-infers arguments before calling the hook; the hook must not
 //!   call `infer_type` again.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
     runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinResultType,
     BuiltinSemanticInput, BuiltinSemantics,
@@ -20,14 +20,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_split",
-    area: System,
-    params: [pattern: Str, subject: Str, limit: Int = DefaultSpec::Int(-1), flags: Int = DefaultSpec::Int(0)],
-    arity_error: "preg_split() takes between 2 and 4 arguments",
-    returns: Mixed,
+    contract: "preg_split",
     check: check,
     semantics: preg_split_semantics(),
-    summary: "Splits a string by a regular expression.",
 }
 
 /// Builds regex-split semantics with the boxed-Mixed EIR array layout expected by the runtime.

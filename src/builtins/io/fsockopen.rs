@@ -10,27 +10,16 @@
 //!   `ref(Str)`, which is what requires a variable there and gives it its type.
 //! - Arguments are pre-inferred by the registry before the hook runs.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fsockopen",
-    area: Io,
-    params: [
-        hostname: Str,
-        port: Int,
-        ref(Int) error_code: Mixed = DefaultSpec::Null,
-        ref(Str) error_message: Mixed = DefaultSpec::Null,
-        timeout: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "fsockopen",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fsockopen,
     ),
-    summary: "Open Internet or Unix domain socket connection.",
-    php_manual: "function.fsockopen",
 }
 
 /// Returns PHP's `resource|false` result. The by-reference outputs need no check here: their

@@ -12,9 +12,8 @@
 //! - Both dispatch arms delegate straight to the canonical implementation.
 
 eval_builtin! {
-    name: "set_file_buffer",
+    contract: "set_file_buffer",
     area: Filesystem,
-    params: [stream, size],
     direct: Filesystem,
     values: Filesystem,
 }

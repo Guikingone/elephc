@@ -15,17 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "realpath_cache_get",
-    area: Io,
-    params: [],
-    arity_error: "realpath_cache_get() takes exactly 0 arguments",
-    returns: Mixed,
+    contract: "realpath_cache_get",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::RealpathCacheGet,
     ),
-    summary: "Returns realpath cache entries.",
-    php_manual: "function.realpath-cache-get",
 }
 
 /// Returns `AssocArray{Str, Mixed}` reflecting the realpath cache structure.

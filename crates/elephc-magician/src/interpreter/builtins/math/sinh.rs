@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "sinh",
+    contract: "sinh",
     area: Math,
-    params: [num],
     direct: Sinh,
     values: Sinh,
 }

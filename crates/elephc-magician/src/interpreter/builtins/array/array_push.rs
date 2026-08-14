@@ -10,11 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_push",
+    contract: "array_push",
     area: Array,
-    params: [array: by_ref],
-    variadic: values,
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

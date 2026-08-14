@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_decompress_archive",
-    area: Io,
-    params: [src: Str],
-    returns: Str,
+    contract: "__elephc_phar_decompress_archive",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharDecompressArchive,
     ),
-    summary: "Decompresses a PHAR archive to a new path.",
-    internal: true,
 }

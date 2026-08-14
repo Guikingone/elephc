@@ -26,12 +26,6 @@ Returns the local time.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `localtime` is implemented in the compiler, see [the internals page](../../../internals/builtins/date/localtime.md).

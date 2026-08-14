@@ -9,19 +9,9 @@
 //! - `stream_select()` rewrites read/write/except arrays through by-reference
 //!   targets after validating resource handles.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_select",
+    contract: "stream_select",
     area: Filesystem,
-    params: [
-        read: by_ref,
-        write: by_ref,
-        except: by_ref,
-        seconds,
-        microseconds = EvalBuiltinDefaultValue::Int(0)
-    ],
-    by_ref: [read, write, except],
     direct: none,
     values: Filesystem,
 }

@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_read16",
+    contract: "ptr_read16",
     area: RawMemory,
-    params: [pointer],
     direct: PtrRead16,
     values: PtrRead16,
 }

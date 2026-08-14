@@ -8,9 +8,8 @@
 //! - Eval validates the context resource and mirrors the main backend's empty-params behavior.
 
 eval_builtin! {
-    name: "stream_context_get_params",
+    contract: "stream_context_get_params",
     area: Filesystem,
-    params: [context],
     direct: Filesystem,
     values: Filesystem,
 }

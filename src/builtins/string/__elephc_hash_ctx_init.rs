@@ -23,13 +23,8 @@
 //!   single-argument shape the runtime helper implements.
 
 builtin! {
-    name: "__elephc_hash_ctx_init",
-    area: String,
-    params: [algo: Str],
-    returns: Mixed,
+    contract: "__elephc_hash_ctx_init",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashInit,
     ),
-    summary: "Opens a raw incremental hashing context for the hash prelude.",
-    internal: true,
 }

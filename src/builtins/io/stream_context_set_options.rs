@@ -11,13 +11,8 @@
 //! - No check hook: the common registry path infers both arguments and returns `Bool`.
 
 builtin! {
-    name: "stream_context_set_options",
-    area: Io,
-    params: [context: Mixed, options: Mixed],
-    returns: Bool,
+    contract: "stream_context_set_options",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamContextSetOptions,
     ),
-    summary: "Sets several options on the specified context from an array.",
-    php_manual: "function.stream-context-set-options",
 }

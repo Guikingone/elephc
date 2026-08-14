@@ -1432,3 +1432,105 @@ echo $fib(10);
     );
     assert_eq!(out, "55");
 }
+
+/// A PHP reference has no type: whatever a closure stores through a `use (&$x)` capture is what
+/// the caller reads back, whether or not it matches what `$x` held when the closure was built.
+///
+/// The reference cell used to carry the captured variable's type, so a write of any other type
+/// was reinterpreted through it — silently, with the wrong value rather than an error:
+///
+/// | program | php | before |
+/// |---|---|---|
+/// | `$b = 5;` then the closure writes `null` | `NULL` | `9223372036854775806` (the raw null sentinel read as an int) |
+/// | `$c = null;` then the closure writes `7` | `7` | `NULL` — the write never landed |
+/// | `$d = "s";` then the closure writes `null` | `NULL` | garbage bytes |
+///
+/// Only the same-type case worked, which is why this went unnoticed: it is the shape every
+/// existing by-ref test used. The int-to-int row below is kept as the control — it must stay
+/// correct through any future narrowing of the widening rule.
+///
+/// An int-to-STRING row is deliberately absent. `$e = 1; $e = "grown";` is refused by the
+/// checker in ordinary straight-line code too (`cannot reassign $e from int to string`), so it
+/// would pin an unrelated gradual-typing over-rejection rather than anything about references.
+/// Reassigning to `null` is allowed, which is what makes these four rows reachable.
+#[test]
+fn test_by_ref_capture_writes_back_a_different_type() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 5;
+(function () use (&$a) { $a = 9; })();
+var_dump($a);
+$b = 5;
+(function () use (&$b) { $b = null; })();
+var_dump($b);
+$c = null;
+(function () use (&$c) { $c = 7; })();
+var_dump($c);
+$d = "s";
+$f = function () use (&$d) { $d = null; };
+$f();
+var_dump($d);
+"#,
+    );
+    assert_eq!(out, "int(9)\nNULL\nint(7)\nNULL\n");
+}
+
+/// The accumulator is the overwhelmingly common by-ref capture, and it must keep answering
+/// correctly whatever the cell's representation is. Pinned separately from the type-change
+/// matrix above so a narrowing that spares this shape from widening has a witness of its own.
+#[test]
+fn test_by_ref_capture_accumulates_across_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$total = 0;
+$add = function (int $n) use (&$total): void { $total += $n; };
+for ($i = 0; $i < 500; $i++) { $add($i); }
+echo $total;
+"#,
+    );
+    assert_eq!(out, "124750");
+}
+
+/// The accumulator crossing `PHP_INT_MAX` is the SAME defect as the null write above, reached
+/// by a different pair of types — and the one that shows the widening is not a tax on a working
+/// program but the price of representing what PHP stores.
+///
+/// PHP promotes an overflowing sum to float, so `$total += $n` stores `int|float`, not `int`.
+/// A cell typed from the captured `int` cannot hold that, and the sum wrapped around instead:
+///
+/// | call | php | before |
+/// |---|---|---|
+/// | first | `int(9223372036854775807)` | `int(9223372036854775807)` |
+/// | second | `float(9.2233720368548E+18)` | `int(-9223372036854775808)` |
+/// | third | `float(9.2233720368548E+18)` | `int(-9223372036854775798)` |
+///
+/// Silent, and it needs no `null` and no string anywhere — just arithmetic that leaves the
+/// integer range, which is why an accumulator is exactly the shape most likely to meet it.
+///
+/// The CONTROL is what makes the cause unambiguous, so it is part of the same fixture: the
+/// identical `+= 1` outside any closure promoted to float correctly even before the fix. The
+/// arithmetic was never wrong — only the trip through a reference cell typed from the captured
+/// `int` was, which is the same defect as the null row above reached by another pair of types.
+#[test]
+fn test_by_ref_capture_accumulator_promotes_to_float_on_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$total = PHP_INT_MAX - 1;
+$add = function (int $n) use (&$total): void { $total += $n; };
+$add(1);
+var_dump($total);
+$add(1);
+var_dump($total);
+$plain = PHP_INT_MAX - 1;
+$plain += 1;
+var_dump($plain);
+$plain += 1;
+var_dump($plain);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
+         int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
+    );
+}

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fputs",
-    area: Io,
-    params: [stream: Mixed, data: Str],
-    returns: Mixed,
+    contract: "fputs",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fwrite,
     ),
-    summary: "Binary-safe file write (alias of fwrite).",
-    php_manual: "function.fwrite",
 }
 
 /// Validates the stream argument and returns PHP's `int|false` result union.

@@ -7,21 +7,16 @@
 //! Key details:
 //! - The returned indexed array contains only ciphers implemented by elephc-crypto.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "openssl_get_cipher_methods",
-    area: String,
-    params: [aliases: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "openssl_get_cipher_methods",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::OpensslGetCipherMethods,
     ),
-    summary: "Returns the supported OpenSSL cipher method names.",
-    php_manual: "https://www.php.net/manual/en/function.openssl-get-cipher-methods.php",
 }
 
 /// Returns an indexed string-array type for the method inventory.

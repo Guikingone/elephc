@@ -15,27 +15,16 @@
 //!   scalar `returns:` field. Arguments are pre-inferred by the registry before the hook runs.
 //! - PHP 8.4: `escape` defaults to `"\\"` (the `""` RFC 4180 doubling mode is PHP 9.0).
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fgetcsv",
-    area: Io,
-    params: [
-        stream: Mixed,
-        length: Int = DefaultSpec::Null,
-        separator: Str = DefaultSpec::Str(","),
-        enclosure: Str = DefaultSpec::Str("\""),
-        escape: Str = DefaultSpec::Str("\\")
-    ],
-    returns: Mixed,
+    contract: "fgetcsv",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fgetcsv,
     ),
-    summary: "Gets line from file pointer and parse for CSV fields.",
-    php_manual: "function.fgetcsv",
 }
 
 /// Validates the stream argument is a stream resource and returns `array<mixed>|false`.

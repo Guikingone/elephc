@@ -8,13 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the streaming file output helper.
 
 eval_builtin! {
-    name: "readfile",
+    contract: "readfile",
     area: Filesystem,
-    params: [
-        filename,
-        use_include_path = EvalBuiltinDefaultValue::Bool(false),
-        context = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

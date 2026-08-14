@@ -8,15 +8,10 @@
 //! Key details:
 //! - Pure-data builtin: return type (`Void`) is fully determined by the declaration.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "header",
-    area: System,
-    params: [header: Str, replace: Bool = DefaultSpec::Bool(true), response_code: Int = DefaultSpec::Int(0)],
-    returns: Void,
+    contract: "header",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Header,
     ),
-    summary: "Sends a raw HTTP header.",
 }

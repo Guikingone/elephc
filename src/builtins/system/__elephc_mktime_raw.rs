@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "__elephc_mktime_raw",
-    area: System,
-    params: [hour: Int, minute: Int, second: Int, month: Int, day: Int, year: Int],
-    returns: Int,
+    contract: "__elephc_mktime_raw",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcMktimeRaw,
     ),
-    summary: "Internal raw mktime alias used by the synthetic DateTime body.",
-    internal: true,
 }

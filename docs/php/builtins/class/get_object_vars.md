@@ -1,6 +1,6 @@
 ---
 title: "get_object_vars()"
-description: "get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
+description: "Returns visible properties for an object."
 sidebar:
   order: 90
 ---
@@ -11,7 +11,7 @@ sidebar:
 function get_object_vars(mixed $object): mixed
 ```
 
-get_object_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet.
+Returns visible properties for an object.
 
 **Parameters**:
 - `$object` (`mixed`)
@@ -20,7 +20,7 @@ get_object_vars() is available inside eval'd code via the magician interpreter; 
 
 ## Availability
 
-- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin (`eval-only-reflection`).
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._

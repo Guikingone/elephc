@@ -10,9 +10,8 @@
 //!   line break, so eval and compiled output stay identical for binary input.
 
 eval_builtin! {
-    name: "quoted_printable_encode",
+    contract: "quoted_printable_encode",
     area: String,
-    params: [string],
     direct: QuotedPrintableEncode,
     values: QuotedPrintableEncode,
 }

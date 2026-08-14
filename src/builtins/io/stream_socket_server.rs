@@ -10,28 +10,16 @@
 //! - The `error_code` and `error_message` parameters are by-reference: the caller passes
 //!   plain variables that the runtime writes on failure.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
-use crate::types::stream_constants::STREAM_SERVER_DEFAULT_FLAGS;
 
 builtin! {
-    name: "stream_socket_server",
-    area: Io,
-    params: [
-        address: Str,
-        ref(Int) error_code: Mixed = DefaultSpec::Null,
-        ref(Str) error_message: Mixed = DefaultSpec::Null,
-        flags: Int = DefaultSpec::Int(STREAM_SERVER_DEFAULT_FLAGS),
-        context: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "stream_socket_server",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketServer,
     ),
-    summary: "Create an Internet or Unix domain server socket.",
-    php_manual: "function.stream-socket-server",
 }
 
 /// Returns PHP's `resource|false` result. The by-reference outputs need no check here: their

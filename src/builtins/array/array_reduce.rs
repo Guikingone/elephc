@@ -11,23 +11,16 @@
 //! - `check` validates the callback with the inferred initial and array-element types.
 //!   The return type is `PhpType::Int`, matching the legacy arm.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_reduce",
-    area: Array,
-    params: [array: Mixed, callback: Mixed, initial: Mixed = DefaultSpec::Null],
-    min_args: 3,
-    max_args: 3,
-    returns: Mixed,
+    contract: "array_reduce",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayReduce,
     ),
-    summary: "Iteratively reduces an array to a single value using a callback function.",
-    php_manual: "https://www.php.net/manual/en/function.array-reduce.php",
 }
 
 /// Validates the callback for an `array_reduce` call and returns `PhpType::Int`.

@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "urldecode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "urldecode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::UrlDecode),
         crate::ir::Effects::PURE,
     ),
-    summary: "Decodes a URL-encoded string, including '+' as a space.",
-    php_manual: "https://www.php.net/manual/en/function.urldecode.php",
 }

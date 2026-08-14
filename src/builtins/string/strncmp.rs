@@ -14,13 +14,8 @@
 //!   `ValueError`, so the call must not be removable by dead-code elimination.
 
 builtin! {
-    name: "strncmp",
-    area: String,
-    params: [string1: Str, string2: Str, length: Int],
-    returns: Int,
+    contract: "strncmp",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strncmp,
     ),
-    summary: "Compares the first n bytes of two strings.",
-    php_manual: "https://www.php.net/manual/en/function.strncmp.php",
 }

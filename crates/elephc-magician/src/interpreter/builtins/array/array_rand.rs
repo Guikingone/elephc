@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_rand",
+    contract: "array_rand",
     area: Array,
-    params: [array],
     direct: ArrayRand,
     values: ArrayRand,
 }

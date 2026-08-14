@@ -7,12 +7,9 @@
 //! Key details:
 //! - Class-like existence semantics are shared with `trait_exists()`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "enum_exists",
+    contract: "enum_exists",
     area: Symbols,
-    params: [r#enum, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

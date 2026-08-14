@@ -25,12 +25,6 @@ Shuffles an array into random order.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `shuffle` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/shuffle.md).

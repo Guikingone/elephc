@@ -12,9 +12,8 @@
 //! - Both dispatch arms delegate straight to the canonical implementation.
 
 eval_builtin! {
-    name: "stream_register_wrapper",
+    contract: "stream_register_wrapper",
     area: Filesystem,
-    params: [protocol, r#class, flags = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

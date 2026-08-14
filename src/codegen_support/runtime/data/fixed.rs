@@ -763,6 +763,30 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
     out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
+    // BCMath bridge slots are published only by `bc*` call sites. Shared runtime
+    // helpers call through these slots so unrelated programs never reference the
+    // optional elephc-bcmath archive.
+    for slot in [
+        "_elephc_bcmath_add_fn",
+        "_elephc_bcmath_sub_fn",
+        "_elephc_bcmath_mul_fn",
+        "_elephc_bcmath_div_fn",
+        "_elephc_bcmath_mod_fn",
+        "_elephc_bcmath_divmod_fn",
+        "_elephc_bcmath_pow_fn",
+        "_elephc_bcmath_powmod_fn",
+        "_elephc_bcmath_sqrt_fn",
+        "_elephc_bcmath_comp_fn",
+        "_elephc_bcmath_get_scale_fn",
+        "_elephc_bcmath_set_scale_fn",
+        "_elephc_bcmath_ceil_fn",
+        "_elephc_bcmath_floor_fn",
+        "_elephc_bcmath_round_fn",
+        "_elephc_bcmath_last_error_fn",
+        "_elephc_bcmath_free_fn",
+    ] {
+        out.push_str(&comm_directive(slot, 8, target));
+    }
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.

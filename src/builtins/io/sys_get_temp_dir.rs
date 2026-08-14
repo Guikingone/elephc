@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "sys_get_temp_dir",
-    area: Io,
-    params: [],
-    returns: Str,
+    contract: "sys_get_temp_dir",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SysGetTempDir,
     ),
-    summary: "Returns the directory path used for temporary files.",
-    php_manual: "function.sys-get-temp-dir",
 }

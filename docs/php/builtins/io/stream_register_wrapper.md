@@ -27,12 +27,6 @@ Register a URL wrapper implemented as a PHP class (alias of stream_wrapper_regis
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_register_wrapper` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_register_wrapper.md).

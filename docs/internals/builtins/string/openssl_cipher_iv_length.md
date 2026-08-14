@@ -2,7 +2,7 @@
 title: "openssl_cipher_iv_length() — internals"
 description: "Compiler internals for openssl_cipher_iv_length(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 423
+  order: 437
 ---
 
 ## `openssl_cipher_iv_length()` — internals
@@ -49,6 +49,8 @@ function openssl_cipher_iv_length(string $cipher_algo): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/openssl_cipher_iv_length.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_cipher_iv_length.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

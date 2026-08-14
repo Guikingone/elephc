@@ -12,21 +12,16 @@
 //! - Arguments are pre-inferred by the registry before the hook runs, except `would_block`, which
 //!   is written rather than read; `operation` is re-inferred inside the hook for validation.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "flock",
-    area: Io,
-    params: [stream: Mixed, operation: Int, ref(Int) would_block: Mixed = DefaultSpec::Null],
-    returns: Bool,
+    contract: "flock",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Flock,
     ),
-    summary: "Portable advisory file locking.",
-    php_manual: "function.flock",
 }
 
 /// Validates the stream resource and enforces a strict `Int` type for `operation`.

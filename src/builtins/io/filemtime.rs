@@ -12,15 +12,8 @@
 
 
 builtin! {
-    name: "filemtime",
-    area: Io,
-    params: [filename: Str],
-    // php returns int|false — false for a path it cannot stat. Declaring Int discarded
-    // the false and handed back the raw payload register.
-    returns: Mixed,
+    contract: "filemtime",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filemtime,
     ),
-    summary: "Gets file modification time.",
-    php_manual: "function.filemtime",
 }

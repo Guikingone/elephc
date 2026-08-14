@@ -7,16 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the bounded stream read helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_get_contents",
+    contract: "stream_get_contents",
     area: Filesystem,
-    params: [
-        stream,
-        length = EvalBuiltinDefaultValue::Null,
-        offset = EvalBuiltinDefaultValue::Int(-1)
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

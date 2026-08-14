@@ -12,9 +12,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "current",
+    contract: "current",
     area: Array,
-    params: [array],
     direct: Array,
     values: Array,
 }

@@ -15,14 +15,9 @@
 
 
 builtin! {
-    name: "__elephc_ptr_write_string",
-    area: Pointers,
-    params: [pointer: Mixed, string: Mixed],
-    returns: Int,
+    contract: "__elephc_ptr_write_string",
     check: crate::builtins::pointers::ptr_write_string::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPtrWriteString,
     ),
-    summary: "Internal prelude alias of ptr_write_string.",
-    internal: true,
 }

@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "log2",
+    contract: "log2",
     area: Math,
-    params: [num],
     direct: Log2,
     values: Log2,
 }

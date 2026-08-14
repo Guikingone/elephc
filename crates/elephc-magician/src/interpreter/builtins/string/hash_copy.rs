@@ -9,9 +9,8 @@
 //! - Hash context resources are owned by the eval context stream table.
 
 eval_builtin! {
-    name: "hash_copy",
+    contract: "hash_copy",
     area: String,
-    params: [context],
     direct: HashContext,
     values: HashContext,
 }

@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "stream_wrapper_unregister",
-    area: Io,
-    params: [protocol: Str],
-    returns: Bool,
+    contract: "stream_wrapper_unregister",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamWrapperUnregister,
     ),
-    summary: "Unregisters a previously registered URL wrapper.",
-    php_manual: "function.stream-wrapper-unregister",
 }

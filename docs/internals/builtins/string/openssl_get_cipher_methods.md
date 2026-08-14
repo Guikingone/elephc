@@ -2,7 +2,7 @@
 title: "openssl_get_cipher_methods() — internals"
 description: "Compiler internals for openssl_get_cipher_methods(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 426
+  order: 440
 ---
 
 ## `openssl_get_cipher_methods()` — internals
@@ -49,6 +49,8 @@ function openssl_get_cipher_methods(bool $aliases = false): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/openssl_get_cipher_methods.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_get_cipher_methods.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

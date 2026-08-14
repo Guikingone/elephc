@@ -2,7 +2,7 @@
 title: "ptr_read_string()"
 description: "Copies raw bytes from a pointer into a PHP string of the given length."
 sidebar:
-  order: 338
+  order: 352
 ---
 
 ## ptr_read_string()
@@ -26,12 +26,6 @@ Copies raw bytes from a pointer into a PHP string of the given length.
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

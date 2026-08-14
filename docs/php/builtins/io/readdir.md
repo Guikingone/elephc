@@ -25,12 +25,6 @@ Read entry from directory handle.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `readdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/readdir.md).

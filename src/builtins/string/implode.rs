@@ -16,17 +16,10 @@
 //!   the two to agree on their enforced bounds (one required parameter, at most two).
 //! - No `check` hook narrows the arity: `returns: Str` is authoritative for the checker.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "implode",
-    area: String,
-    params: [separator: Mixed, array: Mixed = DefaultSpec::Null],
-    max_args: 2,
-    returns: Str,
+    contract: "implode",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Implode,
     ),
-    summary: "Joins array elements into a single string using a separator.",
-    php_manual: "https://www.php.net/manual/en/function.implode.php",
 }

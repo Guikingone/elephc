@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing checksum hook.
 
 eval_builtin! {
-    name: "crc32",
+    contract: "crc32",
     area: String,
-    params: [string],
     direct: Crc32,
     values: Crc32,
 }

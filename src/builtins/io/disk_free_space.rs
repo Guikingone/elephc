@@ -12,15 +12,8 @@
 
 
 builtin! {
-    name: "disk_free_space",
-    area: Io,
-    params: [directory: Str],
-    // php returns float|false — false for a path it cannot stat. Declaring Float
-    // discarded the false and handed back a plain 0.0.
-    returns: Mixed,
+    contract: "disk_free_space",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DiskFreeSpace,
     ),
-    summary: "Returns available space on filesystem or disk partition.",
-    php_manual: "function.disk-free-space",
 }

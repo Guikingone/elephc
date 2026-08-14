@@ -2,7 +2,7 @@
 title: "implode() — internals"
 description: "Compiler internals for implode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 411
+  order: 425
 ---
 
 ## `implode()` — internals
@@ -49,6 +49,9 @@ function implode(string $separator, array $array = null): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/implode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/implode.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
+- **Eval signature compatibility**: `non-trailing-required-parameter`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

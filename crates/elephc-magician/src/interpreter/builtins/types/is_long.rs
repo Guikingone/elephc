@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_long",
+    contract: "is_long",
     area: Types,
-    params: [value],
     direct: IsLong,
     values: IsLong,
 }

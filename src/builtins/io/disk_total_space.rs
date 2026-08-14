@@ -12,15 +12,8 @@
 
 
 builtin! {
-    name: "disk_total_space",
-    area: Io,
-    params: [directory: Str],
-    // php returns float|false — false for a path it cannot stat. Declaring Float
-    // discarded the false and handed back a plain 0.0.
-    returns: Mixed,
+    contract: "disk_total_space",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DiskTotalSpace,
     ),
-    summary: "Returns the total size of a filesystem or disk partition.",
-    php_manual: "function.disk-total-space",
 }

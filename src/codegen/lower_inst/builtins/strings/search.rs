@@ -592,7 +592,13 @@ pub(super) fn lower_substr_aarch64(
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_aarch64(ctx, inst)?;
-    if inst.operands.len() >= 3 {
+    // Whether a length was PASSED is known here, at compile time, so it is never encoded in the
+    // length's own value. It used to be: `-1` doubled as the "omitted" sentinel, which made an
+    // explicit `substr($s, 1, -1)` indistinguishable from the two-argument call and kept the
+    // whole tail. Every other negative length was then clamped to zero, so `substr("hello",0,-2)`
+    // answered `""` where php answers `"hel"`.
+    let has_length = inst.operands.len() >= 3;
+    if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov x3, x0");                                  // move the explicit substring length into the clamp register
@@ -609,20 +615,18 @@ pub(super) fn lower_substr_aarch64(
     ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining byte length after the selected offset
-    // Whether a length was passed is known HERE, at compile time, so nothing has to be
-    // encoded in the value — which is what let an explicit -1 read as "argument omitted".
-    if inst.operands.len() >= 3 {
-        let keep_tail = ctx.next_label("substr_len_nonneg");
-        ctx.emitter.instruction("cmp x3, #0");                                  // is the requested length negative?
-        ctx.emitter.instruction(&format!("b.ge {}", keep_tail));                // no: it is an ordinary maximum
-        ctx.emitter.instruction("add x3, x2, x3");                              // php omits that many bytes from the END of the tail
-        ctx.emitter.instruction("cmp x3, #0");                                  // did the omission consume the whole tail?
-        ctx.emitter.instruction("csel x3, xzr, x3, lt");                        // then nothing is left
-        ctx.emitter.label(&keep_tail);
-        ctx.emitter.instruction("cmp x3, x2");                                  // compare requested length against the remaining tail
-        ctx.emitter.instruction("csel x2, x3, x2, lt");                         // shrink the result when the request is shorter
+    if has_length {
+        // A NEGATIVE length is php's "stop this many bytes before the end", counted from the
+        // remaining tail — not an error and not zero.
+        ctx.emitter.instruction("cmp x3, #0");                                  // check whether the requested substring length is negative
+        ctx.emitter.instruction(&format!("b.ge {}", len_done));                 // a non-negative length is already a byte count
+        ctx.emitter.instruction("add x3, x2, x3");                              // omit that many bytes from the end of the remaining tail
+        ctx.emitter.instruction("cmp x3, #0");                                  // check whether more bytes were omitted than remain
+        ctx.emitter.instruction("csel x3, xzr, x3, lt");                        // an over-long omission selects the empty string
+        ctx.emitter.label(len_done);
+        ctx.emitter.instruction("cmp x3, x2");                                  // compare requested length against the remaining tail length
+        ctx.emitter.instruction("csel x2, x3, x2, lt");                         // shrink the result length when the requested length is shorter
     }
-    ctx.emitter.label(len_done);
     Ok(())
 }
 
@@ -647,7 +651,10 @@ pub(super) fn lower_substr_x86_64(
     len_done: &str,
 ) -> Result<()> {
     load_substr_string_and_offset_x86_64(ctx, inst)?;
-    if inst.operands.len() >= 3 {
+    // See the AArch64 sibling: the "was a length passed" question is answered by the operand
+    // count, never by the length's own value.
+    let has_length = inst.operands.len() >= 3;
+    if has_length {
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov rcx, rax");                                // move the explicit substring length into the clamp register
@@ -665,20 +672,19 @@ pub(super) fn lower_substr_x86_64(
     ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add rdi, rax");                                    // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining byte length after the selected offset
-    // See the AArch64 half: the argument count decides, not a value smuggled in the register.
-    if inst.operands.len() >= 3 {
-        let keep_tail = ctx.next_label("substr_len_nonneg_x");
-        ctx.emitter.instruction("cmp rcx, 0");                                  // is the requested length negative?
-        ctx.emitter.instruction(&format!("jge {}", keep_tail));                 // no: it is an ordinary maximum
-        ctx.emitter.instruction("add rcx, rsi");                                // php omits that many bytes from the END of the tail
-        ctx.emitter.instruction("cmp rcx, 0");                                  // did the omission consume the whole tail?
-        ctx.emitter.instruction("mov r8, 0");
-        ctx.emitter.instruction("cmovl rcx, r8");                               // then nothing is left
-        ctx.emitter.label(&keep_tail);
-        ctx.emitter.instruction("cmp rcx, rsi");                                // compare requested length against the remaining tail
-        ctx.emitter.instruction("cmovl rsi, rcx");                              // shrink the result when the request is shorter
+    if has_length {
+        // A NEGATIVE length is php's "stop this many bytes before the end", counted from the
+        // remaining tail — not an error and not zero.
+        ctx.emitter.instruction("cmp rcx, 0");                                  // check whether the requested substring length is negative
+        ctx.emitter.instruction(&format!("jge {}", len_done));                  // a non-negative length is already a byte count
+        ctx.emitter.instruction("add rcx, rsi");                                // omit that many bytes from the end of the remaining tail
+        ctx.emitter.instruction("cmp rcx, 0");                                  // check whether more bytes were omitted than remain
+        ctx.emitter.instruction("mov r8, 0");                                   // materialize zero for the over-omission clamp
+        ctx.emitter.instruction("cmovl rcx, r8");                               // an over-long omission selects the empty string
+        ctx.emitter.label(len_done);
+        ctx.emitter.instruction("cmp rcx, rsi");                                // compare requested length against the remaining tail length
+        ctx.emitter.instruction("cmovl rsi, rcx");                              // shrink the result length when the requested length is shorter
     }
-    ctx.emitter.label(len_done);
     ctx.emitter.instruction("mov rax, rdi");                                    // return the selected substring pointer in the string result register
     ctx.emitter.instruction("mov rdx, rsi");                                    // return the selected substring length in the string result register
     Ok(())
@@ -839,7 +845,10 @@ pub(super) fn materialize_substr_replace_length_aarch64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov x7, x0");                                  // pass the explicit replacement length to the runtime helper
     } else {
-        abi::emit_load_int_immediate(ctx.emitter, "x7", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
+        // `i64::MAX`, not `-1`: the helper bounds the length by what remains, so a saturating
+        // value runs through the subject end by the ordinary path. `-1` cannot serve here — it
+        // is a real php length meaning "stop one byte before the end".
+        abi::emit_load_int_immediate(ctx.emitter, "x7", i64::MAX);
     }
     Ok(())
 }
@@ -854,7 +863,8 @@ pub(super) fn materialize_substr_replace_length_x86_64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov r8, rax");                                 // pass the explicit replacement length to the runtime helper
     } else {
-        abi::emit_load_int_immediate(ctx.emitter, "r8", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
+        // See the AArch64 sibling: `i64::MAX` runs through the subject end, `-1` is a real length.
+        abi::emit_load_int_immediate(ctx.emitter, "r8", i64::MAX);
     }
     Ok(())
 }

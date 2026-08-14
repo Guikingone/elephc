@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function fgets(resource $stream, int $length = null): mixed
+function fgets(resource $stream, mixed $length = null): mixed
 ```
 
 ## What the type checker enforces
@@ -49,6 +49,8 @@ function fgets(resource $stream, int $length = null): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

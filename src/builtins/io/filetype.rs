@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "filetype",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "filetype",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filetype,
     ),
-    summary: "Gets file type.",
-    php_manual: "function.filetype",
 }
 
 /// Returns `Union(Str, Bool)` reflecting that `filetype` can return a type string or `false`.

@@ -27,12 +27,6 @@ Sets access and modification time of a file.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `touch` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/touch.md).

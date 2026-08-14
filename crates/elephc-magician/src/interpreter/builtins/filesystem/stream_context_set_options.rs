@@ -10,9 +10,8 @@
 //!   the parity gate requires every static builtin to be visible to `eval()` by name.
 
 eval_builtin! {
-    name: "stream_context_set_options",
+    contract: "stream_context_set_options",
     area: Filesystem,
-    params: [context, options],
     direct: Filesystem,
     values: Filesystem,
 }

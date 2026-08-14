@@ -27,12 +27,6 @@ Pads an array to the specified length with a value.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_pad` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_pad.md).

@@ -21,19 +21,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "phpversion",
-    area: System,
-    params: [extension: Str = DefaultSpec::Null],
-    arity_error: "phpversion() takes 0 or 1 arguments",
-    returns: Mixed,
+    contract: "phpversion",
     check: check,
     semantics: phpversion_semantics(),
-    summary: "Returns the PHP version elephc targets, or an extension's version string.",
 }
 
 /// Builds semantics whose EIR result type matches the backend representation per arity.

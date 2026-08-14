@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "rawurlencode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "rawurlencode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::RawUrlEncode),
         crate::ir::Effects::PURE,
     ),
-    summary: "URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces).",
-    php_manual: "https://www.php.net/manual/en/function.rawurlencode.php",
 }

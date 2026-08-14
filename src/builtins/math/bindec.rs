@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "bindec",
-    area: Math,
-    params: [binary_string: Str],
-    returns: Mixed,
+    contract: "bindec",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Bindec,
     ),
-    summary: "Converts a binary string to its decimal number.",
-    php_manual: "https://www.php.net/manual/en/function.bindec.php",
 }
 
 /// Returns `PhpType::Union([Int, Float])` for a `bindec` call.

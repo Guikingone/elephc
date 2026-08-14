@@ -12,9 +12,8 @@
 //!   scan, and a base outside `2..=36` is php-src's `ValueError`, reported as a runtime fatal.
 
 eval_builtin! {
-    name: "base_convert",
+    contract: "base_convert",
     area: Math,
-    params: [num, from_base, to_base],
     direct: BaseConvert,
     values: BaseConvert,
 }

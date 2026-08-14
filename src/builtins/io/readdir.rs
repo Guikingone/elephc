@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "readdir",
-    area: Io,
-    params: [dir_handle: Mixed],
-    returns: Mixed,
+    contract: "readdir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Readdir,
     ),
-    summary: "Read entry from directory handle.",
-    php_manual: "function.readdir",
 }
 
 /// Validates the directory handle is a stream resource and returns `Union(Str, Bool)`.

@@ -7,29 +7,16 @@
 //! Key details:
 //! - The checked result is `string|false`; GCM consumes the by-value tag and optional AAD.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "openssl_decrypt",
-    area: String,
-    params: [
-        data: Str,
-        cipher_algo: Str,
-        passphrase: Str,
-        options: Int = DefaultSpec::Int(0),
-        iv: Str = DefaultSpec::Str(""),
-        tag: Mixed = DefaultSpec::Null,
-        aad: Str = DefaultSpec::Str("")
-    ],
-    returns: Mixed,
+    contract: "openssl_decrypt",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::OpensslDecrypt,
     ),
-    summary: "Decrypts data with a supported AES cipher.",
-    php_manual: "https://www.php.net/manual/en/function.openssl-decrypt.php",
 }
 
 /// Returns the PHP `string|false` result contract for decryption.

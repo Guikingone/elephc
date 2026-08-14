@@ -16,21 +16,16 @@
 //!   a simple type identifier and cannot express a union inline. Argument types are
 //!   inferred by the common registry dispatch path before the hook fires.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stripos",
-    area: String,
-    params: [haystack: Str, needle: Str, offset: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "stripos",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Stripos,
     ),
-    summary: "Finds the numeric position of the first case-insensitive occurrence of a substring.",
-    php_manual: "https://www.php.net/manual/en/function.stripos.php",
 }
 
 /// Returns `PhpType::Union([Int, Bool])` for a `stripos` call (position, or `false`).

@@ -14,21 +14,16 @@
 //!   a simple type identifier and cannot express a union inline. Argument types are
 //!   inferred by the common registry dispatch path before the hook fires.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "strrpos",
-    area: String,
-    params: [haystack: Str, needle: Str, offset: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "strrpos",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strrpos,
     ),
-    summary: "Finds the numeric position of the last occurrence of a substring.",
-    php_manual: "https://www.php.net/manual/en/function.strrpos.php",
 }
 
 /// Returns `PhpType::Union([Int, Bool])` for a `strrpos` call (position, or `false`).

@@ -9,21 +9,16 @@
 //! - The typed runtime target declares the zlib system-library requirement.
 //! - Argument types are inferred by the common registry dispatch path before the hook fires.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "gzuncompress",
-    area: String,
-    params: [data: Str, max_length: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "gzuncompress",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gzuncompress,
     ),
-    summary: "Uncompress a compressed string.",
-    php_manual: "https://www.php.net/manual/en/function.gzuncompress.php",
 }
 
 /// Returns `PhpType::Union([Str, Bool])` for a `gzuncompress` call.

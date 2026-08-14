@@ -315,6 +315,20 @@ pub enum RuntimeFnId {
     Atan,
     Atan2,
     BaseConvert,
+    BcAdd,
+    BcCeil,
+    BcComp,
+    BcDiv,
+    BcDivmod,
+    BcFloor,
+    BcMod,
+    BcMul,
+    BcPow,
+    BcPowmod,
+    BcRound,
+    BcScale,
+    BcSqrt,
+    BcSub,
     Ceil,
     Clamp,
     Cos,
@@ -636,6 +650,7 @@ impl RuntimeFnId {
             // `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation
             // the lowering builds.
             RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
@@ -785,6 +800,31 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcComp => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayCombine |
@@ -1067,6 +1107,20 @@ impl RuntimeFnId {
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
         match self {
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcComp
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcScale
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -1235,12 +1289,27 @@ impl RuntimeFnId {
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
         // for `Strpos` and `Strtr` below.
-        if matches!(self, RuntimeFnId::IntvalBase) {
+        if matches!(
+            self,
+            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+        ) {
             return BuiltinResultOwnership::NonHeap;
         }
         if matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::BcAdd
+                | RuntimeFnId::BcCeil
+                | RuntimeFnId::BcDiv
+                | RuntimeFnId::BcDivmod
+                | RuntimeFnId::BcFloor
+                | RuntimeFnId::BcMod
+                | RuntimeFnId::BcMul
+                | RuntimeFnId::BcPow
+                | RuntimeFnId::BcPowmod
+                | RuntimeFnId::BcRound
+                | RuntimeFnId::BcSqrt
+                | RuntimeFnId::BcSub
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
@@ -1672,6 +1741,20 @@ impl RuntimeFnId {
             RuntimeFnId::Asin => "asin",
             RuntimeFnId::Atan => "atan",
             RuntimeFnId::Atan2 => "atan2",
+            RuntimeFnId::BcAdd => "bcadd",
+            RuntimeFnId::BcCeil => "bcceil",
+            RuntimeFnId::BcComp => "bccomp",
+            RuntimeFnId::BcDiv => "bcdiv",
+            RuntimeFnId::BcDivmod => "bcdivmod",
+            RuntimeFnId::BcFloor => "bcfloor",
+            RuntimeFnId::BcMod => "bcmod",
+            RuntimeFnId::BcMul => "bcmul",
+            RuntimeFnId::BcPow => "bcpow",
+            RuntimeFnId::BcPowmod => "bcpowmod",
+            RuntimeFnId::BcRound => "bcround",
+            RuntimeFnId::BcScale => "bcscale",
+            RuntimeFnId::BcSqrt => "bcsqrt",
+            RuntimeFnId::BcSub => "bcsub",
             RuntimeFnId::Ceil => "ceil",
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",

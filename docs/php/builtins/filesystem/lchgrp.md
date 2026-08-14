@@ -26,12 +26,6 @@ Changes group ownership of a symlink.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `lchgrp` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/lchgrp.md).

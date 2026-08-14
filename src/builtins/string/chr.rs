@@ -16,13 +16,8 @@
 
 
 builtin! {
-    name: "chr",
-    area: String,
-    params: [codepoint: Int],
-    returns: Str,
+    contract: "chr",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chr,
     ),
-    summary: "Returns a one-character string from the given byte code point.",
-    php_manual: "https://www.php.net/manual/en/function.chr.php",
 }

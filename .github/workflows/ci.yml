@@ -22,6 +22,7 @@ env:
     -p elephc-tls
     -p elephc-pdo
     -p elephc-crypto
+    -p elephc-bcmath
     -p elephc-phar
     -p elephc-tz
     -p elephc-image
@@ -74,7 +75,8 @@ jobs:
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -143,7 +145,8 @@ jobs:
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -207,7 +210,8 @@ jobs:
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
         # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
-        # libelephc_crypto.a (hash / HMAC family), libelephc_phar.a (PHAR),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_phar.a (PHAR),
         # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
         # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_magician.a (eval),
         # and libelephc_web.a. Build
@@ -807,11 +811,16 @@ jobs:
             rust-builtins-docs-
 
       - name: Build the builtin docs exporter
-        # The docs generator reads the single-source `builtin!` registry plus the
-        # eval interpreter's `eval_builtin!` registry via the `gen_builtins`
-        # example (`extract.py` prefers the prebuilt binary at
-        # target/debug/examples/gen_builtins), so it must be built first.
+        # The exporter joins the shared contract to the AOT `builtin!` and
+        # Magician `eval_builtin!` bindings. `extract.py` prefers this prebuilt
+        # debug binary, so compile it before any documentation checks.
         run: cargo build --example gen_builtins
+
+      - name: Enforce builtin target architecture
+        run: python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
+
+      - name: Test builtin contract documentation pipeline
+        run: python3 -m unittest discover -s scripts/docs/elephc_builtins -p 'test_*.py'
 
       - name: Regenerate builtins documentation
         # Re-run the generator; the committed Markdown pages and JSON registry

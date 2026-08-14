@@ -9,9 +9,8 @@
 //!   rules before materialization.
 
 eval_builtin! {
-    name: "get_class_methods",
+    contract: "get_class_methods",
     area: Symbols,
-    params: [object_or_class],
     direct: Symbols,
     values: Symbols,
 }

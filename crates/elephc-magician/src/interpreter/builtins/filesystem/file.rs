@@ -12,13 +12,8 @@
 //!   plumbing, and dropping the parameter would put the two registries out of shape.
 
 eval_builtin! {
-    name: "file",
+    contract: "file",
     area: Filesystem,
-    params: [
-        filename,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        context = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

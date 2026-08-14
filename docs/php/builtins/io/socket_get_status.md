@@ -25,12 +25,6 @@ Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `socket_get_status` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/socket_get_status.md).

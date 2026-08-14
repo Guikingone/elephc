@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_column",
-    area: Array,
-    params: [array: Mixed, column_key: Mixed],
-    returns: Mixed,
+    contract: "array_column",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayColumn,
     ),
-    summary: "Returns the values from a single column of an array of arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-column.php",
 }
 
 /// Returns the extracted-column array type for an `array_column` call.

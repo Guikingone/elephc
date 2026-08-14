@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_walk",
+    contract: "array_walk",
     area: Array,
-    params: [array: by_ref, callback],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

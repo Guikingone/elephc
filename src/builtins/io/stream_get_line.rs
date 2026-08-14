@@ -10,21 +10,16 @@
 //!   stream has nothing left, and an empty string for a segment that is genuinely empty.
 //! - `ending` is optional (defaults to empty string). Arguments are pre-inferred by the registry.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_get_line",
-    area: Io,
-    params: [stream: Mixed, length: Int, ending: Str = DefaultSpec::Str("")],
-    returns: Mixed,
+    contract: "stream_get_line",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetLine,
     ),
-    summary: "Gets line from stream resource up to a given delimiter.",
-    php_manual: "function.stream-get-line",
 }
 
 /// Validates the stream resource argument and returns `Mixed` for the `string|false` EOF pattern.

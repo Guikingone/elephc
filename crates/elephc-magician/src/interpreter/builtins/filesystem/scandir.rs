@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory listing helper.
 
 eval_builtin! {
-    name: "scandir",
+    contract: "scandir",
     area: Filesystem,
-    params: [directory, sorting_order = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the chmod helper.
 
 eval_builtin! {
-    name: "chmod",
+    contract: "chmod",
     area: Filesystem,
-    params: [filename, permissions],
     direct: Filesystem,
     values: Filesystem,
 }

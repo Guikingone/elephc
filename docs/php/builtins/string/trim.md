@@ -2,7 +2,7 @@
 title: "trim()"
 description: "Strips whitespace (or other characters) from the beginning and end of a string."
 sidebar:
-  order: 466
+  order: 480
 ---
 
 ## trim()
@@ -25,12 +25,6 @@ Strips whitespace (or other characters) from the beginning and end of a string.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/trim.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/trim.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

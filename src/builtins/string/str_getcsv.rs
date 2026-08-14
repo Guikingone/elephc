@@ -16,24 +16,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "str_getcsv",
-    area: String,
-    params: [
-        string: Str,
-        separator: Str = DefaultSpec::Str(","),
-        enclosure: Str = DefaultSpec::Str("\""),
-        escape: Str = DefaultSpec::Str("\\")
-    ],
-    returns: Mixed,
+    contract: "str_getcsv",
     check: check,
     semantics: str_getcsv_semantics(),
-    summary: "Parse a CSV string into an array.",
-    php_manual: "function.str-getcsv",
 }
 
 /// Builds CSV-record semantics pinned to the boxed-`Mixed` row layout the runtime builds.

@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the substring hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "substr",
+    contract: "substr",
     area: String,
-    params: [string, offset, length = EvalBuiltinDefaultValue::Null],
     direct: Substr,
     values: Substr,
 }

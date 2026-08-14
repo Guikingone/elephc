@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "__elephc_phar_list_entries",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "__elephc_phar_list_entries",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharListEntries,
     ),
-    summary: "Lists the file paths within a PHAR archive.",
-    internal: true,
 }
 
 /// Links the `elephc_phar` bridge and returns `Array<Str>` for the entry path list.

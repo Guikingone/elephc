@@ -9,13 +9,8 @@
 //! - `socket_get_status` is an alias for `stream_get_meta_data`.
 
 builtin! {
-    name: "socket_get_status",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Mixed,
+    contract: "socket_get_status",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetMetaData,
     ),
-    summary: "Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_data).",
-    php_manual: "function.stream-get-meta-data",
 }

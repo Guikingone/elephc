@@ -11,13 +11,8 @@
 //!   `"1777777777777777777777"`; the shared `__rt_dec_to_base` renderer owns that contract.
 
 builtin! {
-    name: "decoct",
-    area: Math,
-    params: [num: Int],
-    returns: Str,
+    contract: "decoct",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Decoct,
     ),
-    summary: "Converts an integer to its octal string representation.",
-    php_manual: "https://www.php.net/manual/en/function.decoct.php",
 }

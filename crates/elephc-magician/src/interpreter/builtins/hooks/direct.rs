@@ -18,16 +18,12 @@ use super::super::super::{
 /// Direct expression-level dispatch hooks for migrated builtins.
 #[derive(Clone, Copy)]
 pub(in crate::interpreter) enum EvalDirectHook {
-    /// Dispatches `abs(...)`.
-    Abs,
     /// Dispatches `array_sum(...)` and `array_product(...)`.
     ArrayAggregate,
     /// Dispatches non-mutating array and iterator builtins.
     Array,
     /// Dispatches `array_flip(...)`.
     ArrayFlip,
-    /// Dispatches `array_key_exists(...)`.
-    ArrayKeyExists,
     /// Dispatches `array_pad(...)`.
     ArrayPad,
     /// Dispatches `array_keys(...)`.
@@ -46,16 +42,14 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the PHP BCMath procedural surface.
+    Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
-    /// Dispatches `boolval(...)`.
-    Boolval,
-    /// Dispatches `ceil(...)`.
-    Ceil,
     /// Dispatches `chr(...)`.
     Chr,
     /// Dispatches `chunk_split(...)`.
@@ -90,10 +84,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Deg2rad,
     /// Dispatches `exp(...)`.
     Exp,
-    /// Dispatches `fdiv(...)`.
-    Fdiv,
-    /// Dispatches `fmod(...)`.
-    Fmod,
     /// Dispatches `hypot(...)`.
     Hypot,
     /// Dispatches `printf(...)`.
@@ -106,16 +96,10 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Vprintf,
     /// Dispatches `vsprintf(...)`.
     Vsprintf,
-    /// Dispatches `floor(...)`.
-    Floor,
     /// Dispatches `gettype(...)`.
     Gettype,
-    /// Dispatches `floatval(...)`.
-    Floatval,
     /// Dispatches `intval(...)`.
     Intval,
-    /// Dispatches `is_array(...)`.
-    IsArray,
     /// Dispatches `is_bool(...)`.
     IsBool,
     /// Dispatches `is_double(...)`.
@@ -136,8 +120,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     IsLong,
     /// Dispatches `is_nan(...)`.
     IsNan,
-    /// Dispatches `is_null(...)`.
-    IsNull,
     /// Dispatches `is_numeric(...)`.
     IsNumeric,
     /// Dispatches `is_object(...)`.
@@ -200,8 +182,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ParseUrl,
     /// Dispatches `pi()`.
     Pi,
-    /// Dispatches `pow(...)`.
-    Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
     /// Dispatches `quotemeta(...)`.
@@ -272,16 +252,15 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Sin,
     /// Dispatches `sinh(...)`.
     Sinh,
-    /// Dispatches `sqrt(...)`.
-    Sqrt,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
     /// Dispatches string comparison builtins.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
-    /// Dispatches string search predicate builtins.
+    /// Dispatches `str_getcsv(...)`.
     StrGetcsv,
+    /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
     StringSplitJoin,
@@ -303,8 +282,6 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrRepeat,
     /// Dispatches `strval(...)`.
     Strval,
-    /// Dispatches `strrev(...)`.
-    Strrev,
     /// Dispatches `strtr(...)`.
     Strtr,
     /// Dispatches `strstr(...)`.
@@ -346,12 +323,10 @@ impl EvalDirectHook {
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
-            Self::Abs => eval_builtin_abs(args, context, scope, values),
             Self::Acos => eval_builtin_acos(args, context, scope, values),
             Self::ArrayAggregate
             | Self::Array
             | Self::ArrayFlip
-            | Self::ArrayKeyExists
             | Self::ArrayPad
             | Self::ArrayKeys
             | Self::ArrayRand
@@ -366,11 +341,10 @@ impl EvalDirectHook {
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
+            Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
-            Self::Boolval => eval_builtin_boolval(args, context, scope, values),
-            Self::Ceil => eval_builtin_ceil(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
             Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
@@ -388,15 +362,10 @@ impl EvalDirectHook {
             },
             Self::Deg2rad => eval_builtin_deg2rad(args, context, scope, values),
             Self::Exp => eval_builtin_exp(args, context, scope, values),
-            Self::Fdiv => eval_builtin_fdiv(args, context, scope, values),
             Self::Filesystem => eval_builtin_filesystem_call(name, args, context, scope, values),
-            Self::Fmod => eval_builtin_fmod(args, context, scope, values),
-            Self::Floor => eval_builtin_floor(args, context, scope, values),
             Self::Gettype => eval_builtin_gettype(args, context, scope, values),
             Self::Hypot => eval_builtin_hypot(args, context, scope, values),
-            Self::Floatval => eval_builtin_floatval(args, context, scope, values),
             Self::Intval => eval_builtin_intval(args, context, scope, values),
-            Self::IsArray => eval_builtin_is_array(args, context, scope, values),
             Self::IsBool => eval_builtin_is_bool(args, context, scope, values),
             Self::IsDouble => eval_builtin_is_double(args, context, scope, values),
             Self::IsFinite => eval_builtin_is_finite(args, context, scope, values),
@@ -407,7 +376,6 @@ impl EvalDirectHook {
             Self::IsIterable => eval_builtin_is_iterable(args, context, scope, values),
             Self::IsLong => eval_builtin_is_long(args, context, scope, values),
             Self::IsNan => eval_builtin_is_nan(args, context, scope, values),
-            Self::IsNull => eval_builtin_is_null(args, context, scope, values),
             Self::IsNumeric => eval_builtin_is_numeric(args, context, scope, values),
             Self::IsObject => eval_builtin_is_object(args, context, scope, values),
             Self::IsReal => eval_builtin_is_real(args, context, scope, values),
@@ -469,7 +437,6 @@ impl EvalDirectHook {
             Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
-            Self::Pow => eval_builtin_pow(args, context, scope, values),
             Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
             Self::QuotedPrintableEncode => {
                 eval_builtin_quoted_printable_encode(args, context, scope, values)
@@ -511,7 +478,6 @@ impl EvalDirectHook {
                 "stripslashes" => eval_builtin_stripslashes(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::Sqrt => super::super::math::eval_builtin_sqrt(args, context, scope, values),
             Self::Sprintf => eval_builtin_sprintf(args, context, scope, values),
             Self::Sscanf => eval_builtin_sscanf(args, context, scope, values),
             Self::StringCase => match name {
@@ -579,7 +545,6 @@ impl EvalDirectHook {
             },
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
-            Self::Strrev => eval_builtin_strrev(args, context, scope, values),
             Self::Strtr => eval_builtin_strtr(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "cos",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "cos",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Cos,
     ),
-    summary: "Returns the cosine of a number (radians).",
-    php_manual: "https://www.php.net/manual/en/function.cos.php",
 }

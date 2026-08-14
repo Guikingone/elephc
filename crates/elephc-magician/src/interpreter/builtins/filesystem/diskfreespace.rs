@@ -12,9 +12,8 @@
 //! - Both dispatch arms delegate straight to the canonical implementation.
 
 eval_builtin! {
-    name: "diskfreespace",
+    contract: "diskfreespace",
     area: Filesystem,
-    params: [directory],
     direct: Filesystem,
     values: Filesystem,
 }

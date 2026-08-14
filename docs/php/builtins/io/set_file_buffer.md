@@ -26,12 +26,6 @@ Sets file buffering on the given stream (alias of stream_set_write_buffer).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `set_file_buffer` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/set_file_buffer.md).

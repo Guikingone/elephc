@@ -8,12 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the unary stream helper.
 
 eval_builtin! {
-    name: "fgets",
+    contract: "fgets",
     area: Filesystem,
-    params: [
-        stream,
-        length = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

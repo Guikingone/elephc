@@ -10,13 +10,13 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **469 / 2030** (23%).
+Overall builtin coverage: **483 / 2030** (24%).
 
 ## Builtin coverage by PHP module
 
 | PHP module | Supported | Coverage | AOT | eval() |
 |---|---|---|---|---|
-| `bcmath` | 0 / 14 | 0% | 0 | 0 |
+| `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
 | `core` | 32 / 59 | 54% | 28 | 30 |
@@ -32,7 +32,7 @@ Overall builtin coverage: **469 / 2030** (23%).
 | `gd` | 0 / 103 | 0% | 0 | 0 |
 | `gettext` | 0 / 10 | 0% | 0 | 0 |
 | `gmp` | 0 / 51 | 0% | 0 | 0 |
-| `hash` | 9 / 15 | 60% | 5 | 9 |
+| `hash` | 9 / 15 | 60% | 9 | 9 |
 | `iconv` | 0 / 10 | 0% | 0 | 0 |
 | `intl` | 0 / 183 | 0% | 0 | 0 |
 | `json` | 5 / 5 | 100% | 5 | 5 |
@@ -128,7 +128,7 @@ elephc-specific builtins with no PHP equivalent (not counted in coverage above):
 | `class_get_attributes()` | Class | Returns an array of ReflectionAttribute objects for all attributes of a class. |
 | `clamp()` | Math | Clamps a value to be within a specified range. *(No PHP equivalent (not in PHP 8.4/8.5))* |
 | `log2()` | Math | Returns the base-2 logarithm of a number. *(No PHP equivalent (PHP has log(), log10(), log1p()))* |
-| `buffer_new()` | Misc |  |
+| `buffer_new()` | Pointer | Allocates a raw byte buffer. |
 | `ptr()` | Pointer | Returns a raw pointer to the given variable. |
 | `ptr_get()` | Pointer | Reads one machine word through a raw pointer and returns it as an integer. |
 | `ptr_is_null()` | Pointer | Returns true if the pointer is null. |

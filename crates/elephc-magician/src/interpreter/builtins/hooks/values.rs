@@ -19,8 +19,6 @@ use super::arity::{one_arg, three_args, two_args};
 /// Evaluated-argument dispatch hooks for migrated builtins.
 #[derive(Clone, Copy)]
 pub(in crate::interpreter) enum EvalValuesHook {
-    /// Dispatches `abs(...)`.
-    Abs,
     /// Dispatches `array_sum(...)` and `array_product(...)`.
     ArrayAggregate,
     /// Dispatches non-mutating array and iterator builtins.
@@ -29,8 +27,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayMutating,
     /// Dispatches `array_flip(...)`.
     ArrayFlip,
-    /// Dispatches `array_key_exists(...)`.
-    ArrayKeyExists,
     /// Dispatches `array_pad(...)`.
     ArrayPad,
     /// Dispatches `array_keys(...)`.
@@ -49,16 +45,14 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the PHP BCMath procedural surface.
+    Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
     Base64Encode,
     /// Dispatches `bin2hex(...)`.
     Bin2Hex,
-    /// Dispatches `boolval(...)`.
-    Boolval,
-    /// Dispatches `ceil(...)`.
-    Ceil,
     /// Dispatches `chr(...)`.
     Chr,
     /// Dispatches `chunk_split(...)`.
@@ -93,10 +87,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Deg2rad,
     /// Dispatches `exp(...)`.
     Exp,
-    /// Dispatches `fdiv(...)`.
-    Fdiv,
-    /// Dispatches `fmod(...)`.
-    Fmod,
     /// Dispatches `hypot(...)`.
     Hypot,
     /// Dispatches `printf(...)`.
@@ -109,16 +99,10 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Vprintf,
     /// Dispatches `vsprintf(...)`.
     Vsprintf,
-    /// Dispatches `floor(...)`.
-    Floor,
     /// Dispatches `gettype(...)`.
     Gettype,
-    /// Dispatches `floatval(...)`.
-    Floatval,
     /// Dispatches `intval(...)`.
     Intval,
-    /// Dispatches `is_array(...)`.
-    IsArray,
     /// Dispatches `is_bool(...)`.
     IsBool,
     /// Dispatches `is_double(...)`.
@@ -139,8 +123,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     IsLong,
     /// Dispatches `is_nan(...)`.
     IsNan,
-    /// Dispatches `is_null(...)`.
-    IsNull,
     /// Dispatches `is_numeric(...)`.
     IsNumeric,
     /// Dispatches `is_object(...)`.
@@ -203,8 +185,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ParseUrl,
     /// Dispatches `pi()`.
     Pi,
-    /// Dispatches `pow(...)`.
-    Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
     /// Dispatches `quotemeta(...)`.
@@ -277,16 +257,15 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Sin,
     /// Dispatches `sinh(...)`.
     Sinh,
-    /// Dispatches `sqrt(...)`.
-    Sqrt,
     /// Dispatches string ASCII case-conversion builtins.
     StringCase,
     /// Dispatches string comparison builtins.
     StringCompare,
     /// Dispatches string position builtins.
     StringPosition,
-    /// Dispatches string search predicate builtins.
+    /// Dispatches `str_getcsv(...)`.
     StrGetcsv,
+    /// Dispatches string search predicate builtins.
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
     StringSplitJoin,
@@ -308,8 +287,6 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrRepeat,
     /// Dispatches `strval(...)`.
     Strval,
-    /// Dispatches `strrev(...)`.
-    Strrev,
     /// Dispatches `strtr(...)`.
     Strtr,
     /// Dispatches `strstr(...)`.
@@ -350,13 +327,11 @@ impl EvalValuesHook {
         values: &mut impl RuntimeValueOps,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self {
-            Self::Abs => one_arg(evaluated_args, values, eval_abs_result),
             Self::Acos => one_arg(evaluated_args, values, eval_acos_result),
             Self::ArrayAggregate
             | Self::Array
             | Self::ArrayMutating
             | Self::ArrayFlip
-            | Self::ArrayKeyExists
             | Self::ArrayPad
             | Self::ArrayKeys
             | Self::ArrayRand
@@ -381,6 +356,7 @@ impl EvalValuesHook {
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
+            Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
                 [value] => eval_base64_decode_result(*value, false, values),
                 [value, strict] => {
@@ -391,8 +367,6 @@ impl EvalValuesHook {
             },
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
-            Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
-            Self::Ceil => one_arg(evaluated_args, values, eval_ceil_result),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::ChunkSplit => match evaluated_args {
                 [subject] => eval_chunk_split_result(*subject, None, None, values),
@@ -425,19 +399,14 @@ impl EvalValuesHook {
             }),
             Self::Deg2rad => one_arg(evaluated_args, values, eval_deg2rad_result),
             Self::Exp => one_arg(evaluated_args, values, eval_exp_result),
-            Self::Fdiv => two_args(evaluated_args, values, eval_fdiv_result),
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
-            Self::Floor => one_arg(evaluated_args, values, eval_floor_result),
-            Self::Fmod => two_args(evaluated_args, values, eval_fmod_result),
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
-            Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
             Self::Intval => match evaluated_args {
                 [value] => eval_intval_result(*value, None, values),
                 [value, base] => eval_intval_result(*value, Some(*base), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::IsArray => one_arg(evaluated_args, values, eval_is_array_result),
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
             Self::IsFinite => one_arg(evaluated_args, values, eval_is_finite_result),
@@ -450,7 +419,6 @@ impl EvalValuesHook {
             }),
             Self::IsLong => one_arg(evaluated_args, values, eval_is_long_result),
             Self::IsNan => one_arg(evaluated_args, values, eval_is_nan_result),
-            Self::IsNull => one_arg(evaluated_args, values, eval_is_null_result),
             Self::IsNumeric => one_arg(evaluated_args, values, eval_is_numeric_result),
             Self::IsObject => one_arg(evaluated_args, values, eval_is_object_result),
             Self::IsReal => one_arg(evaluated_args, values, eval_is_real_result),
@@ -551,7 +519,6 @@ impl EvalValuesHook {
                 eval_pi_result(values)
             }
             Self::Printf => eval_printf_result(evaluated_args, values),
-            Self::Pow => two_args(evaluated_args, values, eval_pow_result),
             Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
             Self::QuotedPrintableEncode => {
                 one_arg(evaluated_args, values, eval_quoted_printable_encode_result)
@@ -602,7 +569,6 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Sprintf => eval_sprintf_result(evaluated_args, values),
-            Self::Sqrt => one_arg(evaluated_args, values, eval_sqrt_result),
             Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {
                 "lcfirst" => eval_lcfirst_result(value, values),
@@ -720,7 +686,6 @@ impl EvalValuesHook {
             Self::Strval => one_arg(evaluated_args, values, |value, values| {
                 eval_strval_result(value, context, values)
             }),
-            Self::Strrev => one_arg(evaluated_args, values, eval_strrev_result),
             Self::Strtr => match evaluated_args {
                 [subject, from] => eval_strtr_result(*subject, *from, None, values),
                 [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),

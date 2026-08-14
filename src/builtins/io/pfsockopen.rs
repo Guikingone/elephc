@@ -12,27 +12,16 @@
 //!   in error messages so diagnostics name `pfsockopen` correctly.
 //! - Arguments are pre-inferred by the registry before the hook runs.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "pfsockopen",
-    area: Io,
-    params: [
-        hostname: Str,
-        port: Int,
-        ref(Int) error_code: Mixed = DefaultSpec::Null,
-        ref(Str) error_message: Mixed = DefaultSpec::Null,
-        timeout: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "pfsockopen",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Pfsockopen,
     ),
-    summary: "Open persistent Internet or Unix domain socket connection.",
-    php_manual: "function.pfsockopen",
 }
 
 /// Returns PHP's `resource|false` result. The by-reference outputs need no check here: their

@@ -8,17 +8,9 @@
 //! - TLS enablement is conservative: disabling succeeds for valid streams while
 //!   enabling reports false because eval does not manage TLS state.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_socket_enable_crypto",
+    contract: "stream_socket_enable_crypto",
     area: Filesystem,
-    params: [
-        stream,
-        enable,
-        crypto_method = EvalBuiltinDefaultValue::Null,
-        session_stream = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

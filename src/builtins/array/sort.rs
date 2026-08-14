@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "sort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "sort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sort,
     ),
-    summary: "Sorts an array in ascending order.",
-    php_manual: "https://www.php.net/manual/en/function.sort.php",
 }
 
 /// Validates the argument type for a `sort` call.

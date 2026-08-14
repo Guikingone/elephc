@@ -26,12 +26,6 @@ Set blocking mode on a socket stream (alias of stream_set_blocking).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `socket_set_blocking` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/socket_set_blocking.md).

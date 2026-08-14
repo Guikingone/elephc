@@ -10,9 +10,8 @@
 //!   `eval()` by name.
 
 eval_builtin! {
-    name: "fputs",
+    contract: "fputs",
     area: Filesystem,
-    params: [stream, data],
     direct: Filesystem,
     values: Filesystem,
 }

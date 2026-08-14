@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_key_last",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_key_last",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayKeyLast,
     ),
-    summary: "Gets the last key of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-key-last.php",
 }
 
 /// Validates that the argument is an array or Mixed and returns `Mixed`.

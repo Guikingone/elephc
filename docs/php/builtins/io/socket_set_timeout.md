@@ -27,12 +27,6 @@ Set timeout period on a socket stream (alias of stream_set_timeout).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `socket_set_timeout` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/socket_set_timeout.md).

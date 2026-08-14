@@ -14,19 +14,12 @@
 //!   answer from the early exit.
 
 eval_builtin! {
-    name: "str_getcsv",
+    contract: "str_getcsv",
     area: String,
-    params: [
-        string,
-        separator = EvalBuiltinDefaultValue::String(","),
-        enclosure = EvalBuiltinDefaultValue::String("\""),
-        escape = EvalBuiltinDefaultValue::String("\\")
-    ],
     direct: StrGetcsv,
     values: StrGetcsv,
 }
 
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::super::*;
 
 /// Evaluates PHP `str_getcsv()` over its subject and optional control characters.

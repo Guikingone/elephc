@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "opendir",
-    area: Io,
-    params: [directory: Str],
-    returns: Mixed,
+    contract: "opendir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Opendir,
     ),
-    summary: "Open directory handle.",
-    php_manual: "function.opendir",
 }
 
 /// Returns `Union(stream_resource, Bool)` for the directory open result.

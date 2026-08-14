@@ -22,19 +22,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_diff",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_diff",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayDiff,
     ),
-    summary: "Computes the difference of arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-diff.php",
 }
 
 /// Validates the first argument is an array and returns its key-preserving result type.

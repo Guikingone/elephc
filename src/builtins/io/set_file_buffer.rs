@@ -9,13 +9,8 @@
 //! - `set_file_buffer` is an alias for `stream_set_write_buffer`; both share the same runtime target.
 
 builtin! {
-    name: "set_file_buffer",
-    area: Io,
-    params: [stream: Mixed, size: Int],
-    returns: Int,
+    contract: "set_file_buffer",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetWriteBuffer,
     ),
-    summary: "Sets file buffering on the given stream (alias of stream_set_write_buffer).",
-    php_manual: "function.stream-set-write-buffer",
 }

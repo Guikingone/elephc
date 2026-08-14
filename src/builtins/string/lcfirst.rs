@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "lcfirst",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "lcfirst",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Lcfirst,
     ),
-    summary: "Lowercases the first character of a string.",
-    php_manual: "https://www.php.net/manual/en/function.lcfirst.php",
 }

@@ -9,21 +9,16 @@
 //!   because the array return type cannot be expressed through the scalar `returns:`
 //!   field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "scandir",
-    area: Io,
-    params: [directory: Str, sorting_order: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "scandir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Scandir,
     ),
-    summary: "Lists files and directories inside the specified path.",
-    php_manual: "function.scandir",
 }
 
 /// Returns `array|false`, the signature php documents.

@@ -25,12 +25,6 @@ Output all remaining data on a file pointer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `fpassthru` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fpassthru.md).

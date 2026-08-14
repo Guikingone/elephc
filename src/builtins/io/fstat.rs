@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fstat",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Mixed,
+    contract: "fstat",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fstat,
     ),
-    summary: "Gets information about a file using an open file pointer.",
-    php_manual: "function.fstat",
 }
 
 /// Validates `stream` is a stream resource and returns `assoc-array<mixed, int>|bool`.

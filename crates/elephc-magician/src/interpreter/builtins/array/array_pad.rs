@@ -22,9 +22,8 @@ use super::super::super::*;
 const ARRAY_PAD_MAX_LENGTH: i64 = 1_073_741_824;
 
 eval_builtin! {
-    name: "array_pad",
+    contract: "array_pad",
     area: Array,
-    params: [array, length, value],
     direct: ArrayPad,
     values: ArrayPad,
 }

@@ -8,13 +8,8 @@
 //! - `socket_set_blocking` is an alias for `stream_set_blocking`.
 
 builtin! {
-    name: "socket_set_blocking",
-    area: Io,
-    params: [stream: Mixed, enable: Bool],
-    returns: Bool,
+    contract: "socket_set_blocking",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetBlocking,
     ),
-    summary: "Set blocking mode on a socket stream (alias of stream_set_blocking).",
-    php_manual: "function.stream-set-blocking",
 }

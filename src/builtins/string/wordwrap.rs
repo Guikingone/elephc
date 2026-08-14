@@ -10,21 +10,10 @@
 //!   `cut_long_words` params with PHP-compatible defaults. The `break` param
 //!   uses the raw identifier `r#break` because `break` is a Rust keyword.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "wordwrap",
-    area: String,
-    params: [
-        string: Str,
-        width: Int = DefaultSpec::Int(75),
-        r#break: Str = DefaultSpec::Str("\n"),
-        cut_long_words: Bool = DefaultSpec::Bool(false)
-    ],
-    returns: Str,
+    contract: "wordwrap",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Wordwrap,
     ),
-    summary: "Wraps a string to a given number of characters.",
-    php_manual: "https://www.php.net/manual/en/function.wordwrap.php",
 }

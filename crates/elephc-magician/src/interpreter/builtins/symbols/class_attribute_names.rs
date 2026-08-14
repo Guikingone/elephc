@@ -9,9 +9,8 @@
 //!   `class_get_attributes()` lives here.
 
 eval_builtin! {
-    name: "class_attribute_names",
+    contract: "class_attribute_names",
     area: Symbols,
-    params: [class_name],
     direct: Symbols,
     values: Symbols,
 }

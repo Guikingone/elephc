@@ -8,18 +8,11 @@
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //! - result assembly for `preg_split()`.
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::*;
 
 eval_builtin! {
-    name: "preg_split",
+    contract: "preg_split",
     area: Regex,
-    params: [
-        pattern,
-        subject,
-        limit = EvalBuiltinDefaultValue::Int(-1),
-        flags = EvalBuiltinDefaultValue::Int(0),
-    ],
     direct: PregSplit,
     values: PregSplit,
 }

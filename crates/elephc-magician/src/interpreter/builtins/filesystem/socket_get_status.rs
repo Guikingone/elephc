@@ -12,9 +12,8 @@
 //! - Both dispatch arms delegate straight to the canonical implementation.
 
 eval_builtin! {
-    name: "socket_get_status",
+    contract: "socket_get_status",
     area: Filesystem,
-    params: [stream],
     direct: Filesystem,
     values: Filesystem,
 }

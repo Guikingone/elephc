@@ -8,16 +8,8 @@
 //! - Opened listeners enter eval's normal stream table.
 
 eval_builtin! {
-    name: "stream_socket_server",
+    contract: "stream_socket_server",
     area: Filesystem,
-    params: [
-        address,
-        error_code: by_ref = EvalBuiltinDefaultValue::Null,
-        error_message: by_ref = EvalBuiltinDefaultValue::Null,
-        flags = EvalBuiltinDefaultValue::Int(12),
-        context = EvalBuiltinDefaultValue::Null
-    ],
-    by_ref: [error_code, error_message],
     direct: Filesystem,
     values: Filesystem,
 }

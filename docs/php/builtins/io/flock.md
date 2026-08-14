@@ -27,12 +27,6 @@ Portable advisory file locking.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `flock` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/flock.md).

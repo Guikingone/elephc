@@ -17,17 +17,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "uksort",
-    area: Array,
-    params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    contract: "uksort",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Uksort,
     ),
-    summary: "Sorts an array by keys using a user-defined comparison function.",
-    php_manual: "https://www.php.net/manual/en/function.uksort.php",
 }
 
 /// Validates the array and comparator callback arguments for a `uksort` call.

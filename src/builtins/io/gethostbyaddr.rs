@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "gethostbyaddr",
-    area: Io,
-    params: [ip: Str],
-    returns: Mixed,
+    contract: "gethostbyaddr",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gethostbyaddr,
     ),
-    summary: "Gets the Internet host name corresponding to a given IP address.",
-    php_manual: "function.gethostbyaddr",
 }
 
 /// Returns `Union(Str, Bool)` reflecting PHP's false-on-failure return.

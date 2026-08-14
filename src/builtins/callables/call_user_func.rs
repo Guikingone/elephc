@@ -15,18 +15,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "call_user_func",
-    area: Callables,
-    params: [callback: Mixed],
-    variadic: "args",
-    returns: Mixed,
+    contract: "call_user_func",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CallUserFunc,
     ),
-    summary: "Calls a callback with the given arguments.",
-    php_manual: "function.call-user-func",
 }
 
 /// Delegates to `check_call_user_func` which lives in the checker's callables module.

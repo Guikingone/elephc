@@ -9,22 +9,17 @@
 //!   is a string literal or null (the runtime only handles AOT-known extension strings).
 //! - Returns the current extension string (`Str`) in all cases.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_autoload_extensions",
-    area: Spl,
-    params: [file_extensions: Mixed = DefaultSpec::Null],
-    returns: Str,
+    contract: "spl_autoload_extensions",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplAutoloadExtensions,
     ),
-    summary: "Register and return default file extensions for spl_autoload.",
-    php_manual: "https://www.php.net/manual/en/function.spl-autoload-extensions.php",
 }
 
 /// Validates the optional argument is a string literal or null; returns `Str`.

@@ -163,7 +163,6 @@ pub(in crate::interpreter) use stripslashes::*;
 pub(in crate::interpreter) use strlen::*;
 pub(in crate::interpreter) use stripos::*;
 pub(in crate::interpreter) use strpos::*;
-pub(in crate::interpreter) use strrev::*;
 pub(in crate::interpreter) use strripos::*;
 pub(in crate::interpreter) use strrpos::*;
 pub(in crate::interpreter) use strstr::*;
