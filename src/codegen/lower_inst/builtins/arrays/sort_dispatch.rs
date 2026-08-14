@@ -11,6 +11,10 @@ use super::*;
 use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 /// Loads an indexed array argument and calls the selected runtime aggregate helper.
+///
+/// HASH storage is aggregated through the same helpers: php's `array_sum()`/`array_product()`
+/// walk the values with `ZEND_HASH_FOREACH_VAL` (ext/standard/array.c) and never read a key, so
+/// a hash aggregates exactly like the indexed array of its values.
 pub(super) fn lower_indexed_array_aggregate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -21,6 +25,18 @@ pub(super) fn lower_indexed_array_aggregate(
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
     let array_ty = ctx.value_php_type(array)?;
+    if let PhpType::AssocArray { value, .. } = array_ty.codegen_repr() {
+        return lower_hash_aggregate_via_values(
+            ctx,
+            inst,
+            name,
+            scalar_helper,
+            mixed_helper,
+            array,
+            &array_ty.codegen_repr(),
+            &value.codegen_repr(),
+        );
+    }
     let helper = match array_ty.codegen_repr() {
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
             .ok_or_else(|| {
@@ -40,6 +56,59 @@ pub(super) fn lower_indexed_array_aggregate(
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
     }
     abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
+/// Aggregates HASH storage by materializing its values and reusing the packed helper.
+///
+/// The values are copied into a temporary indexed array — the route `implode()` already takes
+/// for hash storage — so the per-element rules stay in the one packed helper instead of being
+/// restated for the hash layout, and both architectures are covered without a second assembly
+/// body. The temporary is owned HERE: it holds the same payload pointers the hash entries
+/// carry, so it is deep-freed around the aggregate's integer result, which the free helper's
+/// own argument register (`x0`/`rax`, NOT `rdi`) would otherwise destroy.
+///
+/// The supported value types are exactly the packed ones, and an unsupported value keeps the
+/// refusal worded with the ORIGINAL hash type: reporting the materialized `Array(Mixed)`
+/// instead would name a type the source never wrote.
+#[allow(clippy::too_many_arguments)]
+fn lower_hash_aggregate_via_values(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    scalar_helper: &str,
+    mixed_helper: Option<&str>,
+    array: ValueId,
+    array_ty: &PhpType,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let unsupported =
+        || CodegenIrError::unsupported(format!("{} for PHP type {:?}", name, array_ty));
+    let helper = match value_ty {
+        PhpType::Mixed => mixed_helper.ok_or_else(unsupported)?,
+        PhpType::Int | PhpType::Bool | PhpType::Never | PhpType::Void => scalar_helper,
+        _ => return Err(unsupported()),
+    };
+    ctx.load_value_to_result(array)?;
+    values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // preserve the temporary values array across the aggregate call
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the materialized values array as the runtime helper argument
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_push_reg(ctx.emitter, result_reg);                                // preserve the aggregate result across the deep free
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx
+            .emitter
+            .instruction(&format!("ldr {}, [sp, #16]", result_reg)),             // reload the temporary values array pointer
+        Arch::X86_64 => ctx
+            .emitter
+            .instruction(&format!("mov {}, QWORD PTR [rsp + 16]", result_reg)),  // reload the temporary values array pointer
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_free_deep");
+    abi::emit_pop_reg(ctx.emitter, result_reg);                                 // restore the aggregate result
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the temporary values array slot
     store_if_result(ctx, inst)
 }
 
