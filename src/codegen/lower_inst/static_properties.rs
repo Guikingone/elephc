@@ -951,7 +951,9 @@ fn static_property_is_visible(
         Visibility::Private => super::current_method_class(ctx)
             .is_ok_and(|current| current == declaring_class),
         Visibility::Protected => super::current_method_class(ctx).is_ok_and(|current| {
-            current == declaring_class || is_same_or_descendant(ctx, current, declaring_class)
+            current == declaring_class
+                || is_same_or_descendant(ctx, current, declaring_class)
+                || is_same_or_descendant(ctx, declaring_class, current)
         }),
     }
 }

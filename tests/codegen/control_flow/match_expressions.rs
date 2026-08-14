@@ -19,6 +19,29 @@
 
 use super::*;
 
+/// Verifies boolean-subject match arms narrow an object parameter on the matching `instanceof`
+/// edge before validating the arm's typed function call.
+#[test]
+fn test_match_true_instanceof_arms_narrow_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+        class First {}
+        class Second {}
+        function first(First $value): string { return "first"; }
+        function second(Second $value): string { return "second"; }
+        function describe(object $value): string {
+            return match (true) {
+                $value instanceof First => first($value),
+                $value instanceof Second => second($value),
+                default => "other",
+            };
+        }
+        echo describe(new First()), "|", describe(new Second());
+        "#,
+    );
+    assert_eq!(out, "first|second");
+}
+
 /// Verifies a trailing comma after match conditions still reaches the assignment result arm.
 #[test]
 fn test_match_condition_list_with_trailing_comma() {

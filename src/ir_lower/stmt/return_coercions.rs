@@ -16,6 +16,7 @@ pub(super) fn coerce_to_return_type(
     span: Option<Span>,
 ) -> LoweredValue {
     let return_php_type = ctx.return_php_type.clone();
+    let value = guard_generic_object_nominal_return(ctx, value, &return_php_type, span);
     let value = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
         ctx,
         value,
@@ -47,6 +48,57 @@ pub(super) fn coerce_to_return_type(
             span,
         ),
         IrType::Void => value,
+    }
+}
+
+/// Inserts the runtime class guard required when bare `object` crosses a nominal return boundary.
+fn guard_generic_object_nominal_return(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    return_type: &PhpType,
+    span: Option<Span>,
+) -> LoweredValue {
+    let PhpType::Object(source_name) = ctx.builder.value_php_type(value.value).codegen_repr() else {
+        return value;
+    };
+    if !source_name.trim_start_matches('\\').is_empty() {
+        return value;
+    }
+    let Some(target_name) = nominal_object_return_target(return_type) else {
+        return value;
+    };
+    let data = ctx.intern_string(&target_name);
+    ctx.emit_value(
+        Op::RuntimeCall,
+        vec![value.value],
+        Some(Immediate::Data(data)),
+        PhpType::Object(target_name),
+        effects_lookup::runtime_effects(),
+        span,
+    )
+}
+
+/// Extracts the single named object accepted by an object or nullable-object return type.
+fn nominal_object_return_target(return_type: &PhpType) -> Option<String> {
+    match return_type {
+        PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => Some(name.clone()),
+        PhpType::Union(members) => {
+            let mut target = None;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(name) if !name.trim_start_matches('\\').is_empty() => {
+                        if target.as_ref().is_some_and(|existing| existing != name) {
+                            return None;
+                        }
+                        target = Some(name.clone());
+                    }
+                    _ => return None,
+                }
+            }
+            target
+        }
+        _ => None,
     }
 }
 
@@ -104,6 +156,44 @@ pub(super) fn coerce_container_to_return_type(
 ) -> Option<LoweredValue> {
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     let return_ty = ctx.return_php_type.codegen_repr();
+    if let (
+        PhpType::AssocArray {
+            key,
+            value: source_value,
+        },
+        PhpType::Array(return_element),
+    ) = (&source_ty, &return_ty)
+    {
+        if return_element.codegen_repr() == PhpType::Mixed {
+            // PHP's bare `array` return contract accepts both indexed and associative layouts.
+            // Widen concrete hash slots first, then only retype the same runtime container as
+            // the generic array contract; converting the hash itself to indexed storage would
+            // discard string keys and change iteration order.
+            let source = if source_value.codegen_repr() == PhpType::Mixed {
+                value
+            } else {
+                ctx.emit_value(
+                    Op::HashToMixed,
+                    vec![value.value],
+                    None,
+                    PhpType::AssocArray {
+                        key: key.clone(),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    Op::HashToMixed.default_effects(),
+                    span,
+                )
+            };
+            return Some(ctx.emit_value(
+                Op::Move,
+                vec![source.value],
+                None,
+                return_ty,
+                Op::Move.default_effects(),
+                span,
+            ));
+        }
+    }
     let op = match (source_ty, return_ty.clone()) {
         (PhpType::Array(source_elem), PhpType::Array(return_elem))
             if source_elem.codegen_repr() != PhpType::Mixed

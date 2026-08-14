@@ -62,6 +62,22 @@ pub(super) fn require_array_filter_result_type(source_elem_ty: &PhpType, result_
     }
 }
 
+/// Verifies associative filtering preserves the source key and value metadata.
+pub(super) fn require_assoc_array_filter_result_type(
+    source_ty: &PhpType,
+    result_ty: &PhpType,
+) -> Result<()> {
+    if result_ty.codegen_repr() == source_ty.codegen_repr()
+        && matches!(source_ty.codegen_repr(), PhpType::AssocArray { .. })
+    {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_filter associative result PHP type {:?} for source PHP type {:?}",
+        result_ty, source_ty
+    )))
+}
+
 /// Verifies gradual `array_filter()` keeps its runtime-dispatched result boxed as `Mixed`.
 pub(super) fn require_mixed_array_filter_result_type(result_ty: &PhpType) -> Result<()> {
     if matches!(result_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
@@ -97,17 +113,22 @@ pub(super) fn array_filter_callback_arg_types(
     ctx: &FunctionContext<'_>,
     mode: Option<ValueId>,
     elem_ty: &PhpType,
-    dynamic_keys: bool,
+    boxed_args: bool,
 ) -> Result<Option<Vec<PhpType>>> {
-    let key_ty = if dynamic_keys {
+    let elem_ty = if boxed_args {
+        PhpType::Mixed
+    } else {
+        elem_ty.codegen_repr()
+    };
+    let key_ty = if boxed_args {
         PhpType::Mixed
     } else {
         PhpType::Int
     };
     match static_array_filter_mode(ctx, mode)? {
-        Some(1) => Ok(Some(vec![elem_ty.codegen_repr(), key_ty])),
+        Some(1) => Ok(Some(vec![elem_ty, key_ty])),
         Some(2) => Ok(Some(vec![key_ty])),
-        Some(_) => Ok(Some(vec![elem_ty.codegen_repr()])),
+        Some(_) => Ok(Some(vec![elem_ty])),
         None => Ok(None),
     }
 }

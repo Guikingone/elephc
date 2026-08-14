@@ -261,6 +261,9 @@ impl Checker {
         context: &str,
     ) -> Result<(), CompileError> {
         if let Some(default_expr) = default_expr {
+            if matches!(default_expr.kind, ExprKind::ScopedConstantAccess { .. }) {
+                return Ok(());
+            }
             let default_ty = infer_expr_type_syntactic(default_expr);
             if matches!(expected_ty, PhpType::Object(_)) && matches!(default_ty, PhpType::Object(_))
             {

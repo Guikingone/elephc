@@ -9,6 +9,52 @@
 
 use crate::support::*;
 
+/// Verifies that name resolution descends into an assignment used as a condition.
+///
+/// The closure parameter and method call sit below `!($value = ...)`; leaving an assignment
+/// opaque would retain the source-local `Item` spelling instead of the canonical class name.
+#[test]
+fn test_namespaced_types_inside_conditional_assignment_are_resolved() {
+    let source = r#"<?php
+namespace Example;
+
+final class Item {}
+
+final class Collection {
+    private array $items;
+
+    public function __construct() {
+        $this->items = ['first' => new Item()];
+    }
+
+    private function accepts(Item $item): bool {
+        return true;
+    }
+
+    public function filtered(): array {
+        if (!$filtered = array_filter(
+            $this->items,
+            fn (Item $item) => $this->accepts($item)
+        )) {
+            return [];
+        }
+
+        return $filtered;
+    }
+}
+
+echo count((new Collection())->filtered());
+"#;
+    let dir = make_cli_test_dir("namespaced-conditional-assignment");
+    let _ = compile_source_to_asm_with_options(
+        source,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+}
+
 /// Verifies `use function` aliasing and global builtin resolution inside a namespaced file.
 /// Uses a two-namespace fixture: `Demo\Util\render` aliased as `paint` and global `strlen`.
 /// Checks that the alias resolves correctly and global builtins are accessible without prefix.

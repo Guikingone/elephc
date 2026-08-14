@@ -137,6 +137,28 @@ echo $m["x"] + $m["y"];
     assert_eq!(out, "30");
 }
 
+/// Verifies an append dynamically dispatches after a Mixed-key write promotes indexed storage.
+#[test]
+fn test_array_append_after_dynamic_string_key_promotion() {
+    let out = compile_and_run(
+        r#"<?php
+$source = [2 => "first", "named" => "second", 5 => "third"];
+$result = [];
+foreach ($source as $key => $value) {
+    if (is_string($key)) {
+        $result[$key] = $value;
+    } else {
+        $result[] = $value;
+    }
+}
+foreach ($result as $key => $value) {
+    echo $key, "=>", $value, "|";
+}
+"#,
+    );
+    assert_eq!(out, "0=>first|named=>second|1=>third|");
+}
+
 /// Compiles a PHP script that creates an assoc array, overwrites its sole key, and verifies the new value is returned.
 #[test]
 fn test_assoc_array_update() {
@@ -425,6 +447,30 @@ echo $result[0][0] . "|" . $result[1][0] . "|" . $result["meta"][0];
 "#,
     );
     assert_eq!(out, "10|20|30");
+}
+
+/// Verifies boxed union operands dispatch `+` between PHP array union and numeric addition.
+#[test]
+fn test_gradual_add_dispatches_array_union_and_numeric_paths() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_array(bool $array, string $key): array|false {
+    return $array ? [$key => $key] : false;
+}
+
+$union = gradual_array(true, 'left') + gradual_array(true, 'right');
+foreach ($union as $key => $value) {
+    echo $key . '=' . $value . ';';
+}
+echo gradual_array(false, 'left') + gradual_array(false, 'right');
+try {
+    gradual_array(true, 'left') + gradual_array(false, 'right');
+} catch (TypeError $error) {
+    echo '|type-error';
+}
+"#,
+    );
+    assert_eq!(out, "left=left;right=right;0|type-error");
 }
 
 /// Compiles a PHP script that performs array union inside a function with indexed left and assoc right, then iterates via foreach, verifying key/value preservation.

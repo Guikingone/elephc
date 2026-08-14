@@ -90,12 +90,12 @@ fn test_error_class_implements_wrong_args() {
     );
 }
 
-/// Verifies that error class implements requires literal or object.
+/// Verifies that class relation helpers reject a statically known scalar target.
 #[test]
-fn test_error_class_implements_requires_literal_or_object() {
+fn test_error_class_implements_rejects_known_scalar_target() {
     expect_error(
-        r#"<?php $name = "DateTime"; class_implements($name);"#,
-        "class_implements() first argument must be an object or string literal in AOT mode",
+        r#"<?php class_implements(42);"#,
+        "class_implements() first argument must be an object or string",
     );
 }
 

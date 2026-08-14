@@ -437,17 +437,18 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
 /// Builds the complete shared descriptor for one PHP internal-array-pointer builtin.
 ///
 /// The six pointer builtins are lowered as a unit by
-/// `BuiltinArgumentLowering::ArrayInternalPointer`, which resolves the receiver to a
-/// plain local, pairs it with that local's hidden cursor slot, and emits the typed
-/// `ArrayPtrSeek` / `ArrayPtrKey` / `ArrayPtrValue` runtime calls itself. Two
+/// `BuiltinArgumentLowering::ArrayInternalPointer`, which pairs a plain-local receiver
+/// with its hidden cursor slot or gives a temporary expression receiver a call-local
+/// cursor, then emits the typed `ArrayPtrSeek` / `ArrayPtrKey` / `ArrayPtrValue` runtime
+/// calls itself. Two
 /// consequences are encoded here:
 ///
 /// - `runtime_functions` stays `None`. The declared arity is one PHP argument, but the
 ///   emitted runtime calls carry two or three operands; publishing an inventory entry
 ///   would bind that one-argument arity onto the runtime signature and fail EIR
 ///   validation.
-/// - `callable` is `StaticOnly`. A runtime-selected name has no receiver expression, so
-///   there is no local to attach a cursor to.
+/// - `callable` is `StaticOnly`. Runtime-selected dispatch does not carry the extra cursor
+///   operand required by these typed targets.
 pub const fn array_pointer_semantics(
     op: ArrayPointerOp,
     target: RuntimeFnId,
@@ -463,7 +464,7 @@ pub const fn array_pointer_semantics(
         runtime_functions: BuiltinRuntimeFunctions::None,
         argument_lowering: BuiltinArgumentLowering::ArrayInternalPointer(op),
         callable: BuiltinCallablePolicy::StaticOnly(
-            "the internal array pointer needs a named array variable receiver",
+            "the internal array pointer needs specialized cursor argument lowering",
         ),
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
     }

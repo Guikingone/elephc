@@ -223,6 +223,10 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
+        Op::StrBitAnd | Op::StrBitOr | Op::StrBitXor => {
+            strings::lower_str_bitwise(ctx, &inst)
+        }
+        Op::StrSetOffset => strings::lower_str_set_offset(ctx, &inst),
         Op::StrLen => strings::lower_str_len(ctx, &inst),
         Op::StrCharAt => strings::lower_str_char_at(ctx, &inst),
         Op::StrPersist => strings::lower_str_persist(ctx, &inst),

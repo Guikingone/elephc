@@ -589,20 +589,33 @@ impl Checker {
                 // The variadic occupies the last `declared_params` slot, so gating on it keeps
                 // the strict rejection off builtin variadics, whose registry-derived parameter
                 // types the checker does not otherwise consume.
-                if sig.declared_params.last().copied().unwrap_or(false) {
-                    self.require_strict_types_param_binding(
+                let declared_variadic = sig.declared_params.last().copied().unwrap_or(false);
+                if coercive_param_binding && declared_variadic {
+                    self.require_bound_param_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                        None,
+                        sig.ref_params.last().copied().unwrap_or(false),
+                    )?;
+                } else {
+                    if declared_variadic {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
+                    self.require_compatible_arg_type(
                         expected_ty,
                         &actual_ty,
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
                 }
-                self.require_compatible_arg_type(
-                    expected_ty,
-                    &actual_ty,
-                    arg.span,
-                    &format!("{} variadic parameter ${}", callee_desc, vname),
-                )?;
             }
             param_idx += 1;
         }

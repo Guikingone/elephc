@@ -199,6 +199,77 @@ fn test_object_type_declarations_do_not_trigger_autoload() {
     assert_eq!(out, "done");
 }
 
+/// Verifies an autoload candidate with an unavailable direct parent stays absent instead of
+/// poisoning the closed-world class schema when the requested class is only probed.
+#[test]
+fn test_autoload_candidate_with_missing_parent_remains_absent() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Feature.php",
+                "<?php\nnamespace Optional;\nclass Feature extends MissingParent {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho class_exists(Optional\\Feature::class) ? 'loaded' : 'absent';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "absent");
+}
+
+/// Verifies a candidate extending a supported built-in class is retained and loaded normally.
+#[test]
+fn test_autoload_candidate_with_builtin_parent_loads() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Local\\":"src/"}}}"#,
+            ),
+            (
+                "src/File.php",
+                "<?php\nnamespace Local;\nclass File extends \\SplFileInfo {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\n$file = new Local\\File(__FILE__);\necho 'loaded';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
+}
+
+/// Verifies a missing-parent candidate referenced only from a dormant function body remains a
+/// runtime concern and does not make an otherwise reachable program fail schema construction.
+#[test]
+fn test_dormant_function_can_reference_unbindable_autoload_candidate() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Feature.php",
+                "<?php\nnamespace Optional;\nclass Feature extends MissingParent {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nfunction dormant() { return new Optional\\Feature(); }\necho 'ok';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies that incremental-hash usage found only after PSR-4 expansion receives the late hash
 /// prelude and that bare namespaced `hash_*` calls fall back to its global declarations.
 #[test]
@@ -817,6 +888,35 @@ fn test_class_triggered_autoload_executes_before_first_use() {
         "main.php",
     );
     assert_eq!(out, "loadmain");
+}
+
+/// Verifies a referenced attribute class is available to reflection-backed instantiation.
+#[test]
+fn test_attribute_class_triggers_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "module.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Marker.php",
+                "<?php\nnamespace App;\n#[\\Attribute]\nclass Marker { public function __construct(public string $label) {} }\n",
+            ),
+            (
+                "main.php",
+                r#"<?php
+namespace App;
+#[Marker("loaded")]
+class Target {}
+$attribute = (new \ReflectionClass(Target::class))->getAttributes()[0]->newInstance();
+echo $attribute->label;
+"#,
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "loaded");
 }
 
 /// Verifies autoload classmap explicit file.

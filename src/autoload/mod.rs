@@ -24,8 +24,7 @@ use std::path::{Path, PathBuf};
 pub use registry::Registry;
 
 use crate::errors::CompileError;
-use crate::parser::ast::Program;
-use crate::parser::ast::Stmt;
+use crate::parser::ast::{Program, Stmt, StmtKind};
 use crate::span::Span;
 
 use walk::{collect_declared_fqns, collect_reference_points};
@@ -70,7 +69,11 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "Exception",
     "Fiber",
     "FiberError",
+    "FilesystemIterator",
+    "FilterIterator",
     "Generator",
+    "GlobIterator",
+    "InfiniteIterator",
     "InternalIterator",
     "InvalidArgumentException",
     "Iterator",
@@ -88,13 +91,20 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "OuterIterator",
     "OverflowException",
     "ParentIterator",
+    "Phar",
+    "PharData",
+    "PharFileInfo",
     "RangeException",
     "RecursiveArrayIterator",
     "RecursiveCallbackFilterIterator",
+    "RecursiveCachingIterator",
+    "RecursiveDirectoryIterator",
     "RecursiveFilterIterator",
     "RecursiveIterator",
     "RecursiveIteratorIterator",
+    "RecursiveRegexIterator",
     "RecursiveTreeIterator",
+    "RegexIterator",
     "ReflectionAttribute",
     "ReflectionClass",
     "ReflectionObject",
@@ -112,11 +122,19 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "SeekableIterator",
     "SortDirection",
     "SplDoublyLinkedList",
+    "SplFileInfo",
+    "SplFileObject",
     "SplFixedArray",
+    "SplHeap",
+    "SplMaxHeap",
+    "SplMinHeap",
     "SplObserver",
+    "SplObjectStorage",
+    "SplPriorityQueue",
     "SplQueue",
     "SplStack",
     "SplSubject",
+    "SplTempFileObject",
     "Stringable",
     "Throwable",
     "Traversable",
@@ -124,6 +142,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "UnderflowException",
     "UnexpectedValueException",
     "ValueError",
+    "WeakMap",
     "stdClass",
 ];
 
@@ -230,6 +249,9 @@ pub fn run_collecting_included_with_defines_and_sources(
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes, loaded_sources) =
                         load_autoloaded_file(&canonical, base_dir, defines)?;
+                    if !autoload_target_can_bind(&loaded, &fqn, &declared, registry) {
+                        continue;
+                    }
                     nested_includes.extend(loaded_includes);
                     declaration_sources.extend(loaded_sources);
                     insertions.push((stmt_idx, loaded));
@@ -280,6 +302,115 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
             if path.is_file() {
                 return Some(path);
             }
+        }
+    }
+    None
+}
+
+/// Returns whether the source selected for an autoload demand can bind that class-like symbol.
+///
+/// PHP loads a candidate file before it binds the requested declaration. A class whose direct
+/// parent, interface, or used trait cannot itself be found therefore remains absent; code guarded
+/// by an existence probe can continue, while an actually reached construction still fails through
+/// the compiler's normal absent-class path. Keeping such a declaration out of the closed world also
+/// prevents an eagerly inspected but dormant file from turning a runtime-conditional failure into a
+/// whole-program schema error.
+fn autoload_target_can_bind(
+    program: &Program,
+    target: &str,
+    declared: &HashSet<String>,
+    registry: &Registry,
+) -> bool {
+    let Some(dependencies) = direct_binding_dependencies(program, target) else {
+        return true;
+    };
+    let local = collect_declared_fqns(program)
+        .into_iter()
+        .map(|name| crate::names::php_symbol_key(&name))
+        .collect::<HashSet<_>>();
+    let available = declared
+        .iter()
+        .map(|name| crate::names::php_symbol_key(name))
+        .collect::<HashSet<_>>();
+
+    dependencies.into_iter().all(|dependency| {
+        let key = crate::names::php_symbol_key(&dependency);
+        local.contains(&key)
+            || available.contains(&key)
+            || resolve_class(&dependency, registry).is_some()
+    })
+}
+
+/// Finds the direct class-like dependencies of the requested declaration in one loaded source.
+fn direct_binding_dependencies(program: &Program, target: &str) -> Option<Vec<String>> {
+    let target_key = crate::names::php_symbol_key(target.trim_start_matches('\\'));
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl {
+                name,
+                extends,
+                implements,
+                trait_uses,
+                ..
+            } if crate::names::php_symbol_key(name.trim_start_matches('\\')) == target_key => {
+                let mut dependencies = Vec::new();
+                if let Some(parent) = extends {
+                    dependencies.push(parent.as_canonical().trim_start_matches('\\').to_string());
+                }
+                dependencies.extend(
+                    implements
+                        .iter()
+                        .map(|name| name.as_canonical().trim_start_matches('\\').to_string()),
+                );
+                dependencies.extend(trait_uses.iter().flat_map(|trait_use| {
+                    trait_use.trait_names.iter().map(|name| {
+                        name.as_canonical().trim_start_matches('\\').to_string()
+                    })
+                }));
+                return Some(dependencies);
+            }
+            StmtKind::InterfaceDecl { name, extends, .. }
+                if crate::names::php_symbol_key(name.trim_start_matches('\\')) == target_key =>
+            {
+                return Some(
+                    extends
+                        .iter()
+                        .map(|name| name.as_canonical().trim_start_matches('\\').to_string())
+                        .collect(),
+                );
+            }
+            StmtKind::TraitDecl {
+                name, trait_uses, ..
+            } if crate::names::php_symbol_key(name.trim_start_matches('\\')) == target_key => {
+                return Some(
+                    trait_uses
+                        .iter()
+                        .flat_map(|trait_use| {
+                            trait_use.trait_names.iter().map(|name| {
+                                name.as_canonical().trim_start_matches('\\').to_string()
+                            })
+                        })
+                        .collect(),
+                );
+            }
+            StmtKind::EnumDecl {
+                name, implements, ..
+            } if crate::names::php_symbol_key(name.trim_start_matches('\\')) == target_key => {
+                return Some(
+                    implements
+                        .iter()
+                        .map(|name| name.as_canonical().trim_start_matches('\\').to_string())
+                        .collect(),
+                );
+            }
+            StmtKind::NamespaceBlock { body, .. }
+            | StmtKind::Synthetic(body)
+            | StmtKind::IncludeOnceGuard { body, .. } => {
+                if let Some(dependencies) = direct_binding_dependencies(body, target) {
+                    return Some(dependencies);
+                }
+            }
+            _ => {}
         }
     }
     None

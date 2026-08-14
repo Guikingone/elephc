@@ -65,6 +65,12 @@ impl Checker {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
                     return self.infer_array_union_type(&lt, &rt, left, right, expr);
                 }
+                if is_runtime_add_operand_type(self, &lt)
+                    && is_runtime_add_operand_type(self, &rt)
+                    && (matches!(&lt, PhpType::Union(_)) || matches!(&rt, PhpType::Union(_)))
+                {
+                    return Ok(PhpType::Mixed);
+                }
                 let lt_ok = is_numeric_operand_type(self, &lt);
                 let rt_ok = is_numeric_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
@@ -126,14 +132,10 @@ impl Checker {
                 Ok(PhpType::Bool)
             }
             BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
-                let datetime_ok =
-                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !is_php_order_comparable_type(&lt) || !is_php_order_comparable_type(&rt) {
                     return Err(CompileError::new(
                         expr.span,
-                        "Comparison operators require numeric operands",
+                        "Comparison operators require PHP values",
                     ));
                 }
                 Ok(PhpType::Bool)
@@ -144,7 +146,27 @@ impl Checker {
             }
             BinOp::Concat => Ok(PhpType::Str),
             BinOp::And | BinOp::Or | BinOp::Xor => Ok(PhpType::Bool),
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight => {
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor
+                if lt == PhpType::Str && rt == PhpType::Str =>
+            {
+                Ok(PhpType::Str)
+            }
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor => {
+                let lt_ok = is_bitwise_operand_type(self, &lt);
+                let rt_ok = is_bitwise_operand_type(self, &rt);
+                if !lt_ok || !rt_ok {
+                    return Err(CompileError::new(
+                        expr.span,
+                        "Bitwise operators require integer or string operands",
+                    ));
+                }
+                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    Ok(PhpType::Mixed)
+                } else {
+                    Ok(PhpType::Int)
+                }
+            }
+            BinOp::ShiftLeft | BinOp::ShiftRight => {
                 let lt_ok = is_integer_operand_type(self, &lt);
                 let rt_ok = is_integer_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {
@@ -156,14 +178,10 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             BinOp::Spaceship => {
-                let numeric_ok =
-                    is_numeric_operand_type(self, &lt) && is_numeric_operand_type(self, &rt);
-                let datetime_ok =
-                    is_datetime_family_object(&lt) && is_datetime_family_object(&rt);
-                if !numeric_ok && !datetime_ok {
+                if !is_php_order_comparable_type(&lt) || !is_php_order_comparable_type(&rt) {
                     return Err(CompileError::new(
                         expr.span,
-                        "Spaceship operator requires numeric operands",
+                        "Spaceship operator requires PHP values",
                     ));
                 }
                 Ok(PhpType::Int)
@@ -1247,6 +1265,15 @@ impl Checker {
     }
 }
 
+/// Returns whether a type has a PHP runtime-value representation accepted by ordered comparison.
+fn is_php_order_comparable_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Buffer(_) | PhpType::Packed(_) | PhpType::Pointer(_) => false,
+        PhpType::Union(members) => members.iter().all(is_php_order_comparable_type),
+        _ => true,
+    }
+}
+
 /// Returns receiver and method from a two-element PHP callable array literal.
 fn callable_array_parts(callee: &Expr) -> Option<(&Expr, &str)> {
     let elems = match &callee.kind {
@@ -1294,6 +1321,11 @@ fn is_gradual_array_union_operand(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Mixed | PhpType::Union(_))
 }
 
+/// Returns whether `+` can defer a boxed union operand to PHP's runtime numeric/array dispatch.
+fn is_runtime_add_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Union(_)) || is_numeric_operand_type(checker, ty)
+}
+
 /// Returns the conservative hash shape produced when one array-union operand is gradual.
 fn gradual_array_union_result_type() -> PhpType {
     PhpType::AssocArray {
@@ -1318,17 +1350,6 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     ) || checker.is_union_with_mixed_int_dispatch(ty)
 }
 
-/// Returns `true` if `ty` is a concrete `DateTime`/`DateTimeImmutable` object, the family PHP orders
-/// and compares by its absolute instant. Used to allow relational and spaceship operators on these
-/// objects; EIR lowering then reduces each operand to its `timestamp`/`microsecond` instant key.
-fn is_datetime_family_object(ty: &PhpType) -> bool {
-    matches!(
-        ty,
-        PhpType::Object(name)
-            if matches!(name.trim_start_matches('\\'), "DateTime" | "DateTimeImmutable")
-    )
-}
-
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.
 /// Accepts `Int`, `Bool`, `Void`, `Mixed`, or a union with mixed integer dispatch.
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
@@ -1336,6 +1357,11 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         ty,
         PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+}
+
+/// Returns whether a type can participate in PHP's value-dependent bitwise operators.
+fn is_bitwise_operand_type(checker: &Checker, ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Str) || is_integer_operand_type(checker, ty)
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

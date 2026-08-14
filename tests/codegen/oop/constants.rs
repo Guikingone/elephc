@@ -78,6 +78,84 @@ echo Child::VERSION;
     assert_eq!(out, "7");
 }
 
+/// Verifies a missing class constant makes a literal `defined()` guard select its fallback
+/// before the unreachable access is type-checked.
+#[test]
+fn test_defined_missing_class_constant_prunes_unreachable_access() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+if (!defined('FeatureFlags::MISSING')) {
+    echo 'fallback';
+} else {
+    echo FeatureFlags::MISSING;
+}
+"#,
+    );
+    assert_eq!(out, "fallback");
+}
+
+/// Verifies a declared class constant makes a literal `defined()` guard select the branch that
+/// reads it while discarding an invalid fallback branch.
+#[test]
+fn test_defined_present_class_constant_prunes_unreachable_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+if (!defined('FeatureFlags::PRESENT')) {
+    echo FeatureFlags::MISSING;
+} else {
+    echo FeatureFlags::PRESENT;
+}
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies literal `defined()` probes follow closed-world class inheritance for both present
+/// and absent constants.
+#[test]
+fn test_defined_class_constant_follows_declared_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentFlags {
+    const PRESENT = 9;
+}
+class ChildFlags extends ParentFlags {}
+echo defined('ChildFlags::PRESENT') ? 'Y' : 'N';
+echo defined('ChildFlags::MISSING') ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
+/// Verifies a certain right-hand boolean still evaluates the left operand before pruning the
+/// unreachable branch of a class-constant guard.
+#[test]
+fn test_defined_class_constant_guard_preserves_left_evaluation() {
+    let out = compile_and_run(
+        r#"<?php
+class FeatureFlags {
+    const PRESENT = 7;
+}
+function probe(): bool {
+    echo 'P';
+    return false;
+}
+if (probe() || !defined('FeatureFlags::MISSING')) {
+    echo 'Y';
+} else {
+    echo FeatureFlags::MISSING;
+}
+"#,
+    );
+    assert_eq!(out, "PY");
+}
+
 /// Verifies class constant expression can reference self constant.
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {

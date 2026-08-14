@@ -1,8 +1,8 @@
 //! Purpose:
 //! Applies PHP's parameter-binding rules when a declared user-defined parameter is handed an
 //! argument whose inferred type does not already satisfy it: coercive scalar binding
-//! (`string $s` accepting `42`) and callable-name strings (`callable $f` accepting
-//! `"strtoupper"`).
+//! (`string $s` accepting `42`), weak `Stringable` object conversion, and callable-name
+//! strings (`callable $f` accepting `"strtoupper"`).
 //!
 //! Called from:
 //! - `crate::types::checker::functions::resolution` (user function and method calls)
@@ -18,10 +18,12 @@
 //!   already accepts on its own.
 
 use crate::errors::CompileError;
-use crate::parser::ast::Expr;
+use crate::names::php_symbol_key;
+use crate::parser::ast::{Expr, Visibility};
 use crate::span::Span;
 use crate::types::param_binding::{
-    classify_param_binding, strict_param_binding_rejection, ParamBinding,
+    classify_param_binding, param_accepts_weak_string_coercion,
+    strict_param_binding_rejection, ParamBinding,
 };
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -65,6 +67,13 @@ impl Checker {
         if by_ref {
             return self.require_compatible_arg_type(expected, actual, arg.span, context);
         }
+        if !self.strict_types && param_accepts_weak_string_coercion(expected) {
+            if let PhpType::Object(class_name) = actual.codegen_repr() {
+                if self.object_supports_weak_string_coercion(&class_name) {
+                    return Ok(());
+                }
+            }
+        }
         match classify_param_binding(expected, actual, arg) {
             ParamBinding::Identity | ParamBinding::Cast(_) | ParamBinding::Const(_) => Ok(()),
             ParamBinding::Callable(target) => {
@@ -91,6 +100,35 @@ impl Checker {
                 self.require_compatible_arg_type(expected, actual, arg.span, context)
             }
         }
+    }
+
+    /// Returns whether a concrete object type can participate in PHP's weak object-to-string
+    /// parameter conversion.
+    ///
+    /// Explicit `Stringable` implementation is authoritative. A public, string-returning
+    /// `__toString` is checked directly as well because PHP grants `Stringable` implicitly,
+    /// while the checker may validate a call before its final implicit-interface enrichment.
+    fn object_supports_weak_string_coercion(&self, class_name: &str) -> bool {
+        if self.object_type_implements_interface(class_name, "Stringable") {
+            return true;
+        }
+        let method_key = php_symbol_key("__toString");
+        let mut current = Some(class_name);
+        while let Some(candidate) = current {
+            let Some(class_info) = self.classes.get(candidate) else {
+                return false;
+            };
+            if class_info
+                .methods
+                .get(&method_key)
+                .is_some_and(|sig| sig.return_type == PhpType::Str)
+                && class_info.method_visibilities.get(&method_key) == Some(&Visibility::Public)
+            {
+                return true;
+            }
+            current = class_info.parent.as_deref();
+        }
+        false
     }
 
     /// Rejects a declared-parameter argument that `declare(strict_types=1)` forbids at this

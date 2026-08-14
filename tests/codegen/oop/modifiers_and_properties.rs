@@ -263,6 +263,36 @@ echo Box::$value;
     assert_eq!(out, "0");
 }
 
+/// Verifies typed instance and static property defaults resolve class-like constants only after
+/// class, parent, and interface metadata is complete.
+#[test]
+fn test_typed_property_defaults_resolve_scoped_constants() {
+    let out = compile_and_run(
+        r#"<?php
+interface Defaults {
+    public const VALUE = 41;
+}
+
+class ParentBox {
+    protected const OFFSET = 1;
+}
+
+class Box extends ParentBox implements Defaults {
+    private const LOCAL = 40;
+
+    public int $interfaceValue = Defaults::VALUE;
+    public int $selfValue = self::LOCAL;
+    public int $parentValue = parent::OFFSET;
+    public static int $staticValue = Defaults::VALUE;
+}
+
+$box = new Box();
+echo $box->interfaceValue, ":", $box->selfValue, ":", $box->parentValue, ":", Box::$staticValue;
+"#,
+    );
+    assert_eq!(out, "41:40:1:41");
+}
+
 /// Verifies that a nullable typed static property with an explicit `= null` default
 /// is considered initialized (`is_null()` returns true), and that a typed static
 /// property without a default remains uninitialized and throws a catchable Error;

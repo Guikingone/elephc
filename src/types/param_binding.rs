@@ -1,8 +1,8 @@
 //! Purpose:
 //! Owns the PHP parameter-binding rules that let a declared parameter accept an argument
-//! of a different type: coercive scalar binding (`string $s` accepting `42`), callable-name
-//! strings (`callable $f` accepting `"strtoupper"`), and the `declare(strict_types=1)` mode
-//! that switches every one of those conversions off.
+//! of a different type: coercive scalar binding (`string $s` accepting `42`), weak
+//! `Stringable` object conversion, callable-name strings (`callable $f` accepting
+//! `"strtoupper"`), and the `declare(strict_types=1)` mode that switches those conversions off.
 //!
 //! Called from:
 //! - `crate::types::checker::functions::resolution` (acceptance + diagnostics)
@@ -446,19 +446,43 @@ fn literal_php_type(kind: &ExprKind) -> Option<PhpType> {
     }
 }
 
-/// Returns the explicit cast that implements a *value-level* scalar parameter binding.
+/// Returns the explicit cast that implements a *value-level* parameter binding.
 ///
 /// `actual` is the lowered argument's codegen type, so this fires for runtime values as well
-/// as literals. Returns `None` when no total scalar coercion applies.
+/// as literals. Returns `None` when no total scalar coercion applies. An object conversion is
+/// returned only for a declared string arm; the checker has already proven the concrete object
+/// implements `Stringable` before lowering consumes this helper.
 ///
 /// The classifier is shared with the checker so the two cannot disagree; the placeholder
 /// argument is inert because only the value-independent `ParamBinding::Cast` outcome is kept,
 /// and every expression-sensitive outcome maps to `None` here.
 pub(crate) fn scalar_param_cast(expected: &PhpType, actual: &PhpType) -> Option<CastType> {
+    if matches!(actual.codegen_repr(), PhpType::Object(_))
+        && param_accepts_weak_string_coercion(expected)
+    {
+        // The checker only admits this path after proving that the concrete object implements
+        // `Stringable`. Lowering deliberately consumes that proof instead of duplicating class
+        // metadata, which is not available at this stage.
+        return Some(CastType::String);
+    }
     let placeholder = Expr::new(ExprKind::Null, crate::span::Span::dummy());
     match classify_param_binding(expected, actual, &placeholder) {
         ParamBinding::Cast(target) => Some(target),
         _ => None,
+    }
+}
+
+/// Returns whether a declared parameter contains a `string` arm that PHP may select through
+/// weak object-to-string parameter coercion.
+///
+/// This inspects the source declaration rather than `codegen_repr()`: union storage collapses
+/// to `Mixed`, but PHP still selects its `string` member when a `Stringable` object is passed
+/// from a non-strict call site.
+pub(crate) fn param_accepts_weak_string_coercion(expected: &PhpType) -> bool {
+    match expected {
+        PhpType::Str => true,
+        PhpType::Union(members) => members.iter().any(param_accepts_weak_string_coercion),
+        _ => false,
     }
 }
 
@@ -630,5 +654,19 @@ mod tests {
             classify_param_binding(&PhpType::Bool, &PhpType::Str, &string_arg("a")),
             ParamBinding::Cast(CastType::Bool)
         );
+    }
+
+    /// Verifies lowering retains the declared union shape when selecting its weakly coercive
+    /// `string` member for an object already proven `Stringable` by the checker.
+    #[test]
+    fn stringable_object_binding_selects_string_union_member() {
+        let expected = PhpType::Union(vec![PhpType::Str, PhpType::Iterable]);
+        let actual = PhpType::Object("Label".to_string());
+        assert!(param_accepts_weak_string_coercion(&expected));
+        assert_eq!(
+            scalar_param_cast(&expected, &actual),
+            Some(CastType::String)
+        );
+        assert!(!param_accepts_weak_string_coercion(&PhpType::Iterable));
     }
 }

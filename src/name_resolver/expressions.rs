@@ -70,6 +70,27 @@ pub(super) fn resolve_expr(
             value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
             callable: Box::new(resolve_expr(callable, current_namespace, imports, symbols)),
         },
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            conditional_value_temp,
+        } => ExprKind::Assignment {
+            target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
+            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
+            result_target: result_target.as_ref().map(|target| {
+                Box::new(resolve_expr(
+                    target,
+                    current_namespace,
+                    imports,
+                    symbols,
+                ))
+            }),
+            prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
+                .expect("name resolver bug: assignment prelude resolution failed"),
+            conditional_value_temp: conditional_value_temp.clone(),
+        },
         ExprKind::FunctionCall { name, args } => {
             let function_name = resolve_function_name(name, current_namespace, imports, symbols);
             let resolved_args: Vec<Expr> = rewrite_callback_literal_args(

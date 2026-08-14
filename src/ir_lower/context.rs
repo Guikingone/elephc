@@ -2115,6 +2115,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
+                    | Op::StrBitAnd
+                    | Op::StrBitOr
+                    | Op::StrBitXor
+                    | Op::StrSetOffset
                     | Op::StrPersist
                     | Op::StrCharAt
                     | Op::StrInterpolate

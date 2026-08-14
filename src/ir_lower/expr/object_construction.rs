@@ -205,10 +205,10 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let (object, class_name, invoke_static_hook) = if let Some((class_name, false)) =
+    let (object, class_name, gradual_result_ty) = if let Some((class_name, false)) =
         singular_object_class(&object_ty)
     {
-        (object, class_name.to_string(), true)
+        (object, class_name.to_string(), None)
     } else if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
         && crate::types::checker::type_is_gradual_object_family(&object_ty)
     {
@@ -220,7 +220,11 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
             Op::MixedUnbox.default_effects(),
             Some(inner.span),
         );
-        (unboxed, "object".to_string(), false)
+        (
+            unboxed,
+            "object".to_string(),
+            Some(object_ty.clone()),
+        )
     } else {
         unreachable!("clone expressions must be type-checked as object-capable values before lowering");
     };
@@ -234,9 +238,12 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
         Op::ObjectCloneShallow.default_effects(),
         Some(expr.span),
     );
-    if !invoke_static_hook {
+    if let Some(result_ty) = gradual_result_ty {
         crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
-        return cloned;
+        // Runtime-class cloning needs a raw object pointer, while a gradual source is represented
+        // by a boxed cell. Restore that representation before a following property or method
+        // operation so it dispatches on the cloned object's runtime class.
+        return ctx.box_value_as_mixed(cloned, result_ty, Some(expr.span));
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
         // The generic method-call path releases an owning temporary receiver after the call.

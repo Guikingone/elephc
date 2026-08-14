@@ -134,18 +134,21 @@ pub(super) fn lower_backend_gap_builtin_shape(
             expr,
         ));
     }
-    if builtin == "array_reverse"
-        && args.len() == 1
-        && match materialized_expr_type_for_merge(ctx, &args[0]).codegen_repr() {
-            PhpType::Array(element) => element.codegen_repr() == PhpType::Str,
-            PhpType::Mixed | PhpType::Union(_) => true,
-            _ => false,
-        }
-    {
+    if builtin == "array_combine" && args.len() == 2 {
         return Some(lower_function_call(
             ctx,
             &crate::names::Name::unqualified(
-                crate::backend_gap_prelude::ARRAY_REVERSE_STRING_NAME,
+                crate::backend_gap_prelude::ARRAY_COMBINE_GRADUAL_NAME,
+            ),
+            args,
+            expr,
+        ));
+    }
+    if builtin == "array_reverse" && args.len() == 1 {
+        return Some(lower_function_call(
+            ctx,
+            &crate::names::Name::unqualified(
+                crate::backend_gap_prelude::ARRAY_REVERSE_GRADUAL_NAME,
             ),
             args,
             expr,

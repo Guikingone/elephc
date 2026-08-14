@@ -182,10 +182,13 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
-        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
-            name,
-            args: args.into_iter().map(fold_expr).collect(),
-        },
+        ExprKind::FunctionCall { name, args } => {
+            let args: Vec<_> = args.into_iter().map(fold_expr).collect();
+            fold_known_class_constant_defined(&name, &args).unwrap_or(ExprKind::FunctionCall {
+                name,
+                args,
+            })
+        }
         ExprKind::ArrayLiteral(items) => {
             ExprKind::ArrayLiteral(items.into_iter().map(fold_expr).collect())
         }

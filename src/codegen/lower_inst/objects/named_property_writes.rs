@@ -90,6 +90,17 @@ pub(super) fn lower_generic_object_prop_set(
     property: &str,
     inst: &Instruction,
 ) -> Result<()> {
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    lower_generic_object_prop_set_from_loaded_object(ctx, value, property, inst)
+}
+
+/// Dispatches a named property write after the raw object payload is in the result register.
+fn lower_generic_object_prop_set_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
     let value_ty = ctx.value_php_type(value)?;
     let candidates = declared_mixed_property_candidates(ctx, property, inst)?
         .into_iter()
@@ -110,7 +121,6 @@ pub(super) fn lower_generic_object_prop_set(
         })
         .collect::<Vec<_>>();
 
-    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
     emit_mixed_property_class_dispatch(
         ctx,
         &candidates,
@@ -320,6 +330,9 @@ pub(super) fn lower_nullable_prop_set(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if class_name.trim_start_matches('\\').is_empty() {
+        return lower_nullable_generic_object_prop_set(ctx, inst, object, value, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
@@ -328,6 +341,28 @@ pub(super) fn lower_nullable_prop_set(
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
     emit_property_store(ctx, value, &slot, base_reg)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_property_assign_on_null_fatal(ctx, property);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a nullable bare-object property write through concrete runtime class dispatch.
+fn lower_nullable_generic_object_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("nullable_generic_prop_set_null");
+    let done_label = ctx.next_label("nullable_generic_prop_set_done");
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
+    lower_generic_object_prop_set_from_loaded_object(ctx, value, property, inst)?;
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);

@@ -187,12 +187,29 @@ impl Checker {
             } else if let (Some(vname), Some(expected_ty)) =
                 (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())
             {
-                self.require_compatible_arg_type(
-                    expected_ty,
-                    &actual_ty,
-                    arg.span,
-                    &format!("Function '{}' variadic parameter ${}", name, vname),
-                )?;
+                if effective_sig
+                    .declared_params
+                    .last()
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    self.require_bound_param_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg,
+                        caller_env,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        None,
+                        effective_sig.ref_params.last().copied().unwrap_or(false),
+                    )?;
+                } else {
+                    self.require_compatible_arg_type(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                }
             }
             param_idx += 1;
         }

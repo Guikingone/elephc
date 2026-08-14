@@ -13,8 +13,8 @@ use super::*;
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let reset_concat_after_store =
-        inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
+    let reset_concat_after_store = inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_scratch_string(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
@@ -22,8 +22,11 @@ pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instructio
     Ok(())
 }
 
-/// Returns true when a value is `Acquire(StrConcat(...))`, which means storage now owns a heap copy.
-pub(super) fn value_is_acquire_of_str_concat(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
+/// Returns true when a value acquires a scratch-backed string that storage has persisted.
+pub(super) fn value_is_acquire_of_scratch_string(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<bool> {
     let Some(acquire_inst) = instruction_for_value(ctx, value)? else {
         return Ok(false);
     };
@@ -33,8 +36,12 @@ pub(super) fn value_is_acquire_of_str_concat(ctx: &FunctionContext<'_>, value: V
     let Some(source) = acquire_inst.operands.first().copied() else {
         return Ok(false);
     };
-    Ok(instruction_for_value(ctx, source)?
-        .is_some_and(|source_inst| source_inst.op == Op::StrConcat))
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|source_inst| {
+        matches!(
+            source_inst.op,
+            Op::StrConcat | Op::StrBitAnd | Op::StrBitOr | Op::StrBitXor | Op::StrSetOffset
+        )
+    }))
 }
 
 /// Returns the instruction that produced an SSA value, or `None` for block parameters.

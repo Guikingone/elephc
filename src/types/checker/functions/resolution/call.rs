@@ -402,8 +402,9 @@ impl Checker {
                 param_types.push((decl.params[arg_idx].clone(), ty));
                 arg_idx += 1;
             } else {
-                // Argument collected into the variadic parameter: enforce its declared element
-                // type (`int ...$xs`) against every passed argument, matching PHP.
+                // Argument collected into the variadic parameter: bind its declared element
+                // type (`int ...$xs`) against every passed argument using the same weak/strict
+                // rules as a regular declared parameter.
                 if let Some(declared) = &decl.variadic_type {
                     let vname = decl.variadic.as_deref().unwrap_or_default();
                     let elem_ty = self.resolve_declared_param_type_hint(
@@ -411,20 +412,14 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
-                    self.require_compatible_arg_type(
+                    self.require_bound_param_arg_type(
                         &elem_ty,
                         &ty,
-                        arg.span,
+                        arg,
+                        caller_env,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
-                    )?;
-                    // PHP applies `strict_types` to a variadic element exactly like a regular
-                    // declared parameter, so the strict rejection runs here too; the coercive
-                    // widenings `require_compatible_arg_type` allows are unchanged otherwise.
-                    self.require_strict_types_param_binding(
-                        &elem_ty,
-                        &ty,
-                        arg.span,
-                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                        None,
+                        decl.variadic_by_ref,
                     )?;
                 }
                 arg_idx += 1;

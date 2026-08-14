@@ -104,6 +104,11 @@ pub(super) fn can_store_object_for_object_property(
 
 /// Returns true when `source_name` is the same class/interface or inherits `target_name`.
 pub(super) fn object_type_is_a(ctx: &FunctionContext<'_>, source_name: &str, target_name: &str) -> bool {
+    if target_name.trim_start_matches('\\').is_empty()
+        && !source_name.trim_start_matches('\\').is_empty()
+    {
+        return true;
+    }
     if same_php_type_name(source_name, target_name) {
         return true;
     }

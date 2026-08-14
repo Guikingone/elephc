@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::Instruction;
+use crate::ir::{Instruction, Op};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -241,6 +241,65 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_concat");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP byte-string `&`, `|`, and `^` through the shared string-bitwise runtime helper.
+pub(super) fn lower_str_bitwise(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    require_string(ctx.value_php_type(lhs)?, inst)?;
+    require_string(ctx.value_php_type(rhs)?, inst)?;
+    let operation = match inst.op {
+        Op::StrBitAnd => 0,
+        Op::StrBitOr => 1,
+        Op::StrBitXor => 2,
+        _ => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "{} is not a string bitwise opcode",
+                inst.op.name()
+            )))
+        }
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
+            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x5", operation);
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(lhs, "rax", "rdx")?;
+            ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "r8", operation);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_bitwise");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers PHP byte-string offset assignment through the shared copy-on-write helper.
+pub(super) fn lower_str_set_offset(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let source = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let replacement = expect_operand(inst, 2)?;
+    require_string(ctx.value_php_type(source)?, inst)?;
+    require_string(ctx.value_php_type(replacement)?, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(source, "x1", "x2")?;
+            require_integer_like(ctx.load_value_to_reg(index, "x0")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "x3", "x4")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(source, "rax", "rdx")?;
+            require_integer_like(ctx.load_value_to_reg(index, "r8")?, inst)?;
+            ctx.load_string_value_to_regs(replacement, "rdi", "rsi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_set_offset");
     store_if_result(ctx, inst)
 }
 

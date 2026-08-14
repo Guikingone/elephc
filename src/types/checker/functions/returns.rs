@@ -373,6 +373,10 @@ impl Checker {
             ));
         }
 
+        if generic_object_requires_nominal_return_guard(expected, actual) {
+            return Ok(());
+        }
+
         self.require_compatible_arg_type(expected, actual, span, context)
     }
 
@@ -536,5 +540,34 @@ impl Checker {
             (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             _ => PhpType::Mixed,
         }
+    }
+}
+
+/// Returns whether a bare `object` value can be checked against a nominal return at runtime.
+fn generic_object_requires_nominal_return_guard(expected: &PhpType, actual: &PhpType) -> bool {
+    let PhpType::Object(actual_name) = actual.codegen_repr() else {
+        return false;
+    };
+    if !actual_name.trim_start_matches('\\').is_empty() {
+        return false;
+    }
+    match expected {
+        PhpType::Object(expected_name) => !expected_name.trim_start_matches('\\').is_empty(),
+        PhpType::Union(members) => {
+            let mut saw_named_object = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(expected_name)
+                        if !expected_name.trim_start_matches('\\').is_empty() =>
+                    {
+                        saw_named_object = true;
+                    }
+                    _ => return false,
+                }
+            }
+            saw_named_object
+        }
+        _ => false,
     }
 }

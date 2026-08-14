@@ -9,13 +9,12 @@
 
 use super::*;
 
-/// Tests that `&=` compound assignment rejects a string left-hand operand.
-/// The error message is "Bitwise operators require integer operands".
+/// Tests that `&=` compound assignment rejects an array left-hand operand.
 #[test]
 fn test_error_bitwise_compound_assignment_requires_ints() {
     expect_error(
-        "<?php $x = \"flags\"; $x &= 1;",
-        "Bitwise operators require integer operands",
+        "<?php $x = []; $x &= 1;",
+        "Bitwise operators require integer or string operands",
     );
 }
 
@@ -162,13 +161,12 @@ fn test_error_settype_wrong_args() {
     expect_error("<?php settype(42);", "settype() takes exactly 2 arguments");
 }
 
-/// Tests that `&` with a string left-hand operand rejects it with the
-/// "Bitwise operators require integer operands" error.
+/// Tests that `&` with an array operand rejects it as neither integer nor string.
 #[test]
-fn test_error_bitwise_and_string() {
+fn test_error_bitwise_and_array() {
     expect_error(
-        r#"<?php echo "hello" & 1;"#,
-        "Bitwise operators require integer operands",
+        r#"<?php echo [] & 1;"#,
+        "Bitwise operators require integer or string operands",
     );
 }
 
@@ -179,25 +177,6 @@ fn test_error_bitwise_not_string() {
     expect_error(
         r#"<?php echo ~"hello";"#,
         "Bitwise NOT requires integer operand",
-    );
-}
-
-/// Tests that the spaceship operator `<=>` with *runtime* string operands is rejected with
-/// the "Spaceship operator requires numeric operands" error.
-///
-/// The operands are locals rather than literals on purpose. Constant folding runs before type
-/// checking, and it evaluates a literal `"a" <=> "b"` to PHP's answer (`-1`), so the folded
-/// form never reaches the checker and compiles. That is deliberate — PHP defines string
-/// comparison, so folding it is PHP-correct — but it leaves the checker gate in
-/// `types::checker::inference::ops` as the only thing rejecting the non-constant form.
-/// Lifting that gate (and giving the runtime a string comparison path) is issue #507, which
-/// covers `<`, `<=`, `>`, `>=` and this operator alike. Until then this test pins the live
-/// contract: constant-foldable string comparisons compile, everything else is refused.
-#[test]
-fn test_error_spaceship_string() {
-    expect_error(
-        r#"<?php $x = "a"; $y = "b"; echo $x <=> $y;"#,
-        "Spaceship operator requires numeric operands",
     );
 }
 

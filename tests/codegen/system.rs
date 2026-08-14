@@ -1493,6 +1493,21 @@ fn test_json_encode_string_with_quotes() {
     assert_eq!(out, r#""say \"hi\"""#);
 }
 
+/// Verifies an integer read through a gradual array boundary can supply JSON flags.
+#[test]
+fn test_json_encode_accepts_gradual_integer_flags() {
+    let out = compile_and_run(
+        r#"<?php
+function encode_with_options(array $options): string {
+    $flags = $options['flags'] ?? 0;
+    return json_encode('a/b', $flags);
+}
+echo encode_with_options(['flags' => JSON_UNESCAPED_SLASHES]);
+"#,
+    );
+    assert_eq!(out, r#""a/b""#);
+}
+
 /// Verifies `json_encode(true)` emits the JSON literal `true`.
 #[test]
 fn test_json_encode_bool_true() {
@@ -1786,6 +1801,27 @@ fn test_preg_match_case_insensitive() {
 fn test_preg_match_pattern() {
     let out = compile_and_run(r#"<?php echo preg_match("/[0-9]+/", "abc123def");"#);
     assert_eq!(out, "1");
+}
+
+/// Exposes representative locale, signal, regex, grapheme, and fileinfo constants.
+#[test]
+fn test_standard_extension_integer_constants() {
+    let out = compile_and_run(
+        r#"<?php
+echo LC_CTYPE . '|';
+echo SIG_DFL . ',' . SIGINT . ',' . SIGQUIT . ',' . SIGALRM . ',' . SIGTERM . ',' . SIGUSR1 . ',' . SIGUSR2 . '|';
+echo PCRE_VERSION_MAJOR . '.' . PCRE_VERSION_MINOR . ',' . GRAPHEME_EXTR_MAXBYTES . ',' . FILEINFO_MIME_TYPE;
+"#,
+    );
+    let locale_category = if cfg!(target_os = "macos") { 2 } else { 0 };
+    let user_signal = if cfg!(target_os = "macos") { 30 } else { 10 };
+    let user_signal_two = if cfg!(target_os = "macos") { 31 } else { 12 };
+    assert_eq!(
+        out,
+        format!(
+            "{locale_category}|0,2,3,14,15,{user_signal},{user_signal_two}|10.47,1,16"
+        )
+    );
 }
 
 /// Verifies PCRE positive lookahead works through the PCRE2-backed regex runtime.

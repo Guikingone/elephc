@@ -252,16 +252,23 @@ pub(super) fn variadic_container_element_type(ty: PhpType) -> PhpType {
     }
 }
 
-/// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
+/// Applies declared-parameter coercion to one variadic element, then boxes it when the callee
+/// stores the tail in an `array<mixed>` slot.
 pub(super) fn coerce_variadic_tail_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     array_ty: &PhpType,
     span: crate::span::Span,
 ) -> LoweredValue {
-    let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
+    let PhpType::Array(elem_ty) = array_ty else {
         return value;
     };
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if !param_accepts_object_without_string_coercion(ctx, elem_ty, &source_ty) {
+        if let Some(cast) = crate::types::param_binding::scalar_param_cast(elem_ty, &source_ty) {
+            return apply_scalar_param_cast(ctx, cast, value, elem_ty, Some(span));
+        }
+    }
     if elem_ty.codegen_repr() != PhpType::Mixed {
         return value;
     }

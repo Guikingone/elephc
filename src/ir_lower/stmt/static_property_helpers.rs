@@ -116,6 +116,69 @@ pub(in crate::ir_lower) fn object_property_type(
         .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
 }
 
+/// Resolves an array-like property type for a receiver declared as bare PHP `object`.
+pub(in crate::ir_lower) fn generic_object_array_property_type(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+) -> Option<PhpType> {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object) else {
+        return None;
+    };
+    if !class_name.trim_start_matches('\\').is_empty() {
+        return object_property_type(ctx, object, property);
+    }
+    let candidates = ctx
+        .classes
+        .values()
+        .filter_map(|class_info| {
+            class_info
+                .visible_property(property)
+                .map(|(_, (_, property_ty))| normalize_value_php_type(property_ty.codegen_repr()))
+        })
+        .filter(|property_ty| {
+            matches!(
+                property_ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+            ) || matches!(
+                property_ty.codegen_repr(),
+                PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+            ) || type_satisfies_array_access_for_ir(ctx, property_ty)
+        })
+        .collect::<Vec<_>>();
+    let first = candidates.first()?.clone();
+    if candidates
+        .iter()
+        .all(|candidate| {
+            matches!(
+                candidate.codegen_repr(),
+                PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+            ) || type_satisfies_array_access_for_ir(ctx, candidate)
+        })
+    {
+        return Some(PhpType::Object("ArrayAccess".to_string()));
+    }
+    if candidates.iter().all(|candidate| candidate == &first) {
+        return Some(first);
+    }
+    if candidates
+        .iter()
+        .all(|candidate| matches!(candidate.codegen_repr(), PhpType::Array(_)))
+    {
+        return Some(PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    if candidates
+        .iter()
+        .all(|candidate| matches!(candidate.codegen_repr(), PhpType::AssocArray { .. }))
+    {
+        return Some(PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        });
+    }
+    Some(PhpType::Mixed)
+}
+
 /// Returns true when a property type uses concrete indexed-array storage.
 pub(super) fn is_indexed_array_type(php_type: &PhpType) -> bool {
     matches!(php_type.codegen_repr(), PhpType::Array(_))

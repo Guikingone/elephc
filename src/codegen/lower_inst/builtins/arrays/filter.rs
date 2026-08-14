@@ -16,34 +16,46 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let callback = inst.operands.get(1).copied();
     let mode = inst.operands.get(2).copied();
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let gradual = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let gradual = matches!(&source_ty, PhpType::Mixed | PhpType::Union(_));
+    let associative = matches!(&source_ty, PhpType::AssocArray { .. });
+    let boxed_callback_args = gradual || associative;
     let elem_ty = if gradual {
         require_mixed_array_filter_result_type(&inst.result_php_type.codegen_repr())?;
         emit_array_filter_gradual_source_guard(ctx, array)?;
         PhpType::Mixed
+    } else if let PhpType::AssocArray { value, .. } = &source_ty {
+        require_assoc_array_filter_result_type(&source_ty, &inst.result_php_type.codegen_repr())?;
+        value.codegen_repr()
     } else {
-        let elem_ty = array_filter_source_element_type(source_ty)?;
+        let elem_ty = array_filter_source_element_type(source_ty.clone())?;
         require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
         elem_ty
     };
     let runtime_label = if gradual {
         "__rt_array_filter_mixed"
+    } else if associative {
+        "__rt_array_filter_mixed_raw"
     } else if array_filter_uses_refcounted_runtime(&elem_ty) {
         "__rt_array_filter_refcounted"
     } else {
         "__rt_array_filter"
     };
     if array_filter_uses_default_callback(ctx, callback)? {
-        let wrapper_label = emit_array_filter_truthiness_wrapper(ctx, &elem_ty, gradual)?;
+        let wrapper_label =
+            emit_array_filter_truthiness_wrapper(ctx, &elem_ty, boxed_callback_args)?;
         load_array_filter_runtime_args(ctx, array, None, &wrapper_label, 0)?;
         abi::emit_call_label(ctx.emitter, runtime_label);
+        if associative {
+            emit_take_array_filter_assoc_result(ctx);
+        }
         return store_if_result(ctx, inst);
     }
 
     let callback = callback.ok_or_else(|| {
         CodegenIrError::invalid_module("array_filter callback unexpectedly missing")
     })?;
-    let callback_arg_types = array_filter_callback_arg_types(ctx, mode, &elem_ty, gradual)?;
+    let callback_arg_types =
+        array_filter_callback_arg_types(ctx, mode, &elem_ty, boxed_callback_args)?;
     if let Some(visible_arg_types) = callback_arg_types.clone() {
         match ctx.value_php_type(callback)?.codegen_repr() {
             PhpType::Callable => {
@@ -64,6 +76,9 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
                         Ok(())
                     },
                 )?;
+                if associative {
+                    emit_take_array_filter_assoc_result(ctx);
+                }
                 store_if_result(ctx, inst)?;
                 return Ok(());
             }
@@ -88,6 +103,9 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
                         Ok(())
                     },
                 )?;
+                if associative {
+                    emit_take_array_filter_assoc_result(ctx);
+                }
                 store_if_result(ctx, inst)?;
                 return Ok(());
             }
@@ -112,7 +130,38 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
+    if associative {
+        emit_take_array_filter_assoc_result(ctx);
+    }
     store_if_result(ctx, inst)
+}
+
+/// Transfers a filtered associative payload out of the temporary boxed runtime result.
+fn emit_take_array_filter_assoc_result(ctx: &mut FunctionContext<'_>) {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp]");                            // preserve the owned result box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("str x1, [sp, #8]");                        // preserve the borrowed filtered-hash payload
+            ctx.emitter.instruction("mov x0, x1");                              // retain a raw owner before releasing the wrapper
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldr x0, [sp]");                            // release the result box and its child ownership
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the transferred raw hash owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the owned result box
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdi");            // preserve the borrowed filtered-hash payload
+            ctx.emitter.instruction("mov rax, rdi");                            // retain a raw owner before releasing the wrapper
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // release the result box and its child ownership
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // return the transferred raw hash owner
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Returns whether an omitted or literal-null callback requests PHP truthiness filtering.

@@ -113,6 +113,9 @@ pub(super) fn property_abstract_receiver(
         return Ok(None);
     };
     let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        return Ok(Some(String::new()));
+    }
     let Some(class_info) = ctx.module.class_infos.get(normalized) else {
         return Ok(None);
     };

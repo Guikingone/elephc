@@ -219,6 +219,83 @@ foreach ($filtered as $value) { echo $value; }
     assert_eq!(out, "22040");
 }
 
+/// Verifies associative filtering preserves string keys, adapts boxed callback arguments,
+/// and releases direct-adapter string conversions after each invocation.
+#[test]
+fn test_array_filter_associative_array_preserves_keys_and_types() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function keep_named_positive(int $value, string $key): bool {
+    return $key !== "drop" && $value > 0;
+}
+$filtered = array_filter(
+    ["first" => 2, "drop" => 4, "last" => 3],
+    "keep_named_positive",
+    ARRAY_FILTER_USE_BOTH,
+);
+echo count($filtered) . "|" . $filtered["first"] . "|" . $filtered["last"];
+foreach ($filtered as $key => $value) {
+    echo "|" . $key . ":" . $value;
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|2|3|first:2|last:3");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected direct callback adaptation to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies callback-free associative filtering uses boxed PHP truthiness and keeps keys.
+#[test]
+fn test_array_filter_associative_array_without_callback_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$filtered = array_filter(["zero" => 0, "two" => 2, "empty" => "", "text" => "ok"]);
+echo count($filtered) . "|" . $filtered["two"] . "|" . $filtered["text"];
+"#,
+    );
+    assert_eq!(out, "2|2|ok");
+}
+
+/// Verifies associative filtering preserves refcounted string values through a typed callback.
+#[test]
+fn test_array_filter_associative_string_values() {
+    let out = compile_and_run(
+        r#"<?php
+$filtered = array_filter(
+    ["first" => "keep", "second" => "", "third" => "also"],
+    static fn(string $value): bool => $value !== "",
+);
+echo $filtered["first"] . "|" . $filtered["third"];
+"#,
+    );
+    assert_eq!(out, "keep|also");
+}
+
+/// Verifies associative filtering balances the temporary box and retained result payloads.
+#[test]
+fn test_array_filter_associative_array_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$filtered = array_filter(
+    ["first" => "keep", "second" => "", "third" => "also"],
+    static fn(string $value): bool => $value !== "",
+);
+echo $filtered["first"] . "|" . $filtered["third"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "keep|also");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected associative filtering to leave a clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
 #[test]
 fn test_array_filter_invalid_literal_mode_throws_value_error() {

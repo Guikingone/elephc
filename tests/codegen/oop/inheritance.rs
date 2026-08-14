@@ -411,6 +411,33 @@ echo $child->reveal();
     assert_eq!(out, "42");
 }
 
+/// Verifies a parent scope can access protected instance, static, and method members declared by
+/// a child because PHP grants protected access across both directions of one inheritance family.
+#[test]
+fn test_parent_scope_accesses_child_protected_members() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentBox {
+    public function read(ChildBox $box): string {
+        return $box->value . ":" . ChildBox::$staticValue . ":" . $box->label();
+    }
+}
+
+class ChildBox extends ParentBox {
+    protected string $value = "instance";
+    protected static string $staticValue = "static";
+
+    protected function label(): string {
+        return "method";
+    }
+}
+
+echo (new ParentBox())->read(new ChildBox());
+"#,
+    );
+    assert_eq!(out, "instance:static:method");
+}
+
 /// Verifies first-class callable syntax `MathBox::double(...)` compiles and calls the
 /// static method correctly, returning 18.
 #[test]

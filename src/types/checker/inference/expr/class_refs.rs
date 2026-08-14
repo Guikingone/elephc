@@ -17,10 +17,11 @@ use super::super::super::Checker;
 
 impl Checker {
     /// Validates `new` expressions on late-bound static constructor targets by inferring
-    /// the object type for every class that descends from `base_class`.
+    /// the object type for every concrete class that descends from `base_class`.
     ///
     /// Used when `$obj::new(...)` or similar late-bound constructor syntax is used,
-    /// to ensure each possible class variant is well-typed.
+    /// to ensure each possible runtime-instantiable class variant is well-typed. Abstract bases
+    /// and descendants cannot be the late-bound runtime class of a successful construction.
     pub(super) fn validate_late_bound_constructor_targets(
         &mut self,
         base_class: &str,
@@ -30,9 +31,11 @@ impl Checker {
     ) -> Result<(), CompileError> {
         let mut class_names: Vec<String> = self
             .classes
-            .keys()
-            .filter(|name| self.class_is_same_or_descends_from(name, base_class))
-            .cloned()
+            .iter()
+            .filter(|(name, info)| {
+                !info.is_abstract && self.class_is_same_or_descends_from(name, base_class)
+            })
+            .map(|(name, _)| name.clone())
             .collect();
         class_names.sort();
 

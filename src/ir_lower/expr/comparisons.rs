@@ -37,6 +37,32 @@ pub(super) fn lower_compare(
         lhs = lhs_key;
         rhs = rhs_key;
     }
+    if matches!(op, BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq)
+        && ordered_compare_uses_php_runtime(lhs.ir_type, rhs.ir_type)
+    {
+        let comparison = ctx.emit_value(
+            Op::Spaceship,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Int,
+            Op::Spaceship.default_effects(),
+            Some(expr.span),
+        );
+        let zero = lower_int_literal(ctx, 0, expr);
+        let result = ctx.emit_value(
+            Op::ICmp,
+            vec![comparison.value, zero.value],
+            Some(Immediate::CmpPredicate(cmp_predicate(op))),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     let opcode = match op {
         BinOp::StrictEq => Op::StrictEq,
         BinOp::StrictNotEq => Op::StrictNotEq,
@@ -74,6 +100,11 @@ pub(super) fn lower_compare(
         release_binary_operand_temporary(ctx, rhs, expr.span);
     }
     result
+}
+
+/// Returns whether ordered operands need PHP's runtime comparison table rather than a typed opcode.
+fn ordered_compare_uses_php_runtime(lhs: IrType, rhs: IrType) -> bool {
+    !matches!((lhs, rhs), (IrType::I64, IrType::I64) | (IrType::F64, IrType::F64) | (IrType::I64, IrType::F64) | (IrType::F64, IrType::I64) | (IrType::Str, IrType::Str))
 }
 
 /// Releases an owning binary-operator operand once the consuming opcode has read it.
@@ -163,4 +194,3 @@ pub(super) fn cmp_predicate(op: &BinOp) -> CmpPredicate {
         _ => CmpPredicate::Eq,
     }
 }
-

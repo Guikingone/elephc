@@ -138,6 +138,38 @@ fn test_effect_analysis_preserves_throwing_builtin_metadata() {
     assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
 }
 
+/// Verifies an unused `array_combine` call remains observable because unequal cardinalities
+/// raise a catchable `ValueError` at runtime.
+#[test]
+fn test_effect_analysis_preserves_array_combine_value_error() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("array_combine"),
+            args: vec![
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::string_lit("only")]),
+                    Span::dummy(),
+                ),
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    assert!(expr_effect(&expr).may_throw);
+    assert!(expr_is_observable(&expr));
+
+    let statement = Stmt::new(StmtKind::ExprStmt(expr), Span::dummy());
+    assert_eq!(
+        prune_constant_control_flow(vec![statement.clone()]),
+        vec![statement.clone()]
+    );
+    assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
+}
+
 /// Verifies callback builtins combine a known callback summary with intrinsic array work.
 #[test]
 fn test_effect_analysis_refines_builtin_with_known_pure_callback() {

@@ -770,7 +770,6 @@ impl RuntimeFnId {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
-            RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
@@ -875,7 +874,8 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
             // These raise reference PHP's catchable `ValueError` for out-of-range
-            // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
+            // arguments (`array_chunk()` non-positive length, `array_combine()` mismatched
+            // cardinalities, `clamp()` inverted bounds,
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
@@ -890,6 +890,7 @@ impl RuntimeFnId {
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
+            | RuntimeFnId::ArrayCombine
             | RuntimeFnId::ArrayFill
             | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad
@@ -1235,6 +1236,10 @@ impl RuntimeFnId {
                 // the same call through a named local stayed clean. Its Fresh-owning siblings
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
                 | RuntimeFnId::ArrayCountValues
+                // Every filter path allocates a destination array/hash and copies or retains
+                // accepted payloads into it. The result never aliases the source container or
+                // callback, so both argument temporaries must be released after the call.
+                | RuntimeFnId::ArrayFilter
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys

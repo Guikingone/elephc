@@ -80,6 +80,24 @@ impl Platform {
         }
     }
 
+    /// Returns the target C library's `SIGUSR1` signal number exposed by PHP.
+    pub fn sigusr1(&self) -> i64 {
+        match self {
+            Platform::MacOS => 30,
+            Platform::Linux => 10,
+            Platform::Windows => panic!("SIGUSR1 is unavailable on the Windows target"),
+        }
+    }
+
+    /// Returns the target C library's `SIGUSR2` signal number exposed by PHP.
+    pub fn sigusr2(&self) -> i64 {
+        match self {
+            Platform::MacOS => 31,
+            Platform::Linux => 12,
+            Platform::Windows => panic!("SIGUSR2 is unavailable on the Windows target"),
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///
     /// These flags open a file for writing, creating it if it does not exist,

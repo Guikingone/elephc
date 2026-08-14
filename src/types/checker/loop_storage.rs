@@ -1,13 +1,13 @@
 //! Purpose:
-//! Computes fixed-point storage contracts for array locals carried around loop back-edges.
+//! Computes fixed-point storage contracts for locals carried around loop back-edges.
 //!
 //! Called from:
 //! - `crate::types::checker::stmt_check::control_flow` before checking a loop body.
 //!
 //! Key details:
 //! - The analysis iterates assignment and array-growth evidence until local types stop changing.
-//! - Only entry array locals whose stable representation needs boxed payloads (or a boxed whole
-//!   value) are reported; ordinary scalar-flow inference remains checker-owned.
+//! - Array payload changes retain their container-specific conversions, while nullable locals
+//!   that receive a non-null whole value across a back-edge use one boxed `Mixed` contract.
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 
@@ -38,12 +38,12 @@ struct ArrayWrite<'a> {
     value: &'a Expr,
 }
 
-/// Computes stable storage types for array locals already present at loop entry.
+/// Computes stable storage types for locals already present at loop entry.
 ///
 /// `infer_value` receives the evolving fixed-point environment, so a promotion can cascade
 /// through intermediate locals and through later iterations. The result contains only locals
 /// that require an up-front representation contract: indexed/associative arrays with boxed
-/// `mixed` payloads, or whole-value `mixed` when the container kind itself can vary.
+/// `mixed` payloads, or whole-value `mixed` for a nullable local crossing a back-edge.
 pub fn loop_carried_storage_types(
     body: &[Stmt],
     update: Option<&Stmt>,
@@ -63,14 +63,14 @@ pub fn loop_carried_storage_types(
     }
 
     let mut fixed = entry.clone();
-    let mut whole_mixed_sources = HashSet::new();
+    let mut whole_representation_sources = HashSet::new();
     loop {
         let previous = fixed.clone();
         apply_assignment_evidence(
             &assignments,
             &mut fixed,
             infer_value,
-            &mut whole_mixed_sources,
+            &mut whole_representation_sources,
         );
         apply_array_write_evidence(&writes, &mut fixed, infer_value);
         if fixed == previous {
@@ -81,14 +81,11 @@ pub fn loop_carried_storage_types(
     let mut contracts = entry
         .iter()
         .filter_map(|(name, entry_ty)| {
-            if !is_array_like(entry_ty) {
-                return None;
-            }
             let fixed_ty = fixed.get(name)?;
             representation_contract(
                 entry_ty,
                 fixed_ty,
-                whole_mixed_sources.contains(name),
+                whole_representation_sources.contains(name),
             )
                 .map(|contract| (name.clone(), contract))
         })
@@ -102,7 +99,7 @@ fn apply_assignment_evidence(
     assignments: &[(&str, AssignedValue<'_>)],
     env: &mut TypeEnv,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
-    whole_mixed_sources: &mut HashSet<String>,
+    whole_representation_sources: &mut HashSet<String>,
 ) {
     for (name, source) in assignments {
         let incoming = match source {
@@ -112,11 +109,19 @@ fn apply_assignment_evidence(
             AssignedValue::Known(ty) => ty.clone(),
             AssignedValue::Opaque => PhpType::Mixed,
         };
-        if env.get(*name).is_some_and(is_array_like)
-            && matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-            && !matches!(source, AssignedValue::Opaque)
-        {
-            whole_mixed_sources.insert((*name).to_string());
+        let proves_whole_representation_change =
+            env.get(*name).is_some_and(|existing| match source {
+                AssignedValue::Opaque => false,
+                AssignedValue::Expr(_) | AssignedValue::Known(_) if is_array_like(existing) => {
+                    matches!(incoming.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                }
+                AssignedValue::Expr(_) | AssignedValue::Known(_) => {
+                    matches!(existing, PhpType::Void)
+                        && !matches!(&incoming, PhpType::Void | PhpType::Never)
+                }
+            });
+        if proves_whole_representation_change {
+            whole_representation_sources.insert((*name).to_string());
         }
         let merged = env
             .get(*name)
@@ -359,7 +364,36 @@ fn join_loop_flow_type(existing: PhpType, incoming: PhpType) -> PhpType {
             PhpType::AssocArray { key, value }
         }
         (left, right) if left.codegen_repr() == right.codegen_repr() => left,
-        _ => PhpType::Mixed,
+        (left, right) => merge_loop_union_members(left, right),
+    }
+}
+
+/// Builds a stable semantic union for loop-carried whole-value representation changes.
+///
+/// Retaining members such as `null|ArrayAccessObject` lets flow narrowing recover the concrete
+/// arm inside a truthy branch while `codegen_repr()` still selects one boxed `Mixed` frame slot.
+/// Existing unions are flattened and duplicate members are removed so the fixed-point converges.
+fn merge_loop_union_members(left: PhpType, right: PhpType) -> PhpType {
+    let mut members = Vec::new();
+    for ty in [left, right] {
+        match ty {
+            PhpType::Union(nested) => {
+                for member in nested {
+                    if !members.contains(&member) {
+                        members.push(member);
+                    }
+                }
+            }
+            member if !matches!(member, PhpType::Never) && !members.contains(&member) => {
+                members.push(member);
+            }
+            _ => {}
+        }
+    }
+    match members.len() {
+        0 => PhpType::Never,
+        1 => members.pop().unwrap(),
+        _ => PhpType::Union(members),
     }
 }
 
@@ -381,7 +415,7 @@ fn join_array_payload_type(existing: PhpType, incoming: PhpType) -> PhpType {
 fn representation_contract(
     entry: &PhpType,
     fixed: &PhpType,
-    has_whole_mixed_source: bool,
+    has_whole_representation_source: bool,
 ) -> Option<PhpType> {
     match (entry.codegen_repr(), fixed.codegen_repr()) {
         (PhpType::Array(entry_element), PhpType::Array(fixed_element))
@@ -409,9 +443,13 @@ fn representation_contract(
         }
         (PhpType::Array(_), fixed @ PhpType::AssocArray { .. }) => Some(fixed),
         (entry_repr, PhpType::Mixed)
-            if entry_repr != PhpType::Mixed && has_whole_mixed_source =>
+            if entry_repr != PhpType::Mixed && has_whole_representation_source =>
         {
-            Some(PhpType::Mixed)
+            Some(if is_array_like(entry) {
+                PhpType::Mixed
+            } else {
+                fixed.clone()
+            })
         }
         _ => None,
     }

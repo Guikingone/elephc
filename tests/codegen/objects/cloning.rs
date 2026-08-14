@@ -76,6 +76,20 @@ fn test_clone_keeps_nested_objects_shared() {
 class Child {
     public int $x = 1;
 }
+class Boxed {
+    public Child $child;
+    public function __construct() {
+        $this->child = new Child();
+    }
+}
+$a = new Boxed();
+$b = clone $a;
+$b->child->x = 7;
+echo $a->child->x . "|" . $b->child->x;
+"#,
+    );
+    assert_eq!(out, "7|7");
+}
 
 /// Verifies cloning preserves a declared object union for a following fluent method call.
 #[test]
@@ -110,20 +124,6 @@ echo $route->path;
 "#,
     );
     assert_eq!(out, "/ready");
-}
-class Boxed {
-    public Child $child;
-    public function __construct() {
-        $this->child = new Child();
-    }
-}
-$a = new Boxed();
-$b = clone $a;
-$b->child->x = 7;
-echo $a->child->x . "|" . $b->child->x;
-"#,
-    );
-    assert_eq!(out, "7|7");
 }
 
 /// Verifies stdClass dynamic properties are copied into a separate hash table during cloning.
@@ -199,4 +199,27 @@ echo $source->name . '|' . $clone->name;
 "#,
     );
     assert_eq!(out, "source|clone");
+}
+
+/// Verifies a clone whose source is untyped remains gradual when passed to a concrete object parameter.
+#[test]
+fn test_clone_mixed_result_can_flow_to_concrete_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class GradualCloneValue {
+    public string $name = 'ready';
+}
+
+function duplicate_gradual($value) {
+    return clone $value;
+}
+
+function read_gradual_clone(GradualCloneValue $value): string {
+    return $value->name;
+}
+
+echo read_gradual_clone(duplicate_gradual(new GradualCloneValue()));
+"#,
+    );
+    assert_eq!(out, "ready");
 }

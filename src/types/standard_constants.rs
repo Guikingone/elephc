@@ -43,6 +43,15 @@ pub(crate) const STANDARD_INT_CONSTANTS: &[(&str, i64)] = &[
     ("INI_SCANNER_TYPED", 2),
     ("PHP_QUERY_RFC1738", 1),
     ("PHP_QUERY_RFC3986", 2),
+    ("SIG_DFL", 0),
+    ("SIGINT", 2),
+    ("SIGQUIT", 3),
+    ("SIGALRM", 14),
+    ("SIGTERM", 15),
+    ("GRAPHEME_EXTR_MAXBYTES", 1),
+    ("FILEINFO_MIME_TYPE", 16),
+    ("PCRE_VERSION_MAJOR", 10),
+    ("PCRE_VERSION_MINOR", 47),
     ("LIBXML_COMPACT", 65_536),
     ("LIBXML_NONET", 2048),
     ("LIBXML_ERR_NONE", 0),
@@ -74,6 +83,13 @@ mod tests {
         assert_eq!(value("UPLOAD_ERR_NO_FILE"), 4);
         assert_eq!(value("PHP_QUERY_RFC3986"), 2);
         assert_eq!(value("PHP_OUTPUT_HANDLER_REMOVABLE"), 64);
+        assert_eq!(value("SIGINT"), 2);
+        assert_eq!(value("SIGQUIT"), 3);
+        assert_eq!(value("SIGTERM"), 15);
+        assert_eq!(value("GRAPHEME_EXTR_MAXBYTES"), 1);
+        assert_eq!(value("FILEINFO_MIME_TYPE"), 16);
+        assert_eq!(value("PCRE_VERSION_MAJOR"), 10);
+        assert_eq!(value("PCRE_VERSION_MINOR"), 47);
         assert_eq!(value("LIBXML_COMPACT"), 65_536);
         assert_eq!(value("LIBXML_NONET"), 2048);
     }

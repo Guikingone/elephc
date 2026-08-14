@@ -18,8 +18,9 @@ pub(super) fn lower_property_array_push(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let generic_receiver = is_generic_object_receiver(ctx, object.value);
     if let Some(property_ty) =
-        object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
+        generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
@@ -57,8 +58,85 @@ pub(super) fn lower_property_array_push(
         return;
     }
 
-    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+    if let Some(property_ty) =
+        generic_object_array_property_type(ctx, object.value, property).filter(is_assoc_array_type)
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        release_property_array_insert_value_after_retain(ctx, &property_ty, value, span);
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
+        return;
+    }
+
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property)
         .filter(|ty| property_type_uses_mixed_array_storage(ty))
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        if generic_receiver {
+            ctx.emit_void(
+                Op::PropSet,
+                vec![object.value, property_value.value],
+                Some(Immediate::Data(data)),
+                Op::PropSet.default_effects(),
+                Some(span),
+            );
+            release_rewritten_property_value_after_retaining_store(
+                ctx,
+                &property_ty,
+                property_value,
+                span,
+            );
+        }
+        return;
+    }
+
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property)
+        .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
@@ -71,10 +149,10 @@ pub(super) fn lower_property_array_push(
         );
         let value = lower_expr(ctx, value);
         ctx.emit_void(
-            Op::MixedArrayAppend,
+            Op::RuntimeCall,
             vec![property_value.value, value.value],
             None,
-            Op::MixedArrayAppend.default_effects(),
+            effects_lookup::runtime_effects(),
             Some(span),
         );
         return;
@@ -121,7 +199,7 @@ pub(super) fn lower_property_array_assign(
 ) {
     let object = lower_expr(ctx, object);
     if let Some(property_ty) =
-        object_property_type(ctx, object.value, property).filter(is_indexed_array_type)
+        generic_object_array_property_type(ctx, object.value, property).filter(is_indexed_array_type)
     {
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
@@ -187,7 +265,7 @@ pub(super) fn lower_property_array_assign(
         return;
     }
     if let Some(property_ty) =
-        object_property_type(ctx, object.value, property).filter(is_assoc_array_type)
+        generic_object_array_property_type(ctx, object.value, property).filter(is_assoc_array_type)
     {
         let data = ctx.intern_string(property);
         let property_value = ctx.emit_value(
@@ -226,7 +304,7 @@ pub(super) fn lower_property_array_assign(
         return;
     }
 
-    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property)
         .filter(|ty| type_satisfies_array_access_for_ir(ctx, ty))
     {
         let data = ctx.intern_string(property);
@@ -250,6 +328,45 @@ pub(super) fn lower_property_array_assign(
         return;
     }
 
+    if let Some(property_ty) = generic_object_array_property_type(ctx, object.value, property)
+        .filter(|ty| property_type_uses_mixed_array_storage(ty))
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty.clone(),
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let property_value =
+            crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(span));
+        let index = lower_expr(ctx, index);
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::RuntimeCall,
+            vec![property_value.value, index.value, value.value],
+            None,
+            effects_lookup::runtime_effects(),
+            Some(span),
+        );
+        ctx.emit_void(
+            Op::PropSet,
+            vec![object.value, property_value.value],
+            Some(Immediate::Data(data)),
+            Op::PropSet.default_effects(),
+            Some(span),
+        );
+        release_rewritten_property_value_after_retaining_store(
+            ctx,
+            &property_ty,
+            property_value,
+            span,
+        );
+        return;
+    }
+
     let index = lower_expr(ctx, index);
     let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
@@ -260,6 +377,17 @@ pub(super) fn lower_property_array_assign(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Returns whether an EIR receiver carries PHP's bare `object` pseudo-type.
+fn is_generic_object_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(object),
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+    )
 }
 
 /// Releases a temporary assigned into an object property after `PropSet` retains or boxes it.

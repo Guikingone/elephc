@@ -29,6 +29,27 @@ pub(super) fn lower_if(
     else_body: Option<&[Stmt]>,
     span: Span,
 ) {
+    if let Some(result) = crate::ir_lower::expr::statically_known_instanceof_result(ctx, condition)
+    {
+        let condition_value = lower_expr(ctx, condition);
+        let _ = ctx.truthy_consuming(condition_value, Some(condition.span));
+        if result {
+            lower_block(ctx, then_body);
+        } else if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
+            lower_if(
+                ctx,
+                next_condition,
+                next_body,
+                rest,
+                else_body,
+                span,
+            );
+        } else if let Some(else_body) = else_body {
+            lower_block(ctx, else_body);
+        }
+        ctx.clear_static_callable_locals();
+        return;
+    }
     let merge = ctx.builder.create_named_block("if.merge", Vec::new());
     let mut arms = Vec::new();
     let merge_reachable = lower_if_chain(

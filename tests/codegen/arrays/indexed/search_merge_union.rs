@@ -306,6 +306,21 @@ echo count($result), ":", $result[0], ":", $result[2];
     assert_eq!(out, "2:alpha:alpha");
 }
 
+/// A value read through a gradual keyed boundary can participate in an array intersection.
+#[test]
+fn test_array_intersect_accepts_gradual_array_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function matching($group): array {
+    return array_intersect($group['values'], ['alpha']);
+}
+$result = matching(['values' => ['named' => 'alpha', 2 => 'missing']]);
+echo count($result), ':', $result['named'];
+"#,
+    );
+    assert_eq!(out, "1:alpha");
+}
+
 /// Verifies `array_flip()` dispatches on the runtime tags stored in a heterogeneous packed array.
 #[test]
 fn test_array_flip_mixed_indexed_runtime_values() {

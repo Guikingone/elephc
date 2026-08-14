@@ -154,7 +154,8 @@ impl Checker {
                     for c in conditions {
                         self.infer_type(c, env)?;
                     }
-                    let ty = self.match_arm_result_type(result, env)?;
+                    let arm_env = self.match_arm_narrowed_env(subject, conditions, env)?;
+                    let ty = self.match_arm_result_type(result, &arm_env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,

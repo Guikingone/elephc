@@ -169,6 +169,9 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -210,6 +213,9 @@ impl MixedNumericOp {
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
             MixedNumericOp::Pow => "pow",
+            MixedNumericOp::BitAnd => "bit_and",
+            MixedNumericOp::BitOr => "bit_or",
+            MixedNumericOp::BitXor => "bit_xor",
         }
     }
 }
@@ -338,6 +344,11 @@ pub enum Op {
     MixedCastFloat,
     MixedCastString,
     StrConcat,
+    StrBitAnd,
+    StrBitOr,
+    StrBitXor,
+    /// Copies a PHP byte string while replacing one offset with the first replacement byte.
+    StrSetOffset,
     StrLen,
     StrPersist,
     StrCharAt,
@@ -624,6 +635,7 @@ impl Op {
             // `<<` / `>>` throw `ArithmeticError` for a negative shift count.
             IDiv | ISDiv | ISMod => E::MAY_FATAL | E::MAY_THROW,
             IShl | IShrA | FDiv => E::MAY_THROW,
+            Spaceship => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
@@ -664,7 +676,8 @@ impl Op {
                 E::WRITES_HEAP | E::READS_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
             }
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
+            IToStr | FToStr | ResourceToStr | StrConcat | StrBitAnd | StrBitOr | StrBitXor
+            | StrSetOffset | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
@@ -761,7 +774,7 @@ impl Op {
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
             | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
-            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
+            | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
             // `++`/`--` on a string reads the operand's payload, may write the shared
@@ -960,6 +973,10 @@ impl Op {
             MixedCastFloat => "mixed_cast_float",
             MixedCastString => "mixed_cast_string",
             StrConcat => "str_concat",
+            StrBitAnd => "str_bit_and",
+            StrBitOr => "str_bit_or",
+            StrBitXor => "str_bit_xor",
+            StrSetOffset => "str_set_offset",
             StrLen => "str_len",
             StrPersist => "str_persist",
             StrCharAt => "str_char_at",

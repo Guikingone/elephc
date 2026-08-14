@@ -21,8 +21,20 @@ pub(super) fn lower_polymorphic_object_prop_get(
     target_name: &str,
     property: &str,
 ) -> Result<()> {
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, target_name, property)
+}
+
+/// Dispatches a property read after the raw object payload has been loaded into the result register.
+fn lower_polymorphic_object_prop_get_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target_name: &str,
+    property: &str,
+) -> Result<()> {
     let candidates = polymorphic_property_candidates(ctx, target_name, property, inst)?;
-    if candidates.is_empty() {
+    if candidates.is_empty() && !target_name.trim_start_matches('\\').is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for polymorphic property {}::${}",
             inst.op.name(),
@@ -33,6 +45,10 @@ pub(super) fn lower_polymorphic_object_prop_get(
 
     let miss_label = ctx.next_label("interface_prop_miss");
     let done_label = ctx.next_label("interface_prop_done");
+    let stdclass_label = target_name
+        .trim_start_matches('\\')
+        .is_empty()
+        .then(|| ctx.next_label("generic_object_stdclass_prop"));
     let match_labels = candidates
         .iter()
         .map(|candidate| {
@@ -43,9 +59,13 @@ pub(super) fn lower_polymorphic_object_prop_get(
         })
         .collect::<Vec<_>>();
 
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(object, object_reg)?;
-    emit_raw_object_property_class_dispatch(ctx, &candidates, &match_labels, &miss_label);
+    emit_raw_object_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        stdclass_label.as_deref(),
+        &miss_label,
+    );
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
@@ -55,6 +75,14 @@ pub(super) fn lower_polymorphic_object_prop_get(
         }
         emit_property_load(ctx, &candidate.slot, base_reg)?;
         materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+        store_if_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    if let Some(stdclass_label) = stdclass_label {
+        ctx.emitter.label(&stdclass_label);
+        emit_stdclass_get_from_loaded_object(ctx, property);
+        cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
         store_if_result(ctx, inst)?;
         abi::emit_jump(ctx.emitter, &done_label);
     }
@@ -73,7 +101,9 @@ fn polymorphic_property_candidates(
     property: &str,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyCandidate>> {
-    let target_key = php_symbol_key(target_name.trim_start_matches('\\'));
+    let normalized_target = target_name.trim_start_matches('\\');
+    let target_key = php_symbol_key(normalized_target);
+    let target_is_any_object = normalized_target.is_empty();
     let target_is_interface = ctx
         .module
         .interface_infos
@@ -81,7 +111,9 @@ fn polymorphic_property_candidates(
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == target_key);
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
-        let satisfies_target = if target_is_interface {
+        let satisfies_target = if target_is_any_object {
+            true
+        } else if target_is_interface {
             object_type_implements_interface(ctx, class_name, target_name)
         } else {
             php_symbol_key(class_name.trim_start_matches('\\')) == target_key
@@ -100,13 +132,39 @@ fn polymorphic_property_candidates(
         {
             continue;
         }
+        let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+        if target_is_any_object
+            && !generic_property_candidate_matches_result(ctx, &slot.php_type, &inst.result_php_type)
+        {
+            continue;
+        }
         candidates.push(MixedPropertyCandidate {
             class_id: class_info.class_id,
-            slot: resolve_property_slot_for_class(ctx, class_name, property, inst)?,
+            slot,
         });
     }
     candidates.sort_by_key(|candidate| candidate.class_id);
     Ok(candidates)
+}
+
+/// Returns whether one concrete property slot can materialize the generic EIR result shape.
+fn generic_property_candidate_matches_result(
+    ctx: &FunctionContext<'_>,
+    source: &PhpType,
+    result: &PhpType,
+) -> bool {
+    let source = source.codegen_repr();
+    let result = result.codegen_repr();
+    if result == PhpType::Mixed || source == result {
+        return true;
+    }
+    match (&source, &result) {
+        (PhpType::Object(source_name), PhpType::Object(result_name)) => {
+            source_name.trim_start_matches('\\').is_empty()
+                || object_type_is_a(ctx, source_name, result_name)
+        }
+        _ => false,
+    }
 }
 
 /// Emits class-id branches for a raw interface object already loaded in the result register.
@@ -114,6 +172,7 @@ fn emit_raw_object_property_class_dispatch(
     ctx: &mut FunctionContext<'_>,
     candidates: &[MixedPropertyCandidate],
     match_labels: &[String],
+    stdclass_label: Option<&str>,
     miss_label: &str,
 ) {
     match ctx.emitter.target.arch {
@@ -124,6 +183,9 @@ fn emit_raw_object_property_class_dispatch(
                 ctx.emitter.instruction("cmp x9, x10");                         // compare against one AOT interface implementor
                 ctx.emitter.instruction(&format!("b.eq {}", label));            // read that implementor's declared property slot
             }
+            if let Some(stdclass_label) = stdclass_label {
+                emit_branch_to_stdclass_candidate(ctx, "x9", "x10", stdclass_label);
+            }
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the concrete class id behind the interface value
@@ -131,6 +193,9 @@ fn emit_raw_object_property_class_dispatch(
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
                 ctx.emitter.instruction("cmp r11, r10");                        // compare against one AOT interface implementor
                 ctx.emitter.instruction(&format!("je {}", label));              // read that implementor's declared property slot
+            }
+            if let Some(stdclass_label) = stdclass_label {
+                emit_branch_to_stdclass_candidate(ctx, "r11", "r10", stdclass_label);
             }
         }
     }
@@ -438,6 +503,9 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
+    if class_name.trim_start_matches('\\').is_empty() {
+        return lower_nullable_generic_object_prop_get(ctx, inst, object, property);
+    }
     let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let null_label = ctx.next_label("nullable_prop_warning_null");
     let done_label = ctx.next_label("nullable_prop_warning_done");
@@ -451,11 +519,38 @@ pub(super) fn lower_nullable_prop_get_with_warning(
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&null_label);
-    emit_property_on_null_warning(ctx, property);
+    if inst.op != Op::NullsafePropGet {
+        emit_property_on_null_warning(ctx, property);
+    }
     emit_boxed_null(ctx);
 
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
+}
+
+/// Lowers a nullable bare-object property read through concrete runtime class dispatch.
+fn lower_nullable_generic_object_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    property: &str,
+) -> Result<()> {
+    let null_label = ctx.next_label("nullable_generic_prop_null");
+    let done_label = ctx.next_label("nullable_generic_prop_done");
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
+    lower_polymorphic_object_prop_get_from_loaded_object(ctx, inst, "", property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    if inst.op != Op::NullsafePropGet {
+        emit_property_on_null_warning(ctx, property);
+    }
+    emit_boxed_null(ctx);
+    store_if_result(ctx, inst)?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits PHP's warning for reading a property from null.

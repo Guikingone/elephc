@@ -17,6 +17,11 @@ pub(super) fn lower_ternary(
     else_expr: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = statically_known_instanceof_result(ctx, condition) {
+        let condition_value = lower_expr(ctx, condition);
+        let _ = ctx.truthy_consuming(condition_value, Some(condition.span));
+        return lower_expr(ctx, if result { then_expr } else { else_expr });
+    }
     let cond = lower_expr(ctx, condition);
     let cond = ctx.truthy_consuming(cond, Some(condition.span));
     let result_type = branch_merge_result_type(ctx, then_expr, else_expr, expr);

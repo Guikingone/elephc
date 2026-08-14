@@ -32,21 +32,17 @@ pub(crate) fn check_class_like_exists(_cx: &mut BuiltinCheckCtx) -> Result<PhpTy
 
 /// Validates `class_implements` / `class_parents` / `class_uses` arguments.
 ///
-/// Infers the first argument and requires it to be an object or string literal.
+/// Infers the first argument and requires it to be an object or string.
 /// If present, infers and validates the second argument (autoload flag) as a literal bool or int.
 /// Returns the union `array<string,string>|bool` used by the PHP class-relation builtins.
 /// This hook is called with `lazy_check: true` so inference happens here, not in the common path.
 pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let first_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let dynamic_eval_target = cx.checker.eval_barrier_active
-        && matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
-    if !matches!(first_ty, PhpType::Object(_))
-        && !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
-        && !dynamic_eval_target
-    {
+    let gradual_target = matches!(first_ty.codegen_repr(), PhpType::Mixed);
+    if !matches!(first_ty, PhpType::Object(_) | PhpType::Str) && !gradual_target {
         return Err(CompileError::new(
             cx.span,
-            &format!("{}() first argument must be an object or string literal in AOT mode", cx.name),
+            &format!("{}() first argument must be an object or string", cx.name),
         ));
     }
     if let Some(autoload_arg) = cx.args.get(1) {

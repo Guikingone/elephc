@@ -223,6 +223,13 @@ pub(super) fn property_get_result_type(
     };
     let nullable = nullable || value_may_carry_container_miss(ctx, object);
     let normalized = class_name.trim_start_matches('\\');
+    if normalized.is_empty() {
+        return if nullable {
+            nullable_result_type(PhpType::Mixed)
+        } else {
+            PhpType::Mixed
+        };
+    }
     if is_builtin_stdclass_name(normalized) {
         return if nullable {
             nullable_result_type(PhpType::Mixed)

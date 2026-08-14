@@ -42,7 +42,36 @@ pub(super) fn lower_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let mut lhs = lower_expr(ctx, left);
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && lhs.ir_type == IrType::Str
+    {
+        lhs = persist_concat_lhs_if_rhs_can_reset(ctx, lhs, right, expr.span);
+    }
     let mut rhs = lower_expr(ctx, right);
+    if lhs.ir_type == IrType::Str
+        && rhs.ir_type == IrType::Str
+        && matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+    {
+        let string_op = match op {
+            BinOp::BitAnd => Op::StrBitAnd,
+            BinOp::BitOr => Op::StrBitOr,
+            BinOp::BitXor => Op::StrBitXor,
+            _ => unreachable!(),
+        };
+        let result = ctx.emit_value(
+            string_op,
+            vec![lhs.value, rhs.value],
+            None,
+            PhpType::Str,
+            string_op.default_effects(),
+            Some(expr.span),
+        );
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
+    }
     if matches!(op, BinOp::Add) {
         let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
         let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
@@ -120,6 +149,17 @@ pub(super) fn lower_numeric_binary(
             arithmetic_effects(Op::ISMod, right),
             Some(expr.span),
         );
+    }
+    if matches!(op, BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor)
+        && (is_gradual_bitwise_operand(ctx, lhs) || is_gradual_bitwise_operand(ctx, rhs))
+    {
+        let mixed_op = mixed_numeric_op(op).expect("bitwise operations have mixed dispatch");
+        let result = lower_mixed_numeric_binary(ctx, lhs, rhs, mixed_op, expr);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value {
+            release_binary_operand_temporary(ctx, rhs, expr.span);
+        }
+        return result;
     }
     if matches!(
         op,
@@ -251,6 +291,17 @@ pub(super) fn lower_numeric_binary(
         fallback_expr_type(expr),
         effects_lookup::runtime_effects(),
         Some(expr.span),
+    )
+}
+
+/// Returns whether a bitwise operand needs runtime string-versus-integer dispatch.
+fn is_gradual_bitwise_operand(
+    ctx: &LoweringContext<'_, '_>,
+    value: LoweredValue,
+) -> bool {
+    matches!(
+        ctx.builder.value_php_type(value.value).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
     )
 }
 
@@ -412,6 +463,9 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
         BinOp::Pow => Some(MixedNumericOp::Pow),
+        BinOp::BitAnd => Some(MixedNumericOp::BitAnd),
+        BinOp::BitOr => Some(MixedNumericOp::BitOr),
+        BinOp::BitXor => Some(MixedNumericOp::BitXor),
         _ => None,
     }
 }

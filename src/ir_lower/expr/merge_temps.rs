@@ -240,47 +240,19 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
         (PhpType::Mixed | PhpType::Union(_), _)
             if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
         {
-            // Whole-boxed sources (a `?array` value flowing through `??`)
-            // unbox the cell payload and convert it with the same
-            // runtime-call coercion declared container returns use. The
-            // conversion borrows the cell and owns a fresh container
-            // reference, so an owning cell must be consumed here.
-            //
-            // The indexed conversion consumes one owned payload reference
-            // and rewrites sole-owner arrays in place, which is only sound
-            // when the cell owns its payload. A borrowed cell (a `?array`
-            // parameter or local) shares its payload with a live caller
-            // array, so it unboxes through the owned-payload coercion —
-            // which retains the payload — and the consuming `ArrayToMixed`
-            // copy-on-write-splits into a private converted copy. The
-            // associative helper returns a fresh hash without consuming the
-            // payload reference, so borrowed hash cells keep the
-            // single-call coercion.
+            // A whole-boxed gradual array can carry either indexed or associative storage at
+            // runtime. Normalize both layouts through the checked sparse-container operation;
+            // selecting the indexed-only runtime conversion from the declared `array<mixed>`
+            // target would reinterpret an associative payload with the wrong layout. The
+            // converted hash owns its payload independently, and `array<mixed>` consumers
+            // dynamically dispatch on the runtime heap kind.
             let cell_is_owning = ctx.value_is_owning_temporary(value);
-            if !cell_is_owning && matches!(target_ty, PhpType::Array(_)) {
-                let unboxed = ctx.emit_value(
-                    Op::RuntimeCall,
-                    vec![value.value],
-                    None,
-                    PhpType::Array(Box::new(PhpType::Never)),
-                    effects_lookup::runtime_effects(),
-                    span,
-                );
-                return ctx.emit_value(
-                    Op::ArrayToMixed,
-                    vec![unboxed.value],
-                    None,
-                    target_ty.clone(),
-                    Op::ArrayToMixed.default_effects(),
-                    span,
-                );
-            }
             let converted = ctx.emit_value(
-                Op::RuntimeCall,
+                Op::MixedToHash,
                 vec![value.value],
                 None,
                 target_ty.clone(),
-                effects_lookup::runtime_effects(),
+                Op::MixedToHash.default_effects(),
                 span,
             );
             if cell_is_owning {

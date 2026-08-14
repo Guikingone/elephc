@@ -147,6 +147,8 @@ use generators::*;
 use instanceof_coercions::*;
 use merge_temps::*;
 
+pub(in crate::ir_lower) use instanceof_coercions::statically_known_instanceof_result;
+
 pub(crate) use callable_resolution::{
     is_bound_closure_assignment_shape, lower_bound_closure_for_assignment,
 };
@@ -993,17 +995,19 @@ fn dynamic_new_args_lower_to_exact_arity(
 /// `BuiltinArgumentLowering::ArrayInternalPointer(op)` descriptor, never by matching the
 /// PHP name here, so the six stay distinguishable as metadata all the way down.
 ///
-/// The receiver's internal pointer is a hidden `Int` frame slot beside the array local
-/// (`LoweringContext::array_pointer_cursor_slot`). A read (`key`/`current`) loads that
-/// cursor and boxes the key/value at it; a seek (`next`/`prev`/`reset`/`end`) first calls
-/// `ArrayPtrSeek` to compute the new cursor, stores it back, and then boxes the value at
-/// the new position — the same two-step shape PHP's own implementations use.
+/// A plain-local receiver keeps its internal pointer in a hidden `Int` frame slot beside
+/// that local (`LoweringContext::array_pointer_cursor_slot`). A read (`key`/`current`)
+/// loads that cursor and boxes the key/value at it; a seek (`next`/`prev`/`reset`/`end`)
+/// first calls `ArrayPtrSeek`, stores the new cursor, and then boxes the selected value.
 ///
-/// Returns `None` for anything this path cannot own (named/spread arguments, a wrong
-/// argument count, or a receiver that is not a plain variable) so the generic builtin path
-/// still runs. The checker has already rejected those shapes with a source-level
-/// diagnostic (`crate::builtins::array::internal_pointer`), so reaching the generic path
-/// in a successful compile is not possible.
+/// Other receiver expressions are evaluated exactly once and start from the first position.
+/// By-reference property and element calls reach this function through the shared place
+/// adapter, which presents a temporary plain local and writes its value back afterwards.
+/// Read-only expression receivers and fresh call results need no persistent cursor, so a
+/// call-local zero cursor preserves their temporary-value semantics.
+///
+/// Returns `None` only for named/spread arguments or a wrong argument count, leaving those
+/// shapes to the ordinary call diagnostics.
 fn lower_array_internal_pointer(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1023,15 +1027,21 @@ fn lower_array_internal_pointer(
     {
         return None;
     }
-    let ExprKind::Variable(variable) = &args[0].kind else {
-        return None;
+    let (container, cursor_slot, cursor) = match &args[0].kind {
+        ExprKind::Variable(variable) => {
+            let container = ctx.load_local(variable, Some(args[0].span));
+            let cursor_slot = ctx.array_pointer_cursor_slot(variable);
+            let cursor = ctx
+                .builder
+                .emit_load_local(cursor_slot, IrType::I64, PhpType::Int);
+            (container, Some(cursor_slot), cursor)
+        }
+        _ => {
+            let container = lower_expr(ctx, &args[0]);
+            let cursor = ctx.builder.emit_const_i64(0);
+            (container, None, cursor)
+        }
     };
-    let variable = variable.clone();
-    let container = ctx.load_local(&variable, Some(args[0].span));
-    let cursor_slot = ctx.array_pointer_cursor_slot(&variable);
-    let cursor = ctx
-        .builder
-        .emit_load_local(cursor_slot, IrType::I64, PhpType::Int);
     let cursor = match op.seek_mode() {
         None => cursor,
         Some(mode) => {
@@ -1046,7 +1056,9 @@ fn lower_array_internal_pointer(
                 effects_lookup::runtime_effects(),
                 Some(expr.span),
             );
-            ctx.builder.emit_store_local(cursor_slot, moved.value);
+            if let Some(cursor_slot) = cursor_slot {
+                ctx.builder.emit_store_local(cursor_slot, moved.value);
+            }
             moved.value
         }
     };
@@ -1055,7 +1067,7 @@ fn lower_array_internal_pointer(
     } else {
         crate::ir::RuntimeFnId::ArrayPtrValue
     };
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::RuntimeCall,
         vec![container.value, cursor],
         Some(Immediate::RuntimeCall(
@@ -1064,7 +1076,11 @@ fn lower_array_internal_pointer(
         PhpType::Mixed,
         effects_lookup::runtime_effects(),
         Some(expr.span),
-    ))
+    );
+    if cursor_slot.is_none() {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(args[0].span));
+    }
+    Some(result)
 }
 
 /// Emits the generic runtime class-name dispatch for `new $class(...)`.

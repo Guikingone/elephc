@@ -36,9 +36,9 @@ impl Checker {
     /// Callback builtins that know the argument types their comparator/visitor
     /// receives (for example `usort`/`uasort` over an array of objects) pass the
     /// element type as a hint so an unannotated parameter is checked against the
-    /// real value type instead of the default `Int`/`Mixed` placeholder. An
-    /// explicitly annotated parameter always keeps its declared type; the hint is
-    /// only consulted for parameters with no type annotation.
+    /// real value type instead of the gradual `Mixed` fallback. An explicitly
+    /// annotated parameter always keeps its declared type; the hint is only
+    /// consulted for parameters with no type annotation.
     pub(crate) fn prepare_closure_signature_context_with_param_hints(
         &mut self,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
@@ -84,7 +84,7 @@ impl Checker {
                 None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
-                    None => (PhpType::Int, PhpType::Mixed),
+                    None => (PhpType::Mixed, PhpType::Mixed),
                 },
             };
 
@@ -285,6 +285,9 @@ impl Checker {
             ExprKind::StaticMethodCall {
                 receiver, method, ..
             } => self.resolve_static_method_return_callable_sig(receiver, method, false),
+            ExprKind::StringLiteral(name) => Ok(self
+                .direct_function_call_signature(name)
+                .map(|(signature, _)| signature)),
             ExprKind::Variable(var_name) => Ok(self.callable_sigs.get(var_name).cloned()),
             ExprKind::ArrayAccess { array, .. } => {
                 if let ExprKind::Variable(array_name) = &array.kind {

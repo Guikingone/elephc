@@ -321,7 +321,8 @@ impl Checker {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
                     fallthrough_env = arm_env.clone();
-                    let mut result_env = arm_env;
+                    let mut result_env =
+                        self.match_arm_narrowed_env(subject, conditions, &arm_env)?;
                     let ty = self.infer_type_with_assignment_effects(result, &mut result_env)?;
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
@@ -650,7 +651,10 @@ impl Checker {
 
     /// Returns the statically known signature for a direct named call and whether it uses
     /// internal-function named-argument rules.
-    fn direct_function_call_signature(&self, name: &str) -> Option<(crate::types::FunctionSig, bool)> {
+    pub(crate) fn direct_function_call_signature(
+        &self,
+        name: &str,
+    ) -> Option<(crate::types::FunctionSig, bool)> {
         let key = php_symbol_key(name);
         if !crate::types::checker::builtins::strict_php_hidden_builtin(&key) {
             if let Some(signature) = crate::types::builtin_call_sig(&key) {
@@ -663,7 +667,94 @@ impl Checker {
         self.functions
             .get(&canonical)
             .cloned()
+            .or_else(|| self.unresolved_direct_function_effect_signature(&canonical))
             .map(|signature| (signature, false))
+    }
+
+    /// Builds the caller-visible reference contract for a declared function not yet resolved.
+    ///
+    /// Call-effect inference runs before ordinary call inference. A forward call can therefore
+    /// encounter only its parsed declaration, but its by-reference arguments still need their
+    /// post-call storage before later statements are checked. This lightweight signature keeps
+    /// declared parameter types authoritative without resolving or checking the function body.
+    fn unresolved_direct_function_effect_signature(
+        &self,
+        canonical: &str,
+    ) -> Option<crate::types::FunctionSig> {
+        let declaration = self.fn_decls.get(canonical)?;
+        let params = declaration
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let ty = declaration
+                    .param_types
+                    .get(index)
+                    .and_then(|type_expr| type_expr.as_ref())
+                    .and_then(|type_expr| {
+                        self.resolve_declared_param_type_hint(
+                            type_expr,
+                            declaration.span,
+                            "Function parameter",
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(PhpType::Int);
+                (name.clone(), ty)
+            })
+            .chain(declaration.variadic.iter().map(|name| {
+                let element = declaration
+                    .variadic_type
+                    .as_ref()
+                    .and_then(|type_expr| {
+                        self.resolve_declared_param_type_hint(
+                            type_expr,
+                            declaration.span,
+                            "Variadic function parameter",
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(if declaration.variadic_by_ref {
+                        PhpType::Mixed
+                    } else {
+                        PhpType::Int
+                    });
+                (name.clone(), PhpType::Array(Box::new(element)))
+            }))
+            .collect();
+        Some(crate::types::FunctionSig {
+            params,
+            param_type_exprs: declaration
+                .param_types
+                .iter()
+                .cloned()
+                .chain(
+                    declaration
+                        .variadic
+                        .iter()
+                        .map(|_| declaration.variadic_type.clone()),
+                )
+                .collect(),
+            param_attributes: declaration.param_attributes.clone(),
+            defaults: declaration.defaults.clone(),
+            return_type: PhpType::Int,
+            declared_return: declaration.return_type.is_some(),
+            by_ref_return: declaration.by_ref_return,
+            ref_params: declaration.ref_params.clone(),
+            declared_params: declaration
+                .param_types
+                .iter()
+                .map(|type_expr| type_expr.is_some())
+                .chain(
+                    declaration
+                        .variadic
+                        .iter()
+                        .map(|_| declaration.variadic_type.is_some()),
+                )
+                .collect(),
+            variadic: declaration.variadic.clone(),
+            deprecation: None,
+        })
     }
 
     /// Returns whether a direct call has no compile-time declaration and will use runtime lookup.
@@ -790,6 +881,23 @@ impl Checker {
                         } else {
                             Some(expected.clone())
                         }
+                    } else if declared
+                        && matches!(
+                            expected,
+                            PhpType::Array(_) | PhpType::AssocArray { .. }
+                        )
+                        && current.as_ref().is_some_and(|current| {
+                            matches!(
+                                current,
+                                PhpType::Array(_) | PhpType::AssocArray { .. }
+                            )
+                        })
+                    {
+                        // A declared `array` reference may replace elements, keys, or the whole
+                        // array while retaining the same PHP-visible contract. The caller's
+                        // pre-call shape is therefore no longer sound after the call; expose the
+                        // generic declared shape while preserving the shared array ABI storage.
+                        Some(expected.clone())
                     } else if declared
                         && current.as_ref().is_some_and(|current| {
                             current.codegen_repr() != expected.codegen_repr()

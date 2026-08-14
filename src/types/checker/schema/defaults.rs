@@ -7,8 +7,7 @@
 //!
 //! Key details:
 //! - The initial schema pass cannot reliably resolve inheritance or interface relationships.
-//! - Direct scoped-constant method defaults and Object-to-Object pairs are revisited.
-//! - Plain property scoped-constant defaults stay outside this pass until EIR lowering supports them.
+//! - Direct scoped-constant declaration defaults and Object-to-Object pairs are revisited.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
@@ -193,7 +192,7 @@ fn validate_class_defaults(checker: &mut Checker, class_name: &str, errors: &mut
 
 /// Revalidates local declared instance and static property defaults for one class.
 fn validate_class_property_defaults(
-    checker: &Checker,
+    checker: &mut Checker,
     class_name: &str,
     class_info: &crate::types::ClassInfo,
     errors: &mut Vec<CompileError>,
@@ -210,6 +209,20 @@ fn validate_class_property_defaults(
         let Some(default) = class_info.defaults.get(index).and_then(Option::as_ref) else {
             continue;
         };
+        if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+            let previous_class = checker.current_class.replace(class_name.to_string());
+            let result = checker.validate_resolved_declared_default_type(
+                expected_ty,
+                Some(default),
+                default.span,
+                &format!("Property {}::${} default", class_name, property_name),
+            );
+            checker.current_class = previous_class;
+            if let Err(error) = result {
+                errors.extend(error.flatten());
+            }
+            continue;
+        }
         validate_object_default(
             checker,
             expected_ty,
@@ -237,6 +250,20 @@ fn validate_class_property_defaults(
         else {
             continue;
         };
+        if matches!(default.kind, ExprKind::ScopedConstantAccess { .. }) {
+            let previous_class = checker.current_class.replace(class_name.to_string());
+            let result = checker.validate_resolved_declared_default_type(
+                expected_ty,
+                Some(default),
+                default.span,
+                &format!("Static property {}::${} default", class_name, property_name),
+            );
+            checker.current_class = previous_class;
+            if let Err(error) = result {
+                errors.extend(error.flatten());
+            }
+            continue;
+        }
         validate_object_default(
             checker,
             expected_ty,

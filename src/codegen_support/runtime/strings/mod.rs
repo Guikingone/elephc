@@ -10,6 +10,8 @@
 
 mod itoa;
 mod concat;
+mod bitwise;
+mod set_offset;
 mod concat_scratch;
 mod ftoa;
 mod php_num_scan;
@@ -106,6 +108,10 @@ pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
+pub use bitwise::emit_str_bitwise;
+/// Emit byte-string bitwise operators.
+pub use set_offset::emit_str_set_offset;
+/// Emit copy-on-write byte-string offset assignment.
 pub use ftoa::{emit_ftoa, emit_ftoa_repr};
 pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.

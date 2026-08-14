@@ -292,9 +292,30 @@ pub(crate) fn collect_constants(
         ),
     );
     constants.insert(
+        "LC_CTYPE".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(target_platform.lc_ctype())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
         "LC_NUMERIC".to_string(),
         (
             ExprKind::IntLiteral(target_platform.lc_numeric()),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "SIGUSR1".to_string(),
+        (
+            ExprKind::IntLiteral(target_platform.sigusr1()),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "SIGUSR2".to_string(),
+        (
+            ExprKind::IntLiteral(target_platform.sigusr2()),
             PhpType::Int,
         ),
     );
@@ -464,5 +485,17 @@ mod tests {
         assert_eq!(int_constant(&linux, "FNM_PATHNAME"), 1);
         assert_eq!(int_constant(&linux, "FNM_PERIOD"), 4);
         assert_eq!(int_constant(&linux, "FNM_CASEFOLD"), 16);
+    }
+
+    /// Verifies signal numbers follow the target C library rather than the build host.
+    #[test]
+    fn test_signal_constants_follow_target_platform() {
+        let mac = collect_constants(&vec![], Platform::MacOS);
+        assert_eq!(int_constant(&mac, "SIGUSR1"), 30);
+        assert_eq!(int_constant(&mac, "SIGUSR2"), 31);
+
+        let linux = collect_constants(&vec![], Platform::Linux);
+        assert_eq!(int_constant(&linux, "SIGUSR1"), 10);
+        assert_eq!(int_constant(&linux, "SIGUSR2"), 12);
     }
 }

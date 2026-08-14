@@ -133,7 +133,7 @@ fn emit_array_eq_call(
             ctx.load_value_to_reg(rhs, "x1")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
             if !is_equal {
-                ctx.emitter.instruction("eor x0, x0, #1");                    // invert recursive strict equality for PHP !==
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert recursive strict equality for PHP !==
             }
         }
         Arch::X86_64 => {
@@ -141,7 +141,7 @@ fn emit_array_eq_call(
             ctx.load_value_to_reg(rhs, "rsi")?;
             abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
             if !is_equal {
-                ctx.emitter.instruction("xor rax, 1");                        // invert recursive strict equality for PHP !==
+                ctx.emitter.instruction("xor rax, 1");                          // invert recursive strict equality for PHP !==
             }
         }
     }
@@ -813,17 +813,82 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let uses_float_compare = lhs_ty == PhpType::Float || rhs_ty == PhpType::Float;
     if uses_float_compare {
         emit_numeric_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
-    } else if intish_or_null(&lhs_ty) && intish_or_null(&rhs_ty) {
+    } else if spaceship_static_intish(&lhs_ty) && spaceship_static_intish(&rhs_ty) {
         emit_numeric_int_compare(ctx, lhs, rhs)?;
     } else {
-        return Err(CodegenIrError::unsupported(format!(
-            "spaceship for PHP types {:?} and {:?}",
-            lhs_ty,
-            rhs_ty
-        )));
+        emit_php_runtime_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
+        return store_if_result(ctx, inst);
     }
     emit_spaceship_result(ctx, uses_float_compare);
     store_if_result(ctx, inst)
+}
+
+/// Returns whether spaceship can compare a statically integer-like payload without runtime tags.
+fn spaceship_static_intish(ty: &PhpType) -> bool {
+    matches!(
+        ty,
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never | PhpType::TaggedScalar
+    )
+}
+
+/// Compares arbitrary PHP runtime values through the shared unboxed comparison table.
+fn emit_php_runtime_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+) -> Result<()> {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_push_reg(ctx.emitter, "x2");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 48);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov x5, x2");                              // stage the right high payload word for PHP comparison
+            ctx.emitter.instruction("mov x4, x1");                              // stage the right low payload word for PHP comparison
+            ctx.emitter.instruction("mov x3, x0");                              // stage the right runtime tag for PHP comparison
+            abi::emit_pop_reg(ctx.emitter, "x2");
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdx");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 48);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov r9, rdx");                             // stage the right high payload word for PHP comparison
+            ctx.emitter.instruction("mov r8, rdi");                             // stage the right low payload word for PHP comparison
+            ctx.emitter.instruction("mov rcx, rax");                            // stage the right runtime tag for PHP comparison
+            abi::emit_pop_reg(ctx.emitter, "rdx");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_php_compare");
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
 }
 
 /// Returns true for scalar values that can participate in the current loose integer path.

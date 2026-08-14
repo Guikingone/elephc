@@ -200,6 +200,10 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::ResourceToStr
             | Op::MixedCastString
             | Op::StrConcat
+            | Op::StrBitAnd
+            | Op::StrBitOr
+            | Op::StrBitXor
+            | Op::StrSetOffset
             | Op::StrCharAt
             | Op::StrInterpolate
     ))

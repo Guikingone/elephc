@@ -523,9 +523,9 @@ impl Checker {
 
 /// Updates callability metadata when assigning a callable expression to a variable.
 ///
-/// When `ty` is `Callable`, extracts and stores the callable signature, closure return
-/// type, capture list, and first-class callable target on the checker. When `ty` is not
-/// callable, clears any previously stored metadata for `name`.
+/// When `ty` is `Callable`, or a string-valued expression names a statically known callable,
+/// extracts and stores the callable signature, closure return type, capture list, and first-class
+/// callable target on the checker. Other values clear previously stored metadata for `name`.
 ///
 /// This ensures that subsequent uses of the variable can resolve its callable signature
 /// and closure metadata. Handles closures, variables, array access, and first-class callables.
@@ -537,9 +537,10 @@ pub(super) fn update_callable_assignment_metadata(
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
     update_callable_array_assignment_metadata(checker, name, callable_source, env)?;
+    let resolved_callable_sig = checker.resolve_expr_callable_sig(callable_source, env)?;
 
-    if *ty == PhpType::Callable {
-        if let Some(sig) = checker.resolve_expr_callable_sig(callable_source, env)? {
+    if *ty == PhpType::Callable || resolved_callable_sig.is_some() {
+        if let Some(sig) = resolved_callable_sig {
             checker
                 .closure_return_types
                 .insert(name.to_string(), sig.return_type.clone());

@@ -36,6 +36,14 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
+            if class_name.is_empty() {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(self
+                    .mixed_receiver_method_return_type(method, args.len())
+                    .unwrap_or(PhpType::Mixed));
+            }
             if self.interfaces.contains_key(class_name) {
                 return self
                     .infer_method_call_on_interface_type(class_name, method, args, expr, env);

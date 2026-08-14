@@ -31,7 +31,9 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
 pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable)
+        || matches!(&source_ty, PhpType::Object(name) if name.trim_start_matches('\\') != "Generator")
+    {
         return lower_yield_from_array(ctx, value, expr);
     }
     let result = ctx.emit_value(
@@ -52,10 +54,10 @@ pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, 
     result
 }
 
-/// Desugars `yield from <array>` into an iterator loop that re-yields each
-/// key/value pair, returning a boxed PHP null (arrays have no delegated return
-/// value). Reuses the foreach iterator opcodes so every array kind (indexed,
-/// associative, by-element-type) is handled by the existing iterator lowering.
+/// Desugars `yield from <array|Traversable>` into an iterator loop that re-yields
+/// each key/value pair, returning a boxed PHP null (non-Generator iterables have
+/// no delegated return value). Reuses the foreach iterator opcodes so every
+/// supported iterable representation is handled by existing iterator lowering.
 pub(super) fn lower_yield_from_array(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
@@ -164,4 +166,3 @@ pub(super) fn lower_yield_from_array(
         Some(span),
     )
 }
-

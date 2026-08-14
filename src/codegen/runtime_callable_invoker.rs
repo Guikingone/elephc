@@ -89,14 +89,30 @@ pub(super) struct RuntimeCallableInvoker<'a> {
 struct InvokerEmitContext {
     label_prefix: String,
     label_counter: usize,
+    string_cleanup_offsets: Vec<Option<usize>>,
 }
 
 impl InvokerEmitContext {
     /// Creates a fresh label context for one generated invoker body.
-    fn new(invoker_label: &str) -> Self {
+    fn new(invoker_label: &str, sig: &FunctionSig) -> Self {
+        let mut cleanup_slot_count = 0;
+        let string_cleanup_offsets = sig
+            .params
+            .iter()
+            .map(|(_, ty)| {
+                if ty.codegen_repr() == PhpType::Str {
+                    let offset = INVOKER_SAVED_REGS_END + cleanup_slot_count * 16;
+                    cleanup_slot_count += 1;
+                    Some(offset)
+                } else {
+                    None
+                }
+            })
+            .collect();
         Self {
             label_prefix: local_label_prefix(invoker_label),
             label_counter: 0,
+            string_cleanup_offsets,
         }
     }
 
@@ -105,6 +121,23 @@ impl InvokerEmitContext {
         let id = self.label_counter;
         self.label_counter += 1;
         format!("{}_{}_{}", self.label_prefix, prefix, id)
+    }
+
+    /// Returns the cleanup slot reserved for a visible parameter, when it accepts a string.
+    fn string_cleanup_offset(&self, param_idx: usize) -> Option<usize> {
+        self.string_cleanup_offsets
+            .get(param_idx)
+            .copied()
+            .flatten()
+    }
+
+    /// Returns every frame slot that may hold an owned Mixed-to-string conversion.
+    fn active_string_cleanup_offsets(&self) -> Vec<usize> {
+        self.string_cleanup_offsets
+            .iter()
+            .copied()
+            .flatten()
+            .collect()
     }
 }
 
@@ -147,14 +180,17 @@ fn emit_runtime_callable_invoker_impl(
     invoker: &RuntimeCallableInvoker<'_>,
     catch_native_throws: bool,
 ) {
-    let mut ctx = InvokerEmitContext::new(invoker.label);
+    let mut ctx = InvokerEmitContext::new(invoker.label, invoker.sig);
     let call_reg = abi::nested_call_reg(emitter);
     let escape_label = format!("{}_eval_escape", invoker.label);
+    let cleanup_slot_count = ctx.active_string_cleanup_offsets().len();
+    let base_frame_size = INVOKER_FRAME_SIZE + cleanup_slot_count * 16;
     let frame_size = if catch_native_throws {
-        INVOKER_BOUNDARY_FRAME_SIZE
+        base_frame_size + (INVOKER_BOUNDARY_FRAME_SIZE - INVOKER_FRAME_SIZE)
     } else {
-        INVOKER_FRAME_SIZE
+        base_frame_size
     };
+    let boundary_base_offset = INVOKER_BOUNDARY_BASE_OFFSET + cleanup_slot_count * 16;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -165,6 +201,7 @@ fn emit_runtime_callable_invoker_impl(
     // register allocator keeps values live across the indirect invoke in these registers
     // (issue #487).
     emit_invoker_callee_saved_saves(emitter);
+    emit_initialize_invoker_string_cleanup_slots(emitter, &ctx.active_string_cleanup_offsets());
     abi::store_at_offset(
         emitter,
         abi::int_arg_reg_name(emitter.target, 0),
@@ -178,7 +215,7 @@ fn emit_runtime_callable_invoker_impl(
         );
         emit_invoker_exception_boundary_push(
             emitter,
-            INVOKER_BOUNDARY_BASE_OFFSET,
+            boundary_base_offset,
             &escape_label,
         );
         abi::load_at_offset(
@@ -203,7 +240,7 @@ fn emit_runtime_callable_invoker_impl(
     );
     emit_boxed_invoker_return(emitter, &ret_ty);
     if catch_native_throws {
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+        emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
     }
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
@@ -212,7 +249,11 @@ fn emit_runtime_callable_invoker_impl(
     abi::emit_return(emitter);
     if catch_native_throws {
         emitter.label(&escape_label);
-        emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+        emit_invoker_exception_boundary_pop(emitter, boundary_base_offset);
+        emit_release_invoker_string_conversions_preserving_result(
+            emitter,
+            &ctx.active_string_cleanup_offsets(),
+        );
         emit_null_invoker_result(emitter);
         emit_invoker_callee_saved_restores(emitter);
         abi::emit_frame_restore(emitter, frame_size);
@@ -583,6 +624,7 @@ fn emit_loaded_indexed_array_callback_call(
         let pushed_ty = target_ty
             .map(PhpType::codegen_repr)
             .unwrap_or_else(|| elem_ty.codegen_repr());
+        let string_cleanup_offset = ctx.string_cleanup_offset(index);
         if let Some(default_expr) = sig.defaults.get(index).and_then(Option::as_ref) {
             let load_label = ctx.next_label("invoker_load_arg");
             let done_label = ctx.next_label("invoker_arg_done");
@@ -591,11 +633,25 @@ fn emit_loaded_indexed_array_callback_call(
             abi::emit_jump(emitter, &done_label);
             emitter.label(&load_label);
             load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-            push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
+            push_loaded_indexed_array_value_arg(
+                &elem_ty,
+                target_ty,
+                string_cleanup_offset,
+                emitter,
+                ctx,
+                data,
+            );
             emitter.label(&done_label);
         } else {
             load_array_element_to_result(emitter, &elem_ty, array_reg, 24 + index * elem_size);
-            push_loaded_indexed_array_value_arg(&elem_ty, target_ty, emitter, ctx, data);
+            push_loaded_indexed_array_value_arg(
+                &elem_ty,
+                target_ty,
+                string_cleanup_offset,
+                emitter,
+                ctx,
+                data,
+            );
         }
         arg_types.push(pushed_ty);
     }
@@ -680,7 +736,12 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, emitter);
+    call_target_with_pushed_args(
+        call_reg,
+        &arg_types,
+        &ctx.active_string_cleanup_offsets(),
+        emitter,
+    );
     sig.return_type.clone()
 }
 
@@ -719,6 +780,7 @@ fn emit_loaded_assoc_array_callback_call(
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
+        let string_cleanup_offset = ctx.string_cleanup_offset(index);
         emit_hash_lookup_for_param_or_index(hash_reg, param_name, index, emitter, ctx, data);
 
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -751,7 +813,14 @@ fn emit_loaded_assoc_array_callback_call(
             let use_default = ctx.next_label("invoker_assoc_default");
             let done = ctx.next_label("invoker_assoc_done");
             abi::emit_branch_if_int_result_zero(emitter, &use_default);
-            let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
+            let loaded_ty = push_loaded_hash_value_arg(
+                &elem_ty,
+                target_ty,
+                string_cleanup_offset,
+                emitter,
+                ctx,
+                data,
+            );
             abi::emit_jump(emitter, &done);
             emitter.label(&use_default);
             let default_ty = push_default_value_arg(default_expr, target_ty, emitter, ctx, data);
@@ -761,7 +830,14 @@ fn emit_loaded_assoc_array_callback_call(
             let missing = ctx.next_label("invoker_assoc_missing");
             let done = ctx.next_label("invoker_assoc_done");
             abi::emit_branch_if_int_result_zero(emitter, &missing);
-            let loaded_ty = push_loaded_hash_value_arg(&elem_ty, target_ty, emitter, ctx, data);
+            let loaded_ty = push_loaded_hash_value_arg(
+                &elem_ty,
+                target_ty,
+                string_cleanup_offset,
+                emitter,
+                ctx,
+                data,
+            );
             abi::emit_jump(emitter, &done);
             emitter.label(&missing);
             emit_call_user_func_array_missing_arg_abort(emitter, data);
@@ -792,7 +868,12 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, emitter);
+    call_target_with_pushed_args(
+        call_reg,
+        &arg_types,
+        &ctx.active_string_cleanup_offsets(),
+        emitter,
+    );
     sig.return_type.clone()
 }
 
@@ -1076,6 +1157,7 @@ fn push_loaded_indexed_array_ref_arg(
 fn push_loaded_indexed_array_value_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1084,7 +1166,14 @@ fn push_loaded_indexed_array_value_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
+        return push_loaded_array_element_arg(
+            source_elem_ty,
+            target_ty,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
     }
 
     let special_label = ctx.next_label("invoker_ref_value");
@@ -1094,11 +1183,24 @@ fn push_loaded_indexed_array_value_arg(
 
     abi::emit_load_from_address(emitter, tag_reg, result_reg, 0);
     emit_branch_if_invoker_ref_cell_tag(tag_reg, &special_label, emitter);
-    let ordinary_ty = push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data);
+    let ordinary_ty = push_loaded_array_element_arg(
+        source_elem_ty,
+        target_ty,
+        string_cleanup_offset,
+        emitter,
+        ctx,
+        data,
+    );
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&special_label);
-    let ref_cell_ty = push_loaded_invoker_ref_cell_value_arg(target_ty, emitter, ctx, data);
+    let ref_cell_ty = push_loaded_invoker_ref_cell_value_arg(
+        target_ty,
+        string_cleanup_offset,
+        emitter,
+        ctx,
+        data,
+    );
 
     emitter.label(&done_label);
     widen_callback_arg_type(&ordinary_ty, &ref_cell_ty)
@@ -1107,6 +1209,7 @@ fn push_loaded_indexed_array_value_arg(
 /// Pushes the value inside an invoker reference-cell marker for a by-value parameter.
 fn push_loaded_invoker_ref_cell_value_arg(
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1124,6 +1227,12 @@ fn push_loaded_invoker_ref_cell_value_arg(
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
+    store_owned_invoker_string_conversion(
+        emitter,
+        &PhpType::Mixed,
+        &pushed_ty,
+        string_cleanup_offset,
+    );
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
@@ -1282,12 +1391,19 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
 fn push_loaded_array_element_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
     let (pushed_ty, _boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
+    store_owned_invoker_string_conversion(
+        emitter,
+        source_elem_ty,
+        &pushed_ty,
+        string_cleanup_offset,
+    );
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
@@ -1461,6 +1577,7 @@ fn emit_hash_lookup_for_param_or_index(
 fn push_loaded_hash_value_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1469,10 +1586,23 @@ fn push_loaded_hash_value_arg(
         source_elem_ty.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return push_loaded_mixed_hash_value_arg(target_ty, emitter, ctx, data);
+        return push_loaded_mixed_hash_value_arg(
+            target_ty,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
     }
     materialize_hash_value_to_result(emitter, source_elem_ty);
-    push_loaded_array_element_arg(source_elem_ty, target_ty, emitter, ctx, data)
+    push_loaded_array_element_arg(
+        source_elem_ty,
+        target_ty,
+        string_cleanup_offset,
+        emitter,
+        ctx,
+        data,
+    )
 }
 
 /// Pushes a loaded hash value as a by-reference argument.
@@ -1496,6 +1626,7 @@ fn push_loaded_hash_value_ref_arg(
 /// Pushes a Mixed hash value as a by-value argument, honoring invoker ref markers.
 fn push_loaded_mixed_hash_value_arg(
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1525,24 +1656,54 @@ fn push_loaded_mixed_hash_value_arg(
     emitter.label(&ordinary_boxed_label);
     materialize_hash_value_to_result(emitter, &PhpType::Mixed);
     let ordinary_boxed_ty =
-        push_materialized_mixed_hash_value_arg(target_ty, false, emitter, ctx, data);
+        push_materialized_mixed_hash_value_arg(
+            target_ty,
+            false,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&ordinary_raw_label);
     box_raw_hash_value_to_mixed_result(emitter);
     let ordinary_raw_ty =
-        push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+        push_materialized_mixed_hash_value_arg(
+            target_ty,
+            true,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_marker_label);
     let direct_ty =
-        push_raw_invoker_ref_cell_value_arg(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx, data);
+        push_raw_invoker_ref_cell_value_arg(
+            raw_lo_reg,
+            raw_hi_reg,
+            target_ty,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&boxed_marker_label);
     load_boxed_invoker_ref_cell_to_raw_regs(raw_lo_reg, raw_hi_reg, emitter);
     let boxed_ty =
-        push_raw_invoker_ref_cell_value_arg(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx, data);
+        push_raw_invoker_ref_cell_value_arg(
+            raw_lo_reg,
+            raw_hi_reg,
+            target_ty,
+            string_cleanup_offset,
+            emitter,
+            ctx,
+            data,
+        );
 
     emitter.label(&done_label);
     let ordinary_ty = widen_callback_arg_type(&ordinary_boxed_ty, &ordinary_raw_ty);
@@ -1606,6 +1767,7 @@ fn push_loaded_mixed_hash_value_ref_arg(
 fn push_materialized_mixed_hash_value_arg(
     target_ty: Option<&PhpType>,
     release_source_mixed_after_coerce: bool,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
@@ -1623,6 +1785,12 @@ fn push_materialized_mixed_hash_value_arg(
     if release_mixed_after_coerce {
         release_preserved_mixed_after_arg_coercion(emitter, &pushed_ty);
     }
+    store_owned_invoker_string_conversion(
+        emitter,
+        &PhpType::Mixed,
+        &pushed_ty,
+        string_cleanup_offset,
+    );
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
@@ -1632,12 +1800,20 @@ fn push_raw_invoker_ref_cell_value_arg(
     ref_cell_reg: &str,
     source_tag_reg: &str,
     target_ty: Option<&PhpType>,
+    string_cleanup_offset: Option<usize>,
     emitter: &mut Emitter,
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
     emit_box_raw_invoker_ref_cell_value_as_mixed(ref_cell_reg, source_tag_reg, emitter, ctx);
-    push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data)
+    push_materialized_mixed_hash_value_arg(
+        target_ty,
+        true,
+        string_cleanup_offset,
+        emitter,
+        ctx,
+        data,
+    )
 }
 
 /// Boxes a raw reference-cell value as Mixed.
@@ -2071,6 +2247,24 @@ fn release_preserved_mixed_after_arg_coercion(emitter: &mut Emitter, pushed_ty: 
     abi::emit_release_temporary_stack(emitter, 16);
 }
 
+/// Records the result pointer when a borrowed boxed Mixed argument was converted into an
+/// owned string that must remain live until the target callback returns.
+fn store_owned_invoker_string_conversion(
+    emitter: &mut Emitter,
+    source_ty: &PhpType,
+    pushed_ty: &PhpType,
+    cleanup_offset: Option<usize>,
+) {
+    if !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || pushed_ty.codegen_repr() != PhpType::Str
+    {
+        return;
+    }
+    let offset = cleanup_offset.expect("Mixed-to-string invoker coercions need cleanup storage");
+    let (ptr_reg, _) = abi::string_result_regs(emitter);
+    abi::store_at_offset(emitter, ptr_reg, offset);
+}
+
 /// Restores a pushed result value after releasing another value.
 fn restore_pushed_value_after_release(emitter: &mut Emitter, pushed_ty: &PhpType) {
     match pushed_ty.codegen_repr() {
@@ -2119,6 +2313,7 @@ fn push_descriptor_captures_as_hidden_args(
 fn call_target_with_pushed_args(
     call_reg: &str,
     arg_types: &[PhpType],
+    string_cleanup_offsets: &[usize],
     emitter: &mut Emitter,
 ) {
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
@@ -2127,6 +2322,54 @@ fn call_target_with_pushed_args(
     abi::emit_call_reg(emitter, call_reg);
     restore_concat_offset_after_nested_call(emitter);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
+    emit_release_invoker_string_conversions_preserving_result(emitter, string_cleanup_offsets);
+}
+
+/// Initializes optional string-conversion cleanup slots before runtime argument-shape branches.
+fn emit_initialize_invoker_string_cleanup_slots(emitter: &mut Emitter, offsets: &[usize]) {
+    if offsets.is_empty() {
+        return;
+    }
+    let zero_reg = abi::temp_int_reg(emitter.target);
+    abi::emit_load_int_immediate(emitter, zero_reg, 0);
+    for offset in offsets {
+        abi::store_at_offset(emitter, zero_reg, *offset);
+    }
+}
+
+/// Releases owned Mixed-to-string argument conversions while preserving every possible
+/// callback result register used by the compiler ABI.
+fn emit_release_invoker_string_conversions_preserving_result(
+    emitter: &mut Emitter,
+    offsets: &[usize],
+) {
+    if offsets.is_empty() {
+        return;
+    }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(emitter, "x0", "x1");
+            abi::emit_push_reg(emitter, "x2");
+            abi::emit_push_float_reg(emitter, "d0");
+            for offset in offsets {
+                abi::load_at_offset(emitter, "x0", *offset);
+                abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release a persisted callback argument while ignoring null and shared scratch pointers
+            }
+            abi::emit_pop_float_reg(emitter, "d0");
+            abi::emit_pop_reg(emitter, "x2");
+            abi::emit_pop_reg_pair(emitter, "x0", "x1");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(emitter, "rax", "rdx");
+            abi::emit_push_float_reg(emitter, "xmm0");
+            for offset in offsets {
+                abi::load_at_offset(emitter, "rax", *offset);
+                abi::emit_call_label(emitter, "__rt_heap_free_safe"); // release a persisted callback argument while ignoring null and shared scratch pointers
+            }
+            abi::emit_pop_float_reg(emitter, "xmm0");
+            abi::emit_pop_reg_pair(emitter, "rax", "rdx");
+        }
+    }
 }
 
 /// Saves the current concat offset before the nested callable target runs.
@@ -2571,6 +2814,69 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+
+    /// Builds a declared string-parameter signature for invoker cleanup emission tests.
+    fn string_parameter_signature() -> FunctionSig {
+        FunctionSig {
+            params: vec![("value".to_string(), PhpType::Str)],
+            param_type_exprs: vec![None],
+            param_attributes: vec![Vec::new()],
+            defaults: vec![None],
+            return_type: PhpType::Bool,
+            declared_return: true,
+            by_ref_return: false,
+            ref_params: vec![false],
+            declared_params: vec![true],
+            variadic: None,
+            deprecation: None,
+        }
+    }
+
+    /// Emits one string-parameter runtime invoker for the requested target.
+    fn emit_string_parameter_invoker(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let sig = string_parameter_signature();
+        emit_runtime_callable_invoker(
+            &mut emitter,
+            &mut data,
+            &RuntimeCallableInvoker {
+                label: "test_string_parameter_invoker",
+                sig: &sig,
+                captures: &[],
+            },
+        );
+        emitter.output()
+    }
+
+    /// Verifies ARM64 descriptor invokers retain and release owned string coercions.
+    #[test]
+    fn arm64_invoker_releases_mixed_to_string_arguments() {
+        let output = emit_string_parameter_invoker(Target::new(Platform::MacOS, Arch::AArch64));
+
+        assert!(output.contains("    stur x1, [x29, #-96]\n"), "{output}");
+        assert!(output.contains("    stp x0, x1, [sp, #-16]!\n"), "{output}");
+        assert!(output.contains("    bl __rt_heap_free_safe\n"), "{output}");
+        assert!(output.contains("    ldp x0, x1, [sp], #16\n"), "{output}");
+    }
+
+    /// Verifies x86_64 descriptor invokers retain and release owned string coercions.
+    #[test]
+    fn x86_64_invoker_releases_mixed_to_string_arguments() {
+        let output =
+            emit_string_parameter_invoker(Target::new(Platform::Linux, Arch::X86_64));
+
+        assert!(
+            output.contains("    mov QWORD PTR [rbp - 96], rax\n"),
+            "{output}"
+        );
+        assert!(output.contains("    mov QWORD PTR [rsp], rax\n"), "{output}");
+        assert!(output.contains("    call __rt_heap_free_safe\n"), "{output}");
+        assert!(
+            output.contains("    mov rdx, QWORD PTR [rsp + 8]\n"),
+            "{output}"
+        );
+    }
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]

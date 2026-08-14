@@ -159,6 +159,28 @@ fn test_new_static_returns_instance_of_called_class() {
     assert_eq!(out, "Child");
 }
 
+/// Verifies an abstract factory may construct the concrete runtime-called subclass through
+/// `new static()` without treating the lexical abstract base as an instantiation candidate.
+#[test]
+fn test_new_static_from_abstract_base_constructs_concrete_child() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class AbstractFactory {
+    public function __construct(public string $value) {}
+
+    public static function make(string $value): static {
+        return new static($value);
+    }
+}
+
+final class ConcreteFactory extends AbstractFactory {}
+
+echo ConcreteFactory::make("ready")->value;
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
 /// Verifies `new static()` pads omitted constructor defaults before the late-static candidate
 /// dispatch, including when an inherited factory constructs the runtime-called child class.
 #[test]

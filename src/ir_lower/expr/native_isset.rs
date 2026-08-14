@@ -296,6 +296,7 @@ pub(super) fn ir_can_access_member(
         Visibility::Protected => ctx.current_class.as_deref().is_some_and(|current| {
             same_php_class_name(current, declaring_class)
                 || class_extends_class(ctx, current, declaring_class)
+                || class_extends_class(ctx, declaring_class, current)
         }),
     }
 }

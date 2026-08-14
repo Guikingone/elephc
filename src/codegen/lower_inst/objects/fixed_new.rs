@@ -64,7 +64,8 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 class_name
             )));
         }
-        let property_defaults = collect_property_defaults(class_info, inst)?;
+        let property_defaults =
+            collect_property_defaults(ctx.module, &class_name, class_info, inst)?;
         let mut initialize_inherited_builtin_throwable = false;
         let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
             let impl_class = class_info

@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end coverage for PHP's coercive parameter binding on declared user-defined
-//! parameters: scalars widening into `string`/`bool` parameters, and compile-time-constant
-//! numeric arguments binding to `int`/`float` parameters.
+//! parameters: scalars widening into `string`/`bool` parameters, `Stringable` objects selecting
+//! string declarations, and compile-time-constant numeric arguments binding to `int`/`float`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -114,4 +114,46 @@ fn test_coercive_binding_applies_to_named_arguments() {
         "#,
     );
     assert_eq!(out, "4.5|7");
+}
+
+/// Verifies a weak call converts a `Stringable` object into both a direct `string` parameter
+/// and the `string` member of a union, including reordered and fresh owning arguments.
+#[test]
+fn test_stringable_objects_bind_to_string_parameter_members() {
+    let out = compile_and_run(
+        r#"<?php
+        class Label {
+            public function __construct(public string $text) {}
+            public function __toString(): string { return $this->text; }
+        }
+        function direct(string $value): string { return $value; }
+        function either(string|iterable $value): string {
+            return is_string($value) ? $value : "iterable";
+        }
+        function many(string ...$values): string { return implode(",", $values); }
+        $label = new Label("local");
+        echo direct($label), "|", either($label), "|", either(value: new Label("fresh")),
+            "|", many($label, new Label("tail"));
+        "#,
+    );
+    assert_eq!(out, "local|local|fresh|local,tail");
+}
+
+/// Verifies union identity wins over weak coercion: an object satisfying `iterable` remains an
+/// iterable for `string|iterable`, even when that same object is also `Stringable`.
+#[test]
+fn test_stringable_iterable_object_keeps_iterable_union_member() {
+    let out = compile_and_run(
+        r#"<?php
+        class Labels implements Stringable, IteratorAggregate {
+            public function __toString(): string { return "string"; }
+            public function getIterator(): Traversable { yield "item"; }
+        }
+        function either(string|iterable $value): string {
+            return is_string($value) ? $value : "iterable";
+        }
+        echo either(new Labels());
+        "#,
+    );
+    assert_eq!(out, "iterable");
 }

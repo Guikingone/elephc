@@ -59,6 +59,19 @@ echo $calc(5);
     assert_eq!(out, "26");
 }
 
+/// Verifies that untyped closure parameters retain gradual array access semantics.
+#[test]
+fn test_untyped_closure_parameter_supports_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+$classic = function ($value) { return $value[1]; };
+$arrow = fn ($value) => $value[2];
+echo $classic([10, 20, 30]), ":", $arrow([10, 20, 30]);
+"#,
+    );
+    assert_eq!(out, "20:30");
+}
+
 /// Regression for #300: arrow functions capture outer locals by value at definition time.
 #[test]
 fn test_arrow_function_captures_outer_local_by_value() {

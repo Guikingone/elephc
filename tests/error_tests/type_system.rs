@@ -36,13 +36,13 @@ fn test_error_string_index_requires_integer() {
     );
 }
 
-/// Verifies that assigning to a string offset (character replacement) is rejected.
-/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
+/// Verifies that a non-numeric string offset assignment index is rejected.
+/// Input: `$s = "hello"; $s["x"] = "H";` — the offset cannot be converted to an integer.
 #[test]
-fn test_error_string_offset_assignment_is_not_supported() {
+fn test_error_string_offset_assignment_requires_integer() {
     expect_error(
-        "<?php $s = \"hello\"; $s[0] = \"H\";",
-        "String offset assignment is not supported",
+        "<?php $s = \"hello\"; $s[\"x\"] = \"H\";",
+        "String offset assignment index must be integer",
     );
 }
 
@@ -251,16 +251,6 @@ fn test_error_negate_string() {
     expect_error(
         "<?php $x = \"hi\"; echo -$x;",
         "Cannot negate a non-numeric value",
-    );
-}
-
-/// Verifies that comparison operators on strings produce an error.
-/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
-#[test]
-fn test_error_comparison_on_string() {
-    expect_error(
-        "<?php $x = \"a\"; echo $x < 1;",
-        "Comparison operators require numeric operands",
     );
 }
 
@@ -636,6 +626,23 @@ class Foo {
 function unused_class_constant_default(Foo $value = Foo::BAR): void {}
 "#,
         "Function 'unused_class_constant_default' parameter $value expects Object(\"Foo\"), got Int",
+    );
+}
+
+/// Verifies a scoped class constant used as a typed property default is checked against the
+/// property's declared type after class-like constant metadata is complete.
+#[test]
+fn test_error_typed_property_default_rejects_incompatible_scoped_constant() {
+    expect_error(
+        r#"<?php
+interface Defaults {
+    public const VALUE = "wrong";
+}
+class Box {
+    public int $value = Defaults::VALUE;
+}
+"#,
+        "Property Box::$value default expects Int, got Str",
     );
 }
 
@@ -1166,6 +1173,34 @@ fn test_error_strict_types_rejects_scalars_into_string_parameter() {
             &format!("must be of type string, {} given", php_type),
         );
     }
+}
+
+/// Verifies strict binding rejects a `Stringable` object even when the declaration offers a
+/// `string` union member; PHP only performs this object conversion from weak call sites.
+#[test]
+fn test_error_strict_types_rejects_stringable_object_into_string_union() {
+    expect_error(
+        "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function either(string|iterable $value): string { return ''; } echo either(new Label());",
+        "parameter $value expects Union",
+    );
+    expect_error(
+        "<?php declare(strict_types=1); class Label { public function __toString(): string { return 'x'; } } function many(string ...$values): string { return ''; } echo many(new Label());",
+        "variadic parameter $values expects Str",
+    );
+}
+
+/// Verifies weak binding still rejects an arbitrary object that has no string conversion,
+/// rather than accepting every object merely because the declaration contains `string`.
+#[test]
+fn test_error_weak_binding_rejects_non_stringable_object_into_string_union() {
+    expect_error(
+        "<?php class Value {} function either(string|iterable $value): string { return ''; } echo either(new Value());",
+        "parameter $value expects Union",
+    );
+    expect_error(
+        "<?php class Value {} function many(string ...$values): string { return ''; } echo many(new Value());",
+        "variadic parameter $values expects Str",
+    );
 }
 
 /// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the

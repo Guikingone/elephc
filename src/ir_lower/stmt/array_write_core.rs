@@ -78,6 +78,21 @@ pub(super) fn lower_array_assign(
     let array_value = ctx.load_local(array, Some(span));
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_array_reference_or_value(ctx, value);
+    if array_value.ir_type == IrType::Str {
+        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        value_value = coerce_to_string_at_span(ctx, value_value, Some(value.span));
+        let result = ctx.emit_value(
+            Op::StrSetOffset,
+            vec![array_value.value, index_value.value, value_value.value],
+            None,
+            PhpType::Str,
+            Op::StrSetOffset.default_effects(),
+            Some(span),
+        );
+        ctx.store_local(array, result, PhpType::Str, Some(span));
+        release_persisted_string_operand(ctx, value_value, span);
+        return;
+    }
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either

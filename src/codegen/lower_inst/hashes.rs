@@ -659,7 +659,7 @@ fn lower_hash_set_aarch64(
 }
 
 /// Lowers an associative-array append for AArch64 targets.
-fn lower_hash_append_aarch64(
+pub(super) fn lower_hash_append_aarch64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     value: ValueId,
@@ -701,7 +701,7 @@ fn lower_hash_set_x86_64(
 }
 
 /// Lowers an associative-array append for x86_64 targets.
-fn lower_hash_append_x86_64(
+pub(super) fn lower_hash_append_x86_64(
     ctx: &mut FunctionContext<'_>,
     hash: ValueId,
     value: ValueId,

@@ -26,6 +26,38 @@ echo ($a instanceof Missing) ? "T" : "F";
     assert_eq!(out, "TFFF");
 }
 
+/// Verifies an unresolved target gives the true branch dynamic access without inventing a class.
+#[test]
+fn test_unknown_instanceof_target_uses_dynamic_true_branch_type() {
+    let out = compile_and_run(
+        r#"<?php
+class Candidate {
+    public static int $checks = 0;
+
+    public static function make(): Candidate {
+        self::$checks++;
+        return new Candidate();
+    }
+}
+
+function inspect(Candidate $value): void {
+    if ($value instanceof Missing) {
+        echo $value->label;
+    }
+}
+
+inspect(new Candidate());
+if (Candidate::make() instanceof Missing) {
+    echo "bad";
+}
+$candidate = new Candidate();
+echo ($candidate instanceof Missing) ? $candidate->missing() : "ok";
+echo Candidate::$checks;
+"#,
+    );
+    assert_eq!(out, "ok1");
+}
+
 /// Tests instanceof with class inheritance hierarchies and interface implementations.
 #[test]
 fn test_instanceof_inheritance_and_interfaces() {
@@ -84,6 +116,62 @@ $child->checkParent($child);
 "#,
     );
     assert_eq!(out, "STStP");
+}
+
+/// Verifies that flow narrowing resolves relative `instanceof` targets before member access.
+#[test]
+fn test_instanceof_self_and_parent_narrow_to_concrete_classes() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    public string $value = "B";
+
+    public function fromSelf($candidate): string {
+        if ($candidate instanceof self) {
+            return $candidate->value;
+        }
+
+        return "x";
+    }
+}
+
+class Child extends Base {
+    public function fromParent($candidate): string {
+        if ($candidate instanceof parent) {
+            return $candidate->value;
+        }
+
+        return "x";
+    }
+}
+
+$child = new Child();
+echo $child->fromSelf($child);
+echo $child->fromParent($child);
+"#,
+    );
+    assert_eq!(out, "BB");
+}
+
+/// Verifies that the native `object` pseudo-type dispatches methods by runtime class.
+#[test]
+fn test_generic_object_parameter_method_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+final class NamedObject {
+    public function name(): string {
+        return "ok";
+    }
+}
+
+function invokeName(object $value): string {
+    return $value->name();
+}
+
+echo invokeName(new NamedObject());
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies that the LHS object expression is evaluated exactly once by calling a

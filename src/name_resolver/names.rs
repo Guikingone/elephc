@@ -405,7 +405,10 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "PHP_EOL"
                 | "DIRECTORY_SEPARATOR"
                 | "PHP_MAXPATHLEN"
+                | "LC_CTYPE"
                 | "LC_NUMERIC"
+                | "SIGUSR1"
+                | "SIGUSR2"
         ) {
             return true;
         }

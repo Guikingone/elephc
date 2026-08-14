@@ -52,7 +52,8 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     // the strict path for the same reason.
     let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
         && !sig.ref_params.get(index).copied().unwrap_or(false);
-    let param_ty = param_ty.codegen_repr();
+    let declared_param_ty = param_ty;
+    let param_ty = declared_param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
@@ -60,9 +61,19 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
-    if bindable {
-        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
-            return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
+    if bindable
+        && !param_accepts_object_without_string_coercion(ctx, declared_param_ty, &source_ty)
+    {
+        if let Some(cast) =
+            crate::types::param_binding::scalar_param_cast(declared_param_ty, &source_ty)
+        {
+            return apply_scalar_param_cast(
+                ctx,
+                cast,
+                value,
+                declared_param_ty,
+                Some(arg.span),
+            );
         }
     }
     if sig.ref_params.get(index).copied().unwrap_or(false) {
@@ -84,22 +95,71 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     )
 }
 
+/// Returns whether an object argument already satisfies a declared parameter without selecting
+/// a weakly coercive `string` arm.
+///
+/// PHP resolves a union by identity before coercion: an object implementing `IteratorAggregate`
+/// remains an object for `string|iterable`, even when it also implements `Stringable`. This
+/// mirrors the checker's object/iterable/callable acceptance so lowering only consumes the
+/// checker's weak-string proof when no non-string member already accepts the object.
+pub(super) fn param_accepts_object_without_string_coercion(
+    ctx: &LoweringContext<'_, '_>,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    let PhpType::Object(actual_name) = actual else {
+        return false;
+    };
+    match expected {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| param_accepts_object_without_string_coercion(ctx, member, actual)),
+        PhpType::Object(expected_name) => {
+            expected_name.is_empty()
+                || class_extends_class(ctx, actual_name, expected_name)
+                || object_name_satisfies_interface_for_ir(ctx, actual_name, expected_name)
+        }
+        PhpType::Iterable => {
+            object_name_satisfies_interface_for_ir(ctx, actual_name, "Traversable")
+                || object_name_satisfies_interface_for_ir(ctx, actual_name, "Iterator")
+                || object_name_satisfies_interface_for_ir(ctx, actual_name, "IteratorAggregate")
+        }
+        PhpType::Callable => actual.is_closure_object(),
+        _ => false,
+    }
+}
+
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
 ///
 /// The conversion is the one elephc emits for the equivalent explicit cast, which is why the
-/// binding is expressed as a `CastType`: `(string)` and `(bool)` are total over the scalar
-/// sources `crate::types::param_binding` admits, so no runtime failure path is needed here.
-fn apply_scalar_param_cast(
+/// binding is expressed as a `CastType`: scalar inputs use the same total `(string)` / `(bool)`
+/// conversions, while objects reach `(string)` only after checker proof of `Stringable`.
+/// When PHP selects a scalar member of a union, the converted value is boxed back into the
+/// union's `Mixed` ABI storage before the callee receives it.
+pub(super) fn apply_scalar_param_cast(
     ctx: &mut LoweringContext<'_, '_>,
     cast: CastType,
     value: LoweredValue,
+    declared_param_ty: &PhpType,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
-    match cast {
+    let converted = match cast {
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
         CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
+    };
+    if declared_param_ty.codegen_repr() == PhpType::Mixed
+        && ctx
+            .builder
+            .value_php_type(converted.value)
+            .codegen_repr()
+            != PhpType::Mixed
+    {
+        ctx.box_value_as_mixed(converted, declared_param_ty.clone(), span)
+    } else {
+        converted
     }
 }
 
@@ -120,12 +180,12 @@ pub(super) fn coerce_operands_to_params(
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             continue;
         }
-        let Some((_, param_ty)) = sig.params.get(index) else {
+        let Some((_, declared_param_ty)) = sig.params.get(index) else {
             continue;
         };
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        let param_ty = param_ty.codegen_repr();
+        let param_ty = declared_param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
@@ -140,18 +200,25 @@ pub(super) fn coerce_operands_to_params(
                 ir_type: ctx.builder.value_type(value),
             };
             operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
-        } else if sig.declared_params.get(index).copied().unwrap_or(false) {
+        } else if sig.declared_params.get(index).copied().unwrap_or(false)
+            && !param_accepts_object_without_string_coercion(
+                ctx,
+                declared_param_ty,
+                &operand_ty,
+            )
+        {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
             // and only reordered afterwards.
             if let Some(cast) =
-                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
+                crate::types::param_binding::scalar_param_cast(declared_param_ty, &operand_ty)
             {
                 let lowered = LoweredValue {
                     value,
                     ir_type: ctx.builder.value_type(value),
                 };
-                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+                operands[index] =
+                    apply_scalar_param_cast(ctx, cast, lowered, declared_param_ty, None).value;
             }
         }
         let lowered = LoweredValue {

@@ -82,6 +82,10 @@ pub(crate) fn string_op_uses_scratch_storage(op: Op) -> bool {
             | Op::ResourceToStr
             | Op::MixedCastString
             | Op::StrConcat
+            | Op::StrBitAnd
+            | Op::StrBitOr
+            | Op::StrBitXor
+            | Op::StrSetOffset
             | Op::StrCharAt
             | Op::StrInterpolate
             | Op::RuntimeCall

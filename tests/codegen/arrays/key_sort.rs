@@ -249,6 +249,29 @@ foreach ($a as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "0=3;1=1;2=2;");
 }
 
+/// Nested keyed writes expose their autovivified inner arrays to a following `foreach` sort.
+#[test]
+fn test_ksort_foreach_value_after_nested_keyed_writes() {
+    let out = compile_and_run(
+        r#"<?php
+function grouped(array $values): array {
+    $groups = [];
+    foreach ($values as $name => $value) {
+        $groups['all'][$name] = $value;
+    }
+    foreach ($groups as $group => $members) {
+        ksort($members);
+        $groups[$group] = $members;
+    }
+    return $groups;
+}
+$result = grouped(['z' => 1, 'a' => 2]);
+echo implode(',', array_keys($result['all']));
+"#,
+    );
+    assert_eq!(out, "a,z");
+}
+
 /// `krsort()` on a non-empty indexed array must be refused by name rather than silently
 /// returning the receiver untouched: indexed storage has no room for a descending key order.
 #[test]

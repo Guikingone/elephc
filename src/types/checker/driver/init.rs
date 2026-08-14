@@ -140,7 +140,10 @@ impl Checker {
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
         constants.insert("PHP_MAXPATHLEN".to_string(), PhpType::Int);
+        constants.insert("LC_CTYPE".to_string(), PhpType::Int);
         constants.insert("LC_NUMERIC".to_string(), PhpType::Int);
+        constants.insert("SIGUSR1".to_string(), PhpType::Int);
+        constants.insert("SIGUSR2".to_string(), PhpType::Int);
         for (name, _value) in STANDARD_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

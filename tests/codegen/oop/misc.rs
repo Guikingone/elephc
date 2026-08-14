@@ -119,6 +119,97 @@ echo null === peek(null) ? 'null' : 'bad';
     assert_eq!(out, "class|dynamic|null");
 }
 
+/// Verifies a read-only generic-object property is boxed and coerced at a declared return boundary.
+#[test]
+fn test_generic_object_property_read_with_declared_return() {
+    let out = compile_and_run(
+        r#"<?php
+final class NamedPropertyObject {
+    public string $name = 'ok';
+}
+
+function readName(object $value): string {
+    return $value->name;
+}
+
+echo readName(new NamedPropertyObject());
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies keyed and append writes through bare `object` dispatch to an array property owner.
+#[test]
+fn test_generic_object_array_property_writes() {
+    let out = compile_and_run(
+        r#"<?php
+final class GenericArrayPropertyBag {
+    public array $entries = [];
+}
+
+function fillGenericArrayProperty(object $bag): string {
+    $bag->entries['name'] = 'value';
+    $bag->entries[] = 'tail';
+    return $bag->entries['name'] . '|' . $bag->entries[0];
+}
+
+echo fillGenericArrayProperty(new GenericArrayPropertyBag());
+"#,
+    );
+    assert_eq!(out, "value|tail");
+}
+
+/// Verifies a bare-object property implementing ArrayAccess receives keyed writes dynamically.
+#[test]
+fn test_generic_object_array_access_property_write() {
+    let out = compile_and_run(
+        r#"<?php
+final class GenericArrayAccessPropertyBag {
+    public object $slots;
+
+    public function __construct() {
+        $this->slots = new ArrayObject();
+    }
+
+    public function slotCount(): int {
+        return $this->slots->count();
+    }
+}
+
+function fillGenericArrayAccessProperty(object $bag): int {
+    $bag->slots['name'] = 'value';
+    return $bag->slotCount();
+}
+
+echo fillGenericArrayAccessProperty(new GenericArrayAccessPropertyBag());
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies bare-object returns are runtime-checked at nullable nominal object boundaries.
+#[test]
+fn test_generic_object_nominal_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+final class ExpectedReturnObject {}
+final class UnexpectedReturnObject {}
+
+function nominalReturn(object $value): ?ExpectedReturnObject {
+    return $value;
+}
+
+echo nominalReturn(new ExpectedReturnObject()) instanceof ExpectedReturnObject ? 'ok' : 'bad';
+try {
+    nominalReturn(new UnexpectedReturnObject());
+} catch (TypeError) {
+    echo '|caught';
+}
+"#,
+    );
+    assert_eq!(out, "ok|caught");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.

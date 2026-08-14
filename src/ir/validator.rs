@@ -453,8 +453,14 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrEq | StrCmp | StrLooseEq => {
+        StrConcat | StrBitAnd | StrBitOr | StrBitXor | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
+        }
+        StrSetOffset => {
+            check_count(inst_id, inst, 3, "3")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
+            check_operand_type(function, inst_id, inst, 2, IrType::Str, "Str")
         }
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;

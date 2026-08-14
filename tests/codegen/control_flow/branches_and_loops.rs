@@ -366,4 +366,26 @@ fn test_property_null_coalesce_ternary_sees_condition_assignment() {
     assert_eq!(out, "Alpha");
 }
 
+/// Boxes a local whose value changes from null to an indexable object across a loop back-edge.
+#[test]
+fn test_loop_carried_local_widens_runtime_representation() {
+    let out = compile_and_run(
+        r#"<?php
+class LoopStorageSource {
+    public $value;
+}
+$source = new LoopStorageSource();
+$source->value = new ArrayObject(['ready']);
+$slot = null;
+foreach ([0, 1] as $iteration) {
+    if ($slot) {
+        echo $slot[0];
+    }
+    $slot = $source->value;
+}
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
 // --- Ternary operator ---

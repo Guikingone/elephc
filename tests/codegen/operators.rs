@@ -931,6 +931,106 @@ fn test_angle_not_equal_does_not_capture_spaced_comparisons() {
     assert_eq!(out, "bool(true)\n");
 }
 
+/// Verifies ordered runtime string comparisons use lexicographic PHP byte-string ordering.
+#[test]
+fn test_runtime_ordered_string_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_strings(string $left, string $right): void {
+    echo $left < $right ? '1' : '0';
+    echo $left <= $right ? '1' : '0';
+    echo $left > $right ? '1' : '0';
+    echo $left >= $right ? '1' : '0';
+    echo $left <=> $right;
+}
+compare_strings('abc', 'abd');
+echo '|';
+compare_strings('same', 'same');
+"#,
+    );
+    assert_eq!(out, "1100-1|01010");
+}
+
+/// Verifies gradual and cross-type ordered comparisons use PHP's runtime comparison table.
+#[test]
+fn test_runtime_gradual_ordered_comparisons() {
+    let out = compile_and_run(
+        r#"<?php
+function compare_gradual(mixed $left, mixed $right): void {
+    echo $left < $right ? '1' : '0', ':', $left <=> $right;
+}
+compare_gradual('a', 'b');
+echo '|';
+compare_gradual(0, 'a');
+"#,
+    );
+    assert_eq!(out, "1:-1|1:-1");
+}
+
+/// Verifies PHP string `&`, `|`, and `^` operate byte-wise with their distinct length rules,
+/// including a scratch-backed left operand whose right side performs a call.
+#[test]
+fn test_runtime_string_bitwise_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function string_bits(string $left, string $right): void {
+    echo bin2hex($left & $right), ';';
+    echo bin2hex($left | $right), ';';
+    echo bin2hex($left ^ $right);
+}
+function right_bits(): string { return 'xy'; }
+string_bits('ABC', 'xy');
+echo '|';
+string_bits('A', 'xyz');
+echo '|', bin2hex(('A'.'B') | right_bits());
+"#,
+    );
+    assert_eq!(out, "4040;797b43;393b|40;79797a;39|797b");
+}
+
+/// Verifies gradual bitwise operands choose byte-string behavior only when both runtime values
+/// are strings and otherwise follow PHP's integer coercion path.
+#[test]
+fn test_runtime_gradual_bitwise_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_bits(mixed $left, mixed $right): void {
+    var_dump($left & $right);
+    var_dump($left | $right);
+    var_dump($left ^ $right);
+}
+gradual_bits('A', 'x');
+gradual_bits('3', 1);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"@\"\nstring(1) \"y\"\nstring(1) \"9\"\nint(1)\nint(3)\nint(2)\n"
+    );
+}
+
+/// Verifies PHP byte-string offset assignment uses copy-on-write, relative negative offsets,
+/// positive-offset space extension, numeric string offsets, and the first replacement byte.
+#[test]
+fn test_runtime_string_offset_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+function replacement(): string { return 'YZ'; }
+$value = 'abc';
+$copy = $value;
+$value[1] = 'Z';
+echo $value, '|', $copy;
+$value[-1] = 'Q';
+echo '|', $value;
+$value[5] = replacement();
+echo '|', $value, '|', strlen($value);
+$value['0'] = '!';
+echo '|', $value;
+"#,
+    );
+    assert_eq!(out, "aZc|abc|aZQ|aZQ  Y|6|!ZQ  Y");
+}
+
 
 /// Verifies `<<` with a shift count of 64 or more yields `0` instead of masking the count.
 ///

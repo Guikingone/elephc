@@ -11,6 +11,8 @@ use super::*;
 
 /// Collects literal defaults that can be copied directly into object property slots.
 pub(super) fn collect_property_defaults(
+    module: &crate::ir::Module,
+    class_name: &str,
     class_info: &ClassInfo,
     inst: &Instruction,
 ) -> Result<Vec<PropertyDefault>> {
@@ -28,12 +30,18 @@ pub(super) fn collect_property_defaults(
             continue;
         }
         let offset = 8 + index * 16;
+        let resolved = crate::codegen::eval_class_constant_helpers::resolve_class_like_constant_literal(
+            module,
+            class_name,
+            &default_expr.kind,
+        )
+        .unwrap_or_else(|| default_expr.kind.clone());
         defaults.push(PropertyDefault {
             offset,
             value: literal_default_value(
                 &format!("property ${}", property),
                 php_type,
-                &default_expr.kind,
+                &resolved,
                 inst.op.name(),
             )?,
             is_reference: class_info.owned_reference_properties.contains(property),

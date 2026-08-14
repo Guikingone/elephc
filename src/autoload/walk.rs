@@ -12,8 +12,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::parser::ast::{
-    CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Program,
-    StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
+    AttributeGroup, CallableTarget, CatchClause, ClassConst, ClassMethod, ClassProperty, Expr,
+    ExprKind, Program, StaticReceiver, Stmt, StmtKind, TraitUse, TypeExpr,
 };
 
 /// Stable l-value shapes whose deterministic class-string assignments can seed dynamic `new`.
@@ -219,6 +219,7 @@ fn dynamic_class_index(expr: &Expr) -> Option<DynamicClassIndex> {
 
 /// Recurse into a statement to collect class references.
 fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
+    collect_attribute_groups(&stmt.attributes, out);
     match &stmt.kind {
         StmtKind::ClassDecl {
             extends,
@@ -286,6 +287,7 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
         }
         StmtKind::EnumDecl { cases, .. } => {
             for case in cases {
+                collect_attribute_groups(&case.attributes, out);
                 if let Some(value) = &case.value {
                     collect_refs_expr(value, out);
                 }
@@ -298,9 +300,13 @@ fn collect_refs_stmt(stmt: &Stmt, out: &mut ReferenceSet<'_>) {
         }
         StmtKind::FunctionDecl {
             params,
+            param_attributes,
             body,
             ..
         } => {
+            for groups in param_attributes {
+                collect_attribute_groups(groups, out);
+            }
             for (_, _, default, _) in params {
                 if let Some(d) = default {
                     collect_refs_expr(d, out);
@@ -509,6 +515,10 @@ fn collect_refs_catch(catch: &CatchClause, out: &mut ReferenceSet<'_>) {
 
 /// Collect class references from a class method declaration.
 fn collect_method(method: &ClassMethod, out: &mut ReferenceSet<'_>) {
+    collect_attribute_groups(&method.attributes, out);
+    for groups in &method.param_attributes {
+        collect_attribute_groups(groups, out);
+    }
     for (_, _, default, _) in &method.params {
         if let Some(d) = default {
             collect_refs_expr(d, out);
@@ -521,6 +531,7 @@ fn collect_method(method: &ClassMethod, out: &mut ReferenceSet<'_>) {
 
 /// Collect class references from a class property declaration.
 fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet<'_>) {
+    collect_attribute_groups(&prop.attributes, out);
     if let Some(d) = &prop.default {
         collect_refs_expr(d, out);
     }
@@ -528,7 +539,20 @@ fn collect_property(prop: &ClassProperty, out: &mut ReferenceSet<'_>) {
 
 /// Collect class references from a class constant declaration.
 fn collect_class_const(constant: &ClassConst, out: &mut ReferenceSet<'_>) {
+    collect_attribute_groups(&constant.attributes, out);
     collect_refs_expr(&constant.value, out);
+}
+
+/// Collects attribute class names and references nested in their argument expressions.
+fn collect_attribute_groups(groups: &[AttributeGroup], out: &mut ReferenceSet<'_>) {
+    for group in groups {
+        for attribute in &group.attributes {
+            push_name(&attribute.name, out);
+            for argument in &attribute.args {
+                collect_refs_expr(argument, out);
+            }
+        }
+    }
 }
 
 /// Collect class references from a trait use declaration.

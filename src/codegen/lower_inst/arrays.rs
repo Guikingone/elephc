@@ -793,15 +793,65 @@ pub(super) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_indexed_array(array_ty.clone(), inst)?;
     let elem_ty = indexed_array_element_type(&array_ty, inst)?;
     let source_local = source_load_local_slot(ctx, array)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
-        Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
+    if elem_ty.codegen_repr() == PhpType::Mixed {
+        lower_runtime_promotable_array_push(ctx, array, value)?;
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_array_push_aarch64(ctx, array, value, &elem_ty)?,
+            Arch::X86_64 => lower_array_push_x86_64(ctx, array, value, &elem_ty)?,
+        }
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_value_to_local(slot, array)?;
     }
     ctx.writeback_global_array_source(array)?;
+    Ok(())
+}
+
+/// Appends to an `array<mixed>` whose raw storage may have promoted to a hash at runtime.
+fn lower_runtime_promotable_array_push(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    value: ValueId,
+) -> Result<()> {
+    let hash_case = ctx.next_label("array_push_dynamic_hash");
+    let done = ctx.next_label("array_push_dynamic_done");
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #3");                              // heap kind 3 identifies associative storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // promoted arrays append through the hash helper
+            lower_array_push_aarch64(ctx, array, value, &PhpType::Mixed)?;
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 3");                              // heap kind 3 identifies associative storage
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // promoted arrays append through the hash helper
+            lower_array_push_x86_64(ctx, array, value, &PhpType::Mixed)?;
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => super::hashes::lower_hash_append_aarch64(
+            ctx,
+            array,
+            value,
+            &value_ty,
+            &PhpType::Mixed,
+        )?,
+        Arch::X86_64 => super::hashes::lower_hash_append_x86_64(
+            ctx,
+            array,
+            value,
+            &value_ty,
+            &PhpType::Mixed,
+        )?,
+    }
+    ctx.emitter.label(&done);
     Ok(())
 }
 

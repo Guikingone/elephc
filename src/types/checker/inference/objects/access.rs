@@ -207,6 +207,9 @@ impl Checker {
         property: &str,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
+        if class_name.trim_start_matches('\\').is_empty() {
+            return Ok(PhpType::Mixed);
+        }
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
         }

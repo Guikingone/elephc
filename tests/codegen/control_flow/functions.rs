@@ -351,3 +351,24 @@ fn test_foreach_key_over_unknown_element_array() {
     );
     assert_eq!(out, "a=1;b=2;");
 }
+
+/// Verifies a declared array reference invalidates an empty caller's pre-call element shape.
+#[test]
+fn test_array_reference_mutation_widens_caller_shape() {
+    let out = compile_and_run(
+        r#"<?php
+function populate(array &$result): void {
+    $result['Example'] = ['dev' => true];
+}
+function definitions(): array {
+    $result = [];
+    populate($result);
+    return $result;
+}
+foreach (definitions() as $environments) {
+    echo ($environments['dev'] ?? false) ? 'dev' : 'none';
+}
+"#,
+    );
+    assert_eq!(out, "dev");
+}

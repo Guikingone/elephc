@@ -54,6 +54,25 @@ enum EvalClassConstantValue {
     },
 }
 
+/// Resolves a supported class-like constant expression into the literal form consumed by direct
+/// property initializers. Enum cases remain runtime objects and therefore are not literalized.
+pub(super) fn resolve_class_like_constant_literal(
+    module: &Module,
+    current_class: &str,
+    expr: &ExprKind,
+) -> Option<ExprKind> {
+    let current_info = module.class_infos.get(current_class);
+    let expr = Expr::new(expr.clone(), crate::span::Span::dummy());
+    match eval_class_constant_value(module, current_class, current_info, &expr, 0)? {
+        EvalClassConstantValue::Int(value) => Some(ExprKind::IntLiteral(value)),
+        EvalClassConstantValue::Bool(value) => Some(ExprKind::BoolLiteral(value)),
+        EvalClassConstantValue::Float(value) => Some(ExprKind::FloatLiteral(value)),
+        EvalClassConstantValue::Str(value) => Some(ExprKind::StringLiteral(value)),
+        EvalClassConstantValue::Null => Some(ExprKind::Null),
+        EvalClassConstantValue::EnumCase { .. } => None,
+    }
+}
+
 /// Emits eval class-constant helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_class_constant_helpers(
     module: &Module,

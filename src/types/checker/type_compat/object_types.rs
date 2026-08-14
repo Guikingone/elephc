@@ -36,8 +36,8 @@ pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
     /// declared in `declaring_class`. Public members are always accessible; protected members
-    /// are accessible if the current class is the declaring class or a subclass; private
-    /// members are only accessible if the current class is exactly the declaring class.
+    /// are accessible throughout the same inheritance family; private members are only
+    /// accessible if the current class is exactly the declaring class.
     pub(crate) fn can_access_member(
         &self,
         declaring_class: &str,
@@ -46,7 +46,9 @@ impl Checker {
         match visibility {
             Visibility::Public => true,
             Visibility::Protected => self.current_class.as_deref().is_some_and(|current| {
-                current == declaring_class || self.is_subclass_of(current, declaring_class)
+                current == declaring_class
+                    || self.is_subclass_of(current, declaring_class)
+                    || self.is_subclass_of(declaring_class, current)
             }),
             Visibility::Private => self.current_class.as_deref() == Some(declaring_class),
         }

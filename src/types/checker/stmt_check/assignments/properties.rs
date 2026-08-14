@@ -137,6 +137,12 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
+            if class_name.trim_start_matches('\\').is_empty() {
+                check_generic_object_property_array_push(
+                    checker, property, &val_ty, span,
+                )?;
+                return Ok(());
+            }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
@@ -205,6 +211,20 @@ pub(super) fn check_property_array_assign(
     }
     match &obj_ty {
         PhpType::Object(class_name) => {
+            if class_name.trim_start_matches('\\').is_empty() {
+                if !is_php_array_key_type(&normalized_idx_ty) {
+                    return Err(CompileError::new(span, "Array index must be integer"));
+                }
+                check_generic_object_property_array_assign(
+                    checker,
+                    property,
+                    index,
+                    &normalized_idx_ty,
+                    &val_ty,
+                    span,
+                )?;
+                return Ok(());
+            }
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
             if let PhpType::Object(prop_class_name) = &prop_ty {
@@ -265,6 +285,102 @@ pub(super) fn check_property_array_assign(
             "Array index assignment requires an object or typed pointer",
         )),
     }
+}
+
+/// Validates an append through PHP's bare `object` type against compatible AOT property owners.
+fn check_generic_object_property_array_push(
+    checker: &mut Checker,
+    property: &str,
+    val_ty: &PhpType,
+    span: Span,
+) -> Result<(), CompileError> {
+    let candidates = generic_object_array_property_candidates(checker, property);
+    for (class_name, prop_ty, property_has_declared_type) in candidates {
+        if matches!(prop_ty.codegen_repr(), PhpType::Object(_) | PhpType::Mixed) {
+            continue;
+        }
+        let updated = updated_array_property_push_type(
+            checker,
+            &prop_ty,
+            property_has_declared_type,
+            &class_name,
+            property,
+            val_ty,
+            span,
+        )?;
+        update_object_property_type(
+            checker,
+            &class_name,
+            property,
+            property_has_declared_type,
+            updated,
+        );
+    }
+    Ok(())
+}
+
+/// Validates a keyed write through PHP's bare `object` type against compatible AOT owners.
+fn check_generic_object_property_array_assign(
+    checker: &mut Checker,
+    property: &str,
+    index: &Expr,
+    normalized_idx_ty: &PhpType,
+    val_ty: &PhpType,
+    span: Span,
+) -> Result<(), CompileError> {
+    let candidates = generic_object_array_property_candidates(checker, property);
+    for (class_name, prop_ty, property_has_declared_type) in candidates {
+        if matches!(prop_ty.codegen_repr(), PhpType::Object(_) | PhpType::Mixed) {
+            continue;
+        }
+        let updated = updated_array_property_assign_type(
+            checker,
+            &prop_ty,
+            property_has_declared_type,
+            &class_name,
+            property,
+            index,
+            normalized_idx_ty,
+            val_ty,
+            span,
+        )?;
+        update_object_property_type(
+            checker,
+            &class_name,
+            property,
+            property_has_declared_type,
+            updated,
+        );
+    }
+    Ok(())
+}
+
+/// Collects array-like property owners that may receive a write through bare `object`.
+fn generic_object_array_property_candidates(
+    checker: &Checker,
+    property: &str,
+) -> Vec<(String, PhpType, bool)> {
+    checker
+        .classes
+        .iter()
+        .filter_map(|(class_name, class_info)| {
+            let (_, (_, prop_ty)) = class_info.visible_property(property)?;
+            let compatible = matches!(
+                prop_ty.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+            ) || matches!(
+                prop_ty.codegen_repr(),
+                PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+            ) || type_satisfies_array_access(checker, prop_ty);
+            compatible.then(|| {
+                (
+                    class_name.clone(),
+                    prop_ty.clone(),
+                    class_info.visible_property_is_declared(property),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Validates a write to a named property of a class instance.

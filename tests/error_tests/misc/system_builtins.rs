@@ -593,3 +593,17 @@ fn test_error_constant_too_many_args() {
         "constant() takes exactly 1 argument",
     );
 }
+
+/// Preserves a shared by-reference output contract across literal callable alternatives.
+#[test]
+fn test_dynamic_literal_regex_callable_defines_matches_output() {
+    expect_no_error(
+        r#"<?php
+$matcher = $argc > 1 ? 'preg_match_all' : 'preg_match';
+if (false === $matcher('/([A-Z]+)/', 'abcXYZ', $matches)) {
+    throw new RuntimeException('failed');
+}
+echo $matches[1];
+"#,
+    );
+}

@@ -45,7 +45,9 @@ thread_local! {
 
 /// Folds constant expressions to their compile-time values.
 pub fn fold_constants(program: Program) -> Program {
-    program.into_iter().map(fold_stmt).collect()
+    with_known_class_constants(program, |program| {
+        program.into_iter().map(fold_stmt).collect()
+    })
 }
 
 /// Propagates scalar constants across statements and control flow.

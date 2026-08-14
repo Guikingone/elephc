@@ -1027,8 +1027,14 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
-    let expr = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
+    let expr = crate::codegen::eval_class_constant_helpers::resolve_class_like_constant_literal(
+        ctx.module,
+        class_name,
         expr,
+    )
+    .unwrap_or_else(|| expr.clone());
+    let expr = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
+        &expr,
         &ctx.module.global_constants,
     );
     let value = literal_default_value(

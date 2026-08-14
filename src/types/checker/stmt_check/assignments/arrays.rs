@@ -20,13 +20,13 @@ use super::super::super::Checker;
 
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
-/// Validates that the target is not a string, merges element types for arrays/assoc-arrays,
+/// Validates string offsets, merges element types for arrays/assoc-arrays,
 /// checks buffer index type and element type compatibility, and requires ArrayAccess for objects.
 /// Updates `env` with the merged key/value types; returns an error for invalid targets or type mismatches.
 ///
 /// Errors:
 /// - Undefined variable
-/// - String offset assignment
+/// - Invalid string offset index
 /// - Buffer element type mismatch or packed buffer assignment via index
 /// - Object assignment without ArrayAccess
 pub(super) fn check_array_assign(
@@ -46,10 +46,13 @@ pub(super) fn check_array_assign(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
     if arr_ty == PhpType::Str {
-        return Err(CompileError::new(
-            span,
-            "String offset assignment is not supported",
-        ));
+        if !valid_string_offset_assignment_index(index, &idx_ty) {
+            return Err(CompileError::new(
+                index.span,
+                "String offset assignment index must be integer",
+            ));
+        }
+        return Ok(());
     }
     if let PhpType::Array(elem_ty) = &arr_ty {
         let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
@@ -156,6 +159,16 @@ pub(super) fn check_array_assign(
     Ok(())
 }
 
+/// Returns whether an assignment index follows PHP's accepted string-offset forms.
+fn valid_string_offset_assignment_index(index: &Expr, index_ty: &PhpType) -> bool {
+    matches!(index_ty, PhpType::Int | PhpType::Mixed)
+        || matches!(
+            &index.kind,
+            ExprKind::StringLiteral(value)
+                if crate::types::parse_php_string_offset_literal(value).is_some()
+        )
+}
+
 /// Returns whether a buffer element accepts an assignment value after runtime coercion.
 fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bool {
     if expected == actual {
@@ -192,7 +205,7 @@ pub(super) fn check_nested_array_assign(
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
-    widen_nested_this_property_storage(checker, target);
+    widen_nested_root_storage(checker, target, env);
     match arr_ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(()),
         PhpType::Str => Err(CompileError::new(
@@ -211,18 +224,24 @@ pub(super) fn check_nested_array_assign(
     }
 }
 
-/// Widens the root `$this->property` of a nested offset write to generic PHP array storage.
+/// Widens the root local or `$this->property` of a nested write to generic array storage.
 ///
-/// A chain such as `$this->map[$first][$second] = $value` autovivifies an inner array and can
-/// switch the outer property between indexed and hash storage. The checker previously validated
-/// the leaf but left the untyped root at its first keyed-write shape, while EIR correctly emitted
-/// runtime-dispatched Mixed cells. Updating the root keeps those two contracts identical without
-/// weakening declared PHP property types.
-fn widen_nested_this_property_storage(checker: &mut Checker, target: &Expr) {
+/// A chain such as `$map[$first][$second] = $value` autovivifies an inner array. The checker must
+/// expose that inner container to subsequent reads and `foreach` bindings even though its exact
+/// indexed-or-hash shape depends on runtime keys. Object roots retain the same refinement only for
+/// untyped `$this` properties; declared property contracts remain authoritative.
+fn widen_nested_root_storage(checker: &mut Checker, target: &Expr, env: &mut TypeEnv) {
     let mut current = target;
     loop {
         match &current.kind {
             ExprKind::ArrayAccess { array, .. } => current = array,
+            ExprKind::Variable(name) => {
+                env.insert(
+                    name.clone(),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                );
+                return;
+            }
             ExprKind::PropertyAccess { object, property }
                 if matches!(&object.kind, ExprKind::This) =>
             {

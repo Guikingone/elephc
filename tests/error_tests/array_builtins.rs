@@ -959,46 +959,12 @@ fn test_error_array_pointer_non_array_receiver() {
     }
 }
 
-/// Verifies an object-property receiver is a named compile error rather than a silently
-/// detached cursor.
-///
-/// elephc keeps the internal pointer in a hidden slot beside the array LOCAL, so a
-/// property has nowhere to store one. PHP accepts this shape, so the divergence is
-/// deliberate and must stay loud.
-#[test]
-fn test_error_array_pointer_property_receiver() {
-    expect_error(
-        r#"<?php class C { public array $p = [1, 2]; } $o = new C(); echo key($o->p);"#,
-        "key() argument must be an array variable",
-    );
-}
-
-/// Verifies an array-element receiver is a named compile error for the same reason.
-/// Fixture: `next($a[0])` on a nested indexed array.
-#[test]
-fn test_error_array_pointer_element_receiver() {
-    expect_error(
-        r#"<?php $a = [[1, 2], [3, 4]]; next($a[0]);"#,
-        "next() argument must be an array variable",
-    );
-}
-
-/// Verifies a call-result receiver is a named compile error for the same reason.
-/// Fixture: `current(f())` where `f()` returns a fresh array.
-#[test]
-fn test_error_array_pointer_call_result_receiver() {
-    expect_error(
-        r#"<?php function f(): array { return [1, 2]; } echo current(f());"#,
-        "current() argument must be an array variable",
-    );
-}
-
-/// Verifies an array literal receiver is a named compile error for the same reason.
-/// Fixture: `reset([1, 2, 3])`, which PHP itself also rejects for the by-reference members.
+/// Verifies a seek operation rejects an array literal because its by-reference parameter
+/// has no writable caller-visible place.
 #[test]
 fn test_error_array_pointer_literal_receiver() {
     expect_error(
         r#"<?php reset([1, 2, 3]);"#,
-        "reset() argument must be an array variable",
+        "reset parameter $array must be passed a variable",
     );
 }

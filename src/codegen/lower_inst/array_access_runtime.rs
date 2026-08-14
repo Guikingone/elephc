@@ -17,6 +17,11 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
     if inst.operands.len() == 3 && matches!(inst.immediate, Some(Immediate::Data(_))) {
         return lower_property_array_runtime_set(ctx, inst);
     }
+    if inst.operands.len() == 1 && matches!(inst.immediate, Some(Immediate::Data(_))) {
+        if let Some(()) = lower_generic_object_nominal_guard(ctx, inst)? {
+            return Ok(());
+        }
+    }
     if let Some(()) = try_lower_array_access_runtime_call(ctx, inst)? {
         return Ok(());
     }
@@ -111,6 +116,50 @@ pub(super) fn lower_runtime_call(ctx: &mut FunctionContext<'_>, inst: &Instructi
         "runtime_call from PHP type {:?} to PHP type {:?}",
         source_ty, inst.result_php_type
     )))
+}
+
+/// Guards a raw bare-object payload against a named class or interface boundary.
+fn lower_generic_object_nominal_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<Option<()>> {
+    let value = expect_operand(inst, 0)?;
+    let PhpType::Object(source_name) = ctx.value_php_type(value)?.codegen_repr() else {
+        return Ok(None);
+    };
+    if !source_name.trim_start_matches('\\').is_empty() {
+        return Ok(None);
+    }
+    let target_name = objects::class_name_immediate(ctx, inst)?.to_string();
+    let Some((target_id, target_kind)) = objects::classify_named_target(ctx, &target_name) else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "missing runtime type metadata for object boundary {:?}",
+            target_name
+        )));
+    };
+    let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(value, source_reg)?;
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    objects::emit_match_call(ctx, target_id, target_kind, "__rt_exception_matches");
+    let accepted = ctx.next_label("generic_object_boundary_accepted");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", accepted));         // accept a runtime object matching the nominal return contract
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // test the nominal object matcher result
+            ctx.emitter.instruction(&format!("jne {}", accepted));              // accept a runtime object matching the nominal return contract
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    exceptions::emit_type_error(
+        ctx,
+        &format!("Return value must be of type {}, object returned", target_name),
+    );
+    ctx.emitter.label(&accepted);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    store_if_result(ctx, inst)?;
+    Ok(Some(()))
 }
 
 /// Lowers generic EIR runtime calls that represent PHP `ArrayAccess` object indexing.

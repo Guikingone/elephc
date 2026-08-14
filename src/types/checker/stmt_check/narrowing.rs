@@ -52,10 +52,13 @@ pub(crate) struct GuardNarrowing {
     pub else_ty: PhpType,
 }
 
-/// Describes an exact guard type or the element-agnostic array family.
+/// Describes an exact guard type, an unresolved object target, or the element-agnostic array
+/// family.
 enum GuardTarget {
     /// An exact scalar, null, callable, or object target.
     Exact(PhpType),
+    /// An object-like target whose declaration is unavailable to the static checker.
+    UnknownObject,
     /// Any indexed or associative array, regardless of its element types.
     AnyArray,
 }
@@ -65,12 +68,45 @@ impl GuardTarget {
     fn fallback_type(&self) -> PhpType {
         match self {
             Self::Exact(ty) => ty.clone(),
-            Self::AnyArray => PhpType::Mixed,
+            Self::UnknownObject | Self::AnyArray => PhpType::Mixed,
         }
     }
 }
 
 impl Checker {
+    /// Returns the environment for a single-condition arm of `match (true)` or `match (false)`.
+    ///
+    /// PHP commonly expresses type dispatch as `match (true) { $value instanceof T => ... }`.
+    /// The arm result executes on the guard's matching edge, so it receives the same narrowing
+    /// as an `if` body. Multi-condition arms remain conservative because their conditions are
+    /// alternatives and may narrow different bindings or types.
+    pub(crate) fn match_arm_narrowed_env(
+        &mut self,
+        subject: &Expr,
+        conditions: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<TypeEnv, CompileError> {
+        let ExprKind::BoolLiteral(subject_value) = &subject.kind else {
+            return Ok(env.clone());
+        };
+        let [condition] = conditions else {
+            return Ok(env.clone());
+        };
+        let Some(narrowing) = self.guard_narrowing(condition, env)? else {
+            return Ok(env.clone());
+        };
+        let mut narrowed = env.clone();
+        narrowed.insert(
+            narrowing.var,
+            if *subject_value {
+                narrowing.then_ty
+            } else {
+                narrowing.else_ty
+            },
+        );
+        Ok(narrowed)
+    }
+
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
@@ -91,7 +127,9 @@ impl Checker {
         if let Some(narrowing) = self.truthy_binding_guard_narrowing(cond, prefix_negated, env)? {
             return Ok(Some(narrowing));
         }
-        let Some((receiver, target, comparison_negated)) = guard_receiver_and_target(cond) else {
+        let Some((receiver, target, comparison_negated)) =
+            guard_receiver_and_target(self, cond)
+        else {
             return Ok(None);
         };
         let negated = prefix_negated ^ comparison_negated;
@@ -457,7 +495,10 @@ fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
 /// NOT match (`isset`, `!==`), so `guard_narrowing` can combine it with a leading `!`. The
 /// receiver may be any expression here — `guard_env_key` decides which receivers narrowing can
 /// actually key.
-fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> {
+fn guard_receiver_and_target<'a>(
+    checker: &Checker,
+    cond: &'a Expr,
+) -> Option<(&'a Expr, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
             // `php_symbol_key` rather than a plain lowercase: it also folds the leading `\` and
@@ -487,14 +528,23 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            let class_name = class.as_str();
+            let class_name = checker
+                .resolve_instanceof_target_name(class, cond.span)
+                .ok()?;
+            let target_is_known = checker.classes.contains_key(&class_name)
+                || checker.interfaces.contains_key(&class_name)
+                || checker.enums.contains_key(&class_name)
+                || checker.declared_traits.contains(&class_name);
+            if !target_is_known {
+                return Some((value, GuardTarget::UnknownObject, false));
+            }
             let narrowed_type = if class_name
                 .trim_start_matches('\\')
                 .eq_ignore_ascii_case("Closure")
             {
                 PhpType::Callable
             } else {
-                PhpType::Object(class_name.to_string())
+                PhpType::Object(class_name)
             };
             Some((
                 value,
@@ -551,10 +601,12 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
 /// (else) members. Exact targets require a matching variant; an `Object` target matches an object
-/// member with the same class name (inheritance-aware narrowing is left for the future), and
-/// `AnyArray` matches either array shape.
+/// member with the same class name (inheritance-aware narrowing is left for the future), an
+/// unresolved object target matches no statically known member, and `AnyArray` matches either
+/// array shape.
 fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
     match target {
+        GuardTarget::UnknownObject => false,
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
         GuardTarget::Exact(PhpType::Object(target_class)) => {
             matches!(member, PhpType::Object(member_class) if member_class == target_class)

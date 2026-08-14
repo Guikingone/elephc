@@ -6,10 +6,10 @@
 //!
 //! Key details:
 //! - The PHP golden signature is `optional(&["array","callback","mode"], 1, &[null, 0])`.
-//! - `check` validates the first argument is an indexed array, derives callback argument types
-//!   from the static mode value, and validates a non-null callback signature. Omitting the
-//!   callback, or passing `null`, selects PHP truthiness filtering. The return type preserves
-//!   the input array element type.
+//! - `check` validates the first argument is an array, derives callback argument types from the
+//!   static mode value, and validates a non-null callback signature. Omitting the callback, or
+//!   passing `null`, selects PHP truthiness filtering. The return type preserves the input
+//!   container shape and element metadata.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::builtins::semantics::{
@@ -36,17 +36,18 @@ const fn array_filter_semantics() -> BuiltinSemantics {
     semantics
 }
 
-/// Returns a boxed result for gradual sources and preserves typed indexed-array metadata.
+/// Returns a boxed result for gradual sources and preserves concrete array metadata.
 fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
     match input.arg_types.first().map(PhpType::codegen_repr) {
         Some(PhpType::Array(elem)) => PhpType::Array(elem),
+        Some(PhpType::AssocArray { key, value }) => PhpType::AssocArray { key, value },
         _ => PhpType::Mixed,
     }
 }
 
 /// Returns the filtered array type for an `array_filter` call.
 ///
-/// Validates the first argument is an indexed array, derives callback argument types
+/// Validates the first argument is an array, derives callback argument types
 /// from the optional mode argument, and validates a non-null callback. Arity is
 /// pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
@@ -55,8 +56,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         cx.checker.infer_type(mode, cx.env)?;
     }
     match arr_ty {
-        PhpType::Array(elem_ty) => {
-            let arr_ty = PhpType::Array(elem_ty.clone());
+        arr_ty @ PhpType::Array(_) | arr_ty @ PhpType::AssocArray { .. } => {
             if let Some(callback) = cx.args.get(1) {
                 if !matches!(callback.kind, crate::parser::ast::ExprKind::Null) {
                     let callback_arg_types =
@@ -74,7 +74,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                     )?;
                 }
             }
-            Ok(PhpType::Array(elem_ty))
+            Ok(arr_ty)
         }
         PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(

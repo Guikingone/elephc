@@ -43,15 +43,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             then_body,
             elseif_clauses,
             else_body,
-        } => StmtKind::If {
-            condition: fold_expr(condition),
-            then_body: fold_block(then_body),
-            elseif_clauses: elseif_clauses
-                .into_iter()
-                .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
-                .collect(),
-            else_body: else_body.map(fold_block),
-        },
+        } => fold_if_statement(
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+            span,
+            source_mode,
+            strict_types,
+        ),
         StmtKind::IfDef {
             symbol,
             then_body,
@@ -401,4 +401,163 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
 /// Returns a new `Vec<Stmt>` with each statement folded.
 pub(crate) fn fold_block(body: Vec<Stmt>) -> Vec<Stmt> {
     body.into_iter().map(fold_stmt).collect()
+}
+
+/// Folds an if-chain and removes a leading branch whose condition became a scalar literal.
+///
+/// This early, effect-safe pruning happens before type checking so a statically unreachable
+/// branch cannot report diagnostics for expressions PHP never evaluates. Dynamic conditions
+/// retain the original if-chain shape and all source-order evaluation rules.
+fn fold_if_statement(
+    condition: Expr,
+    then_body: Vec<Stmt>,
+    elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    let condition = fold_expr(condition);
+    let Some((truthy, required_evaluation)) = known_condition_truthiness(&condition) else {
+        return StmtKind::If {
+            condition,
+            then_body: fold_block(then_body),
+            elseif_clauses: elseif_clauses
+                .into_iter()
+                .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
+                .collect(),
+            else_body: else_body.map(fold_block),
+        };
+    };
+
+    if truthy {
+        return prefix_required_condition_evaluation(
+            StmtKind::Synthetic(fold_block(then_body)),
+            required_evaluation,
+            span,
+            source_mode,
+            strict_types,
+        );
+    }
+
+    let selected = fold_reachable_elseif_chain(
+        elseif_clauses,
+        else_body,
+        span,
+        source_mode,
+        strict_types,
+    );
+    prefix_required_condition_evaluation(
+        selected,
+        required_evaluation,
+        span,
+        source_mode,
+        strict_types,
+    )
+}
+
+/// Selects the first statically true elseif branch or preserves the suffix beginning at the
+/// first dynamic condition; when every elseif is false, it selects the optional else body.
+fn fold_reachable_elseif_chain(
+    mut elseif_clauses: Vec<(Expr, Vec<Stmt>)>,
+    else_body: Option<Vec<Stmt>>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    while !elseif_clauses.is_empty() {
+        let (condition, body) = elseif_clauses.remove(0);
+        let condition = fold_expr(condition);
+        match known_condition_truthiness(&condition) {
+            Some((true, required_evaluation)) => {
+                return prefix_required_condition_evaluation(
+                    StmtKind::Synthetic(fold_block(body)),
+                    required_evaluation,
+                    span,
+                    source_mode,
+                    strict_types,
+                );
+            }
+            Some((false, required_evaluation)) => {
+                if let Some(evaluation) = required_evaluation {
+                    let selected = fold_reachable_elseif_chain(
+                        elseif_clauses,
+                        else_body,
+                        span,
+                        source_mode,
+                        strict_types,
+                    );
+                    return prefix_required_condition_evaluation(
+                        selected,
+                        Some(evaluation),
+                        span,
+                        source_mode,
+                        strict_types,
+                    );
+                }
+            }
+            None => {
+                return StmtKind::If {
+                    condition,
+                    then_body: fold_block(body),
+                    elseif_clauses: elseif_clauses
+                        .into_iter()
+                        .map(|(condition, body)| (fold_expr(condition), fold_block(body)))
+                        .collect(),
+                    else_body: else_body.map(fold_block),
+                };
+            }
+        }
+    }
+
+    StmtKind::Synthetic(else_body.map(fold_block).unwrap_or_default())
+}
+
+/// Determines scalar truthiness and the expression that still must be evaluated before a
+/// short-circuit identity can select a branch (`$value || true`, `$value && false`).
+fn known_condition_truthiness(condition: &Expr) -> Option<(bool, Option<Expr>)> {
+    if let Some(value) = scalar_value(condition) {
+        return Some((value.truthy(), None));
+    }
+    let ExprKind::BinaryOp { left, op, right } = &condition.kind else {
+        return None;
+    };
+    let right = scalar_value(right)?;
+    match op {
+        BinOp::Or if right.truthy() => Some((true, Some((**left).clone()))),
+        BinOp::And if !right.truthy() => Some((false, Some((**left).clone()))),
+        _ => None,
+    }
+}
+
+/// Prefixes a selected branch with the expression PHP must still evaluate for a short-circuit
+/// identity, retaining the original statement's source and strict-types profile.
+fn prefix_required_condition_evaluation(
+    selected: StmtKind,
+    required_evaluation: Option<Expr>,
+    span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
+) -> StmtKind {
+    let Some(required_evaluation) = required_evaluation else {
+        return selected;
+    };
+    let mut body = vec![Stmt {
+        kind: StmtKind::ExprStmt(required_evaluation),
+        span,
+        source_mode,
+        strict_types,
+        attributes: Vec::new(),
+    }];
+    match selected {
+        StmtKind::Synthetic(mut selected_body) => body.append(&mut selected_body),
+        selected => body.push(Stmt {
+            kind: selected,
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }),
+    }
+    StmtKind::Synthetic(body)
 }

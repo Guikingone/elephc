@@ -44,8 +44,11 @@ pub(crate) const ARRAY_DIFF_STRING_NAME: &str = "__elephc_array_diff_string";
 /// Reserved helper used for two-argument `array_intersect()` calls.
 pub(crate) const ARRAY_INTERSECT_NAME: &str = "__elephc_array_intersect";
 
-/// Reserved helper used for one-argument `array_reverse()` calls on string lists.
-pub(crate) const ARRAY_REVERSE_STRING_NAME: &str = "__elephc_array_reverse_string";
+/// Reserved helper used for one-argument `array_reverse()` calls on gradual arrays.
+pub(crate) const ARRAY_REVERSE_GRADUAL_NAME: &str = "__elephc_array_reverse_gradual";
+
+/// Reserved helper used for `array_combine()` across generic array layouts.
+pub(crate) const ARRAY_COMBINE_GRADUAL_NAME: &str = "__elephc_array_combine_gradual";
 
 /// Reserved helper used for `array_search()` calls on gradual indexed arrays.
 pub(crate) const ARRAY_SEARCH_MIXED_NAME: &str = "__elephc_array_search_mixed";
@@ -354,13 +357,16 @@ function __elephc_array_diff_string(array $left, array $right): array {
 
 /// Two-array intersection that compares values by PHP string cast and preserves left keys.
 const ARRAY_INTERSECT_SRC: &str = r#"<?php
-function __elephc_array_intersect(array $left, array $right): array {
-    $result = ["__elephc_seed" => null];
-    unset($result["__elephc_seed"]);
+function __elephc_array_intersect(array $left, array $right): mixed {
+    $result = [];
     foreach ($left as $key => $value) {
         foreach ($right as $candidate) {
             if ((string) $value === (string) $candidate) {
-                $result[$key] = $value;
+                if (is_string($key)) {
+                    $result[(string) $key] = $value;
+                } else {
+                    $result[(int) $key] = $value;
+                }
                 break;
             }
         }
@@ -369,14 +375,48 @@ function __elephc_array_intersect(array $left, array $right): array {
 }
 "#;
 
-/// Reverses a packed string list while renumbering its integer keys from zero.
-const ARRAY_REVERSE_STRING_SRC: &str = r#"<?php
-function __elephc_array_reverse_string(array $input): array {
+/// Reverses a gradual array, renumbering integer keys while preserving string keys.
+const ARRAY_REVERSE_GRADUAL_SRC: &str = r#"<?php
+function __elephc_array_reverse_gradual(array $input): array {
+    $keys = [];
+    $values = [];
+    foreach ($input as $key => $value) {
+        $keys[] = $key;
+        $values[] = $value;
+    }
     $result = [];
-    $position = count($input);
+    $position = count($values);
     while ($position > 0) {
         $position--;
-        $result[] = $input[$position];
+        $key = $keys[$position];
+        if (is_string($key)) {
+            $result[$key] = $values[$position];
+        } else {
+            $result[] = $values[$position];
+        }
+    }
+    return $result;
+}
+"#;
+
+/// Combines generic array layouts in iteration order after validating equal cardinality.
+const ARRAY_COMBINE_GRADUAL_SRC: &str = r#"<?php
+function __elephc_array_combine_gradual(array $keys, array $values): array {
+    if (count($keys) !== count($values)) {
+        throw new ValueError('array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements');
+    }
+    $orderedValues = [];
+    foreach ($values as $value) {
+        $orderedValues[] = $value;
+    }
+    $result = [];
+    $position = 0;
+    foreach ($keys as $key) {
+        if (!is_int($key) && !is_string($key)) {
+            $key = (string) $key;
+        }
+        $result[$key] = $orderedValues[$position];
+        $position++;
     }
     return $result;
 }
@@ -687,7 +727,10 @@ pub fn inject_if_used(program: Program) -> Program {
         sources.push(ARRAY_INTERSECT_SRC);
     }
     if usage.references("array_reverse") {
-        sources.push(ARRAY_REVERSE_STRING_SRC);
+        sources.push(ARRAY_REVERSE_GRADUAL_SRC);
+    }
+    if usage.references("array_combine") {
+        sources.push(ARRAY_COMBINE_GRADUAL_SRC);
     }
     if usage.references("array_search") {
         sources.push(ARRAY_SEARCH_MIXED_SRC);
