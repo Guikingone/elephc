@@ -194,6 +194,16 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
 - **`MYSQLI_USE_RESULT` is accepted but still buffered.** True unbuffered
   `use_result()` streaming is out of scope; `use_result()` behaves like
   `store_result()`.
+- **A connection statement while a prepared result is pending is permitted**,
+  not rejected. A `mysqli_stmt::execute()` whose result set has not yet been
+  drained by `get_result()`/`store_result()` leaves those rows buffered on the
+  bridge (the connection wire is free), so a `query()` on the same connection
+  runs and the statement's rows stay fully readable afterward. Real mysqlnd
+  raises errno 2014 ("Commands out of sync") for that interleaving unless the
+  statement was explicitly `store_result()`-ed; elephc's always-buffered model
+  is the more lenient side of that divergence. (The 2014 guard still fires for
+  an unconsumed `query()`/`multi_query()`/`real_query()` result — those DO hold
+  connection-level state.)
 - **`MYSQLI_CLIENT_SSL` is rejected** with
   `"elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes"`.
 - **No `mysqlnd`**: `extension_loaded('mysqlnd')` is `false`, and

@@ -80,6 +80,26 @@ echo "|", mysqli_connect_error() !== null ? "msg" : "null";
     assert_eq!(out, "F|err|msg");
 }
 
+/// SECURITY: a `;` in the host, database, or socket argument is rejected at
+/// connect time (errno 2002) rather than injected as a second DSN directive
+/// that would redirect the connection to an attacker-chosen server. Needs no
+/// live server — the rejection happens before any bridge open.
+#[test]
+fn test_mysqli_connect_rejects_dsn_separator_injection() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = new mysqli("127.0.0.1;host=192.0.2.1", "u", "p", "d", 3306);
+echo $db->connect_errno === 2002 ? "host-rejected" : ("host:" . $db->connect_errno);
+$db2 = new mysqli("127.0.0.1", "u", "p", "app;host=192.0.2.1", 3306);
+echo "|", $db2->connect_errno === 2002 ? "db-rejected" : ("db:" . $db2->connect_errno);
+$db3 = new mysqli("localhost", "u", "p", "d", 3306, "/tmp/x;host=192.0.2.1");
+echo "|", $db3->connect_errno === 2002 ? "sock-rejected" : ("sock:" . $db3->connect_errno);
+"#,
+    );
+    assert_eq!(out, "host-rejected|db-rejected|sock-rejected");
+}
+
 /// Under `MYSQLI_REPORT_STRICT` a failed connect throws `mysqli_sql_exception`
 /// — never `PDOException` — with the SQLSTATE on the public property.
 #[test]

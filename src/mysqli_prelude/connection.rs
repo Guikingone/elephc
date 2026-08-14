@@ -134,6 +134,16 @@ class mysqli {
         }
         $_port = $port === null ? 3306 : $port;
         $_socket = $socket === null ? "" : $socket;
+        // SECURITY: host, dbname, and unix_socket are folded verbatim into the
+        // bridge DSN, which splits on ';' and applies the LAST duplicate of a
+        // directive; unlike user/password these three are NOT percent-decoded
+        // by the bridge, so a ';' in any of them would inject a second
+        // directive (e.g. host="localhost;host=attacker" redirects the
+        // connection). None of the three ever legitimately contains a ';', so
+        // reject it rather than silently trusting the crafted value.
+        if (strpos($_host, ";") !== false || ($database !== null && strpos($database, ";") !== false) || strpos($_socket, ";") !== false) {
+            return $this->connectFailure(2002, "elephc mysqli: host, database, and socket must not contain ';'", "HY000");
+        }
         // php-src mysqli honors the socket only when the host is empty or
         // exactly "localhost"; any other host goes over TCP.
         $_dsn = "mysql:";
