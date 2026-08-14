@@ -532,8 +532,16 @@ class extends `SplFileInfo` or `SplFileObject` as required.
 `SplFileObject` snapshots file contents into line storage with `file()` for
 iteration, uses a live stream for byte-position methods such as `fread()`,
 `fwrite()`, `fseek()`, `ftell()`, and `ftruncate()`, reloads line storage after
-stream writes, supports basic CSV splitting, and exposes
+stream writes, and exposes
 `SplFileObject::DROP_NEW_LINE`, `READ_AHEAD`, `SKIP_EMPTY`, and `READ_CSV`.
+Under `READ_CSV` the iteration yields CSV *records*, not lines: enclosures,
+delimiters inside them, and newlines inside a quoted field are honored, so one
+record may span several lines and still count as a single key. A line holding
+nothing but its terminator reads back as `[null]`, and — as in reference PHP —
+one final record comes after the last terminated line. `SKIP_EMPTY` turns that
+last record into `false` and, together with `DROP_NEW_LINE`, steps over blank
+records without renumbering the ones that follow. `fgetcsv()`, `fputcsv()`, and
+an omitted control argument all resolve against `setCsvControl()` state.
 `SplTempFileObject` exposes PHP-compatible logical stream names: negative
 `maxMemory` values report `php://memory`, while non-negative values report
 `php://temp/maxmemory:N`. Contents stay in memory until the configured

@@ -556,6 +556,29 @@ rmdir("root");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `SplFileObject::getCsvControl()` returns the controls instead of faulting.
+///
+/// The method was declared on the class and left out of `is_supported_builtin_spl_method()`,
+/// the list that decides which prelude bodies are LOWERED. A declared-but-unlowered method
+/// keeps a null vtable slot, so calling it branched to address 0 — a segfault at the call site
+/// with nothing wrong at compile time. Removing the name from that list reproduces it exactly.
+#[test]
+fn test_spl_file_object_get_csv_control_is_lowered() {
+    let (out, dir) = compile_and_run_in_dir(
+        r##"<?php
+file_put_contents("ctl2.csv", "a,b\n");
+$f = new SplFileObject("ctl2.csv", "r");
+echo json_encode($f->getCsvControl()), "|";
+$f->setCsvControl(";", "'", "#");
+echo json_encode($f->getCsvControl()), "\n";
+unset($f);
+unlink("ctl2.csv");
+"##,
+    );
+    assert_eq!(out, "[\",\",\"\\\"\",\"\\\\\"]|[\";\",\"'\",\"#\"]\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies READ_CSV iteration reads CSV RECORDS rather than exploding the raw line.
 ///
 /// `current()` used to answer `explode($delimiter, $line)`, which is not CSV: an enclosure was
