@@ -273,6 +273,19 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_fopen_uw_fail");                             // silent fail (obj is freed on the shared fail path)
     emitter.instruction("str x0, [sp, #40]");                                   // save the allocated handle slot index
 
+    // -- stand the FILTER suppression down for the length of the wrapper's PHP --
+    // A `php://filter/...` open silences its inner opener, and for a user-wrapper resource the
+    // inner opener IS this dispatch. php-src silences that open by dropping `REPORT_ERRORS` from
+    // the flags it hands down, which reaches the open's own diagnostics and stops there: PHP
+    // running inside `stream_open` warns exactly as it would anywhere else. Holding the scope
+    // across the call instead swallowed every one of those warnings. `@` is a DIFFERENT counter
+    // and is deliberately left standing, so `@fopen("php://filter/...")` is still silent
+    // throughout — including here.
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // the filter scope this open is holding
+    emitter.instruction("str x10, [sp, #56]");                                  // park it in the dispatch scratch's spare slot
+    emitter.instruction("str xzr, [x9]");                                       // the wrapper's PHP warns in php's own words
+
     // -- call stream_open(obj, path, mode, options=0) --
     emitter.instruction("ldr x0, [sp, #32]");                                   // $this = wrapper object
     emitter.instruction("ldp x1, x2, [sp, #0]");                                // path ptr/len → string-arg pair 1
@@ -286,6 +299,12 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("stp xzr, xzr, [x6]");                                  // zero the opened_path scratch slot before the call
     emitter.instruction("ldr x11, [sp, #48]");                                  // reload stream_open method pointer
     emitter.instruction("blr x11");                                             // invoke stream_open on the wrapper object
+    // Back in runtime code: the enclosing filtered open is owed its scope again, and it is owed
+    // it BEFORE the fail branch, whose silent -1 the filter's own failed-open line replaces.
+    // x9/x10 only, so the boolean `stream_open` returned survives in x0.
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [sp, #56]");                                  // the parked filter scope
+    emitter.instruction("str x10, [x9]");                                       // republish it for the rest of the open
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // stream_open returned false → silent fail (obj is freed on the shared fail path)
 
     // -- success: store obj in the handle slot and return the synthetic fd --
@@ -576,6 +595,14 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     //    shifts the dispatch scratch frame by +16 only across the call;
     //    we load r11 (stream_open ptr) BEFORE the sub so its [rsp+48]
     //    reference is still valid.
+    // See the AArch64 counterpart: the FILTER suppression stands down for the wrapper's PHP,
+    // and `@`'s counter is deliberately left standing. Parked before the `sub rsp, 16` below so
+    // the slot is addressed the same way on both sides of the call.
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                            // the filter scope this open is holding
+    emitter.instruction("mov QWORD PTR [rsp + 56], r11");                       // park it in the dispatch scratch's spare slot
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // the wrapper's PHP warns in php's own words
+
     emitter.instruction("mov rdi, QWORD PTR [rsp + 32]");                       // $this = wrapper object
     emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                        // path ptr
     emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                        // path len
@@ -590,6 +617,11 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp], r10");                            // 7th arg (opened_path address) at [rsp+0]
     emitter.instruction("call r11");                                            // invoke stream_open on the wrapper object
     emitter.instruction("add rsp, 16");                                         // release the stack-arg slot
+    // See the AArch64 counterpart: republish the parked scope BEFORE the fail branch. r10/r11
+    // only, so the boolean `stream_open` returned survives in rax.
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_suppression");
+    emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // the parked filter scope
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // republish it for the rest of the open
     emitter.instruction("test rax, rax");                                       // did stream_open return false?
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // stream_open returned false → silent fail (obj is freed on the shared fail path)
 

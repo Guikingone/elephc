@@ -1319,6 +1319,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         target,
     ));
     out.push_str(&comm_directive("_php_filter_pending_depth", 8, target));
+    // The filter machinery's OWN suppression depth, kept apart from `_rt_diag_suppression`.
+    // Both silence `__rt_diag_warning`, and `@` still silences everything by raising the other
+    // one; what only this counter can do is STAND DOWN for the length of a user wrapper's
+    // `stream_open`, which is PHP and whose warnings php prints. Sharing one counter meant the
+    // scope a filtered open opens for its inner OPENER also swallowed the wrapper's own PHP.
+    out.push_str(&comm_directive("_php_filter_suppression", 8, target));
     // Needles the parse matches, kept as data so one spelling serves both assembly emitters.
     out.push_str(".globl _pf_n_prefix\n_pf_n_prefix:\n    .ascii \"php://filter/\"\n");
     out.push_str(".globl _pf_n_read\n_pf_n_read:\n    .ascii \"read=\"\n");

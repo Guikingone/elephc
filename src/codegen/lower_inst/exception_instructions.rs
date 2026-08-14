@@ -54,12 +54,10 @@ pub(super) fn lower_try_push_handler(ctx: &mut FunctionContext<'_>, inst: &Instr
     abi::store_at_offset(ctx.emitter, scratch, handler_offset);
     abi::emit_load_int_immediate(ctx.emitter, scratch, 0);
     abi::store_at_offset(ctx.emitter, scratch, handler_offset - 8);
-    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_suppression", 0);
-    abi::store_at_offset(
-        ctx.emitter,
-        scratch,
-        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-    );
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::emit_load_symbol_to_reg(ctx.emitter, scratch, symbol, 0);
+        abi::store_at_offset(ctx.emitter, scratch, handler_offset - offset);
+    }
     abi::emit_frame_slot_address(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
     abi::emit_frame_slot_address(
@@ -80,12 +78,10 @@ pub(super) fn lower_try_pop_handler(ctx: &mut FunctionContext<'_>, inst: &Instru
     ctx.emitter.comment("pop EIR exception handler");
     abi::load_at_offset(ctx.emitter, scratch, handler_offset);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_exc_handler_top", 0);
-    abi::load_at_offset(
-        ctx.emitter,
-        scratch,
-        handler_offset - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-    );
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_suppression", 0);
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::load_at_offset(ctx.emitter, scratch, handler_offset - offset);
+        abi::emit_store_reg_to_symbol(ctx.emitter, scratch, symbol, 0);
+    }
     Ok(())
 }
 

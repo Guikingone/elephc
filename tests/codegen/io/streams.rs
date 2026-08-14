@@ -10946,3 +10946,219 @@ unlink("rtn.txt");
     assert_eq!(out.stdout, "string(5) \"bytes\"\nstring(5) \"BYTES\"\n");
     assert_eq!(out.stderr, "", "an empty segment is skipped in silence");
 }
+
+/// Verifies a user wrapper's OWN unresolvable-filter warnings survive the outer filter scope.
+///
+/// A filtered open silences its inner opener, because php-src returns NULL from
+/// `php_stream_url_wrap_php` the moment the resource fails and composes one line from the whole
+/// URL instead. elephc opened that silence with `__rt_diag_push_suppression` — the counter `@`
+/// uses — around the WHOLE inner opener, and a user wrapper's `stream_open` is PHP running inside
+/// it. Every warning that PHP raised therefore vanished with the inner opener's.
+///
+/// Written RED first. `php -n` 8.5.6 prints FOUR unresolvable-name lines here, the inner open's
+/// pair before the outer's, and `string(3) "abc"`; at base elephc printed only the outer pair:
+///
+///     stdout: string(3) "abc"                                     # matched
+///     stderr: Warning: fopen(): Unable to locate filter "outer.absent"
+///             Warning: fopen(): Unable to create filter (outer.absent)
+///             # the two `inner.absent` lines php prints FIRST were missing
+#[test]
+fn test_a_nested_open_reports_the_wrapper_s_own_unresolved_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W6 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w6", "W6");
+$u = "php://filter/read=outer.absent/resource=w6://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(): Unable to locate filter \"inner.absent\"\n\
+         Warning: fopen(): Unable to create filter (inner.absent)\n\
+         Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
+         Warning: fopen(): Unable to create filter (outer.absent)\n",
+        "the wrapper's own PHP warns inside the outer open, and the outer names follow it"
+    );
+}
+
+/// Verifies a FAILED open inside a user wrapper's `stream_open` still names itself.
+///
+/// The same swallow as [`test_a_nested_open_reports_the_wrapper_s_own_unresolved_names`], reached
+/// by the other route: what the wrapper's PHP loses here is an ordinary failed-open line, not a
+/// filter name, which pins that the scope silenced every warning raised under it rather than one
+/// family. The outer chain resolves and applies, so the answer also says the swallow was never
+/// the price of the chain.
+///
+/// Written RED first. `php -n` 8.5.6 prints the wrapper's own failed-open line and `string(3)
+/// "ABC"`; at base elephc printed the same stdout and an EMPTY stderr:
+///
+///     stdout: string(3) "ABC"                                     # matched
+///     stderr: <empty>                                             # php prints one Warning here
+#[test]
+fn test_a_failed_open_inside_stream_open_still_warns_under_a_filter_url() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W7 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $p = "definitely_absent" . "_inner7.txt";
+        $inner = fopen($p, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w7", "W7");
+$u = "php://filter/read=string.toupper/resource=w7://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"ABC\"\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(definitely_absent_inner7.txt): \
+         Failed to open stream: No such file or directory\n",
+        "the wrapper's own failed open speaks, and the outer chain still applies"
+    );
+}
+
+/// The CONTROL for the two above: `@` on a filtered open still silences EVERYTHING under it.
+///
+/// Splitting the filter scope off the `@` counter is only correct if `@` keeps reaching the same
+/// distance it always did — into the wrapper's PHP, into the inner open's filter names, and into
+/// the outer URL's own. This script raises all three under one `@` and then warns OUTSIDE it, so
+/// a scope left standing would be visible on the following line rather than merely suspected.
+///
+/// `php -n` 8.5.6 prints `string(3) "abc"`, `after` and `bool(false)` with a single Warning, for
+/// the LAST open only. This one was GREEN at base and must stay so: it is what the split may not
+/// cost.
+#[test]
+fn test_at_silences_a_filtered_open_including_the_wrapper_s_own_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W9 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $p = "definitely_absent" . "_inner9.txt";
+        $miss = fopen($p, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w9", "W9");
+$u = "php://filter/read=outer.absent/resource=w9://x";
+var_dump(stream_get_contents(@fopen($u, "r")));
+echo "after\n";
+$q = "absent_after" . "_c9.txt";
+var_dump(fopen($q, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\nafter\nbool(false)\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(absent_after_c9.txt): Failed to open stream: No such file or directory\n",
+        "`@` still covers the whole open, and gives the depth back when it ends"
+    );
+}
+
+/// Verifies a throw out of `stream_open` UNWINDS the filter depths instead of spending them.
+///
+/// A filtered open counts itself in `_php_filter_open_depth` on the way in — which is also what
+/// records that it opened a suppression scope for its inner opener — and in
+/// `_php_filter_pending_depth` when it parks its hand-off. Both are given back by helpers that
+/// run after the opener RETURNS, and an exception thrown out of a user wrapper's `stream_open`
+/// reaches neither: the depth stays up, and the eight parked frames are spent one throw at a
+/// time. The try handler already saves and restores `_rt_diag_suppression` for exactly this
+/// reason, and the filter depths now travel in the same set.
+///
+/// The witness is the LAST open's wording. Past the bound `__rt_php_filter_suppress_begin` parks
+/// nothing and so opens no scope, which stops silencing the inner opener — and php-src never
+/// lets that opener speak, because `php_stream_url_wrap_php` returns NULL and the caller composes
+/// one line naming the WHOLE URL. So a leaked depth turns php's line into the inner opener's,
+/// naming `absent_x7.txt`: a path the program never wrote. That is a plain failed open with no
+/// nesting, so it says the same thing on both arches; an earlier draft of this test ended on a
+/// nested rot13 chain instead, which is x86-red at BASE for an unrelated reason and would have
+/// pinned that defect here by accident.
+///
+/// Written RED first. `php -n` 8.5.6 prints twelve `caught` lines, `bool(false)`, and exactly one
+/// Warning. At base elephc printed the same stdout and the WRONG warning — measured identically
+/// on aarch64 natively and on x86_64 under qemu:
+///
+///     stderr: Warning: fopen(absent_x7.txt): Failed to open stream: No such file or directory
+#[test]
+fn test_a_throw_out_of_stream_open_gives_the_filter_depths_back() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class TH {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) {
+        throw new Exception("boom");
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("th", "TH");
+$t = "php://filter/read=string.toupper/resource=th://x";
+for ($i = 0; $i < 12; $i++) {
+    try { $h = fopen($t, "r"); } catch (Exception $e) { echo "caught\n"; }
+}
+$bad = "php://filter/read=no.such/resource=" . "absent_x7.txt";
+var_dump(fopen($bad, "r"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "caught\ncaught\ncaught\ncaught\ncaught\ncaught\n\
+         caught\ncaught\ncaught\ncaught\ncaught\ncaught\n\
+         bool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(php://filter/read=no.such/resource=absent_x7.txt): \
+         Failed to open stream: operation failed\n",
+        "twelve throws must cost no filter frame, so the last open still names the whole URL"
+    );
+}

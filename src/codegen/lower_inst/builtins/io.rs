@@ -272,8 +272,11 @@ fn emit_dynamic_php_filter_read_route(
             ctx.emitter.instruction(&format!("cbz x9, {}", fall_through));      // no: the plain reader handles the path
             // The openers name themselves and the RESOURCE when they fail; php names
             // `file_get_contents` and the whole URL, so their warnings are suppressed and the
-            // php-worded one is composed below once the outcome is known.
-            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // php-worded one is composed below once the outcome is known. Through the FILTER
+            // counter, not `@`'s: the resource may be a user wrapper whose `stream_open` is PHP,
+            // and php prints what that PHP warns. `__rt_fopen` stands this scope down for the
+            // length of the dispatch, which it can only do to a counter `@` does not share.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_filter_suppression");
             // The resource may be a user wrapper, whose `stream_open` is PHP and can `fopen()` a
             // filter URL of its own — which republishes the hand-off this route is holding.
             fopen_core::emit_dynamic_php_filter_save(ctx);
@@ -322,8 +325,9 @@ fn emit_dynamic_php_filter_read_route(
             ctx.emitter.instruction("mov r9, QWORD PTR [r9]");                  // did the parse see a filter URL at all?
             ctx.emitter.instruction("test r9, r9");
             ctx.emitter.instruction(&format!("jz {}", fall_through));           // no: the plain reader handles the path
-            // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
-            abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // See the AArch64 counterpart: the openers' own failure warnings are suppressed,
+            // through the filter counter so a user wrapper's `stream_open` still warns.
+            abi::emit_call_label(ctx.emitter, "__rt_diag_push_filter_suppression");
             // See the AArch64 counterpart: a user wrapper's `stream_open` republishes the hand-off.
             fopen_core::emit_dynamic_php_filter_save(ctx);
             ctx.emitter.instruction("cmp rdx, 6");                              // long enough for php://?
@@ -364,7 +368,7 @@ fn emit_dynamic_php_filter_read_route(
     }
     ctx.emitter.label(&boxed);
     box_stream_fd_or_false_result(ctx, "fgc_dynf");
-    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_filter_suppression");      // preserves the boxed result: x9/x10 (r10) only
     fopen_core::emit_dynamic_php_filter_restore(ctx);                           // this route's own hand-off, not a nested open's
     abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");        // the parked chain, now the stream exists
     // php warns twice for every name that named no filter, in the CALLING function's words, and

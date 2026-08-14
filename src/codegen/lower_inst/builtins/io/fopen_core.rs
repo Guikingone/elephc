@@ -818,12 +818,14 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     //            Failed to open stream: operation failed
     // The inner opener names ITSELF and the bare resource with its own errno — this used to
     // print `fopen(missing.txt): ... No such file or directory`, which names a path the program
-    // never wrote. Its warnings are suppressed through the same depth counter `@` uses, and the
-    // php-worded line is composed from the literal URL below, exactly as the literal
-    // `file_get_contents` route already does for the same URLs.
-    abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+    // never wrote. Its warnings are suppressed through the FILTER counter — not the one `@`
+    // raises — and the php-worded line is composed from the literal URL below, exactly as the
+    // literal `file_get_contents` route already does for the same URLs. The resource may be a
+    // user wrapper, whose `stream_open` is PHP that php lets warn; `__rt_fopen` stands this
+    // scope down for the dispatch, which only works because `@` does not share the counter.
+    abi::emit_call_label(ctx.emitter, "__rt_diag_push_filter_suppression");
     emit_literal_fopen_result(ctx, mode, &parsed.resource)?;
-    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    abi::emit_call_label(ctx.emitter, "__rt_diag_pop_filter_suppression");      // preserves the boxed result: x9/x10 (r10) only
     let opened = ctx.next_label("fopen_filter_lit_opened");
     let done = ctx.next_label("fopen_filter_lit_done");
     let (url_label, url_len) = ctx.data.add_string(path.as_bytes());

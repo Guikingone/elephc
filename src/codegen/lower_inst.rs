@@ -16,7 +16,7 @@ use crate::codegen::{
     runtime_value_tag,
 };
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SAVED_DEPTHS,
 };
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{

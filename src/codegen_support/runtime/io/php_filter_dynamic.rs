@@ -508,9 +508,16 @@ fn emit_mode_dirs_aarch64(emitter: &mut Emitter) {
 /// php-src's `php_stream_url_wrap_php` returns NULL the moment the inner resource fails to
 /// open, BEFORE a single filter is created, and the generic caller composes one fixed line from
 /// the URL it was handed. The inner opener would instead name itself and the bare resource with
-/// its own errno, so it is silenced through the same depth counter `@` uses. Gating on the
-/// published URL keeps a PLAIN open loud: it is the pairing partner of the pop in
+/// its own errno, so it is silenced through `_php_filter_suppression`. Gating on the published
+/// URL keeps a PLAIN open loud: it is the pairing partner of the pop in
 /// `__rt_php_filter_open_failed`, which reads the same flag.
+///
+/// The counter is the filter machinery's OWN, not the one `@` raises. php-src silences the inner
+/// open by dropping `REPORT_ERRORS` from the flags it passes down, which reaches that open's own
+/// diagnostics and nothing else; PHP running underneath — a user wrapper's `stream_open` — warns
+/// normally. A shared counter cannot say that, because standing it down for the wrapper would
+/// also hand back a depth an enclosing `@` was holding. Two counters, and
+/// `__rt_fopen`'s wrapper dispatch stands only this one down.
 fn emit_suppress_begin_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: suppress the inner opener of a php://filter URL ---");
@@ -539,7 +546,7 @@ fn emit_suppress_begin_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x12, __rt_pfsb_done");                             // a plain path warns in its own words
     emitter.instruction("sub sp, sp, #16");
     emitter.instruction("str x30, [sp, #0]");                                   // the call below takes the link register
-    emitter.instruction("bl __rt_diag_push_suppression");
+    emitter.instruction("bl __rt_diag_push_filter_suppression");
     emitter.instruction("ldr x30, [sp, #0]");
     emitter.instruction("add sp, sp, #16");
     emitter.label("__rt_pfsb_done");
@@ -678,7 +685,7 @@ fn emit_open_failed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x12, __rt_pfof_done");                             // not a filter URL: nothing was suppressed
     emitter.instruction("str x12, [sp, #24]");
     emitter.instruction("str x13, [sp, #32]");
-    emitter.instruction("bl __rt_diag_pop_suppression");
+    emitter.instruction("bl __rt_diag_pop_filter_suppression");
     emitter.instruction("ldr x0, [sp, #0]");
     emitter.instruction("ldr x9, [x0]");                                        // the boxed open result tag
     emitter.instruction("cmp x9, #9");                                          // a resource has nothing to warn about
@@ -1208,7 +1215,7 @@ fn emit_suppress_begin_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r8], r9");
     emitter.instruction("test r11, r11");
     emitter.instruction("jz __rt_pfsb_done_x");                                 // a plain path warns in its own words
-    emitter.instruction("call __rt_diag_push_suppression");
+    emitter.instruction("call __rt_diag_push_filter_suppression");
     emitter.label("__rt_pfsb_done_x");
     emitter.instruction("ret");
 }
@@ -1327,7 +1334,7 @@ fn emit_open_failed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_pfof_done_x");                                 // not a filter URL: nothing was suppressed
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");
     emitter.instruction("mov QWORD PTR [rbp - 40], r10");
-    emitter.instruction("call __rt_diag_pop_suppression");
+    emitter.instruction("call __rt_diag_pop_filter_suppression");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");
     emitter.instruction("cmp QWORD PTR [rax], 9");                              // a resource has nothing to warn about
     emitter.instruction("je __rt_pfof_done_x");
@@ -1634,15 +1641,25 @@ mod tests {
         // The suppression is a PAIR across two helpers: one pushes only for a filter URL, the
         // other pops under the same flag. Losing either leaks a suppression depth, which
         // silences every later warning in the program.
+        //
+        // The pair names the FILTER counter, never `@`'s: the two are separate so a filtered
+        // open can stand its scope down for the user wrapper's `stream_open`, which is PHP and
+        // whose warnings php prints. Reverting either call to `__rt_diag_{push,pop}_suppression`
+        // would swallow that PHP again, silently, so the spelling is asserted here.
         assert!(
-            a64.contains("bl __rt_diag_push_suppression")
-                && a64.contains("bl __rt_diag_pop_suppression"),
-            "aarch64: the filter open must both open and close its suppression scope"
+            a64.contains("bl __rt_diag_push_filter_suppression")
+                && a64.contains("bl __rt_diag_pop_filter_suppression"),
+            "aarch64: the filter open must both open and close its OWN suppression scope"
         );
         assert!(
-            x86.contains("call __rt_diag_push_suppression")
-                && x86.contains("call __rt_diag_pop_suppression"),
-            "x86_64: the filter open must both open and close its suppression scope"
+            x86.contains("call __rt_diag_push_filter_suppression")
+                && x86.contains("call __rt_diag_pop_filter_suppression"),
+            "x86_64: the filter open must both open and close its OWN suppression scope"
+        );
+        assert!(
+            !a64.contains("bl __rt_diag_push_suppression")
+                && !x86.contains("call __rt_diag_push_suppression"),
+            "the filter machinery must not raise the depth `@` owns"
         );
     }
 
