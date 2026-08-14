@@ -194,6 +194,52 @@ try {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the array-taking builtin TypeErrors answer the same through `eval()` as compiled.
+///
+/// The compiled side already threw — the lowering wraps every `array|false` argument site —
+/// while `eval()` SILENTLY ACCEPTED the same `false`: `in_array("x", @scandir(...))` answered
+/// without throwing, so a failed `scandir()` read as an empty haystack and the caller's
+/// `catch (TypeError)` never ran. Both halves are asserted, because a test that only ran one
+/// of them could not see the two sides disagree.
+///
+/// `array_merge()` earns its place beside `in_array()`: it is FULLY variadic, so php's message
+/// carries no `($name)` segment at all, where `in_array()` names `$haystack` and `sort()` names
+/// `$array`. `sort()` adds the third shape — a BY-REFERENCE receiver, which has to throw before
+/// it writes anything back.
+#[test]
+fn test_array_builtin_type_errors_match_between_compiled_and_eval() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$d = @scandir("no_such_directory_here");
+try { in_array("x", $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { array_merge([], $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { $s = $d; sort($s); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "\n";
+eval('
+$d = @scandir("no_such_directory_here");
+try { in_array("x", $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { array_merge([], $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { $s = $d; sort($s); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+');
+"#,
+    );
+    let expected = concat!(
+        "in_array(): Argument #2 ($haystack) must be of type array, false given",
+        "|array_merge(): Argument #2 must be of type array, false given",
+        "|sort(): Argument #1 ($array) must be of type array, false given",
+    );
+    let (compiled, evaluated) = out
+        .split_once('\n')
+        .expect("compiled half, then the eval half");
+    assert_eq!(compiled, expected);
+    assert_eq!(evaluated, expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `scandir()` reports an unopenable directory the way php does — and stays SILENT
 /// when the directory opens.
 ///

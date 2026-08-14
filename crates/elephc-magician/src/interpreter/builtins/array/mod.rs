@@ -8,6 +8,7 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the concrete
 //!   direct or evaluated-argument adapter used by registry hooks.
 
+mod array_arg_check;
 mod array_chunk;
 mod array_column;
 mod array_combine;

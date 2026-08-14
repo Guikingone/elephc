@@ -16,6 +16,10 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // The evaluated-argument path has every operand in hand, so ONE table-driven sweep
+    // covers the whole array-taking family here; the direct path evaluates inside each
+    // leaf builtin and validates there, against this same table.
+    super::array_arg_check::eval_check_array_args(name, evaluated_args, context, values)?;
     match name {
         "array_sum" => super::array_sum::eval_array_sum_declared_values_result(evaluated_args, context, values),
         "array_product" => super::array_product::eval_array_product_declared_values_result(evaluated_args, context, values),

@@ -82,6 +82,9 @@ pub(in crate::interpreter) fn eval_count_result(
     {
         return eval_method_call_result(value, "count", Vec::new(), context, values);
     }
+    // Countable already had its chance above, so anything left that is not an array is
+    // php's `Countable|array` TypeError — a plain object still names its own class.
+    super::array_arg_check::eval_expect_countable_arg(value, context, values)?;
     let len = match mode {
         EVAL_COUNT_NORMAL => values.array_len(value)?,
         EVAL_COUNT_RECURSIVE => eval_count_recursive_len(value, values, &mut Vec::new())?,
