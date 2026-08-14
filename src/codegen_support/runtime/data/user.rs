@@ -2226,6 +2226,43 @@ pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
     USER_FILTER_METHOD_NAMES.contains(&method_key)
 }
 
+/// Returns true when declaring `method_key` is by itself enough to identify a class as a wrapper.
+///
+/// This is the marker deciding whether the fixed raw-argument ABI applies to a class at all, and
+/// every gate asking "is this a wrapper?" must ask it here — the checker's contract seeding and the
+/// EIR normalizer have to agree, or one hands the body a boxed Mixed while the other hands the
+/// dispatcher a (ptr,len) pair.
+///
+/// The split follows how php-src can REACH each hook:
+///
+/// - PATH hooks (below) are dispatched straight off a `scheme://` URL — `chmod()`/`touch()` reach
+///   `stream_metadata()`, `stat()` reaches `url_stat()`, `opendir()` reaches `dir_opendir()` — with
+///   no stream ever opened. A class declaring one is a wrapper on that evidence alone, and must be,
+///   because nothing else about it says so.
+/// - STREAM-INSTANCE hooks (`stream_read`, `stream_write`, `stream_eof`, …) are reachable only
+///   through an OPEN stream, and `php_stream_open_wrapper` refuses a wrapper without `stream_open`
+///   (measured: `fopen()` on such a class returns false without calling anything). So they mark a
+///   wrapper only alongside `stream_open` — otherwise an unrelated `Codec::stream_write($d)` would
+///   be forced onto an ABI PHP could never invoke.
+/// - GENERIC names (`unlink`/`rename`/`mkdir`/`rmdir`) are ordinary method names on ordinary
+///   classes (`Filesystem::mkdir($path, $mode)`), so they never mark; they take the wrapper
+///   contract only when the class also declares `stream_open` or a path hook.
+pub(crate) fn is_user_wrapper_marker_method(method_key: &str) -> bool {
+    method_key == "stream_open" || USER_WRAPPER_PATH_METHOD_NAMES.contains(&method_key)
+}
+
+/// The wrapper hooks php-src dispatches from a URL alone, with no stream opened.
+///
+/// Their names are reserved by the protocol, so declaring one identifies a wrapper by itself.
+const USER_WRAPPER_PATH_METHOD_NAMES: [&str; 6] = [
+    "stream_metadata",
+    "url_stat",
+    "dir_opendir",
+    "dir_readdir",
+    "dir_closedir",
+    "dir_rewinddir",
+];
+
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
     "oncreate",

@@ -10165,6 +10165,89 @@ echo ($r ? "ok" : "no") . "\n";
     assert_eq!(out, "opt=1 n=2 m=100 a=200\nok\n");
 }
 
+/// stream_metadata() declared the way the MANUAL shows it — with no type hints —
+/// must still receive its arguments intact.
+///
+/// The contract-seeding table covered every hook that takes parameters except
+/// this one, so an untyped `$path` kept the `Int` an untyped parameter is seeded
+/// with. `Int` occupies ONE register, but the caller hands a string as a
+/// (ptr,len) PAIR, so `$path` swallowed the pointer alone and every later
+/// argument slid down one slot — `$option` read the length, `$value` read the
+/// option. Measured against php 8.5.6, which prints the values below.
+#[test]
+fn test_untyped_stream_metadata_receives_its_arguments() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedMetaW {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) { $opened = $path; return true; }
+    public function stream_metadata($path, $option, $value) {
+        echo "p=" . $path . " o=" . $option . " t=" . gettype($value) . "\n";
+        return true;
+    }
+}
+stream_wrapper_register("umw", "UntypedMetaW");
+echo chmod("umw://f", 0644) ? "1" : "0";
+echo "\n";
+$r = touch("umw://g", 100, 200);
+echo ($r ? "ok" : "no") . "\n";
+"#,
+    );
+    assert_eq!(out, "p=umw://f o=6 t=integer\n1\np=umw://g o=1 t=array\nok\n");
+}
+
+/// A wrapper that serves ONLY path operations still gets the wrapper ABI.
+///
+/// Both gates that ask "is this a wrapper?" — the checker's contract seeding and
+/// the EIR normalizer — used `stream_open` as the marker. A wrapper reached only
+/// through `chmod()`/`touch()` never declares `stream_open`, so it failed both:
+/// the body was normalized to boxed Mixed while the runtime dispatcher kept
+/// handing it a raw (ptr,len) pair, and the program SEGFAULTED. Same php output
+/// as the typed form.
+#[test]
+fn test_path_only_wrapper_without_stream_open_seeds_its_contract() {
+    let out = compile_and_run(
+        r#"<?php
+class PathOnlyW {
+    public $context;
+    public function stream_metadata($path, $option, $value) {
+        echo "p=" . $path . " o=" . $option . " t=" . gettype($value) . "\n";
+        return true;
+    }
+}
+stream_wrapper_register("pow", "PathOnlyW");
+echo chmod("pow://f", 0644) ? "1" : "0";
+echo "\n";
+$r = touch("pow://g", 100, 200);
+echo ($r ? "ok" : "no") . "\n";
+"#,
+    );
+    assert_eq!(out, "p=pow://f o=6 t=integer\n1\np=pow://g o=1 t=array\nok\n");
+}
+
+/// The wrapper marker must NOT fire on a class that merely owns generic names.
+///
+/// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary
+/// classes — Symfony's `Filesystem::mkdir($path, $mode)` is not a stream
+/// wrapper. Seeding those on name alone would force the raw (ptr,len) ABI onto a
+/// plain method call, so they take the wrapper contract only when the class also
+/// declares one of the protocol's RESERVED names.
+#[test]
+fn test_generic_method_names_alone_do_not_make_a_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class Filesystem {
+    public function mkdir($path, $mode) { return $path . "/" . $mode; }
+    public function unlink($path) { return strtoupper($path); }
+}
+$fs = new Filesystem();
+echo $fs->mkdir("a", 5), "\n";
+echo $fs->unlink("b"), "\n";
+"#,
+    );
+    assert_eq!(out, "a/5\nB\n");
+}
+
 /// Regression: two `stream_context_create` calls in one program must
 /// assemble. The no-options clear path previously used a fixed
 /// `scc_store_zero` label that was defined twice (once per call), so any

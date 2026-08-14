@@ -220,7 +220,7 @@ impl Checker {
         let Some(ci) = self.classes.get(&class.name).cloned() else {
             return;
         };
-        if !ci.methods.contains_key("stream_open") {
+        if !declares_stream_wrapper_marker(&ci) {
             return;
         }
         let key = crate::names::php_symbol_key(&method.name);
@@ -277,7 +277,7 @@ impl Checker {
             return None;
         }
         let class_info = self.classes.get(&class.name)?;
-        if !class_info.methods.contains_key("stream_open") {
+        if !declares_stream_wrapper_marker(class_info) {
             return None;
         }
         stream_wrapper_contract_return_type(&crate::names::php_symbol_key(&method.name))
@@ -582,6 +582,20 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
     sig
 }
 
+/// Whether a class declares a method the `streamWrapper` protocol reserves.
+///
+/// Shares [`is_user_wrapper_marker_method`] with the EIR normalizer on purpose: the two gates
+/// decide the SAME question — does the fixed raw-argument ABI apply to this class — and a class
+/// only one of them accepts gets a body expecting a boxed Mixed fed a (ptr,len) pair.
+///
+/// [`is_user_wrapper_marker_method`]: crate::codegen_support::runtime::is_user_wrapper_marker_method
+fn declares_stream_wrapper_marker(class_info: &crate::types::schema::ClassInfo) -> bool {
+    class_info
+        .methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key))
+}
+
 /// The parameter types PHP documents for each `streamWrapper` contract method.
 ///
 /// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth
@@ -600,6 +614,11 @@ fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>>
         "rename" => vec![PhpType::Str, PhpType::Str],
         "url_stat" | "rmdir" | "dir_opendir" => vec![PhpType::Str, PhpType::Int],
         "mkdir" => vec![PhpType::Str, PhpType::Int, PhpType::Int],
+        // `$value` carries whatever the option needs: an [mtime, atime] array for
+        // STREAM_META_TOUCH, an int for ACCESS/OWNER/GROUP, a string for the
+        // *_NAME options. Only Mixed spans all three, and the ABI keeps a boxed
+        // Mixed in one register, so the pair-carrying `$path` stays aligned.
+        "stream_metadata" => vec![PhpType::Str, PhpType::Int, PhpType::Mixed],
         _ => return None,
     })
 }
