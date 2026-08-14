@@ -240,6 +240,62 @@ try { $s = $d; sort($s); echo "uncaught"; } catch (TypeError $e) { echo $e->getM
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `count()` answers the same ERROR CLASS through `eval()` as compiled, on both slots.
+///
+/// `count()` is the one builtin of this family that reaches all three shapes in one name, and
+/// the two backends started out disagreeing on the middle one, measured against `php -n` 8.5.6:
+///
+/// - Argument #1 is a `TypeError` naming the union `Countable|array` — both sides already
+///   threw it, so it is the control that proves the harness sees a real throw.
+/// - Argument #2 out of range is a `ValueError` naming the two accepted CONSTANTS rather than
+///   the offending value. The compiled side already raised it while `eval()` answered an
+///   UNCATCHABLE `RuntimeFatal`, so the `catch (ValueError)` block never ran there. A wrong
+///   error CLASS is what this half pins: catching `ValueError` and not `TypeError` is the
+///   assertion, because an eval that threw the wrong class would still print something.
+/// - `array_search()` rides along as the third slot shape, an argument #2 `TypeError`.
+///
+/// Asserting both halves is the point — a test that ran only one could not see them disagree.
+///
+/// Two members of this family are NOT here because the COMPILED side still diverges, measured:
+/// `array_key_exists("x", false)` and `implode(",", false)` both answer without throwing where
+/// php throws. Neither is reachable by adding a row to `ARRAY_OR_FALSE_ARG_SITES`: both declare
+/// their parameter `Mixed`, so the lowered value is a boxed cell and `array_or_false_member()`
+/// never matches. Fixing them means widening the wrap, which is deliberately left undone here
+/// rather than papered over by a test that asserts today's wrong answer.
+#[test]
+fn test_count_argument_errors_match_between_compiled_and_eval() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$d = @scandir("no_such_directory_here");
+try { count($d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { count([1], 99); echo "uncaught"; } catch (ValueError $e) { echo $e->getMessage(); }
+echo "|";
+try { array_search("x", $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "\n";
+eval('
+$d = @scandir("no_such_directory_here");
+try { count($d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { count([1], 99); echo "uncaught"; } catch (ValueError $e) { echo $e->getMessage(); }
+echo "|";
+try { array_search("x", $d); echo "uncaught"; } catch (TypeError $e) { echo $e->getMessage(); }
+');
+"#,
+    );
+    let expected = concat!(
+        "count(): Argument #1 ($value) must be of type Countable|array, false given",
+        "|count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE",
+        "|array_search(): Argument #2 ($haystack) must be of type array, false given",
+    );
+    let (compiled, evaluated) = out
+        .split_once('\n')
+        .expect("compiled half, then the eval half");
+    assert_eq!(compiled, expected);
+    assert_eq!(evaluated, expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `scandir()` reports an unopenable directory the way php does — and stays SILENT
 /// when the directory opens.
 ///

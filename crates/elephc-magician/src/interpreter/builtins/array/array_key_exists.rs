@@ -48,5 +48,11 @@ pub(in crate::interpreter) fn eval_builtin_array_key_exists(
     };
     let key = eval_expr(key, context, scope, values)?;
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args(
+        "array_key_exists",
+        &[key, array],
+        context,
+        values,
+    )?;
     values.array_key_exists(key, array)
 }

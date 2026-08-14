@@ -74,8 +74,15 @@ pub(in crate::interpreter) fn eval_count_result(
         Some(mode) => eval_int_value(mode, values)?,
         None => EVAL_COUNT_NORMAL,
     };
+    // php names the two accepted constants rather than the offending value, and raises
+    // this BEFORE the `Countable|array` check: `count(false, 99)` reports the MODE,
+    // measured. An uncatchable fatal was the wrong answer twice over.
     if !matches!(mode, EVAL_COUNT_NORMAL | EVAL_COUNT_RECURSIVE) {
-        return Err(EvalStatus::RuntimeFatal);
+        return eval_throw_builtin_value_error(
+            "count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE",
+            context,
+            values,
+        );
     }
     if values.type_tag(value)? == EVAL_TAG_OBJECT
         && eval_countable_object_matches(value, context, values)?
