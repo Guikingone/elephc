@@ -545,11 +545,18 @@ mod tests {
                 AsyncFd::new(worker_dispatch).expect("register dispatch socket"),
             ));
             let (cancel, cancellations) = mpsc::channel();
+            let (first_received, first_received_waiter) = oneshot::channel();
+            let (release_first_ack, release_first_ack_waiter) = mpsc::channel();
             let peer = std::thread::spawn(move || unsafe {
                 let first = control::recv_dispatch(broker_dispatch.as_raw_fd())
                     .expect("receive first dispatch")
                     .expect("first dispatch socket closed");
-                std::thread::sleep(Duration::from_millis(75));
+                first_received
+                    .send(())
+                    .expect("report first dispatch receipt");
+                release_first_ack_waiter
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("wait for first ACK release");
                 control::send_id(broker_dispatch.as_raw_fd(), first.id)
                     .expect("acknowledge first dispatch");
                 libc::close(first.channel);
@@ -564,22 +571,34 @@ mod tests {
 
             let (_first_worker, first_broker) = UnixStream::pair().expect("first request channel");
             let first_control = Arc::clone(&dispatch).lock_owned().await;
-            let first = tokio::time::timeout(
-                Duration::from_millis(10),
-                HandlerBroker::send_channel(
+            let first = tokio::spawn(HandlerBroker::send_channel(
                     first_control,
                     1,
                     first_broker.as_raw_fd(),
                     first_broker,
                     cancel.clone(),
-                ),
-            )
-            .await;
-            assert!(first.is_err(), "first dispatch unexpectedly received its delayed ACK");
+                ));
+            first_received_waiter
+                .await
+                .expect("peer stopped before receiving first dispatch");
+            first.abort();
+            match first.await {
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => panic!("first dispatch task failed unexpectedly: {error}"),
+                Ok(_) => panic!("first dispatch unexpectedly received its gated ACK"),
+            }
+            release_first_ack
+                .send(())
+                .expect("release first broker ACK");
 
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let (cancelled, cancellations) = tokio::task::spawn_blocking(move || {
+                let cancelled = cancellations.recv_timeout(Duration::from_secs(1));
+                (cancelled, cancellations)
+            })
+            .await
+            .expect("cancellation observer panicked");
             assert_eq!(
-                cancellations.try_recv(),
+                cancelled,
                 Ok(1),
                 "cancelled ACK waiter did not cancel its acknowledged request"
             );
