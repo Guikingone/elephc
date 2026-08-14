@@ -746,3 +746,24 @@ foreach ($n as $k => $v) { echo $k, $v; }
         out.stderr
     );
 }
+
+/// `ksort()` on an indexed receiver is deliberately NOT promoted.
+///
+/// A packed array's keys are already `0..n-1` in ascending order, so php's `ksort()` leaves
+/// both the order and the LIST shape untouched: measured, `$f=[3,1,2]; ksort($f);` prints
+/// `[3,1,2]` and `$f[0]` is `3`. elephc already matched that byte for byte, so converting the
+/// receiver would allocate a hash to reproduce the packed answer it already had. `krsort()` is
+/// the opposite case — descending key order has no packed form — and keeps its explanatory
+/// refusal; see `crate::types::key_preserving_sort_promotes` for both.
+#[test]
+fn test_ksort_leaves_an_indexed_receiver_packed() {
+    let out = compile_and_run(
+        r#"<?php
+$f = [3, 1, 2];
+ksort($f);
+echo json_encode($f), "|", $f[0];
+"#,
+    );
+    assert_eq!(out, "[3,1,2]|3");
+}
+
