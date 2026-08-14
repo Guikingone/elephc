@@ -5,9 +5,9 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The golden signature is `first_param_ref(fixed(["array"]))`: exactly 1 argument,
-//!   the `array` param is by-reference. The `ref` marker is mandatory — it is what makes
-//!   by-reference mutation lower correctly (ir_lower reads `ref_params` from the registry sig).
+//! - The PHP signature accepts a by-reference array and an optional integer flags argument.
+//!   The `ref` marker is mandatory because EIR lowering reads it from the registry signature
+//!   to preserve mutation of the caller's storage.
 //! - `check` accepts gradual array-compatible values and returns PHP's boolean success result.
 
 use crate::builtins::spec::BuiltinCheckCtx;
@@ -24,8 +24,9 @@ builtin! {
 
 /// Validates the argument type for a `ksort` call.
 ///
-/// Requires the argument be an indexed or associative array. Arity (exactly 1) is
-/// pre-validated by the registry. Returns `Ok(PhpType::Bool)` on success.
+/// Requires the first argument be an indexed or associative array. The registry validates the
+/// optional flags argument and the one-to-two argument arity. Returns `Ok(PhpType::Bool)` on
+/// success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {

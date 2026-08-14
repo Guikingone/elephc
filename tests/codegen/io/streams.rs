@@ -317,6 +317,20 @@ unlink("array-payload.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `file_put_contents()` accepts its optional flags and context parameters by name.
+#[test]
+fn test_file_put_contents_optional_named_parameters() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents(filename: "optional-write.txt", data: "ok", flags: 0, context: null);
+echo file_get_contents("optional-write.txt");
+unlink("optional-write.txt");
+"#,
+    );
+    assert_eq!(out, "ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies feof() is not incorrectly set stale when a file descriptor is closed and reopened.
 #[test]
 fn test_fopen_clears_stale_eof_for_reused_descriptor() {

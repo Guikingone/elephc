@@ -483,6 +483,18 @@ echo $sum;
     assert_eq!(out, "15");
 }
 
+/// Verifies `array_reduce()` supplies PHP's default null carry when the initial value is omitted.
+#[test]
+fn test_array_reduce_without_initial_value() {
+    let out = compile_and_run(
+        r#"<?php
+function add_without_initial($carry, $item) { return $carry + $item; }
+echo array_reduce([1, 2, 3], "add_without_initial");
+"#,
+    );
+    assert_eq!(out, "6");
+}
+
 // Tests `array_reduce` with a user callback (carry * item) and an explicit initial
 // value of 1, verifying the carry accumulates correctly across the array.
 /// Verifies that array reduce with initial.

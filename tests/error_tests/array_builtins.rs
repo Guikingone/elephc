@@ -144,15 +144,6 @@ fn test_error_array_slice_preserve_keys_boxed_source() {
     );
 }
 
-/// Verifies that error array merge wrong args.
-#[test]
-fn test_error_array_merge_wrong_args() {
-    expect_error(
-        "<?php $a = [1]; array_merge($a);",
-        "array_merge() takes exactly 2 arguments",
-    );
-}
-
 /// Verifies that error array sum wrong args.
 #[test]
 fn test_error_array_sum_wrong_args() {
@@ -438,10 +429,14 @@ fn test_error_arsort_wrong_args() {
     expect_error("<?php arsort();", "arsort() takes exactly 1 argument");
 }
 
-/// Verifies that error ksort wrong args.
+/// Verifies that `ksort()` rejects calls outside its one-to-two argument signature.
 #[test]
 fn test_error_ksort_wrong_args() {
-    expect_error("<?php ksort();", "ksort() takes exactly 1 argument");
+    expect_error("<?php ksort();", "ksort() takes 1 or 2 arguments");
+    expect_error(
+        "<?php $a = []; ksort($a, SORT_REGULAR, 0);",
+        "ksort() takes 1 or 2 arguments",
+    );
 }
 
 /// Verifies that error krsort wrong args.
@@ -492,12 +487,12 @@ fn test_error_array_filter_wrong_args() {
     );
 }
 
-/// Verifies that error array reduce wrong args.
+/// Verifies that `array_reduce()` requires its array and callback arguments.
 #[test]
 fn test_error_array_reduce_wrong_args() {
     expect_error(
-        r#"<?php array_reduce([], "fn");"#,
-        "array_reduce() takes exactly 3 arguments",
+        r#"<?php array_reduce([]);"#,
+        "array_reduce() takes 2 or 3 arguments",
     );
 }
 
