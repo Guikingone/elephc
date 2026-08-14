@@ -242,6 +242,26 @@ pub(crate) const WRAPPER_MISSING_HOOK_TAIL_RMDIR: &str = "::rmdir is not impleme
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_METADATA: &str =
     "::stream_metadata is not implemented!\n";
 
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`]; the stat callers publish their names the same way.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS: &str = "Warning: file_exists(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILESIZE: &str = "Warning: filesize(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_FILE: &str = "Warning: is_file(): ";
+
+/// `url_stat`'s tail, shared by every builtin that stats a path through a wrapper.
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_URL_STAT: &str = "::url_stat is not implemented!\n";
+
+/// Head of the SECOND line `filesize()` prints whenever its stat fails.
+///
+/// php emits it for any failure, not just a wrapper's: an absent ordinary file gets it too, and a
+/// wrapper with no `url_stat()` gets this line after the missing-hook one. The path follows, then
+/// a newline; `_diag_newline` already serves as the tail. `is_file()` and `file_exists()` have no
+/// counterpart — measured on php 8.5.6, they fail silently.
+pub(crate) const FILESIZE_STAT_FAILED_HEAD: &str = "Warning: filesize(): stat failed for ";
+
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///
 /// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No

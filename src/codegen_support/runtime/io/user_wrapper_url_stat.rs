@@ -144,7 +144,16 @@ fn emit_user_wrapper_url_stat_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload the boxed result for return
     emitter.instruction("b __rt_uus_ret");                                      // share the common return path
 
+    // -- the class does not implement url_stat: warn the way php does, then box false --
+    // The caller's name was published by the lowering; every stat builtin reaches this one helper.
     emitter.label("__rt_uus_false_obj");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the wrapper object
+    emitter.instruction("ldr x0, [x0]");                                        // class_id stored at its head
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_head");
+    emitter.instruction("ldp x1, x2, [x9]");                                    // the caller's half
+    abi::emit_symbol_address(emitter, "x9", "_uwmh_tail");
+    emitter.instruction("ldp x3, x4, [x9]");                                    // the method's half
+    emitter.instruction("bl __rt_wrapper_missing_hook_warning");
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload the throwaway wrapper object
     emitter.instruction("bl __rt_decref_any");                                  // free it before falling through to boxed false
     emitter.label("__rt_uus_false");
@@ -268,7 +277,17 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed result for return
     emitter.instruction("jmp __rt_uus_ret_x86");                                // share the common return path
 
+    // -- the class does not implement url_stat: warn the way php does, then box false --
     emitter.label("__rt_uus_false_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the wrapper object
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // class_id stored at its head
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_head");
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // the caller's half
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");
+    abi::emit_symbol_address(emitter, "r10", "_uwmh_tail");
+    emitter.instruction("mov rcx, QWORD PTR [r10]");                            // the method's half
+    emitter.instruction("mov r8, QWORD PTR [r10 + 8]");
+    emitter.instruction("call __rt_wrapper_missing_hook_warning");
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the throwaway wrapper object
     emitter.instruction("call __rt_decref_any");                                // free it before falling through to boxed false
     emitter.label("__rt_uus_false_x86");

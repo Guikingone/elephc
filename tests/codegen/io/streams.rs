@@ -10457,6 +10457,56 @@ var_dump(@unlink("bare://a"));
     );
 }
 
+/// The stat builtins warn when a wrapper has no `url_stat()`, and `filesize()` adds php's second line.
+///
+/// Measured on php 8.5.6: each caller names itself and the missing `url_stat`, and `filesize()`
+/// alone follows with "stat failed for <path>" — which php prints for ANY failed stat, so an
+/// absent ordinary file gets that line too while `is_file()`/`file_exists()` stay silent. A
+/// wrapper that does implement `url_stat()` warns about nothing and keeps its answers.
+#[test]
+fn test_missing_url_stat_warns_and_filesize_adds_its_second_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+class HasStat {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    function url_stat($path, $flags) { return ["size" => 42, "mode" => 0100644]; }
+}
+stream_wrapper_register("bare", "Bare");
+stream_wrapper_register("hs", "HasStat");
+var_dump(file_exists("bare://a"));
+var_dump(filesize("bare://a"));
+var_dump(is_file("bare://a"));
+var_dump(@file_exists("bare://a"));
+var_dump(file_exists("hs://a"));
+var_dump(filesize("hs://a"));
+var_dump(is_file("hs://a"));
+var_dump(filesize("/definitely/not/here"));
+var_dump(is_file("/definitely/not/here"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(true)\nint(42)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: file_exists(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): stat failed for bare://a\n\
+         Warning: is_file(): Bare::url_stat is not implemented!\n\
+         Warning: filesize(): stat failed for /definitely/not/here\n",
+        "the wrapper that implements url_stat warns about nothing, the suppressed call is silent, \
+         and only filesize() reports the failed stat"
+    );
+}
+
 /// The wrapper marker must NOT fire on a class that merely owns generic names.
 ///
 /// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary

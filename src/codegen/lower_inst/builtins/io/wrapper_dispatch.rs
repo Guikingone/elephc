@@ -135,6 +135,13 @@ pub(super) fn lower_file_exists_with_wrapper(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "file_exists", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_file_exists",
+        WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "file_exists")?;
     emit_file_exists_wrapper_dispatch(ctx);
     store_if_result(ctx, inst)
@@ -206,8 +213,15 @@ pub(super) fn emit_file_exists_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
 pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "filesize", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_filesize",
+        WRAPPER_MISSING_HOOK_HEAD_FILESIZE.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "filesize")?;
-    emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+    emit_filesize_with_stat_failed_warning(ctx);
     box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
@@ -216,9 +230,73 @@ pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &
 pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "is_file", 1)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_is_file",
+        WRAPPER_MISSING_HOOK_HEAD_IS_FILE.len(),
+        "_uwmh_tail_url_stat",
+        WRAPPER_MISSING_HOOK_TAIL_URL_STAT.len(),
+    );
     load_string_to_result(ctx, path, "is_file")?;
     emit_is_file_wrapper_dispatch(ctx);
     store_if_result(ctx, inst)
+}
+
+/// Runs `filesize()`'s stat and prints php's second line when it fails.
+///
+/// php reports `filesize(): stat failed for <path>` on ANY failure — an absent ordinary file gets
+/// it as much as a wrapper without `url_stat()`, which gets it after the missing-hook line.
+/// `is_file()` and `file_exists()` have no counterpart, measured on php 8.5.6: they fail silently.
+/// The path is still in the string pair at entry, so it is staged here rather than recomputed.
+fn emit_filesize_with_stat_failed_warning(ctx: &mut FunctionContext<'_>) {
+    let ok = ctx.next_label("filesize_stat_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // hold the path and the result across the diagnostic
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // the path pointer
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // the path length
+            emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+            ctx.emitter.instruction(&format!("cbnz x1, {}", ok));               // a successful stat says nothing
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the value across the diagnostic
+            ctx.emitter.instruction("str x1, [sp, #24]");                       // preserve the failure flag too
+            abi::emit_symbol_address(ctx.emitter, "x1", "_filesize_stat_failed_head");
+            ctx.emitter.instruction(&format!("mov x2, #{}", FILESIZE_STAT_FAILED_HEAD.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");             // honours @ and the filter scope
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // the path php names
+            ctx.emitter.instruction("ldr x2, [sp, #8]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_newline");
+            ctx.emitter.instruction("mov x2, #1");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // restore the value
+            ctx.emitter.instruction("ldr x1, [sp, #24]");                       // restore the failure flag
+            ctx.emitter.label(&ok);
+            ctx.emitter.instruction("add sp, sp, #32");                         // release the diagnostic frame
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // hold the path and the result across the diagnostic
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // the path pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // the path length
+            emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+            ctx.emitter.instruction("test rdx, rdx");                           // a successful stat says nothing
+            ctx.emitter.instruction(&format!("jnz {}", ok));
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the value across the diagnostic
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rdx");           // preserve the failure flag too
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_filesize_stat_failed_head");
+            ctx.emitter.instruction(&format!("mov rsi, {}", FILESIZE_STAT_FAILED_HEAD.len()));
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");             // honours @ and the filter scope
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the path php names
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_newline");
+            ctx.emitter.instruction("mov rsi, 1");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // restore the value
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 24]");           // restore the failure flag
+            ctx.emitter.label(&ok);
+            ctx.emitter.instruction("add rsp, 32");                             // release the diagnostic frame
+        }
+    }
 }
 
 /// Emits a wrapper url_stat field lookup with a native filesystem fallback.
