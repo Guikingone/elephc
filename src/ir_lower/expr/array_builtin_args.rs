@@ -179,40 +179,6 @@ pub(super) fn lower_union_array_in_place_sort(
     Some(lower_null(ctx, expr))
 }
 
-/// The array-taking builtin arguments the lowering unboxes when an `array|false` union flows
-/// in, with php's own parameter naming for the TypeError a runtime `false` produces.
-///
-/// Only POSITIONAL, by-value arguments belong here: the by-reference family (sort, array_push,
-/// array_pop…) receives the caller's storage and needs its own write-back treatment. Each
-/// entry's check hook must accept the union through `array_or_false_member`, or the pair is
-/// unreachable; each is `(builtin, zero-based argument index, php's parameter name)`.
-const ARRAY_OR_FALSE_ARG_SITES: &[(&str, usize, Option<&str>)] = &[
-    ("array_column", 0, Some("array")),
-    ("array_count_values", 0, Some("array")),
-    ("array_diff", 0, Some("array")),
-    ("array_diff", 1, None),
-    ("array_diff_key", 0, Some("array")),
-    ("array_filter", 0, Some("array")),
-    ("array_flip", 0, Some("array")),
-    ("array_intersect", 0, Some("array")),
-    ("array_intersect", 1, None),
-    ("array_intersect_key", 0, Some("array")),
-    ("array_map", 1, Some("array")),
-    // `array_merge(array ...$arrays)` is fully variadic: even its FIRST argument has no
-    // parameter name in php's TypeError, where `array_diff`/`array_intersect` name theirs.
-    ("array_merge", 0, None),
-    ("array_merge", 1, None),
-    ("array_pad", 0, Some("array")),
-    ("array_product", 0, Some("array")),
-    ("array_rand", 0, Some("array")),
-    ("array_reverse", 0, Some("array")),
-    ("array_search", 1, Some("haystack")),
-    ("array_slice", 0, Some("array")),
-    ("array_sum", 0, Some("array")),
-    ("array_unique", 0, Some("array")),
-    ("array_values", 0, Some("array")),
-    ("in_array", 1, Some("haystack")),
-];
 
 /// Wraps `array|false` union arguments to array-taking builtins in an unbox-or-throw call.
 ///
@@ -225,7 +191,7 @@ fn wrap_array_or_false_args(
     args: &[Expr],
     values: &mut [crate::ir::ValueId],
 ) {
-    for &(name, index, param) in ARRAY_OR_FALSE_ARG_SITES {
+    for &(name, index, param) in crate::builtins::array_or_false::ARRAY_OR_FALSE_ARG_SITES {
         if name != canonical {
             continue;
         }
@@ -289,7 +255,7 @@ fn wrap_array_or_false_args_impl(
             Op::RuntimeCall,
             vec![value, message],
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-                crate::ir::RuntimeFnId::ExpectArrayArg,
+                crate::builtins::array_or_false::EXPECT_ARRAY_ARG,
             ))),
             member_ir,
             member,

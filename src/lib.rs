@@ -84,6 +84,7 @@ pub mod superglobals;
 /// Termination and exit handling.
 pub mod termination;
 /// Type system and checking.
+pub mod stream_compliance;
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;

@@ -48,7 +48,7 @@ fn main() {
                 std::process::exit(2);
             }
         };
-        let value = elephc::builtins::stream_compliance::export_json(target);
+        let value = elephc::stream_compliance::export_json(target);
         let json = serde_json::to_string_pretty(&value)
             .expect("serialize stream compliance JSON");
         println!("{}", json);
