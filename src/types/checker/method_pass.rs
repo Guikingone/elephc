@@ -243,6 +243,46 @@ impl Checker {
         }
     }
 
+    /// Pins the return type of an undeclared stream-wrapper contract method to the contract's.
+    ///
+    /// The wrapper's methods are reached through a runtime vtable with a FIXED ABI, and that ABI
+    /// is chosen by the return type: `stream_read()` and `dir_readdir()` are read back out of the
+    /// string-result pair (x1/x2 on AArch64, rax/rdx on x86_64), while every scalar return travels
+    /// in the single result register. Inference does not know that, so an ordinary
+    /// `stream_read($n) { return fread($this->fh, $n); }` — `fread()` answers `string|false`, so the
+    /// method infers `mixed` — returned a BOXED cell where the dispatcher reads a pointer/length
+    /// pair, and the wrapper handed back the box's own bytes instead of the data it read.
+    ///
+    /// On AArch64 the boxed cell lands in x0 while the dispatcher reads x1/x2, which the body
+    /// happened to leave holding the last string it built, so the defect stayed invisible; on
+    /// x86_64 the boxed cell lands in rax, which IS the pointer half of the pair, and the wrapper
+    /// answered three bytes of the box. Pinning the type here converts at the return instead, so
+    /// both arches hand over the same pair — the same seeding [`patch_stream_contract_method_env`]
+    /// already does for the contract's PARAMETERS, and for the same reason.
+    ///
+    /// Only methods WITHOUT a return hint are touched, only on a class that really is a wrapper,
+    /// and only when the body returns values at all: a hint is the author's own answer, a lone
+    /// `stream_read()` on an unrelated class is not a contract, and a body with no value return
+    /// keeps the `void` it infers rather than being promised a string it never produces.
+    fn stream_contract_return_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        raw_inferred: &Option<PhpType>,
+    ) -> Option<PhpType> {
+        if method.is_static {
+            return None;
+        }
+        if raw_inferred.is_none() {
+            return None;
+        }
+        let class_info = self.classes.get(&class.name)?;
+        if !class_info.methods.contains_key("stream_open") {
+            return None;
+        }
+        stream_wrapper_contract_return_type(&crate::names::php_symbol_key(&method.name))
+    }
+
     /// Patches untyped constructor parameters with property types when the constructor
     /// property-promotion rule applies.
     ///
@@ -414,7 +454,8 @@ impl Checker {
                 }
             }
         } else {
-            inferred_return
+            self.stream_contract_return_type(class, method, &raw_inferred)
+                .unwrap_or(inferred_return)
         };
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
@@ -561,4 +602,18 @@ fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>>
         "mkdir" => vec![PhpType::Str, PhpType::Int, PhpType::Int],
         _ => return None,
     })
+}
+
+/// The return type each `streamWrapper` contract method's FIXED runtime ABI is built around.
+///
+/// Only the slots the dispatcher reads out of the string-result pair appear. The scalar slots need
+/// no entry: `bool`, `int` and a boxed `mixed` all travel in the same single result register, so an
+/// inference that lands on the wrong one of those still reaches the dispatcher intact. The stat
+/// slots are deliberately absent for the opposite reason — `stream_stat()`/`url_stat()` hand back a
+/// boxed Mixed cell on purpose, which is why the vtable documents them as having to stay untyped.
+fn stream_wrapper_contract_return_type(method_key: &str) -> Option<PhpType> {
+    match method_key {
+        "stream_read" | "dir_readdir" => Some(PhpType::Str),
+        _ => None,
+    }
 }
