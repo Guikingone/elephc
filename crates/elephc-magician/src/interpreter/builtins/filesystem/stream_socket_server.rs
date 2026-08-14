@@ -8,9 +8,8 @@
 //! - Opened listeners enter eval's normal stream table.
 
 eval_builtin! {
-    name: "stream_socket_server",
+    contract: "stream_socket_server",
     area: Filesystem,
-    params: [address],
     direct: Filesystem,
     values: Filesystem,
 }

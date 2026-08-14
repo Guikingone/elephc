@@ -10,16 +10,11 @@
 //!   (`Str`) is fully determined by its declaration. The `timestamp` parameter
 //!   is optional and defaults to `null` (current time).
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "date",
-    area: System,
-    params: [format: Str, timestamp: Int = DefaultSpec::Null],
-    returns: Str,
+    contract: "date",
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Date),
         crate::builtins::semantics::BuiltinArgumentLowering::Date,
     ),
-    summary: "Formats a local time/date.",
 }

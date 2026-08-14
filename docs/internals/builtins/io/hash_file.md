@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/hash_file.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/hash_file.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function hash_file(string $algo, string $filename, bool $binary = false): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_file.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

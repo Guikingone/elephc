@@ -1,8 +1,9 @@
-"""Extract builtin metadata from the Elephc `builtin!` registry.
+"""Extract builtin metadata from Elephc's shared builtin contracts and bindings.
 
-Since the single-source builtin registry migration, every PHP builtin is declared
-once via `builtin!` in ``src/builtins/<area>/<name>.rs`` and collected through the
-`inventory` crate. The authoritative data is therefore read from the registry
+Every PHP builtin surface is declared once in ``elephc-builtin-contract``. The
+compiler's ``builtin!`` files and Magician's ``eval_builtin!`` files join their
+backend-specific behavior by stable contract ID and are collected through
+`inventory`. The authoritative assembled data is therefore read from the registry
 itself, via the ``gen_builtins`` example (``cargo run --example gen_builtins --
 --include-internal``), NOT by regex-scraping ``catalog.rs`` / ``signatures.rs``
 (which the migration emptied). The exporter also attaches, per builtin, the eval
@@ -17,11 +18,10 @@ For each builtin we enrich the registry data with:
 3. optional type-precision refinements for non-scalar params/returns that the
    registry represents coarsely as ``Mixed`` (``PARAM_TYPES`` / ``RETURN_TYPE_OVERRIDES``).
 
-The 6 names that intentionally stay outside the registry
-(``isset``/``unset``/``empty``/``exit``/``die`` language constructs, plus the
-catalog-name-only ``buffer_new`` whose call form is dedicated syntax) are added
-from a small hand-curated table so their documentation pages are preserved.
-``buffer_len``/``buffer_free`` live in the ``builtin!`` registry.
+Language constructs, dedicated syntax, injected preludes, and eval-only surfaces
+come from the same shared contract export as ordinary registry builtins. Their
+compiler lowering route remains backend-specific metadata, but their signature is
+never reconstructed in Python.
 
 The output is a list of :class:`registry.Builtin` written to a JSON file in
 ``scripts/docs/builtin_registry.json``.
@@ -30,6 +30,7 @@ The output is a list of :class:`registry.Builtin` written to a JSON file in
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import subprocess
@@ -72,7 +73,13 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     """
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
+    source_inputs.extend((repo / "crates").rglob("Cargo.toml"))
+    source_inputs.extend((repo / "crates").rglob("build.rs"))
+    if (repo / "build.rs").exists():
+        source_inputs.append(repo / "build.rs")
     source_inputs.extend((repo / "src").rglob("*.rs"))
+    source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
+    source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
     for profile in ("release", "debug"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
@@ -111,15 +118,16 @@ _NON_HOME_FILES = {
     "parity_tests.rs",
 }
 
-_NAME_RE = re.compile(r'name:\s*"([^"]+)"')
+_CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
     """Map each registry builtin name to its single-source home file.
 
     Scans every builtin home file under ``src/builtins/`` (skipping the registry
-    machinery files) and reads its ``builtin!`` name. Backend lowering metadata
-    comes from the exported semantic descriptor, never from a Rust emitter path.
+    machinery files) and reads its ``builtin!`` shared-contract key. Backend
+    lowering metadata comes from the exported semantic descriptor, never from
+    a Rust emitter path.
     """
     out: dict[str, str] = {}
     builtins_root = repo / "src" / "builtins"
@@ -129,10 +137,10 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
         if "builtin!" not in text:
             continue
-        name_match = _NAME_RE.search(text)
-        if not name_match:
+        contract_match = _CONTRACT_RE.search(text)
+        if not contract_match:
             continue
-        canonical = name_match.group(1).lower()
+        canonical = contract_match.group(1).lower()
         out[canonical] = str(path.relative_to(repo))
     return out
 
@@ -390,141 +398,112 @@ def _render_default(value, optional: bool) -> Optional[str]:
     return str(value)
 
 
-# ---------------------------------------------------------------------------
-# PHP language constructs (checker-resident, NOT in the registry)
-# ---------------------------------------------------------------------------
-
-# These stay in the type checker (they operate on l-values / are lazy constructs)
-# and are absent from the `builtin!` registry. We add them by hand so their doc
-# pages are preserved. Each: params [(name, type, by_ref, default, optional)],
-# variadic, return_type, (area, sub_area), description, emitter_fn (or None).
-LANGUAGE_CONSTRUCTS: dict[str, dict] = {
-    "isset": {
-        "params": [("var", "mixed", False, None, False)],
-        "variadic": "vars",
-        "return_type": "bool",
-        "area": ("Misc", "Variable"),
-        "description": "Determines whether a variable is set and is not null.",
-        "emitter_fn": "lower_isset",
-    },
-    "unset": {
-        "params": [("var", "mixed", False, None, False)],
-        "variadic": "vars",
-        "return_type": "void",
-        "area": ("Misc", "Variable"),
-        "description": "Unsets the given variables.",
-        "emitter_fn": "lower_unset_builtin",
-    },
-    "empty": {
-        "params": [("value", "mixed", False, None, False)],
-        "variadic": None,
-        "return_type": "bool",
-        "area": ("Misc", "Variable"),
-        "description": "Determines whether a variable is considered empty.",
-        "emitter_fn": "lower_empty",
-    },
-    "exit": {
-        "params": [("status", "int", False, None, True)],
-        "variadic": None,
-        "return_type": "void",
-        "area": ("Process", "Process"),
-        "description": "",
-        "emitter_fn": None,
-    },
-    "die": {
-        "params": [("status", "int", False, None, True)],
-        "variadic": None,
-        "return_type": "void",
-        "area": ("Process", "Process"),
-        "description": "",
-        "emitter_fn": None,
-    },
-    # `buffer_len` / `buffer_free` moved to the single-source `builtin!` registry
-    # (src/builtins/pointers/); only the catalog-name-only `buffer_new` remains
-    # hand-described here because its call form is dedicated syntax.
-    "buffer_new": {
-        "params": [("length", "int", False, None, False)],
-        "variadic": None,
-        "return_type": "mixed",
-        "area": ("Misc", "Misc"),
-        "description": "",
-        "emitter_fn": None,
-        "extension": True,
-    },
+NON_REGISTRY_LOWERING_FUNCTIONS: dict[str, str] = {
+    "empty": "lower_empty",
+    "isset": "lower_isset",
+    "unset": "lower_unset_builtin",
 }
 
 
-# Docs area for eval-only builtins, keyed by the magician EvalArea spelling.
-EVAL_AREA_TO_DOCS_AREA: dict[str, tuple[str, str]] = {
-    "array": ("Array", "Array"),
-    "core": ("Misc", "Misc"),
-    "filesystem": ("Filesystem", "Filesystem"),
-    "formatting": ("String", "String"),
-    "json": ("JSON", "JSON"),
-    "math": ("Math", "Math"),
-    "network_env": ("Network", "Network"),
-    "regex": ("Regex", "Regex"),
-    "raw_memory": ("Pointer", "Pointer"),
-    "string": ("String", "String"),
-    "symbols": ("Class", "Class"),
-    "time": ("Date", "Date"),
-    "types": ("Type", "Type"),
-}
+def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
+    """Reject dead, oversized, or duplicate Python presentation overrides."""
+    by_name = {entry["name"].lower(): entry for entry in entries}
+    tables = {
+        "AREA_BY_NAME": AREA_BY_NAME,
+        "REGISTRY_AREA_OVERRIDES": REGISTRY_AREA_OVERRIDES,
+        "PARAM_TYPES": PARAM_TYPES,
+        "RETURN_TYPE_OVERRIDES": RETURN_TYPE_OVERRIDES,
+        "RUNTIME_HELPER_OVERRIDES": RUNTIME_HELPER_OVERRIDES,
+        "DESCRIPTION_OVERRIDES": DESCRIPTION_OVERRIDES,
+        "INTERNAL_NOTES": INTERNAL_NOTES,
+    }
+    errors: list[str] = []
+    for table_name, table in tables.items():
+        missing = sorted(set(table) - set(by_name))
+        if missing:
+            errors.append(f"{table_name} references unknown contracts: {', '.join(missing)}")
+
+    for name, refinements in PARAM_TYPES.items():
+        entry = by_name.get(name)
+        if entry is None:
+            continue
+        signature = entry.get("aot") or entry
+        param_count = len(signature.get("params") or [])
+        if len(refinements) > param_count:
+            errors.append(
+                f"PARAM_TYPES[{name!r}] has {len(refinements)} entries for "
+                f"{param_count} effective AOT parameters"
+            )
+
+    registry_file = repo / "scripts" / "docs" / "elephc_builtins" / "registry.py"
+    tree = ast.parse(registry_file.read_text(encoding="utf-8"), filename=str(registry_file))
+    checked_tables = set(tables)
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        target = node.target if isinstance(node, ast.AnnAssign) else node.targets[0]
+        if not isinstance(target, ast.Name) or target.id not in checked_tables:
+            continue
+        if not isinstance(node.value, ast.Dict):
+            errors.append(f"{target.id} must remain a literal dictionary for auditing")
+            continue
+        keys = [
+            key.value
+            for key in node.value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        ]
+        duplicates = sorted({key for key in keys if keys.count(key) > 1})
+        if duplicates:
+            errors.append(f"{target.id} repeats keys: {', '.join(duplicates)}")
+
+    if errors:
+        raise ValueError("invalid builtin documentation overrides:\n- " + "\n- ".join(errors))
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def _eval_only_builtin(entry: dict) -> Builtin:
-    """Build a Builtin for a name only the eval interpreter (magician) exposes."""
-    name = entry["name"]
-    canonical = name.lower()
-    eval_support = entry.get("eval") or {}
-    area, sub_area = EVAL_AREA_TO_DOCS_AREA.get(
-        eval_support.get("area", ""), ("Misc", "Misc")
-    )
-    params = [
-        Parameter(
-            name=p["name"],
-            php_type=_normalize_type(p.get("type", "mixed")),
-            by_ref=bool(p.get("by_ref")),
-            default=_render_default(p.get("default"), bool(p.get("optional"))),
-            optional=bool(p.get("optional")),
-        )
-        for p in entry.get("params", [])
-    ]
-    description = DESCRIPTION_OVERRIDES.get(canonical, "") or (
-        f"{name}() is available inside eval'd code via the magician interpreter; "
-        "compiled (AOT) code does not support it yet."
-    )
-    return Builtin(
-        name=name,
-        canonical_name=canonical,
-        in_catalog=True,
-        is_internal=bool(entry.get("internal")),
-        area=area,
-        sub_area=sub_area,
-        sig=BuiltinSig(
-            params=params,
-            variadic=entry.get("variadic"),
-            return_type=_normalize_type(entry.get("returns", "mixed")),
-        ),
-        lowering=LoweringInfo(),
-        description=description,
-        eval_support=eval_support,
-        eval_only=True,
-        is_extension=bool(entry.get("extension")),
-    )
+def resolve_non_registry_lowering(
+    repo: Path,
+    read,
+    dispatch: Path,
+    lowering_dir: Path,
+    canonical: str,
+    aot_support: dict,
+) -> LoweringInfo:
+    """Describe a compiler route that intentionally has no ``builtin!`` home."""
+    contract_file = "crates/elephc-builtin-contract/src/catalog_surfaces.rs"
+    emitter_fn = NON_REGISTRY_LOWERING_FUNCTIONS.get(canonical)
+    if emitter_fn:
+        lowering = resolve_lowering(repo, read, dispatch, lowering_dir, emitter_fn, None)
+        lowering.sig_file = contract_file
+        return lowering
+
+    lowering = LoweringInfo(sig_file=contract_file)
+    kind = aot_support.get("kind")
+    if kind == "prelude":
+        prelude = repo / "src" / "hash_prelude.rs"
+        match = re.search(rf"^function\s+{re.escape(canonical)}\s*\(", read(prelude), re.MULTILINE)
+        lowering.codegen_file = str(prelude.relative_to(repo))
+        lowering.codegen_line = read(prelude)[: match.start()].count("\n") + 1 if match else 1
+        lowering.codegen_function = canonical
+        lowering.notes.append("Implemented by the compiler-injected hash prelude.")
+    elif kind == "language-construct":
+        lowering.notes.append("Lowered through the compiler's dedicated language-construct path.")
+    elif kind == "dedicated-syntax":
+        lowering.notes.append("Lowered through a dedicated AST/EIR syntax node.")
+    return lowering
 
 
 def build_registry(repo: Path) -> list[Builtin]:
-    """Build the full list of builtins from the registry + language constructs."""
+    """Build the complete catalog from shared contracts and backend bindings."""
     src = repo / "src"
     dispatch = src / "codegen" / "lower_inst" / "builtins.rs"
     lowering_dir = src / "codegen" / "lower_inst" / "builtins"
 
     gen = run_gen_builtins(repo)
+    validate_presentation_overrides(repo, gen)
     home_map = build_home_file_map(repo)
 
     file_cache: dict[Path, str] = {}
@@ -548,28 +527,18 @@ def build_registry(repo: Path) -> list[Builtin]:
 
     builtins: list[Builtin] = []
 
-    # Eval blocks for compiler-resident constructs (isset, strval, ...): the
-    # exporter appends them as `aot_resident` records; their AOT docs live in
-    # the hand-curated LANGUAGE_CONSTRUCTS entries (or on canonical alias
-    # pages), so only the eval block is consumed here.
-    resident_eval: dict[str, dict] = {}
-
-    # --- registry builtins (PHP-visible + internal helpers) ---
+    # --- shared contracts (ordinary registry entries and non-registry routes) ---
     for entry in gen:
         name = entry["name"]
         canonical = name.lower()
-        if entry.get("aot_resident"):
-            resident_eval[canonical] = entry.get("eval") or {}
-            continue
-        if entry.get("eval_only"):
-            builtins.append(_eval_only_builtin(entry))
-            continue
+        aot_support = entry.get("aot") or {"supported": not entry.get("eval_only")}
         is_internal = bool(entry.get("internal"))
         in_catalog = not is_internal
 
         refine = PARAM_TYPES.get(canonical)
+        signature = aot_support if aot_support.get("supported") else entry
         params: list[Parameter] = []
-        for i, p in enumerate(entry.get("params", [])):
+        for i, p in enumerate(signature.get("params", [])):
             php_type = _normalize_type(p["type"])
             if php_type == "mixed" and refine and i < len(refine):
                 better = _param_refine_type(refine[i])
@@ -586,7 +555,7 @@ def build_registry(repo: Path) -> list[Builtin]:
             )
 
         home_rel = home_map.get(canonical)
-        if home_rel is None:
+        if aot_support.get("kind") == "registry" and home_rel is None:
             raise ValueError(f"registry builtin {canonical!r} has no single-source home file")
 
         return_type = _normalize_type(entry.get("returns", "mixed"))
@@ -598,7 +567,12 @@ def build_registry(repo: Path) -> list[Builtin]:
                 return_type = precise
         if canonical in RETURN_TYPE_OVERRIDES:
             return_type = RETURN_TYPE_OVERRIDES[canonical]
-        lowering = resolve_registry_lowering(repo, read, entry, home_rel)
+        if home_rel is not None:
+            lowering = resolve_registry_lowering(repo, read, entry, home_rel)
+        else:
+            lowering = resolve_non_registry_lowering(
+                repo, read, dispatch, lowering_dir, canonical, aot_support
+            )
         if canonical in RUNTIME_HELPER_OVERRIDES:
             lowering.runtime_helpers = RUNTIME_HELPER_OVERRIDES[canonical]
 
@@ -623,49 +597,16 @@ def build_registry(repo: Path) -> list[Builtin]:
                 sub_area=area[1],
                 sig=BuiltinSig(
                     params=params,
-                    variadic=entry.get("variadic"),
+                    variadic=signature.get("variadic"),
                     return_type=return_type,
                 ),
                 lowering=lowering,
                 description=description,
                 eval_support=entry.get("eval"),
+                aot_support=aot_support,
+                eval_only=not bool(aot_support.get("supported")),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
-            )
-        )
-
-    # --- language constructs (checker-resident, hand-curated) ---
-    for canonical, spec in LANGUAGE_CONSTRUCTS.items():
-        params = [
-            Parameter(
-                name=pname,
-                php_type=ptype,
-                by_ref=by_ref,
-                default=default,
-                optional=optional,
-            )
-            for (pname, ptype, by_ref, default, optional) in spec["params"]
-        ]
-        emitter_fn = spec.get("emitter_fn") or ""
-        lowering = resolve_lowering(repo, read, dispatch, lowering_dir, emitter_fn, None)
-        description = DESCRIPTION_OVERRIDES.get(canonical, spec.get("description", ""))
-        builtins.append(
-            Builtin(
-                name=canonical,
-                canonical_name=canonical,
-                in_catalog=True,
-                is_internal=False,
-                area=spec["area"][0],
-                sub_area=spec["area"][1],
-                sig=BuiltinSig(
-                    params=params,
-                    variadic=spec.get("variadic"),
-                    return_type=spec["return_type"],
-                ),
-                lowering=lowering,
-                description=description,
-                eval_support=resident_eval.get(canonical),
-                is_extension=bool(spec.get("extension")),
             )
         )
 
@@ -736,6 +677,7 @@ def _builtin_to_dict(b: Builtin) -> dict:
             "notes": b.lowering.notes,
         },
         "semantics": b.semantics,
+        "aot": b.aot_support or {"supported": not b.eval_only, "kind": "unknown"},
         "eval": b.eval_support or {"supported": False, "kind": "none"},
         "eval_only": b.eval_only,
     }

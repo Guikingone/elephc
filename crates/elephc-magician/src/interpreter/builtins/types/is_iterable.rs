@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_iterable",
+    contract: "is_iterable",
     area: Types,
-    params: [value],
     direct: IsIterable,
     values: IsIterable,
 }

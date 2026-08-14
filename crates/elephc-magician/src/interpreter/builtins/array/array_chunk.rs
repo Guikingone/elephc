@@ -10,14 +10,11 @@
 //!   `array_chunk(array $array, int $length, bool $preserve_keys = false)` and must stay
 //!   shape-identical to the static registry declaration, which the builtin parity gate asserts.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_chunk",
+    contract: "array_chunk",
     area: Array,
-    params: [array, length, preserve_keys = EvalBuiltinDefaultValue::Bool(false)],
     direct: Array,
     values: Array,
 }

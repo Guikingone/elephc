@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_object",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_object",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Object,
     ),
-    summary: "Checks whether a variable is an object.",
-    php_manual: "function.is-object",
 }

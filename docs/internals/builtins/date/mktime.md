@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/mktime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function mktime(int $hour, int $minute, int $second, int $month, int $day, int $
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/time/mktime.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/mktime.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

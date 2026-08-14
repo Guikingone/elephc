@@ -9,21 +9,10 @@
 //! - Accepts required `string` and `length` params, plus optional `pad_string`
 //!   and `pad_type` params with PHP-compatible defaults.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "str_pad",
-    area: String,
-    params: [
-        string: Str,
-        length: Int,
-        pad_string: Str = DefaultSpec::Str(" "),
-        pad_type: Int = DefaultSpec::Int(1)
-    ],
-    returns: Str,
+    contract: "str_pad",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrPad,
     ),
-    summary: "Pads a string to a certain length with another string.",
-    php_manual: "https://www.php.net/manual/en/function.str-pad.php",
 }

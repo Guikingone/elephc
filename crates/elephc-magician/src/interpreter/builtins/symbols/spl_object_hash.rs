@@ -8,9 +8,8 @@
 //! - Object identity semantics are shared with `spl_object_id()`.
 
 eval_builtin! {
-    name: "spl_object_hash",
+    contract: "spl_object_hash",
     area: Symbols,
-    params: [object],
     direct: Symbols,
     values: Symbols,
 }

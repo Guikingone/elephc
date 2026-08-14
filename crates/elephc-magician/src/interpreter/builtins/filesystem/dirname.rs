@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the path helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "dirname",
+    contract: "dirname",
     area: Filesystem,
-    params: [path, levels = EvalBuiltinDefaultValue::Int(1)],
     direct: Filesystem,
     values: Filesystem,
 }

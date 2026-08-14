@@ -7,16 +7,9 @@
 //! Key details:
 //! - Registration is a conservative successful stub, mirroring the main backend.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "spl_autoload_register",
+    contract: "spl_autoload_register",
     area: Symbols,
-    params: [
-        callback = EvalBuiltinDefaultValue::Null,
-        throw = EvalBuiltinDefaultValue::Bool(true),
-        prepend = EvalBuiltinDefaultValue::Bool(false),
-    ],
     direct: Symbols,
     values: Symbols,
 }

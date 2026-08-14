@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the newline-to-break hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "nl2br",
+    contract: "nl2br",
     area: String,
-    params: [string, use_xhtml = EvalBuiltinDefaultValue::Bool(true)],
     direct: Nl2br,
     values: Nl2br,
 }

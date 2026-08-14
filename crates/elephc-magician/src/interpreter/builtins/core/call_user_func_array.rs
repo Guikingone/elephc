@@ -13,9 +13,8 @@ use super::super::super::*;
 use super::super::registry::eval_call_user_func_array_with_values_from_scope;
 
 eval_builtin! {
-    name: "call_user_func_array",
+    contract: "call_user_func_array",
     area: Core,
-    params: [callback, args],
     direct: Core,
     values: Core,
 }

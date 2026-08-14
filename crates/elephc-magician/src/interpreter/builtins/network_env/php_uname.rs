@@ -9,12 +9,9 @@
 
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "php_uname",
+    contract: "php_uname",
     area: NetworkEnv,
-    params: [mode = EvalBuiltinDefaultValue::String("a")],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

@@ -10,14 +10,8 @@
 
 
 builtin! {
-    name: "sprintf",
-    area: String,
-    params: [format: Str],
-    variadic: "values",
-    returns: Str,
+    contract: "sprintf",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sprintf,
     ),
-    summary: "Returns a formatted string.",
-    php_manual: "https://www.php.net/manual/en/function.sprintf.php",
 }

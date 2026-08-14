@@ -9,16 +9,9 @@
 //! - Runtime resources are stored in the eval context stream table.
 //! - Optional HMAC parameters remain metadata-only for current eval behavior.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "hash_init",
+    contract: "hash_init",
     area: String,
-    params: [
-        algo,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        key = EvalBuiltinDefaultValue::String(""),
-    ],
     direct: HashContext,
     values: HashContext,
 }

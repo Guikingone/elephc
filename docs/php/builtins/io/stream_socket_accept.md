@@ -27,12 +27,6 @@ Accept a connection on a socket created by stream_socket_server().
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_socket_accept` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_socket_accept.md).

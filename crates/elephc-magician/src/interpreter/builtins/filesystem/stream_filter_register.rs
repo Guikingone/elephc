@@ -8,9 +8,8 @@
 //! - Eval conservatively accepts registrations without mutating stream bytes.
 
 eval_builtin! {
-    name: "stream_filter_register",
+    contract: "stream_filter_register",
     area: Filesystem,
-    params: [filter_name, r#class],
     direct: Filesystem,
     values: Filesystem,
 }

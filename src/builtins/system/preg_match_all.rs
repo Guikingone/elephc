@@ -9,28 +9,18 @@
 //! - The optional by-reference capture array, flags, and offset follow PHP's public signature.
 //! - The checker leaves the capture destination write-only while inferring all value inputs.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_match_all",
-    area: System,
-    params: [
-        pattern: Str,
-        subject: Str,
-        ref matches: ArrayMixed = DefaultSpec::Null,
-        flags: Int = DefaultSpec::Int(0),
-        offset: Int = DefaultSpec::Int(0),
-    ],
-    returns: Int,
+    contract: "preg_match_all",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::PregMatchAll),
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex,
     ),
-    summary: "Performs a global regular expression match and returns the number of matches.",
 }
 
 /// Infers every input while leaving the by-reference capture destination write-only.

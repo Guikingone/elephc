@@ -26,7 +26,7 @@ pub(super) fn string_len_reg(ctx: &FunctionContext<'_>) -> &'static str {
 }
 
 /// Loads the sole argument for a string-transform builtin into string result registers.
-pub(super) fn load_single_string_arg(
+pub(in crate::codegen::lower_inst::builtins) fn load_single_string_arg(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,

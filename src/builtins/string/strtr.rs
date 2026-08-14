@@ -16,26 +16,17 @@
 //!   the runtime hash instead of converting each one, so an array of non-string values is
 //!   rejected with an explicit diagnostic rather than silently mis-rendered.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "strtr",
-    area: String,
-    params: [
-        string: Str,
-        from: Mixed,
-        to: Str = DefaultSpec::Null
-    ],
-    returns: Str,
+    contract: "strtr",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strtr,
     ),
-    summary: "Translates bytes pairwise, or applies longest-match-first replacement pairs.",
-    php_manual: "https://www.php.net/manual/en/function.strtr.php",
 }
 
 /// Validates the `strtr` call shape and returns its `string` result type.

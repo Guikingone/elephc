@@ -427,6 +427,12 @@ impl Checker {
                         if contextual_callbacks.contains(&idx) {
                             continue;
                         }
+                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                            || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
+                                && is_openssl_encrypt_tag_arg(arg, idx))
+                        {
+                            continue;
+                        }
                         if is_empty {
                             let probe = null_probe::begin_null_probe_root(self, arg, env);
                             let effects = self.infer_null_probe_operand_with_effects(arg, env);
@@ -441,6 +447,20 @@ impl Checker {
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
+                if builtin_name.eq_ignore_ascii_case("preg_match") {
+                    if let Some(arg) = expanded_args.get(2) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
+                    if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Str);
+                        }
+                    }
+                }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
@@ -1096,6 +1116,38 @@ fn by_ref_output_variable(arg: &Expr) -> Option<&String> {
         ExprKind::NamedArg { value, .. } => by_ref_output_variable(value),
         _ => None,
     }
+}
+
+/// Returns the variable name used by a builtin output argument.
+fn output_variable(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => output_variable(value),
+        _ => None,
+    }
+}
+
+/// Returns true when one source-order argument is OpenSSL encrypt's by-reference tag.
+fn is_openssl_encrypt_tag_arg(arg: &Expr, index: usize) -> bool {
+    match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name) == "tag",
+        _ => index == 5,
+    }
+}
+
+/// Finds OpenSSL encrypt's tag argument across positional and reordered named calls.
+fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
+    args.iter()
+        .find(|arg| {
+            matches!(
+                &arg.kind,
+                ExprKind::NamedArg { name, .. } if php_symbol_key(name) == "tag"
+            )
+        })
+        .or_else(|| {
+            args.get(5)
+                .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        })
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is

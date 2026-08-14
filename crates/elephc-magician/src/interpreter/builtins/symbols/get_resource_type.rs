@@ -8,9 +8,8 @@
 //! - Resource introspection implementation is shared with `get_resource_id()`.
 
 eval_builtin! {
-    name: "get_resource_type",
+    contract: "get_resource_type",
     area: Symbols,
-    params: [resource],
     direct: Symbols,
     values: Symbols,
 }

@@ -39,10 +39,10 @@ pub(crate) struct LoopFrame {
     pub break_block: BlockId,
     pub continue_block: BlockId,
     pub cleanup: Option<LoopCleanup>,
-    /// Lifetime reference a by-reference `foreach` took on a borrowed element source, so the
-    /// loop keeps iterating live storage even if the body drops the parent that owned it
-    /// (issue #580). Released on every exit that skips the loop's own exit block, exactly like
-    /// `cleanup`.
+    /// Lifetime reference a by-reference `foreach` took on a borrowed element or property source,
+    /// so the loop keeps iterating live storage even if the body drops the parent that owned it
+    /// (issues #580 and #642). Released on every exit that skips the loop's own exit block,
+    /// exactly like `cleanup`.
     pub source_pin: Option<LoopCleanup>,
 }
 

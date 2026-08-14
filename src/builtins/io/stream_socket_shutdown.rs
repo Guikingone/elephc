@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_shutdown",
-    area: Io,
-    params: [stream: Mixed, mode: Int],
-    returns: Bool,
+    contract: "stream_socket_shutdown",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketShutdown,
     ),
-    summary: "Shutdown a full-duplex connection.",
-    php_manual: "function.stream-socket-shutdown",
 }
 
 /// Validates arg[0] is a stream resource, then returns `Bool`.

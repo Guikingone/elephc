@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "stripslashes",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "stripslashes",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::StripSlashes),
         crate::ir::Effects::PURE,
     ),
-    summary: "Removes backslashes from a string previously escaped by addslashes.",
-    php_manual: "https://www.php.net/manual/en/function.stripslashes.php",
 }

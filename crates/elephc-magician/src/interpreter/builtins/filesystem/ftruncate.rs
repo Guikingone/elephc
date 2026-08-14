@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream truncate helper.
 
 eval_builtin! {
-    name: "ftruncate",
+    contract: "ftruncate",
     area: Filesystem,
-    params: [stream, size],
     direct: Filesystem,
     values: Filesystem,
 }

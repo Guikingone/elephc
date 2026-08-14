@@ -25,12 +25,6 @@ Retrieves the default stream context.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_context_get_default` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_context_get_default.md).

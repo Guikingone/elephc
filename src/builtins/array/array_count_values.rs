@@ -20,16 +20,11 @@ use crate::errors::CompileError;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 builtin! {
-    name: "array_count_values",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_count_values",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayCountValues,
     ),
-    summary: "Counts the occurrences of each distinct value in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-count-values.php",
 }
 
 /// Returns the tally associative-array type for an `array_count_values` call.

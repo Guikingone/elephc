@@ -2,7 +2,7 @@
 title: "gettype() — internals"
 description: "Compiler internals for gettype(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 477
+  order: 486
 ---
 
 ## `gettype()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/gettype.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function gettype(mixed $value): string
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/gettype.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/gettype.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

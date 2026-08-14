@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_float",
+    contract: "is_float",
     area: Types,
-    params: [value],
     direct: IsFloat,
     values: IsFloat,
 }

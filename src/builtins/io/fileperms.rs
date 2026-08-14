@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fileperms",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "fileperms",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fileperms,
     ),
-    summary: "Gets file permissions.",
-    php_manual: "function.fileperms",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `fileperms` can return permissions or `false`.

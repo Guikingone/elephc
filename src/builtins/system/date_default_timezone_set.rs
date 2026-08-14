@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "date_default_timezone_set",
-    area: System,
-    params: [timezoneId: Str],
-    returns: Bool,
+    contract: "date_default_timezone_set",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DateDefaultTimezoneSet,
     ),
-    summary: "Sets the default timezone.",
 }

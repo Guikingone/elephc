@@ -8,12 +8,9 @@
 //! - The helper terminates the host process to match elephc's compiled behavior.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "exit",
+    contract: "exit",
     area: Core,
-    params: [status = EvalBuiltinDefaultValue::Int(0)],
     direct: Core,
     values: Core,
 }

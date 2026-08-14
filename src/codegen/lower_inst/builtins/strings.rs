@@ -81,7 +81,8 @@ pub(crate) use split::{lower_explode, lower_implode, lower_sscanf, lower_str_spl
 
 #[allow(unused_imports)]
 pub(super) use common::{
-    load_string_arg_to_regs, load_value_as_string_to_regs, materialize_truthy_flag,
+    load_single_string_arg, load_string_arg_to_regs, load_value_as_string_to_regs,
+    materialize_truthy_flag,
 };
 #[allow(unused_imports)]
 pub(super) use printf::{

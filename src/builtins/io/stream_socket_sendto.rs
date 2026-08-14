@@ -8,26 +8,16 @@
 //! - `check` validates arg[0] is a stream resource, then returns `Union(Int, Bool)`.
 //! - Arguments are pre-inferred by the registry before the hook runs.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_sendto",
-    area: Io,
-    params: [
-        socket: Mixed,
-        data: Str,
-        flags: Int = DefaultSpec::Int(0),
-        address: Str = DefaultSpec::Str("")
-    ],
-    returns: Mixed,
+    contract: "stream_socket_sendto",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketSendto,
     ),
-    summary: "Sends a message to a socket, whether it is connected or not.",
-    php_manual: "function.stream-socket-sendto",
 }
 
 /// Validates arg[0] is a stream resource, then returns `Union(Int, Bool)`.

@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_is_null",
-    area: Pointers,
-    params: [pointer: Mixed],
-    returns: Bool,
+    contract: "ptr_is_null",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrIsNull,
     ),
-    summary: "Returns true if the pointer is null.",
-    extension: true,
 }
 
 /// Validates that the argument is a pointer type and returns `PhpType::Bool`.

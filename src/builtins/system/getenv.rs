@@ -11,22 +11,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "getenv",
-    area: System,
-    params: [
-        name: Mixed = DefaultSpec::Null,
-        local_only: Bool = DefaultSpec::Bool(false)
-    ],
-    arity_error: "getenv() takes 0 to 2 arguments",
-    returns: Mixed,
+    contract: "getenv",
     check: check,
     semantics: getenv_semantics(),
-    summary: "Gets the value of an environment variable.",
 }
 
 /// Builds semantics whose EIR result matches the selected array or boxed-union representation.

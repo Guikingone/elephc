@@ -25,12 +25,6 @@ Removes a filter from a stream.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_filter_remove` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_filter_remove.md).

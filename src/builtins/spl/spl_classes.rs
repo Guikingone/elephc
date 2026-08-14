@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_classes",
-    area: Spl,
-    params: [],
-    returns: Mixed,
+    contract: "spl_classes",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplClasses,
     ),
-    summary: "Return available SPL classes.",
-    php_manual: "https://www.php.net/manual/en/function.spl-classes.php",
 }
 
 /// Returns `Array<Str>` as the precise return type for `spl_classes()`.

@@ -2,7 +2,7 @@
 title: "wordwrap() — internals"
 description: "Compiler internals for wordwrap(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 467
+  order: 477
 ---
 
 ## `wordwrap()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/wordwrap.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function wordwrap(string $string, int $width = 75, string $break = '\n', bool $c
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/wordwrap.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

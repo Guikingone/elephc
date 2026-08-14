@@ -24,12 +24,6 @@ Flushes (sends) the contents of the active output buffer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ob_flush` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_flush.md).

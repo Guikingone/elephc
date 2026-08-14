@@ -8,9 +8,8 @@
 //! - Appends bucket objects to the brigade `_buckets` array used by eval filters.
 
 eval_builtin! {
-    name: "stream_bucket_append",
+    contract: "stream_bucket_append",
     area: Filesystem,
-    params: [brigade, bucket],
     direct: Filesystem,
     values: Filesystem,
 }

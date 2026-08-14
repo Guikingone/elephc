@@ -25,12 +25,6 @@ Returns the arctangent of a number in radians.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `atan` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/atan.md).

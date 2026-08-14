@@ -24,12 +24,6 @@ Cleans (erases) the contents of the active output buffer and turns it off.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ob_end_clean` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_end_clean.md).

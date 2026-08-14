@@ -2,7 +2,7 @@
 title: "base64_decode() — internals"
 description: "Compiler internals for base64_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 383
+  order: 390
 ---
 
 ## `base64_decode()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/base64_decode.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function base64_decode(string $string, bool $strict = false): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/base64_decode.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

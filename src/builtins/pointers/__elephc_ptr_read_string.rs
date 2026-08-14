@@ -15,14 +15,9 @@
 
 
 builtin! {
-    name: "__elephc_ptr_read_string",
-    area: Pointers,
-    params: [pointer: Mixed, length: Mixed],
-    returns: Str,
+    contract: "__elephc_ptr_read_string",
     check: crate::builtins::pointers::ptr_read_string::check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPtrReadString,
     ),
-    summary: "Internal prelude alias of ptr_read_string.",
-    internal: true,
 }

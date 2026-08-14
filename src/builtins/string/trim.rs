@@ -12,16 +12,8 @@
 
 
 builtin! {
-    name: "trim",
-    area: String,
-    params: [
-        string: Str,
-        characters: Str = crate::builtins::spec::DefaultSpec::Str(" \n\r\t\u{000b}\u{000c}\0"),
-    ],
-    returns: Str,
+    contract: "trim",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Trim,
     ),
-    summary: "Strips whitespace (or other characters) from the beginning and end of a string.",
-    php_manual: "https://www.php.net/manual/en/function.trim.php",
 }

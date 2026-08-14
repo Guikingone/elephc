@@ -9,18 +9,9 @@
 //! - Reads delegate to `fread`, while optional address writeback uses tracked
 //!   remote endpoint metadata from eval's stream table.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_socket_recvfrom",
+    contract: "stream_socket_recvfrom",
     area: Filesystem,
-    params: [
-        socket,
-        length,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        address: by_ref = EvalBuiltinDefaultValue::String("")
-    ],
-    by_ref: [address],
     direct: none,
     values: Filesystem,
 }

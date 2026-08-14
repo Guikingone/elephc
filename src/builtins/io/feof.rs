@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "feof",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "feof",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Feof,
     ),
-    summary: "Tests for end-of-file on a file pointer.",
-    php_manual: "function.feof",
 }
 
 /// Validates the stream argument is a stream resource and returns `Bool`.

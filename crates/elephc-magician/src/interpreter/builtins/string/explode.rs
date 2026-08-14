@@ -10,12 +10,9 @@
 //!   the last element absorb the remaining suffix, `0` behaves like `1`, and a negative limit
 //!   drops that many trailing segments.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "explode",
+    contract: "explode",
     area: String,
-    params: [separator, string, limit = EvalBuiltinDefaultValue::Int(i64::MAX)],
     direct: StringSplitJoin,
     values: StringSplitJoin,
 }

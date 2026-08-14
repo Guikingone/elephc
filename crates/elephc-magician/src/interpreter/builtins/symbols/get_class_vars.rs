@@ -9,9 +9,8 @@
 //! - Generated/AOT defaults use native callable default metadata when present.
 
 eval_builtin! {
-    name: "get_class_vars",
+    contract: "get_class_vars",
     area: Symbols,
-    params: [r#class],
     direct: Symbols,
     values: Symbols,
 }

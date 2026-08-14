@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the one-shot hash hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "hash",
+    contract: "hash",
     area: String,
-    params: [algo, data, binary = EvalBuiltinDefaultValue::Bool(false)],
     direct: HashOneShot,
     values: HashOneShot,
 }

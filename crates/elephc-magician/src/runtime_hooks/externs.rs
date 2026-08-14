@@ -17,6 +17,14 @@ use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Calls one typed generated-runtime builtin over borrowed boxed arguments.
+    pub(super) fn __elephc_runtime_builtin_call_v1(
+        runtime_builtin_id: u32,
+        args: *const *mut RuntimeCell,
+        arg_count: u64,
+        context: *const c_void,
+        result_out: *mut *mut RuntimeCell,
+    ) -> i32;
     pub(super) fn __elephc_eval_value_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_new(capacity: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string_array_push(

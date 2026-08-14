@@ -2,7 +2,7 @@
 title: "min() — internals"
 description: "Compiler internals for min(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 291
+  order: 304
 ---
 
 ## `min()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/min.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/min.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -50,6 +50,8 @@ function min(mixed $value, ...$values): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/min.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/min.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 

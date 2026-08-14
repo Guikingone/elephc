@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing byte-string hook.
 
 eval_builtin! {
-    name: "chr",
+    contract: "chr",
     area: String,
-    params: [codepoint],
     direct: Chr,
     values: Chr,
 }

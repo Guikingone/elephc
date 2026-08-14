@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the unary stream helper.
 
 eval_builtin! {
-    name: "stream_get_meta_data",
+    contract: "stream_get_meta_data",
     area: Filesystem,
-    params: [stream],
     direct: Filesystem,
     values: Filesystem,
 }

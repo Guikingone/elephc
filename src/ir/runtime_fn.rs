@@ -315,6 +315,20 @@ pub enum RuntimeFnId {
     Atan,
     Atan2,
     BaseConvert,
+    BcAdd,
+    BcCeil,
+    BcComp,
+    BcDiv,
+    BcDivmod,
+    BcFloor,
+    BcMod,
+    BcMul,
+    BcPow,
+    BcPowmod,
+    BcRound,
+    BcScale,
+    BcSqrt,
+    BcSub,
     Ceil,
     Clamp,
     Cos,
@@ -413,6 +427,10 @@ pub enum RuntimeFnId {
     HashHmac,
     HashInit,
     HashUpdate,
+    OpensslCipherIvLength,
+    OpensslDecrypt,
+    OpensslEncrypt,
+    OpensslGetCipherMethods,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -620,6 +638,7 @@ impl RuntimeFnId {
                 value: Box::new(PhpType::Mixed),
             },
             RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
             | RuntimeFnId::Fgetcsv
             | RuntimeFnId::File
@@ -630,6 +649,7 @@ impl RuntimeFnId {
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
@@ -767,6 +787,31 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
+            RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcComp => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
             RuntimeFnId::ArrayColumn |
@@ -1053,6 +1098,20 @@ impl RuntimeFnId {
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
         match self {
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcComp
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcScale
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -1080,6 +1139,12 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashInit => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashUpdate => &[BuiltinRequirement::Bridge("elephc_crypto")],
+            RuntimeFnId::OpensslCipherIvLength
+            | RuntimeFnId::OpensslDecrypt
+            | RuntimeFnId::OpensslEncrypt
+            | RuntimeFnId::OpensslGetCipherMethods => {
+                &[BuiltinRequirement::Bridge("elephc_crypto")]
+            }
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -1216,12 +1281,27 @@ impl RuntimeFnId {
         // in the default `MayAliasArguments` bucket would keep an owned subject temporary
         // alive for the integer's whole lifetime, which is the leak shape already documented
         // for `Strpos` and `Strtr` below.
-        if matches!(self, RuntimeFnId::IntvalBase) {
+        if matches!(
+            self,
+            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+        ) {
             return BuiltinResultOwnership::NonHeap;
         }
         if matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::BcAdd
+                | RuntimeFnId::BcCeil
+                | RuntimeFnId::BcDiv
+                | RuntimeFnId::BcDivmod
+                | RuntimeFnId::BcFloor
+                | RuntimeFnId::BcMod
+                | RuntimeFnId::BcMul
+                | RuntimeFnId::BcPow
+                | RuntimeFnId::BcPowmod
+                | RuntimeFnId::BcRound
+                | RuntimeFnId::BcSqrt
+                | RuntimeFnId::BcSub
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
@@ -1319,6 +1399,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetLength
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
+                | RuntimeFnId::OpensslCipherIvLength
+                | RuntimeFnId::OpensslDecrypt
+                | RuntimeFnId::OpensslEncrypt
+                | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregGrep
                 | RuntimeFnId::PregSplit
@@ -1659,6 +1743,20 @@ impl RuntimeFnId {
             RuntimeFnId::Asin => "asin",
             RuntimeFnId::Atan => "atan",
             RuntimeFnId::Atan2 => "atan2",
+            RuntimeFnId::BcAdd => "bcadd",
+            RuntimeFnId::BcCeil => "bcceil",
+            RuntimeFnId::BcComp => "bccomp",
+            RuntimeFnId::BcDiv => "bcdiv",
+            RuntimeFnId::BcDivmod => "bcdivmod",
+            RuntimeFnId::BcFloor => "bcfloor",
+            RuntimeFnId::BcMod => "bcmod",
+            RuntimeFnId::BcMul => "bcmul",
+            RuntimeFnId::BcPow => "bcpow",
+            RuntimeFnId::BcPowmod => "bcpowmod",
+            RuntimeFnId::BcRound => "bcround",
+            RuntimeFnId::BcScale => "bcscale",
+            RuntimeFnId::BcSqrt => "bcsqrt",
+            RuntimeFnId::BcSub => "bcsub",
             RuntimeFnId::Ceil => "ceil",
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",
@@ -1757,6 +1855,10 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => "hash_hmac",
             RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
             RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
+            RuntimeFnId::OpensslCipherIvLength => "openssl_cipher_iv_length",
+            RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
+            RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
+            RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

@@ -7,12 +7,9 @@
 //! Key details:
 //! - Eval-created object and class-string parents are resolved before runtime fallback.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "get_parent_class",
+    contract: "get_parent_class",
     area: Symbols,
-    params: [object_or_class = EvalBuiltinDefaultValue::Null],
     direct: Symbols,
     values: Symbols,
 }

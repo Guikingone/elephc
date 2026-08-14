@@ -13,10 +13,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "sscanf",
+    contract: "sscanf",
     area: Formatting,
-    params: [string, format],
-    variadic: vars,
     direct: Sscanf,
     values: Sscanf,
 }

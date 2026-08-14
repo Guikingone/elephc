@@ -2,7 +2,7 @@
 title: "ptr() — internals"
 description: "Compiler internals for ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 328
+  order: 335
 ---
 
 ## `ptr()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function ptr(mixed $value): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/raw_memory/ptr.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

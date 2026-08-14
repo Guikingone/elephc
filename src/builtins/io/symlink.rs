@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "symlink",
-    area: Io,
-    params: [target: Str, link: Str],
-    returns: Bool,
+    contract: "symlink",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Symlink,
     ),
-    summary: "Creates a symbolic link.",
-    php_manual: "function.symlink",
 }

@@ -20,16 +20,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "grapheme_strrev",
-    area: String,
-    params: [string: Str],
-    returns: Mixed,
+    contract: "grapheme_strrev",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GraphemeStrrev,
     ),
-    summary: "Reverses a string by grapheme cluster, returning false on failure.",
-    php_manual: "https://www.php.net/manual/en/function.grapheme-strrev.php",
 }
 
 /// Validates a `grapheme_strrev` call and returns `PhpType::Union([Str, Bool])`.

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the filesize helper.
 
 eval_builtin! {
-    name: "filesize",
+    contract: "filesize",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

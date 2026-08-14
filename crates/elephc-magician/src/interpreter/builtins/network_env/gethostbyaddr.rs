@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "gethostbyaddr",
+    contract: "gethostbyaddr",
     area: NetworkEnv,
-    params: [ip],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

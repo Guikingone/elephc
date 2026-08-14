@@ -25,12 +25,6 @@ Returns the key of the element under the array's internal pointer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `key` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/key.md).

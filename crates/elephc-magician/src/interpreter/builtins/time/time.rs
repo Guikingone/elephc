@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "time",
+    contract: "time",
     area: Time,
-    params: [],
     direct: Time,
     values: Time,
 }

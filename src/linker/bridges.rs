@@ -80,6 +80,18 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         php_extension: Some("hash"),
     },
     BridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        env_var: "ELEPHC_BCMATH_LIB_DIR",
+        crate_name: "elephc-bcmath",
+        flag_name: "bcmath",
+        whole_archive: false,
+        macos_frameworks: &[],
+        macos_libraries: &[],
+        needs_libdl: true,
+        // The decimal bridge implements PHP's procedural `bcmath` extension.
+        php_extension: Some("bcmath"),
+    },
+    BridgeStaticlib {
         lib_name: "elephc_phar",
         env_var: "ELEPHC_PHAR_LIB_DIR",
         crate_name: "elephc-phar",
@@ -655,6 +667,7 @@ mod tests {
         assert_eq!(php_extension_for_lib("elephc_tls"), Some("openssl"));
         assert_eq!(php_extension_for_lib("elephc_pdo"), Some("PDO"));
         assert_eq!(php_extension_for_lib("elephc_crypto"), Some("hash"));
+        assert_eq!(php_extension_for_lib("elephc_bcmath"), Some("bcmath"));
         assert_eq!(php_extension_for_lib("elephc_phar"), Some("Phar"));
         assert_eq!(php_extension_for_lib("elephc_image"), Some("gd"));
         assert_eq!(php_extension_for_lib("elephc_web"), Some("session"));

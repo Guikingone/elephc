@@ -7,12 +7,9 @@
 //! Key details:
 //! - Lookup checks eval interface declarations before generated/AOT runtime metadata.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "interface_exists",
+    contract: "interface_exists",
     area: Symbols,
-    params: [interface, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

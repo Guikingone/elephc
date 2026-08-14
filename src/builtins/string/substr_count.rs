@@ -13,21 +13,10 @@
 //!   or `$length` that escapes the subject each raise a catchable `ValueError`, so the
 //!   call must not be removable by dead-code elimination.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "substr_count",
-    area: String,
-    params: [
-        haystack: Str,
-        needle: Str,
-        offset: Int = DefaultSpec::Int(0),
-        length: Mixed = DefaultSpec::Null
-    ],
-    returns: Int,
+    contract: "substr_count",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SubstrCount,
     ),
-    summary: "Counts the number of non-overlapping substring occurrences.",
-    php_manual: "https://www.php.net/manual/en/function.substr-count.php",
 }

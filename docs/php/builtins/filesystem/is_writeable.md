@@ -25,12 +25,6 @@ Tells whether the filename is writable (alias of is_writable).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `is_writeable` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/is_writeable.md).

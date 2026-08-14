@@ -21,17 +21,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_intersect_key",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_intersect_key",
     check: check,
     semantics: array_intersect_key_semantics(),
-    summary: "Computes the intersection of arrays using keys for comparison.",
-    php_manual: "https://www.php.net/manual/en/function.array-intersect-key.php",
 }
 
 /// Builds semantics whose result follows the normalized first hash operand.

@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "stream_bucket_prepend",
-    area: Io,
-    params: [brigade: Mixed, bucket: Mixed],
-    returns: Void,
+    contract: "stream_bucket_prepend",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamBucketPrepend,
     ),
-    summary: "Prepends a bucket to the brigade.",
-    php_manual: "function.stream-bucket-prepend",
 }

@@ -56,6 +56,7 @@ mod reflection_class_flags;
 mod aarch64_clone;
 mod x86_64_clone;
 mod clone_rejections;
+mod runtime_builtin_dispatch;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;
@@ -101,6 +102,8 @@ use aarch64_clone::*;
 use x86_64_clone::*;
 #[allow(unused_imports)]
 use clone_rejections::*;
+#[allow(unused_imports)]
+use runtime_builtin_dispatch::*;
 
 /// Emits ARM64 C-ABI wrappers around the internal mixed value helpers.
 fn emit_aarch64_wrappers(emitter: &mut Emitter) {
@@ -110,6 +113,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emit_aarch64_numeric(emitter);
     emit_aarch64_compare(emitter);
     emit_aarch64_output(emitter);
+    emit_aarch64_runtime_builtin_dispatch(emitter);
 }
 
 /// Emits Linux x86_64 C-ABI wrappers around the internal mixed value helpers.
@@ -120,6 +124,7 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emit_x86_64_numeric(emitter);
     emit_x86_64_compare(emitter);
     emit_x86_64_output(emitter);
+    emit_x86_64_runtime_builtin_dispatch(emitter);
 }
 
 /// Emits a global label with platform C-symbol mangling.

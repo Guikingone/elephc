@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_key_exists",
-    area: Array,
-    params: [key: Mixed, array: Mixed],
-    returns: Bool,
+    contract: "array_key_exists",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayKeyExists,
     ),
-    summary: "Checks if the given key or index exists in the array.",
-    php_manual: "https://www.php.net/manual/en/function.array-key-exists.php",
 }
 
 /// Validates that the second argument can carry an array and returns `Bool`.

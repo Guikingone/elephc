@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_iterable",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_iterable",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Iterable,
     ),
-    summary: "Checks whether a variable is iterable.",
-    php_manual: "function.is-iterable",
 }

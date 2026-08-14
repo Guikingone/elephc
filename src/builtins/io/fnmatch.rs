@@ -9,21 +9,16 @@
 //! - The registry pre-infers all arguments before calling the hook; the hook calls
 //!   `infer_type` on `flags` again (idempotent) to obtain its resolved type.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fnmatch",
-    area: Io,
-    params: [pattern: Str, filename: Str, flags: Int = DefaultSpec::Int(0)],
-    returns: Bool,
+    contract: "fnmatch",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fnmatch,
     ),
-    summary: "Matches a filename against a pattern.",
-    php_manual: "function.fnmatch",
 }
 
 /// Returns `Bool`, requiring the optional `flags` argument to be of type `Int`.

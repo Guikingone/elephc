@@ -33,6 +33,71 @@ fn test_substr_negative_offset() {
     assert_eq!(out, "World");
 }
 
+/// A NEGATIVE length is php's "stop this many bytes before the end", and every row here used to
+/// be wrong — silently, with a plausible-looking string.
+///
+/// Two faults compounded. `-1` doubled as the in-band sentinel for "no length argument", so an
+/// explicit `substr($s, 1, -1)` was indistinguishable from the two-argument call and kept the
+/// whole tail; and every other negative length was clamped to zero, so `substr("hello", 0, -2)`
+/// answered `""` where php answers `"hel"`. Whether a length was PASSED is known from the
+/// operand count at compile time and is never encoded in the length's own value now.
+///
+/// The controls matter as much as the fixes: the two-argument form, a zero length, an
+/// over-long length and an out-of-range offset all have to keep their previous answers, since
+/// removing the sentinel touched the path they share.
+#[test]
+fn test_substr_negative_length_omits_bytes_from_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr("hello", 1, -1),   // the row the -1 sentinel swallowed
+    substr("hello", 0, -2),
+    substr("hello", 1, -2),
+    substr("hello", -4, -1),  // negative offset AND negative length
+    substr("hello", 0, -5),   // omits exactly everything
+    substr("hello", 0, -9),   // omits more than there is
+    substr("hello", 1),       // control: two-argument form
+    substr("hello", 1, 2),    // control: ordinary length
+    substr("hello", 1, 0),    // control: empty selection
+    substr("hello", 1, 99),   // control: length past the end
+    substr("hello", -3, 2),   // control: negative offset, positive length
+    substr("hello", 9, 2),    // control: offset past the end
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "ell|hel|el|ell|||ello|el||ello|ll|");
+}
+
+/// The same rule for `substr_replace()`, whose omitted-length signal had the same collision.
+///
+/// A negative length told it to replace nothing (`"hX"` for `substr_replace("hello","X",1,-1)`,
+/// where php answers `"hXo"`). The omitted-length case now reaches the runtime helper as
+/// `i64::MAX` instead of `-1`: the helper bounds the length by the remaining tail, so a
+/// saturating value runs through the end by the ordinary path and needs no sentinel test —
+/// which frees `-1` to mean what php means by it.
+#[test]
+fn test_substr_replace_negative_length_omits_bytes_from_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr_replace("hello", "X", 1, -1),
+    substr_replace("hello", "X", 0, -2),
+    substr_replace("hello", "X", 1, -3),
+    substr_replace("hello", "X", -3, -1),  // negative offset AND negative length
+    substr_replace("hello", "X", 1, -9),   // omits more than remains
+    substr_replace("hello", "X", 1),       // control: omitted length
+    substr_replace("hello", "X", 1, 0),    // control: pure insertion
+    substr_replace("hello", "X", 1, 2),    // control: ordinary length
+    substr_replace("hello", "X", 1, 99),   // control: length past the end
+    substr_replace("hello", "X", 9, 2),    // control: offset past the end
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "hXo|Xlo|hXllo|heXo|hXello|hX|hXello|hXlo|hX|helloX");
+}
+
 /// Verifies substr accepts a non-negative integer offset derived from a function return via addition.
 /// Regression test: int-to-integer coercion path for the offset expression `$o + 1`.
 /// Fixture: queries with `?` delimiter, strpos + intval, then substr with +1 offset.

@@ -14,17 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "mt_rand",
-    area: Math,
-    params: [min: Int, max: Int],
-    min_args: 0,
-    returns: Int,
+    contract: "mt_rand",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::MtRand,
     ),
-    summary: "Generate a random value via the Mersenne Twister Random Number Generator.",
-    php_manual: "https://www.php.net/manual/en/function.mt-rand.php",
 }
 
 /// Rejects exactly 1 argument, matching PHP's "0 or 2 arguments" arity rule.

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "str_repeat",
-    area: String,
-    params: [string: Str, times: Int],
-    returns: Str,
+    contract: "str_repeat",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrRepeat,
     ),
-    summary: "Repeats a string a given number of times.",
-    php_manual: "https://www.php.net/manual/en/function.str-repeat.php",
 }

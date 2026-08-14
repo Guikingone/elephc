@@ -13,12 +13,9 @@
 use std::collections::HashSet;
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "print_r",
+    contract: "print_r",
     area: Core,
-    params: [value, r#return = EvalBuiltinDefaultValue::Bool(false)],
     direct: Core,
     values: Core,
 }

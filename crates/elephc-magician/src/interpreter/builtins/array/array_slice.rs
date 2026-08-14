@@ -11,19 +11,11 @@
 //!   and must stay shape-identical to the static registry declaration, which the builtin parity
 //!   gate asserts.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_slice",
+    contract: "array_slice",
     area: Array,
-    params: [
-        array,
-        offset,
-        length = EvalBuiltinDefaultValue::Null,
-        preserve_keys = EvalBuiltinDefaultValue::Bool(false)
-    ],
     direct: ArraySlice,
     values: ArraySlice,
 }

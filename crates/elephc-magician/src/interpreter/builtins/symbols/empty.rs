@@ -8,9 +8,8 @@
 //! - Direct calls stay source-sensitive so missing variables are not evaluated normally.
 
 eval_builtin! {
-    name: "empty",
+    contract: "empty",
     area: Symbols,
-    params: [value],
     direct: Symbols,
     values: Symbols,
 }

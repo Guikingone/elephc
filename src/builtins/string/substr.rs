@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "substr",
-    area: String,
-    params: [string: Str, offset: Int, length: Int = crate::builtins::spec::DefaultSpec::Null],
-    returns: Str,
+    contract: "substr",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Substr,
     ),
-    summary: "Returns a portion of a string specified by the offset and length.",
-    php_manual: "https://www.php.net/manual/en/function.substr.php",
 }

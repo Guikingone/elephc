@@ -27,12 +27,6 @@ Returns the constructor arguments of a named attribute applied to a class.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `class_attribute_args` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/class_attribute_args.md).

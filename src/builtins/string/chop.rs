@@ -14,16 +14,8 @@
 
 
 builtin! {
-    name: "chop",
-    area: String,
-    params: [
-        string: Str,
-        characters: Str = crate::builtins::spec::DefaultSpec::Str(" \n\r\t\u{000b}\u{000c}\0"),
-    ],
-    returns: Str,
+    contract: "chop",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chop,
     ),
-    summary: "Alias of rtrim: strips whitespace (or other characters) from the end of a string.",
-    php_manual: "https://www.php.net/manual/en/function.chop.php",
 }

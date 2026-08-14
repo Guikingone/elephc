@@ -8,9 +8,8 @@
 //! - The result uses the late-static-bound class scope when present, matching PHP.
 
 eval_builtin! {
-    name: "get_called_class",
+    contract: "get_called_class",
     area: Symbols,
-    params: [],
     direct: Symbols,
     values: Symbols,
 }

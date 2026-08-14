@@ -8,9 +8,8 @@
 //! - Closes eval-local filter resources created by append/prepend.
 
 eval_builtin! {
-    name: "stream_filter_remove",
+    contract: "stream_filter_remove",
     area: Filesystem,
-    params: [stream_filter],
     direct: Filesystem,
     values: Filesystem,
 }

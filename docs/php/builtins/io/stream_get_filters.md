@@ -24,12 +24,6 @@ Retrieves list of registered filters.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_get_filters` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_get_filters.md).

@@ -21,17 +21,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_diff_key",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_diff_key",
     check: check,
     semantics: array_diff_key_semantics(),
-    summary: "Computes the difference of arrays using keys for comparison.",
-    php_manual: "https://www.php.net/manual/en/function.array-diff-key.php",
 }
 
 /// Builds semantics whose result follows the normalized first hash operand.

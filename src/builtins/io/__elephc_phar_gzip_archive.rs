@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_gzip_archive",
-    area: Io,
-    params: [src: Str],
-    returns: Str,
+    contract: "__elephc_phar_gzip_archive",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharGzipArchive,
     ),
-    summary: "Compresses a PHAR archive using gzip.",
-    internal: true,
 }

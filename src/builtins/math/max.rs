@@ -16,19 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "max",
-    area: Math,
-    params: [value: Mixed],
-    variadic: "values",
-    min_args: 1,
-    arity_error: "max() expects at least 1 argument, 0 given",
-    returns: Mixed,
+    contract: "max",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Max,
     ),
-    summary: "Find highest value.",
-    php_manual: "https://www.php.net/manual/en/function.max.php",
 }
 
 /// Returns the array element type for the single-array form; otherwise returns Float

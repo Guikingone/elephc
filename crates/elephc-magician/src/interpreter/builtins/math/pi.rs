@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "pi",
+    contract: "pi",
     area: Math,
-    params: [],
     direct: Pi,
     values: Pi,
 }

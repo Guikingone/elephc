@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ucfirst",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "ucfirst",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ucfirst,
     ),
-    summary: "Uppercases the first character of a string.",
-    php_manual: "https://www.php.net/manual/en/function.ucfirst.php",
 }

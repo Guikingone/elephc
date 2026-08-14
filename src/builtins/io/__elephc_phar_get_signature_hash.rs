@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_get_signature_hash",
-    area: Io,
-    params: [path: Str],
-    returns: Str,
+    contract: "__elephc_phar_get_signature_hash",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharGetSignatureHash,
     ),
-    summary: "Returns the PHAR signature hash bytes.",
-    internal: true,
 }

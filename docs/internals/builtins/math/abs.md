@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/abs.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/abs.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,7 +49,8 @@ function abs(int $num): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/abs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/abs.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(6)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

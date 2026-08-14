@@ -2,7 +2,7 @@
 title: "intval() — internals"
 description: "Compiler internals for intval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 478
+  order: 487
 ---
 
 ## `intval()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/intval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/intval.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -47,6 +47,8 @@ function intval(mixed $value, int $base = 10): int
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/intval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/intval.rs) (`eval_builtin!`)
+- **Execution**: generated-runtime ABI (`RuntimeBuiltinId(3)`) with a Magician fallback adapter.
+- **Adapter reason**: `additional-signature-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

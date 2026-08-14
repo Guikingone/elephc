@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_intersect_assoc",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_intersect_assoc",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayIntersectAssoc,
     ),
-    summary: "Computes the intersection of arrays with additional index check.",
-    php_manual: "https://www.php.net/manual/en/function.array-intersect-assoc.php",
 }
 
 /// Validates both arguments are hash-compatible arrays and returns the merged hash type.

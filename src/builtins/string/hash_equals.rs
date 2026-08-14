@@ -11,13 +11,8 @@
 
 
 builtin! {
-    name: "hash_equals",
-    area: String,
-    params: [known_string: Str, user_string: Str],
-    returns: Bool,
+    contract: "hash_equals",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashEquals,
     ),
-    summary: "Compares two strings using a constant-time algorithm.",
-    php_manual: "https://www.php.net/manual/en/function.hash-equals.php",
 }

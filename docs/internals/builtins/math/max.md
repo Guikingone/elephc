@@ -2,7 +2,7 @@
 title: "max() — internals"
 description: "Compiler internals for max(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 290
+  order: 303
 ---
 
 ## `max()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/max.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -50,6 +50,8 @@ function max(mixed $value, ...$values): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/math/max.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/max.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `interpreter-specific-value-semantics`.
 - **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$values`.
 

@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_reduce",
+    contract: "array_reduce",
     area: Array,
-    params: [array, callback, initial = EvalBuiltinDefaultValue::Null],
     direct: Array,
     values: Array,
 }

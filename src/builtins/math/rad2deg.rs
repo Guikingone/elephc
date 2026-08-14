@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "rad2deg",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "rad2deg",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rad2deg,
     ),
-    summary: "Converts a radian value to degrees.",
-    php_manual: "https://www.php.net/manual/en/function.rad2deg.php",
 }

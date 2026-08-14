@@ -21,28 +21,17 @@
 //!   `null` default exactly like `fopen()`'s `$context`; the backend rejects a
 //!   non-null one instead of ignoring it.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "file_get_contents",
-    area: Io,
-    params: [
-        filename: Str,
-        use_include_path: Bool = DefaultSpec::Bool(false),
-        context: Mixed = DefaultSpec::Null,
-        offset: Int = DefaultSpec::Int(0),
-        length: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "file_get_contents",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::FileGetContents,
     ),
     requirements: crate::builtins::semantics::file_get_contents_requirements,
-    summary: "Reads an entire file into a string.",
-    php_manual: "function.file-get-contents",
 }
 
 /// Returns `Union(Str, Bool)` and records the runtime libraries the call may need.

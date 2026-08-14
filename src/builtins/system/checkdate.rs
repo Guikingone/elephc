@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "checkdate",
-    area: System,
-    params: [month: Int, day: Int, year: Int],
-    returns: Bool,
+    contract: "checkdate",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Checkdate,
     ),
-    summary: "Validates a Gregorian date.",
 }

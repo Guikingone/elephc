@@ -19,14 +19,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_shift",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Mixed,
+    contract: "array_shift",
     check: check,
     semantics: array_shift_semantics(),
-    summary: "Shifts an element off the beginning of array.",
-    php_manual: "https://www.php.net/manual/en/function.array-shift.php",
 }
 
 /// Builds semantics whose EIR result preserves the builtin's nullable boxed payload.

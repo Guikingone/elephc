@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "nl2br",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "nl2br",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::NlToBr),
         crate::ir::Effects::PURE,
     ),
-    summary: "Inserts HTML line breaks before newlines in a string.",
-    php_manual: "https://www.php.net/manual/en/function.nl2br.php",
 }

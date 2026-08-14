@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "lchown",
-    area: Io,
-    params: [filename: Str, user: Str],
-    returns: Bool,
+    contract: "lchown",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Lchown,
     ),
-    summary: "Changes user ownership of a symlink.",
-    php_manual: "function.lchown",
 }
 
 /// Returns `Bool`, rejecting a `user` argument that is neither `Int` nor `Str`.

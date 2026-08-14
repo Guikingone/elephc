@@ -9,16 +9,9 @@
 //!   after the trailing partial chunk and returns a lone separator for an empty subject.
 //! - A `$length` below 1 is php-src's `ValueError`, reported here as a runtime fatal.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "chunk_split",
+    contract: "chunk_split",
     area: String,
-    params: [
-        string,
-        length = EvalBuiltinDefaultValue::Int(76),
-        separator = EvalBuiltinDefaultValue::String("\r\n"),
-    ],
     direct: ChunkSplit,
     values: ChunkSplit,
 }

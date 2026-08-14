@@ -22,16 +22,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_keys",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_keys",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayKeys,
     ),
-    summary: "Returns all the keys of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-keys.php",
 }
 
 /// Returns the key-array type for an `array_keys` call.

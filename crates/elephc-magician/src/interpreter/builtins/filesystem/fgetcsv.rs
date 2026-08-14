@@ -7,16 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the CSV stream read helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "fgetcsv",
+    contract: "fgetcsv",
     area: Filesystem,
-    params: [
-        stream,
-        length = EvalBuiltinDefaultValue::Null,
-        separator = EvalBuiltinDefaultValue::String(",")
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

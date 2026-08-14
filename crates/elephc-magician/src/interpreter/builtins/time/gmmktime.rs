@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "gmmktime",
+    contract: "gmmktime",
     area: Time,
-    params: [hour, minute, second, month, day, year],
     direct: Time,
     values: Time,
 }

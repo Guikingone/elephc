@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "spl_autoload_call",
-    area: Spl,
-    params: [class: Mixed],
-    returns: Void,
+    contract: "spl_autoload_call",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplAutoloadCall,
     ),
-    summary: "Try all registered __autoload() functions to load the requested class.",
-    php_manual: "https://www.php.net/manual/en/function.spl-autoload-call.php",
 }

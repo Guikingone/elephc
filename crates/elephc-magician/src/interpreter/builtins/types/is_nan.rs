@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_nan",
+    contract: "is_nan",
     area: Types,
-    params: [num],
     direct: IsNan,
     values: IsNan,
 }

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fclose",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "fclose",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fclose,
     ),
-    summary: "Closes an open file pointer.",
-    php_manual: "function.fclose",
 }
 
 /// Validates the stream argument is a stream resource and returns `Bool`.

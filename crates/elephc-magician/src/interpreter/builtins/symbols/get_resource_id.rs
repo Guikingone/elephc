@@ -8,9 +8,8 @@
 //! - Resource id/type support is shared with `get_resource_type()`.
 
 eval_builtin! {
-    name: "get_resource_id",
+    contract: "get_resource_id",
     area: Symbols,
-    params: [resource],
     direct: Symbols,
     values: Symbols,
 }

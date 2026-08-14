@@ -12,12 +12,9 @@
 
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "phpversion",
+    contract: "phpversion",
     area: NetworkEnv,
-    params: [extension = EvalBuiltinDefaultValue::Null],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

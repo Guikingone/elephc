@@ -7,17 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the stream-opening helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "fopen",
+    contract: "fopen",
     area: Filesystem,
-    params: [
-        filename,
-        mode,
-        use_include_path = EvalBuiltinDefaultValue::Bool(false),
-        context = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

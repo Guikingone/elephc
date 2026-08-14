@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_offset",
+    contract: "ptr_offset",
     area: RawMemory,
-    params: [pointer, offset],
     direct: PtrOffset,
     values: PtrOffset,
 }

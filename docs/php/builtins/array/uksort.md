@@ -26,12 +26,6 @@ Sorts an array by keys using a user-defined comparison function.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `uksort` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/uksort.md).

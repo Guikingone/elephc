@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "strtolower",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "strtolower",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::StrToLower),
         crate::ir::Effects::PURE,
     ),
-    summary: "Converts a string to lowercase.",
-    php_manual: "https://www.php.net/manual/en/function.strtolower.php",
 }

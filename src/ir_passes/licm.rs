@@ -13,14 +13,16 @@
 //!   defined by another instruction being hoisted from the same loop or has a
 //!   definition that dominates the preheader (so it is available there). This is
 //!   a fixed point: hoisting one instruction can make a dependent one invariant.
-//! - Only **pure** (`Effects::PURE`) instructions with at least one operand and a
-//!   `NonHeap`/`Persistent` result are eligible. Purity means the result depends
-//!   only on the operands and the op neither reads mutable state nor faults, so
-//!   evaluating it once in the preheader — unconditionally, even if the original
-//!   site was only reached on some iterations — is safe (no speculation hazard).
-//!   The ownership bound keeps the move refcount-neutral. Nullary constant/address
-//!   materializations are not hoisted: they are cheaper to rematerialize than to
-//!   keep live across the loop (the same policy CSE uses).
+//! - Only **pure** (`Effects::PURE`) instructions with a `NonHeap`/`Persistent`
+//!   result are eligible. Purity means the result depends only on immutable inputs
+//!   and the op neither reads mutable state nor faults, so evaluating it once in the
+//!   preheader — unconditionally, even if the original site was only reached on some
+//!   iterations — is safe (no speculation hazard). The ownership bound keeps the move
+//!   refcount-neutral. Nullary constant/address materializations are moved only when
+//!   they are operands of a computation being hoisted; standalone materializations
+//!   remain in place. A `load_local` proven immutable by the dedicated analysis is also
+//!   eligible: moving that load is what makes local-backed invariant arithmetic
+//!   available in the preheader.
 //! - Hoisting needs a preheader to move into. The loop analysis detects an
 //!   existing one (PHP loops lower to slot-based CFGs whose init block is a
 //!   natural preheader); loops without a detected preheader are skipped rather
@@ -125,11 +127,21 @@ fn find_hoistable(
                 if !is_hoist_eligible(inst) {
                     continue;
                 }
-                let ready = inst
-                    .operands
-                    .iter()
-                    .all(|&op| operand_available(function, op, preheader, dominance, def_block, &hoistable));
+                let mut materializations = HashSet::new();
+                let ready = inst.operands.iter().all(|&op| {
+                    operand_available(
+                        function,
+                        op,
+                        loop_ref,
+                        preheader,
+                        dominance,
+                        def_block,
+                        &hoistable,
+                        &mut materializations,
+                    )
+                });
                 if ready {
+                    hoistable.extend(materializations);
                     hoistable.insert(inst_id);
                     added = true;
                 }
@@ -150,13 +162,26 @@ fn find_hoistable(
 fn operand_available(
     function: &Function,
     op: ValueId,
+    loop_ref: &NaturalLoop,
     preheader: BlockId,
     dominance: &DominanceInfo,
     def_block: &HashMap<ValueId, BlockId>,
     hoistable: &HashSet<InstId>,
+    materializations: &mut HashSet<InstId>,
 ) -> bool {
     if let Some(inst) = defining_inst(function, op) {
         if hoistable.contains(&inst) {
+            return true;
+        }
+        let defined_inside_loop = def_block
+            .get(&op)
+            .is_some_and(|block| loop_ref.blocks.contains(block));
+        if defined_inside_loop
+            && function
+                .instruction(inst)
+                .is_some_and(is_rematerializable_dependency)
+        {
+            materializations.insert(inst);
             return true;
         }
     }
@@ -166,15 +191,25 @@ fn operand_available(
     }
 }
 
+/// Returns true for a pure nullary value that may move only with a dependent computation.
+fn is_rematerializable_dependency(inst: &crate::ir::Instruction) -> bool {
+    inst.result.is_some()
+        && inst.op != Op::Nop
+        && inst.op != Op::LoadLocal
+        && inst.effects.is_pure()
+        && inst.operands.is_empty()
+        && matches!(inst.result_ownership, Ownership::NonHeap | Ownership::Persistent)
+}
+
 /// Returns true when an instruction may be hoisted: it produces a value, is not a
-/// `nop`, is pure (no side effects, no fault, no mutable-state read), has at
-/// least one operand (so it is a computation, not a rematerializable constant),
-/// and its result carries no owned-heap cleanup.
+/// `nop`, is pure (no side effects, no fault, no mutable-state read), is either a
+/// computation or a proven-immutable `load_local`, and its result carries no
+/// owned-heap cleanup.
 fn is_hoist_eligible(inst: &crate::ir::Instruction) -> bool {
     inst.result.is_some()
         && inst.op != Op::Nop
         && inst.effects.is_pure()
-        && !inst.operands.is_empty()
+        && (!inst.operands.is_empty() || inst.op == Op::LoadLocal)
         && matches!(inst.result_ownership, Ownership::NonHeap | Ownership::Persistent)
 }
 

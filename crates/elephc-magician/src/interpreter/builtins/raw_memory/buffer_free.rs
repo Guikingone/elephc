@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "buffer_free",
+    contract: "buffer_free",
     area: RawMemory,
-    params: [buffer],
     direct: BufferFree,
     values: BufferFree,
 }

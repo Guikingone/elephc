@@ -8,12 +8,9 @@
 //! - Runtime aliases are stored in the eval context for eval declarations and
 //!   generated/AOT class-like metadata.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "class_alias",
+    contract: "class_alias",
     area: Symbols,
-    params: [r#class, alias, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

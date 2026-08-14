@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "ip2long",
+    contract: "ip2long",
     area: NetworkEnv,
-    params: [ip],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

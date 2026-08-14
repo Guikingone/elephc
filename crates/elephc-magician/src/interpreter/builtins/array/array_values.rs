@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_values",
+    contract: "array_values",
     area: Array,
-    params: [array],
     direct: ArrayValues,
     values: ArrayValues,
 }

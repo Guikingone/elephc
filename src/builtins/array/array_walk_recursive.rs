@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_walk_recursive",
-    area: Array,
-    params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    contract: "array_walk_recursive",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayWalkRecursive,
     ),
-    summary: "Applies a user function recursively to every member of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-walk-recursive.php",
 }
 
 /// Validates the array and callback arguments for an `array_walk_recursive` call.

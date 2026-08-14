@@ -17,16 +17,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_udiff",
-    area: Array,
-    params: [array1: Mixed, array2: Mixed, callback: Mixed],
-    returns: Mixed,
+    contract: "array_udiff",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayUdiff,
     ),
-    summary: "Computes the difference of arrays using a callback comparator.",
-    php_manual: "https://www.php.net/manual/en/function.array-udiff.php",
 }
 
 /// Validates the comparator callback for an `array_udiff` call and returns the first-array type.

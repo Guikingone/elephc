@@ -13,17 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "setlocale",
-    area: System,
-    params: [category: Int, locales: Mixed],
-    variadic: "rest",
-    returns: Mixed,
+    contract: "setlocale",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Setlocale,
     ),
-    summary: "Sets locale information for the process.",
-    php_manual: "function.setlocale",
 }
 
 /// Infers all locale candidates and returns PHP's string-or-false result union.

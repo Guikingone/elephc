@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "is_finite",
-    area: Types,
-    params: [num: Float],
-    returns: Bool,
+    contract: "is_finite",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsFinite,
     ),
-    summary: "Checks whether a float is finite.",
-    php_manual: "function.is-finite",
 }

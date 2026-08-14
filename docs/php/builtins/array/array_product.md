@@ -25,12 +25,6 @@ Calculate the product of values in an array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_product` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_product.md).

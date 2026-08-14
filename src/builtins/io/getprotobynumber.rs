@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "getprotobynumber",
-    area: Io,
-    params: [protocol: Int],
-    returns: Mixed,
+    contract: "getprotobynumber",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Getprotobynumber,
     ),
-    summary: "Gets the protocol name associated with the given protocol number.",
-    php_manual: "function.getprotobynumber",
 }
 
 /// Returns `Union(Str, Bool)` reflecting PHP's false-on-failure return.

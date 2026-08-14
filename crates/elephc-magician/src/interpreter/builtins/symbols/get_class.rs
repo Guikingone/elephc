@@ -8,12 +8,9 @@
 //! - Eval-created object class names are resolved from eval context before
 //!   falling back to runtime object metadata.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "get_class",
+    contract: "get_class",
     area: Symbols,
-    params: [object = EvalBuiltinDefaultValue::Null],
     direct: Symbols,
     values: Symbols,
 }

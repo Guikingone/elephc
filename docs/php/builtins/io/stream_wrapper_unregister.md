@@ -25,12 +25,6 @@ Unregisters a previously registered URL wrapper.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_wrapper_unregister` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_wrapper_unregister.md).

@@ -8,18 +8,9 @@
 //! - Owns both `stream_context_set_option($context, $options)` and the
 //!   four-argument nested option form.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_context_set_option",
+    contract: "stream_context_set_option",
     area: Filesystem,
-    params: [
-        context,
-        wrapper_or_options,
-        option_name = EvalBuiltinDefaultValue::Null,
-        value = EvalBuiltinDefaultValue::Null
-    ],
-    required: 2,
     direct: Filesystem,
     values: Filesystem,
 }

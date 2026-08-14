@@ -17,6 +17,7 @@ mod compare;
 pub(crate) mod data;
 mod diagnostics;
 mod emitters;
+mod bcmath;
 mod eval_bridge;
 mod eval_scope;
 mod exceptions;

@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the array-search hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "in_array",
+    contract: "in_array",
     area: Array,
-    params: [needle, haystack, strict = EvalBuiltinDefaultValue::Bool(false)],
     direct: ArraySearch,
     values: ArraySearch,
 }

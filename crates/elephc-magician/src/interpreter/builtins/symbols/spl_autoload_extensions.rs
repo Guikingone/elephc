@@ -7,12 +7,9 @@
 //! Key details:
 //! - The extension list is eval-local mutable state on the context.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "spl_autoload_extensions",
+    contract: "spl_autoload_extensions",
     area: Symbols,
-    params: [file_extensions = EvalBuiltinDefaultValue::Null],
     direct: Symbols,
     values: Symbols,
 }

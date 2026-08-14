@@ -2,7 +2,7 @@
 title: "iterator_to_array() — internals"
 description: "Compiler internals for iterator_to_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 366
+  order: 373
 ---
 
 ## `iterator_to_array()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/iterator_to_array.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function iterator_to_array(traversable $iterator, bool $preserve_keys = true): a
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/iterator_to_array.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

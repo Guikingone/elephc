@@ -9,16 +9,10 @@
 //! - No check hook: the registry common path infers the optional argument and
 //!   returns the declared `Str` type.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "get_class",
-    area: Callables,
-    params: [object: Mixed = DefaultSpec::Null],
-    returns: Str,
+    contract: "get_class",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetClass,
     ),
-    summary: "Returns the name of the class of an object.",
-    php_manual: "function.get-class",
 }

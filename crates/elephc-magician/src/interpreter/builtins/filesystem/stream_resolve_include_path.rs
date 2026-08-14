@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the include-path resolution helper.
 
 eval_builtin! {
-    name: "stream_resolve_include_path",
+    contract: "stream_resolve_include_path",
     area: Filesystem,
-    params: [filename],
     direct: Filesystem,
     values: Filesystem,
 }

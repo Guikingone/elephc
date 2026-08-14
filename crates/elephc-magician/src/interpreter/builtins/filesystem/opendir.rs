@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory resource open helper.
 
 eval_builtin! {
-    name: "opendir",
+    contract: "opendir",
     area: Filesystem,
-    params: [directory],
     direct: Filesystem,
     values: Filesystem,
 }

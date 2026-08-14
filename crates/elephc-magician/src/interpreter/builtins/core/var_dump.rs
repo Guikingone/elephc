@@ -15,10 +15,8 @@ use super::print_r::{
 use super::super::super::*;
 
 eval_builtin! {
-    name: "var_dump",
+    contract: "var_dump",
     area: Core,
-    params: [value],
-    variadic: values,
     direct: Core,
     values: Core,
 }

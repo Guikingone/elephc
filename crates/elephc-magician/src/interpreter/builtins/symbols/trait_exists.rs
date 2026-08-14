@@ -8,12 +8,9 @@
 //! - The shared trait/enum existence probe lives here and `enum_exists()`
 //!   calls it explicitly.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "trait_exists",
+    contract: "trait_exists",
     area: Symbols,
-    params: [r#trait, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

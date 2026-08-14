@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream chunk-size metadata helper.
 
 eval_builtin! {
-    name: "stream_set_chunk_size",
+    contract: "stream_set_chunk_size",
     area: Filesystem,
-    params: [stream, size],
     direct: Filesystem,
     values: Filesystem,
 }

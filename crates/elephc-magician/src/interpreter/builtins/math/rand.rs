@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "rand",
+    contract: "rand",
     area: Math,
-    params: [min, max],
     direct: Rand,
     values: Rand,
 }

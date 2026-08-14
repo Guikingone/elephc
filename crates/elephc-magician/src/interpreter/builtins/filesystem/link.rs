@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the binary path operation helper.
 
 eval_builtin! {
-    name: "link",
+    contract: "link",
     area: Filesystem,
-    params: [target, link],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -7,15 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through eval's ordered no-op stat-cache helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "clearstatcache",
+    contract: "clearstatcache",
     area: Filesystem,
-    params: [
-        clear_realpath_cache = EvalBuiltinDefaultValue::Bool(false),
-        filename = EvalBuiltinDefaultValue::String("")
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

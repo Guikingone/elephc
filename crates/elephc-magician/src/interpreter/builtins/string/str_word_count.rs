@@ -12,16 +12,9 @@
 //!   Any other format is php-src's catchable `ValueError`, raised through eval's
 //!   pending-throw state so `catch (ValueError $e)` behaves as it does under the compiler.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "str_word_count",
+    contract: "str_word_count",
     area: String,
-    params: [
-        string,
-        format = EvalBuiltinDefaultValue::Int(0),
-        characters = EvalBuiltinDefaultValue::Null,
-    ],
     direct: StrWordCount,
     values: StrWordCount,
 }

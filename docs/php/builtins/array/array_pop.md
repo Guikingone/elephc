@@ -25,12 +25,6 @@ Pops the element off the end of array.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_pop` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_pop.md).

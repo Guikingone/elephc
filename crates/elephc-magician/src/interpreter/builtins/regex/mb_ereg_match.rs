@@ -13,13 +13,11 @@
 //!   bytes are accepted without additional runtime effect, matching the AOT helper.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::*;
 
 eval_builtin! {
-    name: "mb_ereg_match",
+    contract: "mb_ereg_match",
     area: Regex,
-    params: [pattern, subject, options = EvalBuiltinDefaultValue::Null],
     direct: MbEregMatch,
     values: MbEregMatch,
 }

@@ -15,13 +15,8 @@
 
 
 builtin! {
-    name: "ucwords",
-    area: String,
-    params: [string: Str, separators: Str = crate::builtins::spec::DefaultSpec::Str(" \t\r\n\u{0c}\u{0b}")],
-    returns: Str,
+    contract: "ucwords",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ucwords,
     ),
-    summary: "Uppercases the first character of each word in a string.",
-    php_manual: "https://www.php.net/manual/en/function.ucwords.php",
 }

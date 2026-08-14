@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "atan2",
+    contract: "atan2",
     area: Math,
-    params: [y, x],
     direct: Atan2,
     values: Atan2,
 }

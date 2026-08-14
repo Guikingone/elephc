@@ -8,9 +8,8 @@
 //! - Shared class-attribute metadata logic lives in `class_attribute_names`.
 
 eval_builtin! {
-    name: "class_attribute_args",
+    contract: "class_attribute_args",
     area: Symbols,
-    params: [class_name, attribute_name],
     direct: Symbols,
     values: Symbols,
 }

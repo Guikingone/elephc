@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fpassthru",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Int,
+    contract: "fpassthru",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fpassthru,
     ),
-    summary: "Output all remaining data on a file pointer.",
-    php_manual: "function.fpassthru",
 }
 
 /// Validates the stream argument is a stream resource and returns `Int`.

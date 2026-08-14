@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the substring-replace hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "substr_replace",
+    contract: "substr_replace",
     area: String,
-    params: [string, replace, offset, length = EvalBuiltinDefaultValue::Null],
     direct: SubstrReplace,
     values: SubstrReplace,
 }

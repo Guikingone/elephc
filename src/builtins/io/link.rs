@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "link",
-    area: Io,
-    params: [target: Str, link: Str],
-    returns: Bool,
+    contract: "link",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Link,
     ),
-    summary: "Creates a hard link.",
-    php_manual: "function.link",
 }

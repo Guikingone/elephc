@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_set_zip_password",
-    area: Io,
-    params: [password: Str],
-    returns: Bool,
+    contract: "__elephc_phar_set_zip_password",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSetZipPassword,
     ),
-    summary: "Sets the encryption password for a PHAR ZIP archive.",
-    internal: true,
 }

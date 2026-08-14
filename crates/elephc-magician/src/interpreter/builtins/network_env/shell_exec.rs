@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "shell_exec",
+    contract: "shell_exec",
     area: NetworkEnv,
-    params: [command],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

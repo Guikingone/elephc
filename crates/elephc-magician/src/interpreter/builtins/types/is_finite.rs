@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_finite",
+    contract: "is_finite",
     area: Types,
-    params: [num],
     direct: IsFinite,
     values: IsFinite,
 }

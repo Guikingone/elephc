@@ -15,13 +15,8 @@ use crate::builtins::semantics::{
 use crate::types::PhpType;
 
 builtin! {
-    name: "clamp",
-    area: Math,
-    params: [value: Mixed, min: Mixed, max: Mixed],
-    returns: Mixed,
+    contract: "clamp",
     semantics: clamp_semantics(),
-    summary: "Clamps a value to be within a specified range.",
-    php_manual: "https://www.php.net/manual/en/function.clamp.php",
 }
 
 /// Builds clamp semantics with one result resolver shared by checker and EIR lowering.

@@ -276,6 +276,20 @@ sidebar:
 | [`atan()`](./builtins/math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./builtins/math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
 | [`base_convert()`](./builtins/math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
+| [`bcadd()`](./builtins/math/bcadd.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcceil()`](./builtins/math/bcceil.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bccomp()`](./builtins/math/bccomp.md) | `(string $num1, string $num2, int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcdiv()`](./builtins/math/bcdiv.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcdivmod()`](./builtins/math/bcdivmod.md) | `(string $num1, string $num2, int $scale = null): array` | `array` | ✓ | ✓ |
+| [`bcfloor()`](./builtins/math/bcfloor.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bcmod()`](./builtins/math/bcmod.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcmul()`](./builtins/math/bcmul.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpow()`](./builtins/math/bcpow.md) | `(string $num, string $exponent, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpowmod()`](./builtins/math/bcpowmod.md) | `(string $num, string $exponent, string $modulus, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcround()`](./builtins/math/bcround.md) | `(string $num, int $precision = 0, int $mode = 1): string` | `string` | ✓ | ✓ |
+| [`bcscale()`](./builtins/math/bcscale.md) | `(int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcsqrt()`](./builtins/math/bcsqrt.md) | `(string $num, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcsub()`](./builtins/math/bcsub.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./builtins/math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./builtins/math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./builtins/math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
@@ -313,7 +327,6 @@ sidebar:
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
-| [`buffer_new()`](./builtins/misc/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
@@ -336,6 +349,7 @@ sidebar:
 | [`unserialize()`](./builtins/misc/unserialize.md) | `(string $data, mixed $options = []): mixed` | `mixed` | ✓ | — |
 | [`unset()`](./builtins/misc/unset.md) | `(mixed $var, ...$vars): void` | `void` | ✓ | ✓ |
 | [`var_dump()`](./builtins/misc/var_dump.md) | `(mixed $value, ...$values): void` | `void` | ✓ | ✓ |
+| [`buffer_new()`](./builtins/pointer/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`ptr()`](./builtins/pointer/ptr.md) | `(mixed $value): mixed` | `mixed` | ✓ | ✓ |
 | [`ptr_get()`](./builtins/pointer/ptr_get.md) | `(pointer $pointer): int` | `int` | ✓ | ✓ |
 | [`ptr_is_null()`](./builtins/pointer/ptr_is_null.md) | `(pointer $pointer): bool` | `bool` | ✓ | ✓ |
@@ -355,9 +369,9 @@ sidebar:
 | [`zval_pack()`](./builtins/pointer/zval_pack.md) | `(mixed $value): pointer` | `pointer` | ✓ | — |
 | [`zval_type()`](./builtins/pointer/zval_type.md) | `(pointer $zval): int` | `int` | ✓ | — |
 | [`zval_unpack()`](./builtins/pointer/zval_unpack.md) | `(pointer $zval): mixed` | `mixed` | ✓ | — |
-| [`die()`](./builtins/process/die.md) | `(int $status): void` | `void` | ✓ | ✓ |
+| [`die()`](./builtins/process/die.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
 | [`exec()`](./builtins/process/exec.md) | `(string $command): string` | `string` | ✓ | ✓ |
-| [`exit()`](./builtins/process/exit.md) | `(int $status): void` | `void` | ✓ | ✓ |
+| [`exit()`](./builtins/process/exit.md) | `(int $status = 0): void` | `void` | ✓ | ✓ |
 | [`passthru()`](./builtins/process/passthru.md) | `(string $command): void` | `void` | ✓ | ✓ |
 | [`pclose()`](./builtins/process/pclose.md) | `(resource $handle): int` | `int` | ✓ | ✓ |
 | [`popen()`](./builtins/process/popen.md) | `(string $command, string $mode): mixed` | `mixed` | ✓ | ✓ |
@@ -407,12 +421,12 @@ sidebar:
 | [`gzuncompress()`](./builtins/string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./builtins/string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_algos()`](./builtins/string/hash_algos.md) | `(): array` | `array` | ✓ | ✓ |
-| [`hash_copy()`](./builtins/string/hash_copy.md) | `(mixed $context): mixed` | `mixed` | — | ✓ |
+| [`hash_copy()`](./builtins/string/hash_copy.md) | `(HashContext $context): HashContext` | `HashContext` | ✓ | ✓ |
 | [`hash_equals()`](./builtins/string/hash_equals.md) | `(string $known_string, string $user_string): bool` | `bool` | ✓ | ✓ |
-| [`hash_final()`](./builtins/string/hash_final.md) | `(mixed $context, mixed $binary = 'false'): mixed` | `mixed` | — | ✓ |
+| [`hash_final()`](./builtins/string/hash_final.md) | `(HashContext $context, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_hmac()`](./builtins/string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
-| [`hash_init()`](./builtins/string/hash_init.md) | `(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed` | `mixed` | — | ✓ |
-| [`hash_update()`](./builtins/string/hash_update.md) | `(mixed $context, mixed $data): mixed` | `mixed` | — | ✓ |
+| [`hash_init()`](./builtins/string/hash_init.md) | `(string $algo): HashContext` | `HashContext` | ✓ | ✓ |
+| [`hash_update()`](./builtins/string/hash_update.md) | `(HashContext $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./builtins/string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./builtins/string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./builtins/string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
@@ -429,6 +443,10 @@ sidebar:
 | [`md5()`](./builtins/string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
+| [`openssl_cipher_iv_length()`](./builtins/string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_decrypt()`](./builtins/string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |

@@ -28,12 +28,6 @@ Opens file or URL.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `fopen` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fopen.md).

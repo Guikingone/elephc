@@ -8,13 +8,8 @@
 //! - The target-aware backend distinguishes boxed runtime tags and dynamic object class names.
 
 builtin! {
-    name: "get_debug_type",
-    area: Types,
-    params: [value: Mixed],
-    returns: Str,
+    contract: "get_debug_type",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetDebugType,
     ),
-    summary: "Returns a debug-oriented PHP type or class name.",
-    php_manual: "function.get-debug-type",
 }

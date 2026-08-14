@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_walk",
-    area: Array,
-    params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    contract: "array_walk",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayWalk,
     ),
-    summary: "Applies a user function to every member of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-walk.php",
 }
 
 /// Validates the array and callback arguments for an `array_walk` call.

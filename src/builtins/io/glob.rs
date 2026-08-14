@@ -9,21 +9,16 @@
 //!   because the array return type cannot be expressed through the scalar `returns:`
 //!   field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "glob",
-    area: Io,
-    params: [pattern: Str, flags: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "glob",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Glob,
     ),
-    summary: "Finds pathnames matching a pattern.",
-    php_manual: "function.glob",
 }
 
 /// Returns `Array<Str>` reflecting that `glob` yields the matched pathnames.

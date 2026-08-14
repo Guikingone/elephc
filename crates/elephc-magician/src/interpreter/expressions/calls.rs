@@ -68,6 +68,9 @@ pub(in crate::interpreter) fn eval_call(
     if name == "preg_replace_callback" {
         return eval_builtin_preg_replace_callback_call(args, context, scope, values);
     }
+    if name == "openssl_encrypt" {
+        return eval_builtin_openssl_encrypt_call(args, context, scope, values);
+    }
     if name == "is_callable" {
         return eval_builtin_is_callable_call(args, context, scope, values);
     }

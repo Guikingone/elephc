@@ -26,12 +26,6 @@ Computes the intersection of arrays using keys for comparison.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_intersect_key` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_intersect_key.md).

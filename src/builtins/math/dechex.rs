@@ -12,13 +12,8 @@
 //! - Digits above 9 use lowercase letters, exactly like reference PHP.
 
 builtin! {
-    name: "dechex",
-    area: Math,
-    params: [num: Int],
-    returns: Str,
+    contract: "dechex",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Dechex,
     ),
-    summary: "Converts an integer to its hexadecimal string representation.",
-    php_manual: "https://www.php.net/manual/en/function.dechex.php",
 }

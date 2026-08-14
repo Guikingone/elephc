@@ -10,14 +10,8 @@
 
 
 builtin! {
-    name: "printf",
-    area: String,
-    params: [format: Str],
-    variadic: "values",
-    returns: Int,
+    contract: "printf",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Printf,
     ),
-    summary: "Outputs a formatted string.",
-    php_manual: "https://www.php.net/manual/en/function.printf.php",
 }

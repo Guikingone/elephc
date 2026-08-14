@@ -25,12 +25,6 @@ Gets information about a file using an open file pointer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `fstat` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fstat.md).

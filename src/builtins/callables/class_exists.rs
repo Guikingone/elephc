@@ -9,17 +9,11 @@
 //!   discovery while runtime names query the emitted closed-world class metadata.
 //! - Arguments are pre-inferred by the registry common path before the hook runs.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "class_exists",
-    area: Callables,
-    params: [class: Str, autoload: Bool = DefaultSpec::Bool(true)],
-    returns: Bool,
+    contract: "class_exists",
     check: crate::builtins::callables::support::check_class_like_exists,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ClassExists,
     ),
-    summary: "Checks whether the class has been defined.",
-    php_manual: "function.class-exists",
 }

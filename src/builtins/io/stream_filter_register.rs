@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_filter_register",
-    area: Io,
-    params: [filter_name: Str, class: Str],
-    returns: Bool,
+    contract: "stream_filter_register",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamFilterRegister,
     ),
-    summary: "Registers a user-defined stream filter.",
-    php_manual: "function.stream-filter-register",
 }
 
 /// Validates the class argument names a declared class and returns `Bool`.

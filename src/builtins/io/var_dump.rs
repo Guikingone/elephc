@@ -14,14 +14,8 @@
 
 
 builtin! {
-    name: "var_dump",
-    area: Io,
-    params: [value: Mixed],
-    variadic: "values",
-    returns: Void,
+    contract: "var_dump",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::VarDump,
     ),
-    summary: "Dumps information about a variable.",
-    php_manual: "function.var-dump",
 }

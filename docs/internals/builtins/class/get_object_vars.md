@@ -9,18 +9,18 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs)
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
 - **Function symbol**: `(none — type-checker only)()`
 
 
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract intentionally unsupported by the AOT backend.
 
 ## EIR and runtime boundary
 
-_Compiler-resident lowering; no registry-backed typed runtime target applies._
+_No compiled lowering: this surface is intentionally eval-only._
 
 ## Signature summary
 
@@ -35,6 +35,8 @@ function get_object_vars(mixed $object): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_object_vars.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

@@ -14,44 +14,6 @@ use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
 };
 
-/// Registry builtins that exist only in the AOT catalog and have no eval interpreter hook yet.
-///
-/// `function_exists()` inside `eval()` answers from the eval interpreter's own registry, so a
-/// name listed here is skipped by the catalog sweep below.
-const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
-    "array_all",
-    "array_any",
-    "array_diff_assoc",
-    "array_find",
-    "array_intersect_assoc",
-    "array_is_list",
-    "array_key_first",
-    "array_key_last",
-    "array_merge_recursive",
-    "array_multisort",
-    "array_replace",
-    "array_replace_recursive",
-    "array_udiff",
-    "array_uintersect",
-    "array_walk_recursive",
-    "bindec",
-    "decbin",
-    "dechex",
-    "decoct",
-    "hexdec",
-    "join",
-    "octdec",
-    "serialize",
-    "strncasecmp",
-    "strncmp",
-    "substr_count",
-    "unserialize",
-    "zval_free",
-    "zval_pack",
-    "zval_type",
-    "zval_unpack",
-];
-
 /// Verifies AOT builtin lookup stays case-insensitive without eval being present.
 #[test]
 fn test_aot_function_exists_builtin_case_insensitive_without_eval() {
@@ -118,7 +80,14 @@ echo function_exists("StRlEn") ? "M" : "m";');
 fn test_eval_function_exists_covers_static_builtin_catalog() {
     let mut fragment = String::new();
     for name in elephc::builtin_metadata::php_visible_builtin_names() {
-        if STATIC_ONLY_REGISTRY_BUILTINS.contains(name) {
+        let contract = elephc_builtin_contract::lookup(name)
+            .expect("compiler-visible builtin must have a shared contract");
+        if !matches!(
+            elephc_builtin_contract::eval_support(contract),
+            elephc_builtin_contract::BackendSupport::Implemented(
+                elephc_builtin_contract::BackendImplementation::Registry
+            )
+        ) {
             continue;
         }
         writeln!(

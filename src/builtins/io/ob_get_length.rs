@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_get_length",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "ob_get_length",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObGetLength,
     ),
-    summary: "Returns the length of the output buffer.",
-    php_manual: "function.ob-get-length",
 }
 
 /// Returns `Union(Int, False)`: the buffered byte count, or `false` when no

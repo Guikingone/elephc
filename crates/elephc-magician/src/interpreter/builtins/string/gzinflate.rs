@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the gzip/zlib hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "gzinflate",
+    contract: "gzinflate",
     area: String,
-    params: [data, max_length = EvalBuiltinDefaultValue::Int(0)],
     direct: Gzip,
     values: Gzip,
 }

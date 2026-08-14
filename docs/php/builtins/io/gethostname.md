@@ -24,12 +24,6 @@ Gets the standard host name for the local machine.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `gethostname` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/gethostname.md).

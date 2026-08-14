@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "atan",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "atan",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Atan,
     ),
-    summary: "Returns the arctangent of a number in radians.",
-    php_manual: "https://www.php.net/manual/en/function.atan.php",
 }

@@ -7,16 +7,9 @@
 //! Key details:
 //! - Registers protocols in the eval stream wrapper registry.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_wrapper_register",
+    contract: "stream_wrapper_register",
     area: Filesystem,
-    params: [
-        protocol,
-        r#class,
-        flags = EvalBuiltinDefaultValue::Int(0)
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

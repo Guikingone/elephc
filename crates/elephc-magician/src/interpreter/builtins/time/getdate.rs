@@ -10,12 +10,9 @@
 use super::super::*;
 use super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "getdate",
+    contract: "getdate",
     area: Time,
-    params: [timestamp = EvalBuiltinDefaultValue::Null],
     direct: Time,
     values: Time,
 }

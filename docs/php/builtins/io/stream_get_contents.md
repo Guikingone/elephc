@@ -27,12 +27,6 @@ Reads remainder of a stream into a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_get_contents` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_get_contents.md).

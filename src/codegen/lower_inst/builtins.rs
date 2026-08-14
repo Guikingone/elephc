@@ -33,6 +33,7 @@ use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
 pub(crate) mod arrays;
+pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;
@@ -53,6 +54,7 @@ pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
 pub(crate) mod object_props;
+pub(crate) mod openssl;
 pub(crate) mod output_buffering;
 pub(crate) mod pointers;
 pub(crate) mod regex;

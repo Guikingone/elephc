@@ -12,12 +12,8 @@
 
 
 builtin! {
-    name: "time",
-    area: System,
-    params: [],
-    returns: Int,
+    contract: "time",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Time,
     ),
-    summary: "Returns the current Unix timestamp.",
 }

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the unary path operation helper.
 
 eval_builtin! {
-    name: "chdir",
+    contract: "chdir",
     area: Filesystem,
-    params: [directory],
     direct: Filesystem,
     values: Filesystem,
 }

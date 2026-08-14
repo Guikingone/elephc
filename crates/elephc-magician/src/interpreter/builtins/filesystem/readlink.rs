@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the symbolic-link target helper.
 
 eval_builtin! {
-    name: "readlink",
+    contract: "readlink",
     area: Filesystem,
-    params: [path],
     direct: Filesystem,
     values: Filesystem,
 }

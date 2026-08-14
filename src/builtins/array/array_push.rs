@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_push",
-    area: Array,
-    params: [ref array: Mixed],
-    variadic: "values",
-    min_args: 2,
-    max_args: 2,
-    returns: Void,
+    contract: "array_push",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayPush,
     ),
-    summary: "Pushes one or more elements onto the end of array.",
-    php_manual: "https://www.php.net/manual/en/function.array-push.php",
 }
 
 /// Validates the first argument is an indexed array for an `array_push` call.

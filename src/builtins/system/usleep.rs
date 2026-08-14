@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "usleep",
-    area: System,
-    params: [microseconds: Int],
-    returns: Void,
+    contract: "usleep",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Usleep,
     ),
-    summary: "Delays execution for a number of microseconds.",
 }

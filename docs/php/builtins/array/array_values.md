@@ -25,12 +25,6 @@ Returns all the values of an array, re-indexed numerically.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_values` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_values.md).

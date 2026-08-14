@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_replace_recursive",
-    area: Array,
-    params: [array: Mixed, replacements: Mixed],
-    returns: Mixed,
+    contract: "array_replace_recursive",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayReplaceRecursive,
     ),
-    summary: "Replaces elements from passed arrays into the first array recursively.",
-    php_manual: "https://www.php.net/manual/en/function.array-replace-recursive.php",
 }
 
 /// Validates both arguments are hash-compatible arrays and returns the merged hash type.

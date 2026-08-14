@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the one-shot file write helper.
 
 eval_builtin! {
-    name: "file_put_contents",
+    contract: "file_put_contents",
     area: Filesystem,
-    params: [filename, data],
     direct: Filesystem,
     values: Filesystem,
 }

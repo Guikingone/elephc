@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "iterator_count",
+    contract: "iterator_count",
     area: Array,
-    params: [iterator],
     direct: Array,
     values: Array,
 }

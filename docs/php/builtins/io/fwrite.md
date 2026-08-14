@@ -26,12 +26,6 @@ Binary-safe file write.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `fwrite` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/fwrite.md).

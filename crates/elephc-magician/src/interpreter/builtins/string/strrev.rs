@@ -1,40 +1,16 @@
 //! Purpose:
-//! Declarative eval registry entry for `strrev`.
+//! Joins Magician to the shared runtime builtin contract for `strrev`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::string`.
+//! - `crate::interpreter::builtins::registry` inventory assembly.
 //!
 //! Key details:
-//! - Runtime dispatch is declared here and implemented through the existing string-reversal hook.
+//! - Behavior dispatches by `RuntimeBuiltinId` through the versioned
+//!   generated-runtime boxed-cell ABI; no Magician algorithm lives here.
 
 eval_builtin! {
-    name: "strrev",
+    contract: "strrev",
     area: String,
-    params: [string],
-    direct: Strrev,
-    values: Strrev,
-}
-
-use super::super::super::*;
-
-/// Evaluates PHP's `strrev(...)` over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_strrev(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [value] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let value = eval_expr(value, context, scope, values)?;
-    values.strrev(value)
-}
-
-/// Reverses one converted eval string using the runtime string helper.
-pub(in crate::interpreter) fn eval_strrev_result(
-    value: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    values.strrev(value)
+    direct: none,
+    values: none,
 }

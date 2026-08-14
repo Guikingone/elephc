@@ -8,10 +8,8 @@
 //! - Direct calls stay source-sensitive so writable operands can be removed.
 
 eval_builtin! {
-    name: "unset",
+    contract: "unset",
     area: Symbols,
-    params: [var],
-    variadic: vars,
     direct: Symbols,
     values: Symbols,
 }

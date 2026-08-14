@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_fill",
-    area: Array,
-    params: [start_index: Mixed, count: Mixed, value: Mixed],
-    returns: Mixed,
+    contract: "array_fill",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFill,
     ),
-    summary: "Fill an array with values.",
-    php_manual: "https://www.php.net/manual/en/function.array-fill.php",
 }
 
 /// Computes the return array type based on whether `start_index` is a literal zero.

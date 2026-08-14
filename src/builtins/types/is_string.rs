@@ -8,13 +8,8 @@
 //! - Uses the shared typed EIR predicate; dynamic values are inspected by target-aware codegen.
 
 builtin! {
-    name: "is_string",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_string",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::String,
     ),
-    summary: "Checks whether a variable is a string.",
-    php_manual: "function.is-string",
 }

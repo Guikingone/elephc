@@ -15,21 +15,16 @@
 //!   because the array return type cannot be expressed through the scalar `returns:`
 //!   field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "file",
-    area: Io,
-    params: [filename: Str, flags: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "file",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::File,
     ),
-    summary: "Reads an entire file into an array.",
-    php_manual: "function.file",
 }
 
 /// Returns `Array<Str>` reflecting that `file` yields the file's lines as strings.

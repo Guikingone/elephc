@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_merge",
+    contract: "array_merge",
     area: Array,
-    params: [],
-    variadic: arrays,
     direct: Array,
     values: Array,
 }

@@ -1,24 +1,28 @@
 //! Purpose:
-//! Standalone docs exporter that prints the single-source PHP builtin registry as JSON,
-//! enriched with eval-interpreter (magician) support metadata for every builtin.
+//! Standalone documentation exporter for the shared PHP builtin contracts and
+//! their independent AOT and Magician implementation bindings.
 //!
 //! Called from:
-//! - `cargo run --example gen_builtins` (documentation generation / CI docs export).
+//! - `cargo run --example gen_builtins` during documentation generation and CI.
 //!
 //! Key details:
-//! - Declared as an example (not a bin) so it can read `elephc-magician`'s metadata —
-//!   magician is a dev-dependency, keeping the eval interpreter out of the `elephc` binary.
-//! - Static AOT records come from `elephc::builtins::docs`; each record gains an `eval`
-//!   block (`kind`: `registry` | `date-alias` | `none`) and builtins only the eval
-//!   registry exposes are appended with `eval_only: true`.
-//! - `--include-internal` also emits `internal: true` builtins (the docs pipeline renders
-//!   compiler-internals pages for the `__elephc_*` helpers).
+//! - The neutral contract supplies every PHP-visible surface, including constructs,
+//!   dedicated syntax, preludes, and intentionally eval-only functions.
+//! - AOT registry metadata contributes compiler semantics; backend availability and
+//!   effective signatures come from the shared support and signature profiles.
+//! - The example can read Magician through a dev-dependency without linking the
+//!   interpreter into the compiler binary.
 
+use elephc_builtin_contract::{
+    aot_signature_profile, aot_support, contracts, eval_signature, eval_support, lookup, Area,
+    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinContract,
+    BuiltinKind, BuiltinSignature, DefaultSpec, TypeSpec, UnsupportedReason,
+};
 use serde_json::{json, Value};
 
-/// Prints the dual-support builtin documentation JSON (pretty-printed) to stdout.
+/// Prints the complete dual-backend builtin catalog as formatted JSON.
 fn main() {
-    let include_internal = std::env::args().any(|a| a == "--include-internal");
+    let include_internal = std::env::args().any(|argument| argument == "--include-internal");
     let value = if include_internal {
         elephc::builtins::docs::export_builtins_json_all()
     } else {
@@ -27,42 +31,138 @@ fn main() {
     let Value::Array(mut records) = value else {
         panic!("builtins JSON export must be a top-level array");
     };
+
     for record in &mut records {
         let name = record["name"]
             .as_str()
-            .expect("builtin record carries a string name")
-            .to_string();
+            .expect("builtin record carries a string name");
+        let contract = lookup(name).expect("AOT registry record must resolve its shared contract");
         let entry = record
             .as_object_mut()
             .expect("builtin record is a JSON object");
-        entry.insert("eval".to_string(), eval_support_json(&name));
+        entry.insert("surface_kind".to_string(), json!(kind_name(contract.kind)));
+        entry.insert("aot".to_string(), aot_support_json(contract));
+        entry.insert("eval".to_string(), eval_support_json(contract));
+        entry.insert(
+            "eval_only".to_string(),
+            json!(matches!(aot_support(contract), BackendSupport::Unsupported(_))),
+        );
     }
-    append_eval_only_records(&mut records, include_internal);
-    let json = serde_json::to_string_pretty(&Value::Array(records)).expect("serialize builtins JSON");
-    println!("{}", json);
+
+    append_non_registry_contracts(&mut records, include_internal);
+    records.sort_by(|left, right| {
+        left["name"]
+            .as_str()
+            .cmp(&right["name"].as_str())
+    });
+    let expected = contracts()
+        .iter()
+        .filter(|contract| include_internal || !contract.internal)
+        .count();
+    assert_eq!(
+        records.len(),
+        expected,
+        "documentation export must contain every selected shared contract exactly once"
+    );
+
+    let output =
+        serde_json::to_string_pretty(&Value::Array(records)).expect("serialize builtins JSON");
+    println!("{output}");
 }
 
-/// Builds the eval-interpreter (magician) support block for one builtin name.
-///
-/// `kind` distinguishes how eval'd code reaches the builtin: `registry` for
-/// declarative `eval_builtin!` entries, `date-alias` for procedural date/time
-/// aliases resolved by the alias dispatcher, `none` when eval'd code cannot
-/// call it.
-fn eval_support_json(name: &str) -> Value {
-    if let Some(meta) = elephc_magician::builtin_metadata::builtin_docs_metadata(name) {
-        let params: Vec<Value> = meta
+/// Appends contracts implemented outside the ordinary AOT `builtin!` inventory.
+fn append_non_registry_contracts(records: &mut Vec<Value>, include_internal: bool) {
+    for contract in contracts() {
+        if (!include_internal && contract.internal)
+            || elephc::builtins::registry::lookup(contract.name).is_some()
+        {
+            continue;
+        }
+        records.push(contract_record_json(contract));
+    }
+}
+
+/// Builds one top-level documentation record directly from a neutral contract.
+fn contract_record_json(contract: &BuiltinContract) -> Value {
+    let signature = contract.signature();
+    json!({
+        "name": contract.name,
+        "area": area_name(contract.area),
+        "surface_kind": kind_name(contract.kind),
+        "internal": contract.internal,
+        "extension": contract.extension,
+        "params": signature_params_json(signature),
+        "variadic": signature.variadic,
+        "returns": type_name(contract.returns),
+        "by_ref_return": contract.by_ref_return,
+        "min_args": contract.min_args,
+        "max_args": contract.max_args,
+        "arity_error": contract.arity_error,
+        "semantics": Value::Null,
+        "summary": contract.summary,
+        "examples": contract.examples,
+        "php_manual": contract.php_manual,
+        "deprecated": contract.deprecation,
+        "eval_only": matches!(aot_support(contract), BackendSupport::Unsupported(_)),
+        "aot": aot_support_json(contract),
+        "eval": eval_support_json(contract),
+    })
+}
+
+/// Builds the compiler support block from shared support and signature contracts.
+fn aot_support_json(contract: &BuiltinContract) -> Value {
+    let profile = aot_signature_profile(contract);
+    let signature = profile.signature;
+    let common = json!({
+        "params": signature_params_json(signature),
+        "variadic": signature.variadic,
+        "required_param_count": signature.required_param_count(),
+        "signature_override_reason": profile.override_reason.map(aot_override_reason_name),
+    });
+    match aot_support(contract) {
+        BackendSupport::Implemented(implementation) => merge_json(
+            common,
+            json!({
+                "supported": true,
+                "kind": implementation_name(implementation),
+            }),
+        ),
+        BackendSupport::Unsupported(reason) => merge_json(
+            common,
+            json!({
+                "supported": false,
+                "kind": "none",
+                "unsupported_reason": unsupported_reason_name(reason),
+            }),
+        ),
+    }
+}
+
+/// Builds the eval-interpreter support block for one shared contract.
+fn eval_support_json(contract: &BuiltinContract) -> Value {
+    if let Some(meta) = elephc_magician::builtin_metadata::builtin_docs_metadata(contract.name) {
+        let signature = eval_signature(contract);
+        assert_eq!(
+            meta.params.len(),
+            signature.params.len(),
+            "eval metadata and shared signature differ for {}",
+            contract.name
+        );
+        let params = meta
             .params
             .iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(index, param)| {
                 json!({
-                    "name": p.name,
-                    "by_ref": p.by_ref,
-                    "optional": p.default.is_some(),
-                    "default": p.default,
+                    "name": param.name,
+                    "type": type_name(signature.params[index].ty),
+                    "by_ref": param.by_ref,
+                    "optional": param.default.is_some(),
+                    "default": param.default,
                 })
             })
-            .collect();
-        let mut hooks: Vec<&str> = Vec::new();
+            .collect::<Vec<_>>();
+        let mut hooks = Vec::new();
         if meta.has_direct_hook {
             hooks.push("direct");
         }
@@ -74,16 +174,20 @@ fn eval_support_json(name: &str) -> Value {
             "kind": "registry",
             "area": meta.area,
             "hooks": hooks,
+            "execution": meta.execution,
+            "runtime_builtin_id": meta.runtime_builtin_id,
+            "adapter_reason": meta.adapter_reason,
+            "signature_override_reason": meta.signature_override_reason,
             "params": params,
             "variadic": meta.variadic,
             "required_param_count": meta.required_param_count,
             "home_file": meta.home_file,
         });
     }
-    let bare = name.trim_start_matches('\\').to_ascii_lowercase();
+
     if elephc_magician::builtin_metadata::date_procedural_alias_names()
         .iter()
-        .any(|alias| *alias == bare)
+        .any(|alias| *alias == contract.name)
     {
         return json!({
             "supported": true,
@@ -91,68 +195,116 @@ fn eval_support_json(name: &str) -> Value {
             "home_file": "crates/elephc-magician/src/interpreter/builtins/time/aliases.rs",
         });
     }
-    json!({ "supported": false, "kind": "none" })
+
+    match eval_support(contract) {
+        BackendSupport::Unsupported(reason) => json!({
+            "supported": false,
+            "kind": "none",
+            "unsupported_reason": unsupported_reason_name(reason),
+        }),
+        BackendSupport::Implemented(_) => {
+            panic!("eval-supported contract {} has no implementation metadata", contract.name)
+        }
+    }
 }
 
-/// Appends eval-registry builtins with no static `builtin!` counterpart.
-///
-/// Two flavors: `aot_resident: true` when the static compiler still supports
-/// the name as a compiler-resident construct or alias (`isset`, `strval`,
-/// `is_integer`, ...) — the Python pipeline merges the eval block into its
-/// hand-maintained pseudo-entries; `eval_only: true` when only eval'd code can
-/// call the builtin. Static fields carry neutral placeholders (magician specs
-/// are untyped).
-fn append_eval_only_records(records: &mut Vec<Value>, include_internal: bool) {
-    for eval_name in elephc_magician::builtin_metadata::php_visible_builtin_names() {
-        if elephc::builtins::registry::lookup(eval_name).is_some() {
-            continue;
-        }
-        let Some(meta) = elephc_magician::builtin_metadata::builtin_docs_metadata(eval_name)
-        else {
-            continue;
-        };
-        let internal = meta.name.starts_with("__elephc_");
-        if internal && !include_internal {
-            continue;
-        }
-        let aot_resident = elephc::builtins::docs::aot_php_visible_builtin_exists(&meta.name);
-        let params: Vec<Value> = meta
-            .params
-            .iter()
-            .map(|p| {
-                json!({
-                    "name": p.name,
-                    "type": "mixed",
-                    "by_ref": p.by_ref,
-                    "optional": p.default.is_some(),
-                    "default": p.default,
-                })
+/// Renders all fixed parameters in one backend signature.
+fn signature_params_json(signature: BuiltinSignature) -> Vec<Value> {
+    signature
+        .params
+        .iter()
+        .map(|param| {
+            json!({
+                "name": param.name,
+                "type": type_name(param.ty),
+                "by_ref": param.by_ref,
+                "optional": param.default.is_some(),
+                "default": param.default.map(default_json).unwrap_or(Value::Null),
             })
-            .collect();
-        // Appended records have no static `builtin!` spec, so the extension
-        // classification comes from the eval registry's derived set (this is
-        // how the catalog-name-only `buffer_new` gets flagged).
-        let extension = elephc_magician::builtin_metadata::extension_builtin_names()
-            .contains(&meta.name.as_str());
-        records.push(json!({
-            "name": meta.name,
-            "area": meta.area,
-            "internal": internal,
-            "extension": extension,
-            "params": params,
-            "variadic": meta.variadic,
-            "returns": "mixed",
-            "by_ref_return": false,
-            "min_args": Value::Null,
-            "max_args": Value::Null,
-            "arity_error": Value::Null,
-            "summary": "",
-            "examples": Vec::<Value>::new(),
-            "php_manual": Value::Null,
-            "deprecated": Value::Null,
-            "eval_only": !aot_resident,
-            "aot_resident": aot_resident,
-            "eval": eval_support_json(&meta.name),
-        }));
+        })
+        .collect()
+}
+
+/// Renders one neutral default as a JSON value.
+fn default_json(default: DefaultSpec) -> Value {
+    match default {
+        DefaultSpec::Null => Value::Null,
+        DefaultSpec::Int(value) => json!(value),
+        DefaultSpec::Bool(value) => json!(value),
+        DefaultSpec::Float(value) => json!(value),
+        DefaultSpec::Str(value) => json!(value),
+        DefaultSpec::IntMax => json!("PHP_INT_MAX"),
+        DefaultSpec::EmptyArray => json!([]),
     }
+}
+
+/// Returns the documentation spelling for a neutral PHP type.
+fn type_name(ty: TypeSpec) -> &'static str {
+    match ty {
+        TypeSpec::Int => "int",
+        TypeSpec::Float => "float",
+        TypeSpec::Str => "string",
+        TypeSpec::Bool => "bool",
+        TypeSpec::Mixed => "mixed",
+        TypeSpec::Void => "void",
+    }
+}
+
+/// Returns the lowercase documentation spelling for a contract area.
+fn area_name(area: Area) -> &'static str {
+    match area {
+        Area::String => "string",
+        Area::Array => "array",
+        Area::Math => "math",
+        Area::Io => "io",
+        Area::System => "system",
+        Area::Types => "types",
+        Area::Callables => "callables",
+        Area::Spl => "spl",
+        Area::Pointers => "pointers",
+    }
+}
+
+/// Returns the stable documentation spelling for a surface kind.
+fn kind_name(kind: BuiltinKind) -> &'static str {
+    match kind {
+        BuiltinKind::Function => "function",
+        BuiltinKind::LanguageConstruct => "language-construct",
+        BuiltinKind::DedicatedSyntax => "dedicated-syntax",
+        BuiltinKind::PreludeProvided => "prelude-provided",
+    }
+}
+
+/// Returns the stable documentation spelling for an implementation route.
+fn implementation_name(implementation: BackendImplementation) -> &'static str {
+    match implementation {
+        BackendImplementation::Registry => "registry",
+        BackendImplementation::LanguageConstruct => "language-construct",
+        BackendImplementation::DedicatedSyntax => "dedicated-syntax",
+        BackendImplementation::Prelude => "prelude",
+    }
+}
+
+/// Returns the stable documentation spelling for an unsupported backend reason.
+fn unsupported_reason_name(reason: UnsupportedReason) -> &'static str {
+    match reason {
+        UnsupportedReason::InternalCompilerSurface => "internal-compiler-surface",
+        UnsupportedReason::EvalImplementationPending => "eval-implementation-pending",
+        UnsupportedReason::EvalOnlyReflection => "eval-only-reflection",
+    }
+}
+
+/// Returns the stable documentation spelling for an AOT signature override.
+fn aot_override_reason_name(reason: AotSignatureOverrideReason) -> &'static str {
+    match reason {
+        AotSignatureOverrideReason::PreludeSignatureSubset => "prelude-signature-subset",
+    }
+}
+
+/// Merges two JSON objects, with fields from `extension` winning on collision.
+fn merge_json(mut base: Value, extension: Value) -> Value {
+    let base = base.as_object_mut().expect("base JSON must be an object");
+    let extension = extension.as_object().expect("extension JSON must be an object");
+    base.extend(extension.clone());
+    Value::Object(base.clone())
 }

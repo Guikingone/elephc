@@ -37,7 +37,6 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "iterator_count" => super::iterator_count::eval_iterator_count_declared_values_result(evaluated_args, context, values),
         "iterator_to_array" => super::iterator_to_array::eval_iterator_to_array_declared_values_result(evaluated_args, context, values),
         "array_flip" => super::array_flip::eval_array_flip_declared_values_result(evaluated_args, context, values),
-        "array_key_exists" => super::array_key_exists::eval_array_key_exists_declared_values_result(evaluated_args, context, values),
         "array_pad" => super::array_pad::eval_array_pad_declared_values_result(evaluated_args, context, values),
         "array_keys" => super::array_keys::eval_array_keys_declared_values_result(evaluated_args, context, values),
         "array_rand" => super::array_rand::eval_array_rand_declared_values_result(evaluated_args, context, values),

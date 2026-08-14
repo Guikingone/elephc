@@ -8,9 +8,8 @@
 //! - Returns persisted context options or an empty associative array.
 
 eval_builtin! {
-    name: "stream_context_get_options",
+    contract: "stream_context_get_options",
     area: Filesystem,
-    params: [context],
     direct: Filesystem,
     values: Filesystem,
 }

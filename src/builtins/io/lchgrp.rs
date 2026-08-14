@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "lchgrp",
-    area: Io,
-    params: [filename: Str, group: Str],
-    returns: Bool,
+    contract: "lchgrp",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Lchgrp,
     ),
-    summary: "Changes group ownership of a symlink.",
-    php_manual: "function.lchgrp",
 }
 
 /// Returns `Bool`, rejecting a `group` argument that is neither `Int` nor `Str`.

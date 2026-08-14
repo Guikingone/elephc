@@ -225,6 +225,29 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
+| `openssl_encrypt()` | `openssl_encrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", &$tag = null, $aad = "", $tag_length = 16): string\|false` | Encrypt data with a supported AES CBC, CTR, ECB, or GCM cipher. |
+| `openssl_decrypt()` | `openssl_decrypt($data, $cipher_algo, $passphrase, $options = 0, $iv = "", $tag = null, $aad = ""): string\|false` | Decrypt and, for GCM, authenticate data with the supplied tag and AAD. |
+| `openssl_cipher_iv_length()` | `openssl_cipher_iv_length($cipher_algo): int\|false` | Return the default IV length for a supported cipher. |
+| `openssl_get_cipher_methods()` | `openssl_get_cipher_methods($aliases = false): array` | Return the exact cipher matrix implemented by elephc. |
+| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
+| `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
+| `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
+| `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
+| `urldecode()` | `urldecode($str): string` | URL-decode |
+| `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
+| `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
+| `base64_encode()` | `base64_encode($str): string` | Base64 encode |
+| `base64_decode()` | `base64_decode($string, $strict = false): string\|false` | Base64 decode. Whitespace inside the payload is skipped and missing padding is tolerated; the default (lax) mode also drops any other character outside the Base64 alphabet, while `$strict = true` returns `false` for such a character, for data after a padding character, for a truncated final group, and for an invalid amount of padding |
+| `quoted_printable_encode()` | `quoted_printable_encode($string): string` | MIME quoted-printable encode. Control bytes, `0x7F`, high-bit bytes, `=`, and a space directly before a `CR` become `=XX`; an embedded `CRLF` is kept as a hard line break; lines are folded at 75 columns with a trailing `=` |
+| `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
+| `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
+| `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
+| `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
+| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
+| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
+| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
+| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 
 #### `explode()` and the `$limit` argument
 
@@ -322,25 +345,48 @@ Known divergences:
   compile-time "unsupported" error and `var_export()` prints nothing.
 - **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
   its own hashing implementation that has not been moved to the object model.
-| `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
-| `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
-| `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
-| `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
-| `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
-| `urldecode()` | `urldecode($str): string` | URL-decode |
-| `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
-| `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
-| `base64_encode()` | `base64_encode($str): string` | Base64 encode |
-| `base64_decode()` | `base64_decode($string, $strict = false): string\|false` | Base64 decode. Whitespace inside the payload is skipped and missing padding is tolerated; the default (lax) mode also drops any other character outside the Base64 alphabet, while `$strict = true` returns `false` for such a character, for data after a padding character, for a truncated final group, and for an invalid amount of padding |
-| `quoted_printable_encode()` | `quoted_printable_encode($string): string` | MIME quoted-printable encode. Control bytes, `0x7F`, high-bit bytes, `=`, and a space directly before a `CR` become `=XX`; an embedded `CRLF` is kept as a hard line break; lines are folded at 75 columns with a trailing `=` |
-| `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
-| `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
-| `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
-| `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
-| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
-| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
-| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
-| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+### Symmetric encryption (OpenSSL-compatible)
+
+elephc implements `openssl_encrypt()`, `openssl_decrypt()`,
+`openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()` on both compiled
+and `eval()` paths. They use the pure-Rust `elephc-crypto` bridge and do not link
+the system OpenSSL library. Programs that do not use crypto builtins do not link
+the bridge.
+
+The supported cipher list is intentionally smaller than stock PHP/OpenSSL and is
+exactly what `openssl_get_cipher_methods()` returns:
+
+| Mode | Supported names | Key bytes | IV bytes |
+|---|---|---:|---:|
+| CBC | `aes-128-cbc`, `aes-192-cbc`, `aes-256-cbc` | 16 / 24 / 32 | 16 |
+| CTR | `aes-128-ctr`, `aes-192-ctr`, `aes-256-ctr` | 16 / 24 / 32 | 16 |
+| ECB | `aes-128-ecb`, `aes-192-ecb`, `aes-256-ecb` | 16 / 24 / 32 | 0 |
+| GCM | `aes-128-gcm`, `aes-192-gcm`, `aes-256-gcm` | 16 / 24 / 32 | 12 by default |
+
+Cipher names are case-insensitive. Without `OPENSSL_RAW_DATA`, encryption returns
+Base64 and decryption accepts Base64. With the flag, both functions exchange raw
+bytes. The supported option constants are:
+
+| Constant | Value | Behavior |
+|---|---:|---|
+| `OPENSSL_RAW_DATA` | 1 | Exchange raw ciphertext instead of Base64. |
+| `OPENSSL_ZERO_PADDING` | 2 | Disable PKCS#7 padding for CBC/ECB; plaintext must be block-aligned. |
+| `OPENSSL_DONT_ZERO_PAD_KEY` | 4 | Reject a short key instead of zero-padding it. |
+
+Short keys are zero-padded by default and long keys are truncated.
+
+CBC and CTR IVs are zero-padded or truncated to 16 bytes. GCM accepts every
+non-empty IV length, reports 12 as its default, writes a 1–16 byte authentication
+tag through encrypt's by-reference `$tag`, and authenticates the supplied `$tag`
+and `$aad` during decryption. Unknown ciphers, invalid tag/IV lengths, padding
+errors, and GCM authentication failures return `false`.
+
+PHP's warning text is not yet reproduced for OpenSSL failures or successful
+CBC/CTR IV normalization; the cryptographic result and `false` return behavior
+match the supported PHP fixtures. See the
+[`examples/openssl_crypt`](https://github.com/illegalstudio/elephc/tree/main/examples/openssl_crypt)
+program for CBC and GCM round trips.
 
 `parse_url()` follows PHP's component shapes: without a selector (or with any
 negative selector) it returns an associative array containing only present keys,

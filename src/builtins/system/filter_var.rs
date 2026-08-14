@@ -18,7 +18,7 @@ use crate::builtins::semantics::{
     BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics, BuiltinTargetStrategy,
     BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::filter_constants::{
@@ -27,14 +27,7 @@ use crate::types::filter_constants::{
 use crate::types::PhpType;
 
 builtin! {
-    name: "filter_var",
-    area: System,
-    params: [
-        value: Mixed,
-        filter: Int = DefaultSpec::Int(516),
-        options: Mixed = DefaultSpec::Int(0),
-    ],
-    returns: Mixed,
+    contract: "filter_var",
     check: check,
     lazy_check: true,
     semantics: BuiltinSemantics {
@@ -52,8 +45,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower_unspecialized),
     },
-    summary: "Filters a variable with a specified filter.",
-    php_manual: "function.filter-var",
 }
 
 /// Returns the conservative effects of scalar conversion, boxed-result allocation, and failure.

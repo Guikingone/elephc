@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "pclose",
-    area: Io,
-    params: [handle: Mixed],
-    returns: Int,
+    contract: "pclose",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Pclose,
     ),
-    summary: "Closes process file pointer.",
-    php_manual: "function.pclose",
 }
 
 /// Validates the handle argument is a stream resource and returns `Int`.

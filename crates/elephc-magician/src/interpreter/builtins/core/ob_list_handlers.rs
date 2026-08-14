@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "ob_list_handlers",
+    contract: "ob_list_handlers",
     area: Core,
-    params: [],
     direct: Core,
     values: Core,
 }

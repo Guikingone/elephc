@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "ob_flush",
-    area: Io,
-    params: [],
-    returns: Bool,
+    contract: "ob_flush",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObFlush,
     ),
-    summary: "Flushes (sends) the contents of the active output buffer.",
-    php_manual: "function.ob-flush",
 }

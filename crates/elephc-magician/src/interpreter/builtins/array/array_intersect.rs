@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_intersect",
+    contract: "array_intersect",
     area: Array,
-    params: [array],
-    variadic: arrays,
     direct: Array,
     values: Array,
 }

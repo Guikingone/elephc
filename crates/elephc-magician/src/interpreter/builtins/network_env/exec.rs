@@ -12,9 +12,8 @@ use std::process::Command;
 use super::*;
 
 eval_builtin! {
-    name: "exec",
+    contract: "exec",
     area: NetworkEnv,
-    params: [command],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

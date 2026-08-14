@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "is_file",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "is_file",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsFile,
     ),
-    summary: "Tells whether the filename is a regular file.",
-    php_manual: "function.is-file",
 }

@@ -2,7 +2,7 @@
 title: "boolval() — internals"
 description: "Compiler internals for boolval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 478
 ---
 
 ## `boolval()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/boolval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/boolval.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -47,7 +47,8 @@ function boolval(mixed $value): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/boolval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/boolval.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(1)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

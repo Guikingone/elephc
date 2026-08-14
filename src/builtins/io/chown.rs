@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "chown",
-    area: Io,
-    params: [filename: Str, user: Str],
-    returns: Bool,
+    contract: "chown",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chown,
     ),
-    summary: "Changes file owner.",
-    php_manual: "function.chown",
 }
 
 /// Returns `Bool`, rejecting a `user` argument that is neither `Int` nor `Str`.

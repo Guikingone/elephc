@@ -15,17 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fprintf",
-    area: Io,
-    params: [stream: Mixed, format: Str],
-    variadic: "values",
-    returns: Int,
+    contract: "fprintf",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fprintf,
     ),
-    summary: "Write a formatted string to a stream.",
-    php_manual: "function.fprintf",
 }
 
 /// Validates the stream argument is a stream resource and returns `Int`.

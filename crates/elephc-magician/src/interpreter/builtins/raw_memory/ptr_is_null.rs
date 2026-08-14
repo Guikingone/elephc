@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_is_null",
+    contract: "ptr_is_null",
     area: RawMemory,
-    params: [pointer],
     direct: PtrIsNull,
     values: PtrIsNull,
 }

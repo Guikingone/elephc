@@ -9,9 +9,8 @@
 //!   the primary declaration table and the interface/trait variants reuse it.
 
 eval_builtin! {
-    name: "get_declared_classes",
+    contract: "get_declared_classes",
     area: Symbols,
-    params: [],
     direct: Symbols,
     values: Symbols,
 }

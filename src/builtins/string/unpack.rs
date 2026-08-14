@@ -8,21 +8,16 @@
 //! - The current AOT lowering supports literal `C`, `n`, `N`, and `V` integer formats and returns
 //!   a key-preserving associative array or `false` when the input cannot satisfy the format.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "unpack",
-    area: String,
-    params: [format: Str, string: Str, offset: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "unpack",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Unpack,
     ),
-    summary: "Unpacks binary data according to a format string.",
-    php_manual: "function.unpack",
 }
 
 /// Returns the associative integer-array or false union produced by supported formats.

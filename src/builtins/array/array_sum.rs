@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_sum",
-    area: Array,
-    params: [array: Mixed],
-    returns: Int,
+    contract: "array_sum",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArraySum,
     ),
-    summary: "Calculate the sum of values in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-sum.php",
 }
 
 /// Computes the return type (Int or Float) based on the array element type.

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "tan",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "tan",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Tan,
     ),
-    summary: "Returns the tangent of a number (radians).",
-    php_manual: "https://www.php.net/manual/en/function.tan.php",
 }

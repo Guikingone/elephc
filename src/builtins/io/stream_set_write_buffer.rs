@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "stream_set_write_buffer",
-    area: Io,
-    params: [stream: Mixed, size: Int],
-    returns: Int,
+    contract: "stream_set_write_buffer",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetWriteBuffer,
     ),
-    summary: "Sets the write file buffering on a stream.",
-    php_manual: "function.stream-set-write-buffer",
 }

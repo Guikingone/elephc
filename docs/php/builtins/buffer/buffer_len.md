@@ -26,12 +26,6 @@ Returns the logical element count of a buffer<T>.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `buffer_len` is implemented in the compiler, see [the internals page](../../../internals/builtins/buffer/buffer_len.md).

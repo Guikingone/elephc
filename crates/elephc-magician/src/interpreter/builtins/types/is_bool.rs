@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_bool",
+    contract: "is_bool",
     area: Types,
-    params: [value],
     direct: IsBool,
     values: IsBool,
 }

@@ -15,28 +15,18 @@
 //! - `check` validates that args[2] (when present) is a `Variable` expression; passing
 //!   a non-variable to the by-ref `$matches` param is a compile error.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_match",
-    area: System,
-    params: [
-        pattern: Str,
-        subject: Str,
-        ref matches: ArrayMixed = DefaultSpec::Null,
-        flags: Int = DefaultSpec::Int(0),
-        offset: Int = DefaultSpec::Int(0),
-    ],
-    returns: Int,
+    contract: "preg_match",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::PregMatch),
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex,
     ),
-    summary: "Performs a regular expression match.",
 }
 
 /// Infers every input while leaving the by-reference capture destination write-only.

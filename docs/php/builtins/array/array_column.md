@@ -26,12 +26,6 @@ Returns the values from a single column of an array of arrays.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_column` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_column.md).

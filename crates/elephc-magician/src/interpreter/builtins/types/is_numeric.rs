@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_numeric",
+    contract: "is_numeric",
     area: Types,
-    params: [value],
     direct: IsNumeric,
     values: IsNumeric,
 }

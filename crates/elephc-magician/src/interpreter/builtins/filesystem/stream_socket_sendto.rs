@@ -7,17 +7,9 @@
 //! Key details:
 //! - Connected socket writes delegate to the same eval stream write path as `fwrite`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_socket_sendto",
+    contract: "stream_socket_sendto",
     area: Filesystem,
-    params: [
-        socket,
-        data,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        address = EvalBuiltinDefaultValue::String("")
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

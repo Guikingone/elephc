@@ -12,16 +12,9 @@
 
 use super::super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "ob_start",
+    contract: "ob_start",
     area: Core,
-    params: [
-        callback = EvalBuiltinDefaultValue::Null,
-        chunk_size = EvalBuiltinDefaultValue::Int(0),
-        flags = EvalBuiltinDefaultValue::Int(112)
-    ],
     direct: Core,
     values: Core,
 }

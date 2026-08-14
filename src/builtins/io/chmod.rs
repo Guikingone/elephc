@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "chmod",
-    area: Io,
-    params: [filename: Str, permissions: Int],
-    returns: Bool,
+    contract: "chmod",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chmod,
     ),
-    summary: "Changes file mode.",
-    php_manual: "function.chmod",
 }
 
 /// Returns `Bool`, rejecting a non-`Int` `permissions` argument at its own span.

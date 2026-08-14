@@ -2,7 +2,7 @@
 title: "strncasecmp()"
 description: "Compares the first n bytes of two strings, ignoring ASCII case."
 sidebar:
-  order: 446
+  order: 457
 ---
 
 ## strncasecmp()
@@ -26,12 +26,6 @@ Compares the first n bytes of two strings, ignoring ASCII case.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

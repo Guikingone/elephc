@@ -8,13 +8,8 @@
 //! - Static class metadata and eval-aware lookup remain backend implementation details.
 
 builtin! {
-    name: "property_exists",
-    area: Callables,
-    params: [object_or_class: Mixed, property: Str],
-    returns: Bool,
+    contract: "property_exists",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PropertyExists,
     ),
-    summary: "Checks whether an object or class has a property.",
-    php_manual: "function.property-exists",
 }

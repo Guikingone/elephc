@@ -20,15 +20,11 @@ use crate::builtins::semantics::{
     BuiltinRuntimeFunctions, BuiltinSemanticInput, BuiltinSemantics, BuiltinTargetStrategy,
     BuiltinTargetSupport, BuiltinValidation, LoweredBuiltinValue, NormalizedBuiltinCall,
 };
-use crate::builtins::spec::DefaultSpec;
 use crate::ir::{Immediate, IrType, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::PhpType;
 
 builtin! {
-    name: "intval",
-    area: Types,
-    params: [value: Mixed, base: Int = DefaultSpec::Int(10)],
-    returns: Int,
+    contract: "intval",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -42,8 +38,6 @@ builtin! {
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the integer value of a variable, optionally using a given base.",
-    php_manual: "function.intval",
 }
 
 /// Returns the conservative effect contract of the reusable EIR integer cast.

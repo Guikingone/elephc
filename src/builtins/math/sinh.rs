@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "sinh",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "sinh",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sinh,
     ),
-    summary: "Returns the hyperbolic sine of a number.",
-    php_manual: "https://www.php.net/manual/en/function.sinh.php",
 }

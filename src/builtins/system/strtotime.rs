@@ -8,20 +8,16 @@
 //! - `check` always returns `Union(Int, Bool)` to reflect PHP's behaviour where
 //!   `strtotime` returns a Unix timestamp on success or `false` on failure.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "strtotime",
-    area: System,
-    params: [datetime: Str, baseTimestamp: Int = DefaultSpec::Null],
-    returns: Mixed,
+    contract: "strtotime",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strtotime,
     ),
-    summary: "Parses an English textual datetime description into a Unix timestamp.",
 }
 
 /// Returns `Union(Int, Bool)` to reflect that `strtotime` can return a timestamp or `false`.

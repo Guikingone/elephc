@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "octdec",
-    area: Math,
-    params: [octal_string: Str],
-    returns: Mixed,
+    contract: "octdec",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Octdec,
     ),
-    summary: "Converts a octal string to its decimal number.",
-    php_manual: "https://www.php.net/manual/en/function.octdec.php",
 }
 
 /// Returns `PhpType::Union([Int, Float])` for a `octdec` call.

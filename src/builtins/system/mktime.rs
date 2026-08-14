@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "mktime",
-    area: System,
-    params: [hour: Int, minute: Int, second: Int, month: Int, day: Int, year: Int],
-    returns: Int,
+    contract: "mktime",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Mktime,
     ),
-    summary: "Returns the Unix timestamp for a date.",
 }

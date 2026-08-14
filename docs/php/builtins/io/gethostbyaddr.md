@@ -25,12 +25,6 @@ Gets the Internet host name corresponding to a given IP address.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `gethostbyaddr` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/gethostbyaddr.md).

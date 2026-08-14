@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_combine",
+    contract: "array_combine",
     area: Array,
-    params: [keys, values],
     direct: Array,
     values: Array,
 }

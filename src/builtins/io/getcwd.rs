@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "getcwd",
-    area: Io,
-    params: [],
-    returns: Str,
+    contract: "getcwd",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Getcwd,
     ),
-    summary: "Gets the current working directory.",
-    php_manual: "function.getcwd",
 }

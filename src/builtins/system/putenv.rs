@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "putenv",
-    area: System,
-    params: [assignment: Str],
-    returns: Bool,
+    contract: "putenv",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Putenv,
     ),
-    summary: "Sets an environment variable.",
 }

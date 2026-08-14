@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "filesize",
-    area: Io,
-    params: [filename: Str],
-    returns: Int,
+    contract: "filesize",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filesize,
     ),
-    summary: "Gets file size.",
-    php_manual: "function.filesize",
 }

@@ -25,12 +25,6 @@ Moves the array's internal pointer to the last element and returns it.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `end` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/end.md).

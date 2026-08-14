@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing hex decode hook.
 
 eval_builtin! {
-    name: "hex2bin",
+    contract: "hex2bin",
     area: String,
-    params: [string],
     direct: Hex2Bin,
     values: Hex2Bin,
 }

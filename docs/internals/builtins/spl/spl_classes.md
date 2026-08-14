@@ -2,7 +2,7 @@
 title: "spl_classes() — internals"
 description: "Compiler internals for spl_classes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 373
+  order: 380
 ---
 
 ## `spl_classes()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_classes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -49,6 +49,8 @@ function spl_classes(): array
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/spl_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_classes.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `callable-or-reflection`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

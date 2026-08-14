@@ -13,10 +13,8 @@ use super::super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "sprintf",
+    contract: "sprintf",
     area: Formatting,
-    params: [format],
-    variadic: values,
     direct: Sprintf,
     values: Sprintf,
 }

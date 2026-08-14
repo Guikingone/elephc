@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_array",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_array",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Array,
     ),
-    summary: "Checks whether a variable is an array.",
-    php_manual: "function.is-array",
 }

@@ -17,10 +17,7 @@ use crate::builtins::semantics::{
 use crate::ir::Op;
 
 builtin! {
-    name: "is_null",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_null",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -36,8 +33,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Checks whether a variable is null.",
-    php_manual: "function.is-null",
 }
 
 /// Returns the conservative effect contract of the reusable EIR null predicate.

@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fgetc",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Mixed,
+    contract: "fgetc",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fgetc,
     ),
-    summary: "Gets a character from the given file pointer.",
-    php_manual: "function.fgetc",
 }
 
 /// Validates the stream argument and returns `Union(Str, Bool)` for the EOF pattern.

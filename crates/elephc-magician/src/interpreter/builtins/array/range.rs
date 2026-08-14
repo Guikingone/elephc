@@ -9,14 +9,11 @@
 //! - PHP's optional `$step` is accepted; its sign never chooses the traversal direction
 //!   (`$start` vs `$end` does), matching php-src and the AOT `__rt_range` helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "range",
+    contract: "range",
     area: Array,
-    params: [start, end, step = EvalBuiltinDefaultValue::Int(1)],
     direct: Range,
     values: Range,
 }

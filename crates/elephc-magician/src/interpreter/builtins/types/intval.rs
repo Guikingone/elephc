@@ -13,13 +13,11 @@
 //!   `PHP_INT_MAX`/`PHP_INT_MIN` saturation and its `0` answer for an out-of-range base.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use crate::interpreter::runtime_ops::EVAL_TAG_STRING;
 
 eval_builtin! {
-    name: "intval",
+    contract: "intval",
     area: Types,
-    params: [value, base = EvalBuiltinDefaultValue::Int(10)],
     direct: Intval,
     values: Intval,
 }

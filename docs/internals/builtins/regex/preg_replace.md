@@ -2,7 +2,7 @@
 title: "preg_replace() — internals"
 description: "Compiler internals for preg_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 361
+  order: 368
 ---
 
 ## `preg_replace()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/preg_replace.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -23,8 +23,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Validation**: `signature`
+- **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -39,19 +39,19 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace(string $pattern, string $replacement, string $subject, int $limit = -1, int $count = null): string
+function preg_replace(string $pattern, string $replacement, string $subject): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 3–5 arguments (2 optional).
-- **By-reference parameters**: `$count`.
+- **Arity**: takes exactly 3 arguments.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `capability-dependent`.
 - **Dispatch hooks**: `direct`, `values`
-- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

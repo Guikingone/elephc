@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_set_blocking",
-    area: Io,
-    params: [stream: Mixed, enable: Bool],
-    returns: Bool,
+    contract: "stream_set_blocking",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSetBlocking,
     ),
-    summary: "Sets blocking/non-blocking mode on a stream.",
-    php_manual: "function.stream-set-blocking",
 }
 
 /// Validates the stream resource argument and returns `Bool`.

@@ -17,10 +17,7 @@ use crate::ir::{Immediate, IrType, Op};
 use crate::types::PhpType;
 
 builtin! {
-    name: "floatval",
-    area: Types,
-    params: [value: Mixed],
-    returns: Float,
+    contract: "floatval",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::SignatureOnly,
         result_type: BuiltinResultType::Declared,
@@ -34,8 +31,6 @@ builtin! {
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the float value of a variable.",
-    php_manual: "function.floatval",
 }
 
 /// Returns the conservative effect contract of the reusable EIR float cast.

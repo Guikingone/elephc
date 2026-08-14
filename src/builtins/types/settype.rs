@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "settype",
-    area: Types,
-    params: [ref var: Mixed, type: Str],
-    returns: Bool,
+    contract: "settype",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Settype,
     ),
-    summary: "Sets the type of a variable.",
-    php_manual: "function.settype",
 }
 
 /// Validates the `settype` arguments: infers both in source order and rejects a non-string type.

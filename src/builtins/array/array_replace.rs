@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_replace",
-    area: Array,
-    params: [array: Mixed, replacements: Mixed],
-    returns: Mixed,
+    contract: "array_replace",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayReplace,
     ),
-    summary: "Replaces elements from passed arrays into the first array.",
-    php_manual: "https://www.php.net/manual/en/function.array-replace.php",
 }
 
 /// Validates both arguments are hash-compatible arrays and returns the merged hash type.

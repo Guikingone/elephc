@@ -26,12 +26,6 @@ Renames a file or directory.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `rename` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/rename.md).

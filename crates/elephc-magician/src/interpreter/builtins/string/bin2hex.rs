@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing hex encode hook.
 
 eval_builtin! {
-    name: "bin2hex",
+    contract: "bin2hex",
     area: String,
-    params: [string],
     direct: Bin2Hex,
     values: Bin2Hex,
 }

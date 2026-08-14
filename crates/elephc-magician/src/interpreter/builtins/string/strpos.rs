@@ -11,12 +11,9 @@
 //!   throw machinery, so it reports `EvalStatus::RuntimeFatal` the way `str_repeat` does
 //!   for a negative count.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "strpos",
+    contract: "strpos",
     area: String,
-    params: [haystack, needle, offset = EvalBuiltinDefaultValue::Int(0)],
     direct: StringPosition,
     values: StringPosition,
 }

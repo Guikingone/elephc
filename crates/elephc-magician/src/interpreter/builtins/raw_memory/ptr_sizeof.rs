@@ -11,9 +11,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_sizeof",
+    contract: "ptr_sizeof",
     area: RawMemory,
-    params: [r#type],
     direct: PtrSizeof,
     values: PtrSizeof,
 }

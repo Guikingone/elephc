@@ -2,7 +2,7 @@
 title: "defined() — internals"
 description: "Compiler internals for defined(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 308
+  order: 320
 ---
 
 ## `defined()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/defined.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -23,8 +23,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -49,6 +49,8 @@ function defined(string $constant_name): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/defined.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/defined.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `runtime-state-or-resource`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

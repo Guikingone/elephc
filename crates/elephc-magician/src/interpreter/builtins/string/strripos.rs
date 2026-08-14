@@ -11,12 +11,9 @@
 //!   where the scan starts, and an offset outside the haystack is reference PHP's catchable
 //!   `ValueError`, reported here as `EvalStatus::RuntimeFatal`.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "strripos",
+    contract: "strripos",
     area: String,
-    params: [haystack, needle, offset = EvalBuiltinDefaultValue::Int(0)],
     direct: StringPosition,
     values: StringPosition,
 }

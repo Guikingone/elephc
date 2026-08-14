@@ -97,11 +97,12 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
-    let (source, source_is_borrowed_element) = lower_foreach_source(ctx, array, value_by_ref);
-    // Orthogonal to the borrowed-element pin taken after `IterStart` below: that one keeps a
-    // by-reference hash element's storage alive, this one takes the loop's reference on an
-    // object source. A borrowed element is never an object, so `retain_object_foreach_source`
-    // returns it untouched and `source_is_borrowed_element` still describes `source`.
+    let (source, source_is_borrowed_fetch) = lower_foreach_source(ctx, array, value_by_ref);
+    // Orthogonal to the borrowed fetch-for-write pin taken after `IterStart` below: that one
+    // keeps a by-reference element or property container alive, while this one takes the loop's
+    // reference on an object source. Borrowed fetch-for-write sources are containers, never
+    // objects, so `retain_object_foreach_source` returns them untouched and the flag still
+    // describes `source`.
     let source = retain_object_foreach_source(ctx, source, array.span);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
@@ -128,14 +129,15 @@ pub(super) fn lower_foreach(
         Op::IterStart.default_effects(),
         Some(array.span),
     );
-    // Take the loop's own lifetime reference on a borrowed element source, AFTER `IterStart`.
+    // Take the loop's own lifetime reference on a borrowed fetch-for-write source after
+    // `IterStart`.
     // The order is the whole point: `IterStart` splits a by-reference source through
     // `__rt_array_ensure_unique`, so a pin taken before it would put the element back at
     // refcount 2 and hand the loop a private copy — the very miscompile issue #580 fixes.
     // Taken here, the split has already happened and the iterator has already captured the
     // pointer, so the pin only keeps that storage alive.
-    let source_pin = source_is_borrowed_element
-        .then(|| pin_by_ref_foreach_element_source(ctx, source, array.span))
+    let source_pin = source_is_borrowed_fetch
+        .then(|| pin_by_ref_foreach_borrowed_source(ctx, source, array.span))
         .flatten();
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
@@ -260,9 +262,10 @@ pub(super) fn lower_foreach(
 ///
 /// A by-value loop iterates a copy, so it keeps the ordinary retaining read: the extra
 /// reference is what makes `__rt_array_ensure_unique` copy, and copying is precisely the
-/// semantics. A by-reference loop mutates the source in place, so an array-element source is
-/// fetched for writing instead — otherwise the read's own reference makes the runtime copy the
-/// element, and every write lands in a copy the loop then drops (issue #580).
+/// semantics. A by-reference loop mutates the source in place, so an array-element or stable
+/// object-property source is fetched for writing instead. Otherwise the read's own reference
+/// makes the runtime copy the container and the loop writes into a discarded copy (issues #580
+/// and #642).
 ///
 /// Returns the lowered source together with whether it came back borrowed from the
 /// fetch-for-write path, which is what tells the caller the loop still owes it a lifetime
@@ -283,18 +286,22 @@ fn lower_foreach_source(
                 ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
             return (source, is_borrowed_element);
         }
+        if let ExprKind::PropertyAccess { object, property } = &array.kind {
+            let source = lower_by_ref_foreach_property_source(ctx, object, property, array);
+            let is_borrowed_property =
+                ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
+            return (source, is_borrowed_property);
+        }
     }
     (lower_expr(ctx, array), false)
 }
 
-/// Takes the by-reference loop's own lifetime reference on a borrowed element source.
+/// Takes the by-reference loop's own lifetime reference on a borrowed fetch-for-write source.
 ///
-/// `Op::ArrayGetForWrite` hands back the parent's element without a reference of its own: the
-/// parent's element slot is the only owner. That is exactly what makes the writes land in the
-/// parent — and exactly what leaves the iterator holding a dangling pointer as soon as the body
-/// drops that parent (`$a = []`, `unset($a)`, a reassignment through an alias). PHP does not
-/// have this problem because its by-reference `foreach` holds a reference to the iterated array
-/// itself, so the array outlives the variable it came from.
+/// `ArrayGetForWrite` and `PropGetForWrite` return the container without a reference of their own:
+/// the parent slot is the only owner. That makes writes land in the parent, but leaves the iterator
+/// dangling if the loop body drops or replaces the parent. PHP avoids that by holding a reference
+/// to the iterated array itself for the duration of the loop.
 ///
 /// Must be called AFTER `Op::IterStart`: that instruction runs `__rt_array_ensure_unique` on a
 /// by-reference source, and an extra reference held across it would make the split fire and give
@@ -302,7 +309,7 @@ fn lower_foreach_source(
 ///
 /// Returns `None` when the source type carries no runtime lifetime state, in which case there is
 /// nothing to pin and nothing to release.
-fn pin_by_ref_foreach_element_source(
+fn pin_by_ref_foreach_borrowed_source(
     ctx: &mut LoweringContext<'_, '_>,
     source: LoweredValue,
     span: Span,

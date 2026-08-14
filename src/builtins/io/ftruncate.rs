@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ftruncate",
-    area: Io,
-    params: [stream: Mixed, size: Int],
-    returns: Bool,
+    contract: "ftruncate",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ftruncate,
     ),
-    summary: "Truncates a file to a given length.",
-    php_manual: "function.ftruncate",
 }
 
 /// Validates the stream argument is a stream resource and returns `Bool`.

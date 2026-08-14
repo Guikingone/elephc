@@ -20,14 +20,9 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "class_attribute_args",
-    area: System,
-    params: [class_name: Str, attribute_name: Str],
-    returns: Mixed,
+    contract: "class_attribute_args",
     check: check,
     semantics: class_attribute_args_semantics(),
-    summary: "Returns the constructor arguments of a named attribute applied to a class.",
-    extension: true,
 }
 
 /// Builds semantics with the associative Mixed container layout emitted by the backend.

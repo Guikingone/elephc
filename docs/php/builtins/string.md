@@ -26,12 +26,12 @@ sidebar:
 | [`gzuncompress()`](./string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_algos()`](./string/hash_algos.md) | `(): array` | `array` | ✓ | ✓ |
-| [`hash_copy()`](./string/hash_copy.md) | `(mixed $context): mixed` | `mixed` | — | ✓ |
+| [`hash_copy()`](./string/hash_copy.md) | `(HashContext $context): HashContext` | `HashContext` | ✓ | ✓ |
 | [`hash_equals()`](./string/hash_equals.md) | `(string $known_string, string $user_string): bool` | `bool` | ✓ | ✓ |
-| [`hash_final()`](./string/hash_final.md) | `(mixed $context, mixed $binary = 'false'): mixed` | `mixed` | — | ✓ |
+| [`hash_final()`](./string/hash_final.md) | `(HashContext $context, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_hmac()`](./string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
-| [`hash_init()`](./string/hash_init.md) | `(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed` | `mixed` | — | ✓ |
-| [`hash_update()`](./string/hash_update.md) | `(mixed $context, mixed $data): mixed` | `mixed` | — | ✓ |
+| [`hash_init()`](./string/hash_init.md) | `(string $algo): HashContext` | `HashContext` | ✓ | ✓ |
+| [`hash_update()`](./string/hash_update.md) | `(HashContext $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |
@@ -48,6 +48,10 @@ sidebar:
 | [`md5()`](./string/md5.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`nl2br()`](./string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
+| [`openssl_cipher_iv_length()`](./string/openssl_cipher_iv_length.md) | `(string $cipher_algo): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_decrypt()`](./string/openssl_decrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_encrypt()`](./string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
+| [`openssl_get_cipher_methods()`](./string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |

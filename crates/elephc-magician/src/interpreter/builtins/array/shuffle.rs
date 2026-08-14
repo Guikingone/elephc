@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "shuffle",
+    contract: "shuffle",
     area: Array,
-    params: [array: by_ref],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

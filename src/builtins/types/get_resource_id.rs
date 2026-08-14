@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "get_resource_id",
-    area: Types,
-    params: [resource: Mixed],
-    returns: Int,
+    contract: "get_resource_id",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetResourceId,
     ),
-    summary: "Returns an integer identifier for the given resource.",
-    php_manual: "function.get-resource-id",
 }

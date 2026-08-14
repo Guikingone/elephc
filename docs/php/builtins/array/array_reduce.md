@@ -27,12 +27,6 @@ Iteratively reduces an array to a single value using a callback function.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_reduce` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_reduce.md).

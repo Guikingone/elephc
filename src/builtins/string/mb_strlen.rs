@@ -11,23 +11,18 @@
 //!   which keeps malformed-sequence counting aligned with mbstring and rejects unknown names.
 
 use crate::{
-    builtins::spec::{BuiltinCheckCtx, DefaultSpec},
+    builtins::spec::{BuiltinCheckCtx},
     errors::CompileError,
     types::PhpType,
 };
 
 builtin! {
-    name: "mb_strlen",
-    area: String,
-    params: [string: Str, encoding: Str = DefaultSpec::Null],
-    returns: Int,
+    contract: "mb_strlen",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::MbStrlen,
     ),
-    summary: "Returns the character count of a string in the requested encoding.",
-    php_manual: "https://www.php.net/manual/en/function.mb-strlen.php",
 }
 
 /// Validates PHP's string plus nullable optional encoding parameter surface.

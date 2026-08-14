@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_object_hash",
-    area: Spl,
-    params: [object: Mixed],
-    returns: Str,
+    contract: "spl_object_hash",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplObjectHash,
     ),
-    summary: "Return hash id for given object.",
-    php_manual: "https://www.php.net/manual/en/function.spl-object-hash.php",
 }
 
 /// Validates that the argument is an object and returns `Str`.

@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "buffer_len",
-    area: Pointers,
-    params: [buffer: Mixed],
-    returns: Int,
+    contract: "buffer_len",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BufferLen,
     ),
-    summary: "Returns the logical element count of a buffer<T>.",
-    extension: true,
 }
 
 /// Validates that the argument is a `buffer<T>` and returns `PhpType::Int`.

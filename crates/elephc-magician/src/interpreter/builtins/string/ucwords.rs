@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the ucwords hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "ucwords",
+    contract: "ucwords",
     area: String,
-    params: [string, separators = EvalBuiltinDefaultValue::Bytes(b" \t\r\n\x0c\x0b")],
     direct: Ucwords,
     values: Ucwords,
 }

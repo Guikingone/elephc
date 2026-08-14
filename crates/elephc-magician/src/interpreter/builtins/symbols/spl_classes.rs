@@ -8,9 +8,8 @@
 //! - The result is a fixed indexed array of SPL class names.
 
 eval_builtin! {
-    name: "spl_classes",
+    contract: "spl_classes",
     area: Symbols,
-    params: [],
     direct: Symbols,
     values: Symbols,
 }

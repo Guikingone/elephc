@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the vprintf-family stream write helper.
 
 eval_builtin! {
-    name: "vfprintf",
+    contract: "vfprintf",
     area: Filesystem,
-    params: [stream, format, values],
     direct: Filesystem,
     values: Filesystem,
 }

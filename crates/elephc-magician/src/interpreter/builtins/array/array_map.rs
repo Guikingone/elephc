@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_map",
+    contract: "array_map",
     area: Array,
-    params: [callback, array],
-    variadic: arrays,
     direct: Array,
     values: Array,
 }

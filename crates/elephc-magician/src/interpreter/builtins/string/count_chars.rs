@@ -11,12 +11,9 @@
 //! - A mode outside `0..=4` is php-src's catchable `ValueError`, raised through eval's
 //!   pending-throw state so `catch (ValueError $e)` behaves as it does under the compiler.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "count_chars",
+    contract: "count_chars",
     area: String,
-    params: [string, mode = EvalBuiltinDefaultValue::Int(0)],
     direct: CountChars,
     values: CountChars,
 }

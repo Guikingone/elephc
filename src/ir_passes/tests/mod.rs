@@ -9,6 +9,7 @@
 //!   real IR data model without going through AST lowering.
 
 mod branch_simplify_test;
+mod checked_int_sink_test;
 mod const_fold_test;
 mod cse_test;
 mod dead_inst_test;
@@ -17,6 +18,7 @@ mod dominance_test;
 mod driver_test;
 mod identity_arith_test;
 mod inline_test;
+mod immutable_local_loads_test;
 mod intervals_test;
 mod licm_test;
 mod liveness_test;

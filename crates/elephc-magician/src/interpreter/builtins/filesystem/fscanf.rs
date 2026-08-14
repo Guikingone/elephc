@@ -8,10 +8,8 @@
 //! - The current eval implementation returns parsed values and ignores output vars.
 
 eval_builtin! {
-    name: "fscanf",
+    contract: "fscanf",
     area: Filesystem,
-    params: [stream, format],
-    variadic: vars,
     direct: Filesystem,
     values: Filesystem,
 }

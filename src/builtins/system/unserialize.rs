@@ -11,24 +11,17 @@
 //! - `options` default is `DefaultSpec::EmptyArray` (matches legacy `ArrayLiteral([])`
 //!   for parity gate comparison).
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::json_support;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "unserialize",
-    area: System,
-    params: [
-        data: Str,
-        options: Mixed = DefaultSpec::EmptyArray,
-    ],
-    returns: Mixed,
+    contract: "unserialize",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Unserialize,
     ),
-    summary: "Creates a PHP value from a stored representation.",
 }
 
 /// Validates that the data argument is string-compatible.

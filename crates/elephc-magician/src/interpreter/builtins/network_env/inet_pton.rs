@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "inet_pton",
+    contract: "inet_pton",
     area: NetworkEnv,
-    params: [ip],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

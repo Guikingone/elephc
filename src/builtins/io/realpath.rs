@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "realpath",
-    area: Io,
-    params: [path: Str],
-    returns: Mixed,
+    contract: "realpath",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Realpath,
     ),
-    summary: "Returns canonicalized absolute pathname.",
-    php_manual: "function.realpath",
 }
 
 /// Returns `Union(Str, Bool)` reflecting that `realpath` can return a path or `false`.

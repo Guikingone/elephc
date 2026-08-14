@@ -8,9 +8,8 @@
 //! - Current eval behavior validates arity/evaluation and returns the default context resource.
 
 eval_builtin! {
-    name: "stream_context_set_default",
+    contract: "stream_context_set_default",
     area: Filesystem,
-    params: [options],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -25,12 +25,6 @@ Returns true if the given function has been defined.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `function_exists` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/function_exists.md).

@@ -27,12 +27,6 @@ Converts a number between two arbitrary bases from 2 to 36.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `base_convert` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/base_convert.md).

@@ -16,16 +16,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "class_attribute_names",
-    area: System,
-    params: [class_name: Str],
-    returns: Mixed,
+    contract: "class_attribute_names",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ClassAttributeNames,
     ),
-    summary: "Returns the list of attribute names applied to a class.",
-    extension: true,
 }
 
 /// Validates that the argument is a string literal class name, resolves the class,

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fsync",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "fsync",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fsync,
     ),
-    summary: "Synchronizes changes to the file (including meta-data).",
-    php_manual: "function.fsync",
 }
 
 /// Validates the stream argument is a stream resource and returns `Bool`.

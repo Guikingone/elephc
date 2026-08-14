@@ -26,12 +26,6 @@ Returns the parent classes of the given class.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `class_parents` is implemented in the compiler, see [the internals page](../../../internals/builtins/class/class_parents.md).

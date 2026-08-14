@@ -11,7 +11,7 @@
 //!   passing `null`, selects PHP truthiness filtering. The return type preserves the input
 //!   container shape and element metadata.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
@@ -19,14 +19,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_filter",
-    area: Array,
-    params: [array: Mixed, callback: Mixed = DefaultSpec::Null, mode: Mixed = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "array_filter",
     check: check,
     semantics: array_filter_semantics(),
-    summary: "Filters elements of an array using a callback function.",
-    php_manual: "https://www.php.net/manual/en/function.array-filter.php",
 }
 
 /// Builds semantics whose storage result follows the source container representation.

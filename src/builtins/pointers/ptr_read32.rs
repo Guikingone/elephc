@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_read32",
-    area: Pointers,
-    params: [pointer: Mixed],
-    returns: Int,
+    contract: "ptr_read32",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrRead32,
     ),
-    summary: "Reads one unsigned 32-bit word through a raw pointer and returns it as an integer.",
-    extension: true,
 }
 
 /// Validates that the argument is a pointer type and returns `PhpType::Int`.

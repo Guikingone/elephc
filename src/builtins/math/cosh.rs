@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "cosh",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "cosh",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Cosh,
     ),
-    summary: "Returns the hyperbolic cosine of a number.",
-    php_manual: "https://www.php.net/manual/en/function.cosh.php",
 }

@@ -14,21 +14,12 @@
 //! - The optional limit and by-reference replacement counter share the public
 //!   five-parameter replacement signature.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_replace_callback",
-    area: Callables,
-    params: [
-        pattern: Str,
-        callback: Mixed,
-        subject: Str,
-        limit: Int = DefaultSpec::Int(-1),
-        ref count: Int = DefaultSpec::Null,
-    ],
-    returns: Str,
+    contract: "preg_replace_callback",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
@@ -37,8 +28,6 @@ builtin! {
         ),
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback,
     ),
-    summary: "Performs a regular expression search and replace using a callback.",
-    php_manual: "function.preg-replace-callback",
 }
 
 /// Delegates to `check_preg_replace_callback_first_class_call`, which controls closure

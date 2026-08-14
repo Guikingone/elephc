@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "getservbyport",
+    contract: "getservbyport",
     area: NetworkEnv,
-    params: [port, protocol],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

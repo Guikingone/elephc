@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_get_wrappers",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "stream_get_wrappers",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetWrappers,
     ),
-    summary: "Retrieves list of registered streams.",
-    php_manual: "function.stream-get-wrappers",
 }
 
 /// Returns `Array(Str)` as the precise return type for `stream_get_wrappers`.

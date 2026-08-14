@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_product",
-    area: Array,
-    params: [array: Mixed],
-    returns: Int,
+    contract: "array_product",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayProduct,
     ),
-    summary: "Calculate the product of values in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-product.php",
 }
 
 /// Computes the return type (Int or Float) based on the array element type.

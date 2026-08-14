@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "ob_clean",
-    area: Io,
-    params: [],
-    returns: Bool,
+    contract: "ob_clean",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObClean,
     ),
-    summary: "Cleans (erases) the contents of the active output buffer.",
-    php_manual: "function.ob-clean",
 }

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "getservbyname",
-    area: Io,
-    params: [service: Str, protocol: Str],
-    returns: Mixed,
+    contract: "getservbyname",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Getservbyname,
     ),
-    summary: "Gets port number associated with an Internet service and protocol.",
-    php_manual: "function.getservbyname",
 }
 
 /// Returns `Union(Int, Bool)` reflecting PHP's false-on-failure return.

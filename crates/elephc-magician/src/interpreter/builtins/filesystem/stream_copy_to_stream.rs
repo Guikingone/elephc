@@ -7,17 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the stream copy helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_copy_to_stream",
+    contract: "stream_copy_to_stream",
     area: Filesystem,
-    params: [
-        from,
-        to,
-        length = EvalBuiltinDefaultValue::Null,
-        offset = EvalBuiltinDefaultValue::Int(-1)
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

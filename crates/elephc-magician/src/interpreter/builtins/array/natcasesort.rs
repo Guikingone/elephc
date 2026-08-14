@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "natcasesort",
+    contract: "natcasesort",
     area: Array,
-    params: [array: by_ref],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }

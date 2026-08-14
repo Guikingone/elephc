@@ -13,27 +13,17 @@
 //!   or `AssocArray` yields the first-arg type; any other type is an error. All remaining
 //!   args are inferred for side effects.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_splice",
-    area: Array,
-    params: [
-        ref array: Mixed,
-        offset: Int,
-        length: Mixed = DefaultSpec::Null,
-        replacement: Mixed = DefaultSpec::EmptyArray
-    ],
-    returns: Mixed,
+    contract: "array_splice",
     check: check,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArraySplice),
         crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice,
     ),
-    summary: "Removes a portion of the array and replaces it with something else.",
-    php_manual: "https://www.php.net/manual/en/function.array-splice.php",
 }
 
 /// Returns the result type for an `array_splice` call.

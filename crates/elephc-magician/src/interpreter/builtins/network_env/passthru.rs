@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "passthru",
+    contract: "passthru",
     area: NetworkEnv,
-    params: [command],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

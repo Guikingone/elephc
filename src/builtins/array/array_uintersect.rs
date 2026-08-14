@@ -17,16 +17,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_uintersect",
-    area: Array,
-    params: [array1: Mixed, array2: Mixed, callback: Mixed],
-    returns: Mixed,
+    contract: "array_uintersect",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayUintersect,
     ),
-    summary: "Computes the intersection of arrays using a callback comparator.",
-    php_manual: "https://www.php.net/manual/en/function.array-uintersect.php",
 }
 
 /// Validates the comparator callback for an `array_uintersect` call and returns the first-array type.

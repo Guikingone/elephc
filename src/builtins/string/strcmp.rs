@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "strcmp",
-    area: String,
-    params: [string1: Str, string2: Str],
-    returns: Int,
+    contract: "strcmp",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strcmp,
     ),
-    summary: "Binary safe string comparison. Returns negative, zero, or positive.",
-    php_manual: "https://www.php.net/manual/en/function.strcmp.php",
 }

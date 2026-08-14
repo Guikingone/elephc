@@ -14,16 +14,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr_sizeof",
-    area: Pointers,
-    params: [r#type: Mixed],
-    returns: Int,
+    contract: "ptr_sizeof",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PtrSizeof,
     ),
-    summary: "Returns the byte size of the named pointer target type.",
-    extension: true,
 }
 
 /// Validates that the argument is a known string literal type name and returns `PhpType::Int`.

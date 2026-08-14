@@ -11,13 +11,8 @@
 //!   the shared `__rt_dec_to_base` renderer owns that contract.
 
 builtin! {
-    name: "decbin",
-    area: Math,
-    params: [num: Int],
-    returns: Str,
+    contract: "decbin",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Decbin,
     ),
-    summary: "Converts an integer to its binary string representation.",
-    php_manual: "https://www.php.net/manual/en/function.decbin.php",
 }

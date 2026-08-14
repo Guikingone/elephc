@@ -11,22 +11,14 @@
 use crate::builtins::semantics::{
     runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
 };
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "json_encode",
-    area: System,
-    params: [
-        value: Mixed,
-        flags: Int = DefaultSpec::Int(0),
-        depth: Int = DefaultSpec::Int(512),
-    ],
-    returns: Mixed,
+    contract: "json_encode",
     check: check,
     semantics: json_encode_semantics(),
-    summary: "Returns the JSON representation of a value.",
 }
 
 /// Builds semantics whose EIR result matches the runtime's boxed string-or-false value.

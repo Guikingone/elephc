@@ -1,0 +1,10 @@
+[package]
+name = "elephc-builtin-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Dependency-neutral PHP builtin contracts shared by elephc and Magician"
+publish = false
+
+[lib]
+crate-type = ["rlib"]

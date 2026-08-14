@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_all",
-    area: Array,
-    params: [array: Mixed, callback: Mixed],
-    returns: Bool,
+    contract: "array_all",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayAll,
     ),
-    summary: "Returns true when every array element satisfies the predicate callback.",
-    php_manual: "https://www.php.net/manual/en/function.array-all.php",
 }
 
 /// Validates the predicate callback for an `array_all` call and returns `PhpType::Bool`.

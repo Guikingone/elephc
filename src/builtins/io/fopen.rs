@@ -14,27 +14,17 @@
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does
 //!   NOT re-infer them.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fopen",
-    area: Io,
-    params: [
-        filename: Str,
-        mode: Str,
-        use_include_path: Bool = DefaultSpec::Bool(false),
-        context: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "fopen",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fopen,
     ),
     requirements: crate::builtins::semantics::fopen_requirements,
-    summary: "Opens file or URL.",
-    php_manual: "function.fopen",
 }
 
 /// Detects URL scheme from the filename literal and links the required runtime libraries.

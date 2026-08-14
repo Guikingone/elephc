@@ -8,12 +8,8 @@
 //! - Constant names may be computed at runtime and are probed against the emitted registry.
 
 builtin! {
-    name: "defined",
-    area: System,
-    params: [constant_name: Str],
-    returns: Bool,
+    contract: "defined",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Defined,
     ),
-    summary: "Checks whether the given named constant exists.",
 }

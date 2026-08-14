@@ -24,12 +24,6 @@ Returns the contents of the output buffer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ob_get_contents` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_contents.md).

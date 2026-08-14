@@ -15,17 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "vfprintf",
-    area: Io,
-    params: [stream: Mixed, format: Str, values: Mixed],
-    arity_error: "vfprintf() takes exactly 3 arguments (stream, format, values)",
-    returns: Int,
+    contract: "vfprintf",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Vfprintf,
     ),
-    summary: "Write a formatted string to a stream.",
-    php_manual: "function.vfprintf",
 }
 
 /// Validates the stream argument is a stream resource and returns `Int`.

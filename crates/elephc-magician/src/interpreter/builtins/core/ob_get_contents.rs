@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "ob_get_contents",
+    contract: "ob_get_contents",
     area: Core,
-    params: [],
     direct: Core,
     values: Core,
 }

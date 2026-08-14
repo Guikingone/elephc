@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "tanh",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "tanh",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Tanh,
     ),
-    summary: "Returns the hyperbolic tangent of a number.",
-    php_manual: "https://www.php.net/manual/en/function.tanh.php",
 }

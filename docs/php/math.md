@@ -69,6 +69,10 @@ PHP, and the rendered digits are then rounded rather than exact — `base_conver
 is `"18446744073709552046"`, not `"18446744073709551615"`. The float render also stops after 64
 digits.
 
+For exact arbitrary-precision decimal strings, including process-wide scale,
+truncating arithmetic, decimal rounding, powers, square roots, and quotient/remainder
+pairs, see [BCMath](bcmath.md).
+
 ### min() and max()
 
 Both accept PHP's two call forms: a single array whose elements are compared, or

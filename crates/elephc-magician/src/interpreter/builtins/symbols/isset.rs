@@ -9,10 +9,8 @@
 //!   array offsets, and ArrayAccess values keep PHP `isset()` semantics.
 
 eval_builtin! {
-    name: "isset",
+    contract: "isset",
     area: Symbols,
-    params: [var],
-    variadic: vars,
     direct: Symbols,
     values: Symbols,
 }

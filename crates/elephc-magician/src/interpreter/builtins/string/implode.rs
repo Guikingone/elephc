@@ -8,13 +8,9 @@
 //! - Direct and evaluated-argument dispatch stay in this leaf.
 //! - The current eval implementation supports the two-argument runtime form.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "implode",
+    contract: "implode",
     area: String,
-    params: [separator = EvalBuiltinDefaultValue::Null, array],
-    required: 1,
     direct: StringSplitJoin,
     values: StringSplitJoin,
 }

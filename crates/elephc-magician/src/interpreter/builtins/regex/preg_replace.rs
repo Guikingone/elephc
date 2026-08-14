@@ -9,20 +9,11 @@
 //!   backreference replacement expansion for `preg_replace()`.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::*;
 
 eval_builtin! {
-    name: "preg_replace",
+    contract: "preg_replace",
     area: Regex,
-    params: [
-        pattern,
-        replacement,
-        subject,
-        limit = EvalBuiltinDefaultValue::Int(-1),
-        count: by_ref = EvalBuiltinDefaultValue::Null,
-    ],
-    by_ref: [count],
     direct: PregReplace,
     values: PregReplace,
 }

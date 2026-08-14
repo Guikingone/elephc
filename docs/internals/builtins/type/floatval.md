@@ -2,7 +2,7 @@
 title: "floatval() — internals"
 description: "Compiler internals for floatval(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 473
+  order: 483
 ---
 
 ## `floatval()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/floatval.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -47,7 +47,8 @@ function floatval(mixed $value): float
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/floatval.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/floatval.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId(2)`).
+- **Dispatch hooks**: _none_ (shared runtime dispatch)
 
 ## Cross-references
 

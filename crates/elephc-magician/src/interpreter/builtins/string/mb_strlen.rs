@@ -13,13 +13,11 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_void};
 
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::super::*;
 
 eval_builtin! {
-    name: "mb_strlen",
+    contract: "mb_strlen",
     area: String,
-    params: [string, encoding = EvalBuiltinDefaultValue::Null],
     direct: Strlen,
     values: Strlen,
 }

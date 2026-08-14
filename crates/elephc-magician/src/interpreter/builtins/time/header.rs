@@ -10,16 +10,9 @@
 use super::super::super::*;
 use super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "header",
+    contract: "header",
     area: Time,
-    params: [
-        header,
-        replace = EvalBuiltinDefaultValue::Bool(true),
-        response_code = EvalBuiltinDefaultValue::Int(0),
-    ],
     direct: Time,
     values: Time,
 }

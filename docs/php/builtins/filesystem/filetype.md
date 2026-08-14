@@ -25,12 +25,6 @@ Gets file type.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `filetype` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/filetype.md).

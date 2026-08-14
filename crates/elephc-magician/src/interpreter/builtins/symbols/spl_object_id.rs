@@ -8,9 +8,8 @@
 //! - `spl_object_hash()` shares the same object-identity implementation.
 
 eval_builtin! {
-    name: "spl_object_id",
+    contract: "spl_object_id",
     area: Symbols,
-    params: [object],
     direct: Symbols,
     values: Symbols,
 }

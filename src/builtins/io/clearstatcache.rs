@@ -12,19 +12,10 @@
 //! - PHP accepts up to 2 optional arguments; elephc has no stat cache but accepts
 //!   and ignores them (matching legacy behavior).
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "clearstatcache",
-    area: Io,
-    params: [
-        clear_realpath_cache: Bool = DefaultSpec::Bool(false),
-        filename: Str = DefaultSpec::Str("")
-    ],
-    returns: Void,
+    contract: "clearstatcache",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Clearstatcache,
     ),
-    summary: "Clears file status cache.",
-    php_manual: "function.clearstatcache",
 }

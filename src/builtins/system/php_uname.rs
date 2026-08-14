@@ -9,21 +9,16 @@
 //! - `arity_error` overrides the default "takes at most 1 argument" message to match
 //!   the legacy phrasing "takes 0 or 1 arguments".
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "php_uname",
-    area: System,
-    params: [mode: Str = DefaultSpec::Str("a")],
-    arity_error: "php_uname() takes 0 or 1 arguments",
-    returns: Str,
+    contract: "php_uname",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PhpUname,
     ),
-    summary: "Returns information about the operating system PHP is running on.",
 }
 
 /// Validates that the optional `mode` argument is a string when present.

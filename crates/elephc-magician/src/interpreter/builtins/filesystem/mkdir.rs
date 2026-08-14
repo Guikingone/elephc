@@ -8,17 +8,9 @@
 //! - Runtime dispatch preserves optional permissions and recursive creation for
 //!   local paths and passes the matching mode/options pair to userspace wrappers.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "mkdir",
+    contract: "mkdir",
     area: Filesystem,
-    params: [
-        directory,
-        permissions = EvalBuiltinDefaultValue::Int(0o777),
-        recursive = EvalBuiltinDefaultValue::Bool(false),
-        context = EvalBuiltinDefaultValue::Null
-    ],
     direct: Filesystem,
     values: Filesystem,
 }

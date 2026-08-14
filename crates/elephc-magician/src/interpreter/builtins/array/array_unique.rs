@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_unique",
+    contract: "array_unique",
     area: Array,
-    params: [array],
     direct: ArrayUnique,
     values: ArrayUnique,
 }

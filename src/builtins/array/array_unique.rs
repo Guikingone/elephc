@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_unique",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_unique",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayUnique,
     ),
-    summary: "Removes duplicate values from an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-unique.php",
 }
 
 /// Returns the (shape-preserving) array type for an `array_unique` call.

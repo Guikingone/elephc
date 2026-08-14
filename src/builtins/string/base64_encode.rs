@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "base64_encode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "base64_encode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::Base64Encode),
         crate::ir::Effects::PURE,
     ),
-    summary: "Encodes binary data into a Base64 string.",
-    php_manual: "https://www.php.net/manual/en/function.base64-encode.php",
 }

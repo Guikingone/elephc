@@ -1141,8 +1141,11 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         (
             "substr_strings",
+            // `substr('Hello', 1, -2)` is "el": PHP reads a negative length as bytes omitted from
+            // the end, not as an error. This expectation used to be "[]", written from an
+            // implementation that clamped every negative length to zero.
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
-            "World:Hello:World:[]:[]",
+            "World:Hello:World:[]:[el]",
         ),
         (
             "substr_replace_strings",

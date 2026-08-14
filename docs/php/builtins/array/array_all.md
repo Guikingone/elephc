@@ -26,12 +26,6 @@ Returns true when every array element satisfies the predicate callback.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_all` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_all.md).

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ctype_alpha",
-    area: String,
-    params: [text: Str],
-    returns: Bool,
+    contract: "ctype_alpha",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CtypeAlpha,
     ),
-    summary: "Checks if all characters in the string are alphabetic.",
-    php_manual: "https://www.php.net/manual/en/function.ctype-alpha.php",
 }

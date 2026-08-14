@@ -8,9 +8,8 @@
 //! - Creates stdClass bucket objects with `data` and `datalen` properties.
 
 eval_builtin! {
-    name: "stream_bucket_new",
+    contract: "stream_bucket_new",
     area: Filesystem,
-    params: [stream, buffer],
     direct: Filesystem,
     values: Filesystem,
 }

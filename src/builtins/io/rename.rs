@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "rename",
-    area: Io,
-    params: [from: Str, to: Str],
-    returns: Bool,
+    contract: "rename",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rename,
     ),
-    summary: "Renames a file or directory.",
-    php_manual: "function.rename",
 }

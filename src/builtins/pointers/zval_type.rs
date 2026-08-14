@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "zval_type",
-    area: Pointers,
-    params: [zval: Mixed],
-    returns: Int,
+    contract: "zval_type",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ZvalType,
     ),
-    summary: "Returns the PHP zval type byte for a zval pointer.",
-    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Int`.

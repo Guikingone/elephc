@@ -8,14 +8,11 @@
 //! - Recursive counting tracks visited arrays to avoid cycles.
 //! - Top-level objects dispatch through `Countable::count()` when applicable.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "count",
+    contract: "count",
     area: Array,
-    params: [value, mode = EvalBuiltinDefaultValue::Int(0)],
     direct: Count,
     values: Count,
 }

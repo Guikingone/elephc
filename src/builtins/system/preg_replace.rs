@@ -11,21 +11,12 @@
 //! - The checker leaves the counter destination write-only while inferring all
 //!   value inputs, allowing an undefined variable to receive the result.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_replace",
-    area: System,
-    params: [
-        pattern: Str,
-        replacement: Str,
-        subject: Str,
-        limit: Int = DefaultSpec::Int(-1),
-        ref count: Int = DefaultSpec::Null,
-    ],
-    returns: Str,
+    contract: "preg_replace",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
@@ -34,7 +25,6 @@ builtin! {
         ),
         crate::builtins::semantics::BuiltinArgumentLowering::PositionalRegex,
     ),
-    summary: "Performs a regular expression search and replace.",
 }
 
 /// Infers replacement inputs while leaving the optional counter destination write-only.

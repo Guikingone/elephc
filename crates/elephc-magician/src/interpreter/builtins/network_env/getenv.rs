@@ -9,15 +9,9 @@
 //! - A null or omitted name materializes the process environment as an associative array.
 
 use super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "getenv",
+    contract: "getenv",
     area: NetworkEnv,
-    params: [
-        name = EvalBuiltinDefaultValue::Null,
-        local_only = EvalBuiltinDefaultValue::Bool(false)
-    ],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

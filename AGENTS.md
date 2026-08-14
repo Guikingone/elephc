@@ -235,18 +235,21 @@ Common places to audit:
 
 ### Adding a new built-in function
 
-PHP builtins are declared **once** in the single-source registry: one home file per
-builtin at `src/builtins/<area>/<name>.rs`, declared with the `builtin!` macro and
-collected via `inventory`. From that single declaration the compiler derives the
-catalog name-set (`function_exists`, case-insensitive lookup, namespace fallback), the
-`FunctionSig` (named args, defaults, ref params, variadic, arity), the type-check
-entry, backend-neutral semantic lowering, and the generated docs. Do **not**
+PHP builtin surfaces are declared **once** in the dependency-neutral
+`crates/elephc-builtin-contract` catalog. The compiler home file at
+`src/builtins/<area>/<name>.rs` joins AOT semantics with `builtin!`; Magician's home
+file joins eval hooks with `eval_builtin!`. Both bindings key on the same stable
+`BuiltinId`. Name lookup, `FunctionSig`, strict-PHP visibility, backend support, and
+generated docs derive from that contract. Do **not**
 re-add builtin names to hand-maintained tables (`catalog.rs`, `signatures.rs`, per-area
 `check_builtin` arms) — they are superseded by the registry.
 
 Key invariants:
 
-- **One builtin per home file.** Its mandatory `semantics:` descriptor owns
+- **One contract, one home file per backend.** The neutral contract owns PHP-visible
+  names, parameters, defaults, passing modes, arity, returns, visibility,
+  requirements, and docs. The AOT home file repeats none of that metadata; its
+  mandatory `semantics:` descriptor owns
   validation, result typing, effects, ownership/aliasing, requirements, target
   strategy/support, runtime-function inventory, argument lowering, callable policy,
   and backend-neutral EIR lowering. Home files must not import `crate::codegen`.
@@ -271,18 +274,24 @@ Key invariants:
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
   `buffer_new` is catalog-name-only (its call form is dedicated syntax); `buffer_len`
   and `buffer_free` are ordinary registry builtins.
-- **elephc-only builtins declare `extension: true`** so `--strict-php` hides them from
-  user programs (pinned in `src/builtins/parity_tests.rs`). Injected preludes must call
+- **elephc-only contracts declare `extension: true`** so `--strict-php` hides them from
+  AOT and eval without a second pinned list. Injected preludes must call
   `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
   parity gate scans the prelude sources to enforce this.
 - Add codegen + error tests (include a case-insensitive or namespaced call for
-  PHP-visible builtins); keep the parity gates in `src/builtins/parity_tests.rs` green.
+  PHP-visible builtins); keep shared-contract/backend-support parity gates green.
+- Magician bindings contribute only `contract`, `area`, and direct/value hooks. Use
+  `RuntimeBuiltinId` plus the versioned boxed-cell C ABI when runtime helper semantics
+  agree, remove superseded hooks, and retain documented adapters only for by-ref/lvalue,
+  callable, reflection, resource, eval-declaration, or strict signature-subset behavior.
 - Before opening a PR that adds, removes, or changes PHP-visible builtins, run the
   `update-builtin-docs` skill or the equivalent CI sequence:
   `cargo build --example gen_builtins`,
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
-  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`. Commit the
+  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
+  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`.
+  Commit the
   generated docs and registry.
 
 ### Adding a new EIR optimization pass
@@ -582,3 +591,28 @@ When cutting a release:
 - Run the focused pre-commit verification above before committing code changes. Do not knowingly commit with relevant focused tests failing; the full suite must pass in CI.
 - Zero compiler warnings policy (`cargo build` must be clean)
 - Never run `cargo fmt` in this repo. Use targeted manual edits only; global formatting creates noisy churn here.
+
+## Cursor Cloud specific instructions
+
+The dependency-refresh update script runs `cargo build` on startup, which also
+materializes the bridge `libelephc_*.a` staticlibs that `linker.rs` links into
+compiled programs. Standard build/test/run commands are documented above and in
+`CONTRIBUTING.md`; the notes below are only the non-obvious cloud caveats.
+
+- **Rust toolchain is version-pinned.** CI pins the toolchain in
+  `.github/docker/ci.Dockerfile` (currently `1.95.0`) and the "no warnings" gate
+  greps build output, so use that exact toolchain rather than a floating
+  `stable`. The cloud VM has it installed and set as the rustup default.
+- **The compiler shells out to the host `as` + `gcc`/`ld`.** These are present.
+  On Linux, compiling a program prints benign linker warnings
+  (`gethostbyname` in statically linked apps, missing `.note.GNU-stack`,
+  executable stack). They are not errors — the produced binary runs fine.
+- **`php` is not installed.** PHP-equivalence cross-check tests
+  (`ELEPHC_PHP_CHECK=1 cargo test ...`) will not run without installing a PHP
+  interpreter first. Normal codegen tests do not need it.
+- **Docker-based Linux cross-test scripts are unavailable by default.**
+  `scripts/test-linux-x86_64.sh` / `-arm64.sh` require Docker, which is not set
+  up here. Rely on host `cargo test`/`cargo nextest` (this VM is `linux-x86_64`)
+  and CI for the full target matrix.
+- **Quick end-to-end sanity check:** `cargo run -- examples/fizzbuzz/main.php`
+  then `./examples/fizzbuzz/main`.

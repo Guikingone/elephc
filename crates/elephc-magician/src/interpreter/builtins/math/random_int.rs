@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "random_int",
+    contract: "random_int",
     area: Math,
-    params: [min, max],
     direct: RandomInt,
     values: RandomInt,
 }

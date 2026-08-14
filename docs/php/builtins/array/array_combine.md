@@ -26,12 +26,6 @@ Creates an array by using one array for keys and another for values.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_combine` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_combine.md).

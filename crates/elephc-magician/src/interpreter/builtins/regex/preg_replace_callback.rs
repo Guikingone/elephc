@@ -9,21 +9,12 @@
 //!   callback invocation for `preg_replace_callback()`.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_replace_callback",
+    contract: "preg_replace_callback",
     area: Regex,
-    params: [
-        pattern,
-        callback,
-        subject,
-        limit = EvalBuiltinDefaultValue::Int(-1),
-        count: by_ref = EvalBuiltinDefaultValue::Null,
-    ],
-    by_ref: [count],
     direct: PregReplaceCallback,
     values: PregReplaceCallback,
 }

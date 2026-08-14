@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "log10",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "log10",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Log10,
     ),
-    summary: "Returns the base-10 logarithm of a number.",
-    php_manual: "https://www.php.net/manual/en/function.log10.php",
 }

@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "inet_ntop",
-    area: String,
-    params: [ip: Str],
-    returns: Mixed,
+    contract: "inet_ntop",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::InetNtop,
     ),
-    summary: "Converts a packed internet address to a human-readable representation.",
-    php_manual: "https://www.php.net/manual/en/function.inet-ntop.php",
 }
 
 /// Returns `PhpType::Union([Str, Bool])` for an `inet_ntop` call.

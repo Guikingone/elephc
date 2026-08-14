@@ -9,21 +9,16 @@
 //! - The optional `strict` (3rd) argument selects PHP `===` membership; omitted or
 //!   false strictness uses PHP `==` semantics for the supported scalar/string paths.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "in_array",
-    area: Array,
-    params: [needle: Mixed, haystack: Mixed, strict: Bool = DefaultSpec::Bool(false)],
-    returns: Bool,
+    contract: "in_array",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::InArray,
     ),
-    summary: "Checks if a value exists in an array.",
-    php_manual: "https://www.php.net/manual/en/function.in-array.php",
 }
 
 /// Validates that the second argument is an array and returns `Bool`.

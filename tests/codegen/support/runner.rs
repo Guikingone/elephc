@@ -88,6 +88,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         macos_libraries: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        package: "elephc-bcmath",
+        macos_libraries: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
         macos_libraries: &[],

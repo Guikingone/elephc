@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "date_default_timezone_get",
+    contract: "date_default_timezone_get",
     area: Time,
-    params: [],
     direct: Time,
     values: Time,
 }

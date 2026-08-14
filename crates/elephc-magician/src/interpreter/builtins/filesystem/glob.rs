@@ -8,12 +8,9 @@
 //! - Runtime dispatch implements portable PHP glob flags without exposing host
 //!   libc flag values to the eval surface.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "glob",
+    contract: "glob",
     area: Filesystem,
-    params: [pattern, flags = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

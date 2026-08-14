@@ -2,7 +2,7 @@
 title: "strncmp()"
 description: "Compares the first n bytes of two strings."
 sidebar:
-  order: 447
+  order: 458
 ---
 
 ## strncmp()
@@ -26,12 +26,6 @@ Compares the first n bytes of two strings.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

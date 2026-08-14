@@ -12,7 +12,7 @@ mod managed;
 mod platform;
 
 use super::{
-    callables, diagnostics, exceptions, filter, generators, numeric, round_mode, strings,
+    bcmath, callables, diagnostics, exceptions, filter, generators, numeric, round_mode, strings,
     system,
 };
 use crate::codegen_support::emit::Emitter;
@@ -122,6 +122,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_hash_equals(emitter);
     strings::emit_hash_algos_list(emitter);
     strings::emit_hash_context(emitter);
+    strings::emit_openssl_methods(emitter);
+    strings::emit_openssl_cipher(emitter);
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);
@@ -131,6 +133,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
+    bcmath::emit_bcmath(emitter);
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);

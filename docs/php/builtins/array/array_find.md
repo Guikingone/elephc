@@ -26,12 +26,6 @@ Returns the first element satisfying a predicate callback, or null.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_find` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_find.md).

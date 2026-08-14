@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_get_filters",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "stream_get_filters",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetFilters,
     ),
-    summary: "Retrieves list of registered filters.",
-    php_manual: "function.stream-get-filters",
 }
 
 /// Returns `Array(Str)` as the precise return type for `stream_get_filters`.

@@ -8,26 +8,18 @@
 //! - The runtime flag changes only when bytes leave the output-buffering stack.
 //! - Optional `$filename` and `$line` outputs are write-only and therefore checked lazily.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "headers_sent",
-    area: System,
-    params: [
-        ref filename: Mixed = DefaultSpec::Null,
-        ref line: Mixed = DefaultSpec::Null
-    ],
-    returns: Bool,
+    contract: "headers_sent",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HeadersSent,
     ),
-    summary: "Reports whether output has already committed response headers.",
-    php_manual: "function.headers-sent",
 }
 
 /// Validates that supplied output parameters are writable variables without reading them first.

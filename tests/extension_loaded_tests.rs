@@ -1,7 +1,7 @@
 //! Purpose:
 //! End-to-end tests that `extension_loaded()` / `get_loaded_extensions()` report the
 //! bridge extensions actually linked into a given compilation: forced via
-//! `--with-<flag>`, auto-detected from feature usage (e.g. `hash()`), or absent.
+//! `--with-<flag>`, auto-detected from feature usage (e.g. `hash()` / `bcadd()`), or absent.
 //!
 //! Called from:
 //! - `cargo test --test extension_loaded_tests` through Rust's test harness.
@@ -128,6 +128,33 @@ fn hash_usage_reports_hash_extension_loaded() {
          bool(true)\nbool(true)\nbool(false)\n",
         "using hash(): hash loaded (both APIs), PDO not loaded"
     );
+}
+
+/// Verifies a bridge-free program does not report BCMath merely because its names are known.
+#[test]
+fn unused_bcmath_reports_extension_not_loaded() {
+    let dir = make_test_dir("ext_no_bcmath");
+    let src = "<?php echo extension_loaded('bcmath') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "no");
+}
+
+/// Verifies using `bcadd()` auto-links the bridge and exposes its canonical extension name.
+#[test]
+fn bcadd_usage_reports_bcmath_extension_loaded() {
+    let dir = make_test_dir("ext_bcmath_auto");
+    let src = "<?php echo bcadd('1', '2'), '|', extension_loaded('bcmath') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    assert_eq!(run_binary(&bin), "3|yes");
+}
+
+/// Verifies `--with-bcmath` reports the extension even when no BCMath function is called.
+#[test]
+fn with_bcmath_reports_extension_loaded() {
+    let dir = make_test_dir("ext_bcmath_forced");
+    let src = "<?php echo extension_loaded('bcmath') ? 'yes' : 'no';";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-bcmath"]);
+    assert_eq!(run_binary(&bin), "yes");
 }
 
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`

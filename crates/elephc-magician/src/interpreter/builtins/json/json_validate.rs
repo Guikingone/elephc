@@ -12,17 +12,11 @@
 
 use super::json_decode::eval_record_json_parse_error;
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use crate::json_validate;
 
 eval_builtin! {
-    name: "json_validate",
+    contract: "json_validate",
     area: Json,
-    params: [
-        json,
-        depth = EvalBuiltinDefaultValue::Int(512),
-        flags = EvalBuiltinDefaultValue::Int(0),
-    ],
     direct: JsonValidate,
     values: JsonValidate,
 }

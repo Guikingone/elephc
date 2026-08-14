@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the process-pipe close helper.
 
 eval_builtin! {
-    name: "pclose",
+    contract: "pclose",
     area: Filesystem,
-    params: [handle],
     direct: Filesystem,
     values: Filesystem,
 }

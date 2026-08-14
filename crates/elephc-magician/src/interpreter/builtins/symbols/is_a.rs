@@ -8,12 +8,9 @@
 //! - Eval-created classes are checked first, then generated/AOT object and
 //!   interface metadata fills inherited relationships.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "is_a",
+    contract: "is_a",
     area: Symbols,
-    params: [object_or_class, r#class, allow_string = EvalBuiltinDefaultValue::Bool(false)],
     direct: Symbols,
     values: Symbols,
 }

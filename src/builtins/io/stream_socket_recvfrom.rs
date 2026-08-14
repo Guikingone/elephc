@@ -10,27 +10,17 @@
 //!   matches the legacy behavior.
 //! - Arguments are pre-inferred by the registry before the hook runs.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_recvfrom",
-    area: Io,
-    params: [
-        socket: Mixed,
-        length: Int,
-        flags: Int = DefaultSpec::Int(0),
-        ref address: Str = DefaultSpec::Str("")
-    ],
-    returns: Mixed,
+    contract: "stream_socket_recvfrom",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketRecvfrom,
     ),
-    summary: "Receives data from a socket, connected or not.",
-    php_manual: "function.stream-socket-recvfrom",
 }
 
 /// Validates arg[0] is a stream resource and that `address` (arg[3]) is a plain string variable.

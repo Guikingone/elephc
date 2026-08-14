@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "zval_unpack",
-    area: Pointers,
-    params: [zval: Mixed],
-    returns: Mixed,
+    contract: "zval_unpack",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ZvalUnpack,
     ),
-    summary: "Unpacks a PHP zval pointer into an owned elephc Mixed value.",
-    extension: true,
 }
 
 /// Validates the zval pointer argument and returns `PhpType::Mixed`.

@@ -14,17 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "sscanf",
-    area: String,
-    params: [string: Str, format: Str],
-    variadic: "vars",
-    returns: Mixed,
+    contract: "sscanf",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sscanf,
     ),
-    summary: "Parses a string according to a format.",
-    php_manual: "https://www.php.net/manual/en/function.sscanf.php",
 }
 
 /// Returns `PhpType::Array(Box::new(PhpType::Str))` for a `sscanf` call.

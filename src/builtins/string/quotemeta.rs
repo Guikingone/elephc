@@ -12,14 +12,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "quotemeta",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "quotemeta",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::QuoteMeta),
         crate::ir::Effects::PURE,
     ),
-    summary: "Prefixes each regular-expression metacharacter in a string with a backslash.",
-    php_manual: "https://www.php.net/manual/en/function.quotemeta.php",
 }

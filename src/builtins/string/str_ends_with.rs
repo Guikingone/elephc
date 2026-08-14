@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "str_ends_with",
-    area: String,
-    params: [haystack: Str, needle: Str],
-    returns: Bool,
+    contract: "str_ends_with",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrEndsWith,
     ),
-    summary: "Checks if a string ends with a given substring.",
-    php_manual: "https://www.php.net/manual/en/function.str-ends-with.php",
 }

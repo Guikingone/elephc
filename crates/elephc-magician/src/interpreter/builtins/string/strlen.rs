@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing string-length hook.
 
 eval_builtin! {
-    name: "strlen",
+    contract: "strlen",
     area: String,
-    params: [string],
     direct: Strlen,
     values: Strlen,
 }

@@ -9,12 +9,9 @@
 
 use super::super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "microtime",
+    contract: "microtime",
     area: Time,
-    params: [as_float = EvalBuiltinDefaultValue::Bool(false)],
     direct: Time,
     values: Time,
 }

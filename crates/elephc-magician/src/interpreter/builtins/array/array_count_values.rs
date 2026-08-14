@@ -14,9 +14,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_count_values",
+    contract: "array_count_values",
     area: Array,
-    params: [array],
     direct: Array,
     values: Array,
 }

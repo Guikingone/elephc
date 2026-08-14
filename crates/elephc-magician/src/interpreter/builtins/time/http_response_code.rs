@@ -10,12 +10,9 @@
 use super::super::super::*;
 use super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "http_response_code",
+    contract: "http_response_code",
     area: Time,
-    params: [response_code = EvalBuiltinDefaultValue::Int(0)],
     direct: Time,
     values: Time,
 }

@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "is_numeric",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_numeric",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsNumeric,
     ),
-    summary: "Checks whether a variable is a number or a numeric string.",
-    php_manual: "function.is-numeric",
 }

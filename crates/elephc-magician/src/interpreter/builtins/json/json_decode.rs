@@ -10,18 +10,11 @@
 //! - JSON parse-error helpers live here and are reused by `json_validate`.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use crate::json_validate::{self, JsonParseError, JsonParseErrorKind, JsonValue};
 
 eval_builtin! {
-    name: "json_decode",
+    contract: "json_decode",
     area: Json,
-    params: [
-        json,
-        associative = EvalBuiltinDefaultValue::Null,
-        depth = EvalBuiltinDefaultValue::Int(512),
-        flags = EvalBuiltinDefaultValue::Int(0),
-    ],
     direct: JsonDecode,
     values: JsonDecode,
 }

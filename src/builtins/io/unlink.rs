@@ -14,17 +14,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "unlink",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "unlink",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Unlink,
     ),
     requirements: crate::builtins::semantics::unlink_requirements,
-    summary: "Deletes a file.",
-    php_manual: "function.unlink",
 }
 
 /// Returns `Bool` and links `elephc_phar` when the target may live in a PHAR archive.

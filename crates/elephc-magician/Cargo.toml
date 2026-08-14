@@ -10,6 +10,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+elephc-builtin-contract = { path = "../elephc-builtin-contract" }
 elephc-crypto = { path = "../elephc-crypto" }
 elephc-phar = { path = "../elephc-phar" }
 flate2 = "1"
@@ -18,4 +19,5 @@ libc = "0.2"
 unicode-segmentation = "1"
 
 [dev-dependencies]
+elephc-bcmath = { path = "../elephc-bcmath" }
 serde_json = "1"

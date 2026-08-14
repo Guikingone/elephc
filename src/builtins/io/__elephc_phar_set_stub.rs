@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_set_stub",
-    area: Io,
-    params: [filename: Str, stub: Str],
-    returns: Bool,
+    contract: "__elephc_phar_set_stub",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSetStub,
     ),
-    summary: "Writes the PHAR stub script.",
-    internal: true,
 }

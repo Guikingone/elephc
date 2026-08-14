@@ -15,23 +15,18 @@
 //!   matching and leaves other recognized mbregex options without additional runtime effect.
 
 use crate::{
-    builtins::spec::{BuiltinCheckCtx, DefaultSpec},
+    builtins::spec::{BuiltinCheckCtx},
     errors::CompileError,
     types::PhpType,
 };
 
 builtin! {
-    name: "mb_ereg_match",
-    area: String,
-    params: [pattern: Str, subject: Str, options: Str = DefaultSpec::Null],
-    returns: Bool,
+    contract: "mb_ereg_match",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::MbEregMatch,
     ),
-    summary: "Tests whether a regex pattern matches the beginning of a string (multibyte).",
-    php_manual: "https://www.php.net/manual/en/function.mb-ereg-match.php",
 }
 
 /// Validates the `mb_ereg_match()` argument types and returns `Bool`.

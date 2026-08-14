@@ -10,28 +10,18 @@
 //! - `length` and `offset` are optional with defaults `null` and `-1` respectively.
 //! - `returns: Mixed` is used because the union cannot be expressed through the scalar field.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::io::stream_support;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 use crate::types::checker::builtins::io::common;
 
 builtin! {
-    name: "stream_copy_to_stream",
-    area: Io,
-    params: [
-        from: Mixed,
-        to: Mixed,
-        length: Int = DefaultSpec::Null,
-        offset: Int = DefaultSpec::Int(-1)
-    ],
-    returns: Mixed,
+    contract: "stream_copy_to_stream",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamCopyToStream,
     ),
-    summary: "Copies data from one stream to another.",
-    php_manual: "function.stream-copy-to-stream",
 }
 
 /// Validates both stream resource arguments, optional length (int|null), and optional offset (int).

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the temporary stream helper.
 
 eval_builtin! {
-    name: "tmpfile",
+    contract: "tmpfile",
     area: Filesystem,
-    params: [],
     direct: Filesystem,
     values: Filesystem,
 }

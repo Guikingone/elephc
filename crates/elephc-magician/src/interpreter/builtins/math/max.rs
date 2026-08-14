@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "max",
+    contract: "max",
     area: Math,
-    params: [value],
-    variadic: values,
     direct: Max,
     values: Max,
 }

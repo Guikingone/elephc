@@ -12,12 +12,8 @@
 
 
 builtin! {
-    name: "json_last_error",
-    area: System,
-    params: [],
-    returns: Int,
+    contract: "json_last_error",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::JsonLastError,
     ),
-    summary: "Returns the last error (if any) occurred during the last JSON encoding/decoding.",
 }

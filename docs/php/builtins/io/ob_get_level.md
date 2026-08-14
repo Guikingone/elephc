@@ -24,12 +24,6 @@ Returns the nesting level of the output buffering mechanism.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ob_get_level` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/ob_get_level.md).

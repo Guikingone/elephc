@@ -13,22 +13,17 @@
 //! - The registry pre-infers arguments before calling the hook; the hook re-infers the
 //!   optional `flags` argument (idempotent) to obtain its resolved type.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 use crate::types::PhpType;
 
 builtin! {
-    name: "pathinfo",
-    area: Io,
-    params: [path: Str, flags: Int = DefaultSpec::Int(15)],
-    returns: Mixed,
+    contract: "pathinfo",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Pathinfo,
     ),
-    summary: "Returns information about a file path.",
-    php_manual: "function.pathinfo",
 }
 
 /// Validates `pathinfo()` flag argument and returns the refined return type.

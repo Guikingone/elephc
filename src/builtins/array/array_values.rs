@@ -17,16 +17,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_values",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_values",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayValues,
     ),
-    summary: "Returns all the values of an array, re-indexed numerically.",
-    php_manual: "https://www.php.net/manual/en/function.array-values.php",
 }
 
 /// Returns the re-indexed value-array type for an `array_values` call.

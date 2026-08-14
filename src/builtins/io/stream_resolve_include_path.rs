@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "stream_resolve_include_path",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "stream_resolve_include_path",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamResolveIncludePath,
     ),
-    summary: "Resolves filename against the include path.",
-    php_manual: "function.stream-resolve-include-path",
 }

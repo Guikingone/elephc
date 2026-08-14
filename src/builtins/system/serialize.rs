@@ -12,12 +12,8 @@
 
 
 builtin! {
-    name: "serialize",
-    area: System,
-    params: [value: Mixed],
-    returns: Str,
+    contract: "serialize",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Serialize,
     ),
-    summary: "Generates a storable representation of a value.",
 }

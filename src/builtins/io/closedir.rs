@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "closedir",
-    area: Io,
-    params: [dir_handle: Mixed],
-    returns: Void,
+    contract: "closedir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Closedir,
     ),
-    summary: "Closes directory handle.",
-    php_manual: "function.closedir",
 }
 
 /// Validates the directory handle is a stream resource and returns `Void`.

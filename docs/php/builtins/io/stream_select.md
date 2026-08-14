@@ -29,12 +29,6 @@ Runs the equivalent of the select() system call on the given arrays of streams.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_select` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_select.md).

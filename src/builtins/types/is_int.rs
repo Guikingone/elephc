@@ -8,13 +8,8 @@
 //! - Uses the shared typed EIR predicate; dynamic values are inspected by target-aware codegen.
 
 builtin! {
-    name: "is_int",
-    area: Types,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "is_int",
     semantics: crate::builtins::semantics::type_predicate_semantics(
         crate::ir::PhpTypePredicate::Int,
     ),
-    summary: "Checks whether a variable is an integer.",
-    php_manual: "function.is-int",
 }

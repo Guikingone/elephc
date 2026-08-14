@@ -15,13 +15,8 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_class_has_constructor",
-    area: System,
-    params: [class: Str],
-    returns: Bool,
+    contract: "__elephc_class_has_constructor",
     semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
-    summary: "Reports whether a dynamically named AOT class has a constructor.",
-    internal: true
 }
 
 /// Lowers the class-name predicate to the dedicated AOT metadata EIR primitive.

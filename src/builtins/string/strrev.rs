@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "strrev",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "strrev",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::StrReverse),
         crate::ir::Effects::PURE,
     ),
-    summary: "Reverses a string.",
-    php_manual: "https://www.php.net/manual/en/function.strrev.php",
 }

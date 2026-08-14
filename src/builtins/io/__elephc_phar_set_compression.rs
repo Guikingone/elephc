@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_set_compression",
-    area: Io,
-    params: [filename: Str, compression: Int],
-    returns: Bool,
+    contract: "__elephc_phar_set_compression",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharSetCompression,
     ),
-    summary: "Sets the compression algorithm for a PHAR archive.",
-    internal: true,
 }

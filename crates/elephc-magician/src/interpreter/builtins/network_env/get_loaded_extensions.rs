@@ -8,17 +8,19 @@
 //! - Returns a compile-time-known list of extension-name strings, matching native codegen.
 //! - The optional `$zend_extensions` flag selects the Zend extension list; it defaults to false.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::*;
 
 /// Regular (non-Zend) extension list returned by `get_loaded_extensions(false)`.
 ///
-/// KEEP IN SYNC with `src/codegen/lower_inst/builtins.rs` (`CORE_LOADED_EXTENSIONS`).
+/// Most entries mirror AOT's `CORE_LOADED_EXTENSIONS`. BCMath deliberately differs: Magician
+/// always implements every `bc*` function, so eval always lists `bcmath`; AOT lists it only when
+/// `elephc_bcmath` is linked through static detection or `--with-bcmath`. Other bridge-linked AOT
+/// extensions remain absent because eval has no AOT link manifest.
 const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",
     "SPL",
+    "bcmath",
     "json",
     "pcre",
     "date",
@@ -34,9 +36,8 @@ const CORE_LOADED_EXTENSIONS: &[&str] = &[
 const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 
 eval_builtin! {
-    name: "get_loaded_extensions",
+    contract: "get_loaded_extensions",
     area: NetworkEnv,
-    params: [zend_extensions = EvalBuiltinDefaultValue::Bool(false)],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

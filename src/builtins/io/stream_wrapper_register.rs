@@ -9,21 +9,16 @@
 //! - Arguments are pre-inferred by the registry before the hook runs; the hook does NOT
 //!   re-infer them.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_wrapper_register",
-    area: Io,
-    params: [protocol: Str, class: Str, flags: Int = DefaultSpec::Int(0)],
-    returns: Bool,
+    contract: "stream_wrapper_register",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamWrapperRegister,
     ),
-    summary: "Registers a URL wrapper implemented as a PHP class.",
-    php_manual: "function.stream-wrapper-register",
 }
 
 /// Validates the class argument names a declared class and returns `Bool`.

@@ -469,7 +469,11 @@ fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting wit
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
-`move`/`borrow` cleanup), then per-block constant folding that collapses
+`move`/`borrow` cleanup), then immutable integer-local classification and
+integer-sink specialization for checked add/subtract/multiply. Those passes make
+proven-stable local loads pure and replace transient boxed Mixed arithmetic with
+allocation-free `ichecked_*_to_int` operations only when every use observes an
+integer. Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and
