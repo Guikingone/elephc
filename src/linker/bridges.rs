@@ -46,7 +46,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         env_var: "ELEPHC_TLS_LIB_DIR",
         crate_name: "elephc-tls",
         flag_name: "tls",
-        whole_archive: true,
+        whole_archive: false,
         macos_frameworks: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
@@ -617,6 +617,9 @@ mod tests {
     /// Verifies representative bridge metadata and archive naming remain registered.
     #[test]
     fn representative_bridge_metadata_is_preserved() {
+        let tls = bridge_for_library("elephc_tls").expect("TLS bridge");
+        assert!(!tls.whole_archive);
+
         let crypto = bridge_for_library("elephc_crypto").expect("crypto bridge");
         assert_eq!(crypto.crate_name, "elephc-crypto");
         assert_eq!(crypto.env_var, "ELEPHC_CRYPTO_LIB_DIR");
@@ -634,6 +637,26 @@ mod tests {
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
+    }
+
+    /// Verifies automatic TLS linking stays lazy while `--with-tls` force-loads the archive.
+    #[test]
+    fn tls_whole_archive_is_reserved_for_explicit_forcing() {
+        let archive = std::env::current_exe().expect("test executable path");
+        let plan = LinkPlan::from_items(vec![LinkItem::named_runtime("elephc_tls")]);
+
+        for (forced, expected_whole_archive) in [(&[][..], false), (&["elephc_tls".to_string()][..], true)] {
+            let resolution = resolve_with(&plan, forced, |_| Ok(archive.clone()))
+                .expect("TLS bridge must resolve");
+            assert!(resolution.plan.items().iter().any(|item| matches!(
+                item,
+                LinkItem::StaticArchive {
+                    whole_archive,
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } if name == "elephc_tls" && *whole_archive == expected_whole_archive
+            )));
+        }
     }
 
     /// Verifies bridge progress selection and PHP extension reporting share the bridge table.
