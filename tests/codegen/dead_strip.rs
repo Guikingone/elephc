@@ -52,6 +52,25 @@ echo $f->x;
     assert_eq!(out, "42");
 }
 
+/// A managed-native callback may retain code through descriptor data, not a direct call edge.
+#[test]
+fn test_managed_regex_instance_callable_survives_dead_strip() {
+    let out = compile_cli_file_and_run_with_managed_pcre2(
+        r#"<?php
+class RegexFormatter {
+    public function __construct(private string $prefix) {}
+    public function replace(array $matches): string { return $this->prefix; }
+}
+function run_regex(callable $callback): string {
+    return preg_replace_callback('/[A-Z]/', $callback, 'AB');
+}
+echo run_regex((new RegexFormatter('descriptor:'))->replace(...));
+"#,
+        &[],
+    );
+    assert_eq!(out, "descriptor:descriptor:");
+}
+
 /// A program that uses fopen should keep I/O helpers and run correctly.
 #[test]
 fn test_fopen_program_after_dead_strip() {

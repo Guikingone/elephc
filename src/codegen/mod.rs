@@ -207,8 +207,6 @@ pub fn generate_user_asm_from_ir_with_options(
         Emit::Cdylib => Emitter::new_pic(module.target),
         Emit::Executable => Emitter::new(module.target),
     };
-    emitter.dead_strip =
-        matches!(emit, Emit::Executable) && module.target.platform == Platform::MacOS;
     if module.target.arch == Arch::X86_64 {
         emitter.emit_text_prelude();
     }
@@ -332,8 +330,6 @@ fn finalize_user_asm(
         module.target,
     );
 
-    let dead_strip = emitter.dead_strip;
-    let internal_labels = emitter.take_internal_labels();
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
         user_asm.push('\n');
@@ -341,21 +337,6 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
-    if dead_strip {
-        // Class/property/interface metadata uses contiguous tables addressed by base plus
-        // offset. Preserve their global data atoms while leaving function atoms strippable.
-        user_asm.push('\n');
-        user_asm.push_str(&crate::codegen::emit::macos_no_dead_strip_global_data(
-            &data_output,
-        ));
-        user_asm.push_str(&crate::codegen::emit::macos_no_dead_strip_global_data(
-            &user_data,
-        ));
-        user_asm = crate::codegen::emit::localize_internal_labels(
-            &user_asm,
-            &internal_labels,
-        );
-    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()
@@ -370,13 +351,6 @@ fn finalize_user_asm(
             exported.insert(module.target.extern_symbol(lifecycle));
         }
         return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
-    }
-    // Mach-O executable user objects use global function/method symbols as atom boundaries.
-    // Internal block labels were localized above so they remain valid branch targets without
-    // splitting those function atoms. Cdylibs must not opt in because their exported surface
-    // remains dynamically reachable.
-    if matches!(emit, Emit::Executable) && module.target.platform == Platform::MacOS {
-        user_asm.push_str("\n.subsections_via_symbols\n");
     }
     user_asm
 }

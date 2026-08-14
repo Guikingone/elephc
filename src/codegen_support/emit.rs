@@ -31,7 +31,7 @@ pub struct Emitter {
     /// footer that keeps each `__rt_*` helper a single atom (local labels never
     /// start an atom) while remaining valid conditional-branch targets on every
     /// toolchain, so the linker's `-dead_strip` drops whole unreferenced helpers.
-    /// Set for macOS executable runtime and user objects; Linux uses per-section
+    /// Only set for the macOS executable runtime object; Linux uses per-section
     /// `--gc-sections` and cdylibs never dead-strip.
     pub dead_strip: bool,
     /// Names of internal (`label()`) labels recorded while `dead_strip` is set,
@@ -87,8 +87,7 @@ impl Emitter {
     }
 
     /// Takes ownership of the recorded internal-label names, clearing the set.
-    /// Called once after runtime or user-text emission to drive
-    /// `localize_internal_labels`.
+    /// Called once after runtime emission to drive `localize_internal_labels`.
     pub fn take_internal_labels(&mut self) -> HashSet<String> {
         std::mem::take(&mut self.internal_labels)
     }
@@ -331,28 +330,6 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
     out
 }
 
-/// Emits Mach-O directives that preserve every global atom in a generated data fragment.
-///
-/// User metadata contains tables whose entries are addressed by base pointer and offset rather
-/// than one relocation per entry. Under `.subsections_via_symbols`, marking only the table head
-/// live lets `-dead_strip` discard later global entry atoms and corrupt that contiguous layout.
-/// Call this only for generated data fragments; function symbols must remain independently
-/// strippable.
-pub fn macos_no_dead_strip_global_data(asm: &str) -> String {
-    let mut seen = HashSet::new();
-    let mut directives = String::new();
-    for line in asm.lines() {
-        let Some(symbol) = line.trim().strip_prefix(".globl ") else {
-            continue;
-        };
-        let symbol = symbol.trim();
-        if !symbol.is_empty() && seen.insert(symbol) {
-            let _ = writeln!(directives, ".no_dead_strip {symbol}");
-        }
-    }
-    directives
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,13 +373,4 @@ mod tests {
         );
     }
 
-    /// Verifies data preservation directives retain unique globals without rooting local labels.
-    #[test]
-    fn test_macos_no_dead_strip_global_data_deduplicates_symbols() {
-        let asm = ".data\n.globl _table\n_table:\nLentry:\n.globl _table\n.globl _rows\n_rows:\n";
-        assert_eq!(
-            macos_no_dead_strip_global_data(asm),
-            ".no_dead_strip _table\n.no_dead_strip _rows\n"
-        );
-    }
 }

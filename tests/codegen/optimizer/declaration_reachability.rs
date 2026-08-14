@@ -540,16 +540,16 @@ fn test_program_without_pdo_still_does_not_link_bridge() {
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies executable user assembly exposes target-native linker dead-strip boundaries.
+/// Verifies executable user assembly respects the safe target-specific dead-strip boundary.
 #[test]
-fn test_user_assembly_is_prepared_for_link_dead_strip() {
+fn test_user_assembly_respects_linker_dead_strip_boundaries() {
     let dir = make_cli_test_dir("elephc_user_dead_strip_shape");
     let (user_asm, _, _) =
         compile_source_to_asm_with_options("<?php echo 1;", &dir, 8_388_608, false, false);
     if cfg!(target_os = "macos") {
         assert!(
-            user_asm.contains(".subsections_via_symbols"),
-            "macOS user assembly must be atom-split for -dead_strip"
+            !user_asm.contains(".subsections_via_symbols"),
+            "macOS user assembly must remain intact for address-taken callable labels"
         );
     } else {
         assert!(
