@@ -34,6 +34,13 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     if can_be_phar {
         publish_phar_delete_function_pointer(ctx);
     }
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_unlink",
+        WRAPPER_MISSING_HOOK_HEAD_UNLINK.len(),
+        "_uwmh_tail_unlink",
+        WRAPPER_MISSING_HOOK_TAIL_UNLINK.len(),
+    );
     load_string_to_result(ctx, path, "unlink")?;
     if can_be_phar {
         emit_unlink_maybe_phar_dispatch(ctx);
@@ -55,6 +62,13 @@ pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let path = expect_operand(inst, 0)?;
     let permissions = inst.operands.get(1).copied();
     let recursive = inst.operands.get(2).copied();
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_mkdir",
+        WRAPPER_MISSING_HOOK_HEAD_MKDIR.len(),
+        "_uwmh_tail_mkdir",
+        WRAPPER_MISSING_HOOK_TAIL_MKDIR.len(),
+    );
     load_string_to_result(ctx, path, "mkdir")?;
     emit_mkdir_wrapper_dispatch(ctx, permissions, recursive)?;
     store_if_result(ctx, inst)
@@ -67,6 +81,13 @@ pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_rmdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "rmdir", 1, 2)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_rmdir",
+        WRAPPER_MISSING_HOOK_HEAD_RMDIR.len(),
+        "_uwmh_tail_rmdir",
+        WRAPPER_MISSING_HOOK_TAIL_RMDIR.len(),
+    );
     load_string_to_result(ctx, path, "rmdir")?;
     emit_single_path_wrapper_dispatch_with_options(
         ctx,
@@ -213,6 +234,13 @@ pub(crate) fn lower_umask(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 pub(crate) fn lower_touch(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "touch", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_touch",
+        WRAPPER_MISSING_HOOK_HEAD_TOUCH.len(),
+        "_uwmh_tail_metadata",
+        WRAPPER_MISSING_HOOK_TAIL_METADATA.len(),
+    );
     load_string_to_result(ctx, path, "touch path")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_touch_args_aarch64(ctx, inst)?,

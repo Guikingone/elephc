@@ -34,10 +34,17 @@ use super::{
     SOCKET_FAILED_UNABLE,
     SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
     STR_REPEAT_TIMES_MSG,
-    WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK,
-    WRAPPER_MISSING_HOOK_HEAD_FSTAT, WRAPPER_MISSING_HOOK_HEAD_FWRITE,
+    WRAPPER_MISSING_HOOK_HEAD_CHGRP, WRAPPER_MISSING_HOOK_HEAD_CHMOD,
+    WRAPPER_MISSING_HOOK_HEAD_CHOWN, WRAPPER_MISSING_HOOK_HEAD_FEOF,
+    WRAPPER_MISSING_HOOK_HEAD_FLOCK, WRAPPER_MISSING_HOOK_HEAD_FSTAT,
+    WRAPPER_MISSING_HOOK_HEAD_FWRITE, WRAPPER_MISSING_HOOK_HEAD_MKDIR,
+    WRAPPER_MISSING_HOOK_HEAD_RENAME, WRAPPER_MISSING_HOOK_HEAD_RMDIR,
+    WRAPPER_MISSING_HOOK_HEAD_TOUCH, WRAPPER_MISSING_HOOK_HEAD_UNLINK,
     WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK,
-    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_WRITE,
+    WRAPPER_MISSING_HOOK_TAIL_METADATA, WRAPPER_MISSING_HOOK_TAIL_MKDIR,
+    WRAPPER_MISSING_HOOK_TAIL_RENAME, WRAPPER_MISSING_HOOK_TAIL_RMDIR,
+    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_UNLINK,
+    WRAPPER_MISSING_HOOK_TAIL_WRITE,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -180,6 +187,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_uwmh_tail_eof", WRAPPER_MISSING_HOOK_TAIL_EOF),
         ("_uwmh_tail_stat", WRAPPER_MISSING_HOOK_TAIL_STAT),
         ("_uwmh_tail_lock", WRAPPER_MISSING_HOOK_TAIL_LOCK),
+        ("_uwmh_head_unlink", WRAPPER_MISSING_HOOK_HEAD_UNLINK),
+        ("_uwmh_head_rename", WRAPPER_MISSING_HOOK_HEAD_RENAME),
+        ("_uwmh_head_mkdir", WRAPPER_MISSING_HOOK_HEAD_MKDIR),
+        ("_uwmh_head_rmdir", WRAPPER_MISSING_HOOK_HEAD_RMDIR),
+        ("_uwmh_head_chmod", WRAPPER_MISSING_HOOK_HEAD_CHMOD),
+        ("_uwmh_head_touch", WRAPPER_MISSING_HOOK_HEAD_TOUCH),
+        ("_uwmh_head_chown", WRAPPER_MISSING_HOOK_HEAD_CHOWN),
+        ("_uwmh_head_chgrp", WRAPPER_MISSING_HOOK_HEAD_CHGRP),
+        ("_uwmh_tail_unlink", WRAPPER_MISSING_HOOK_TAIL_UNLINK),
+        ("_uwmh_tail_rename", WRAPPER_MISSING_HOOK_TAIL_RENAME),
+        ("_uwmh_tail_mkdir", WRAPPER_MISSING_HOOK_TAIL_MKDIR),
+        ("_uwmh_tail_rmdir", WRAPPER_MISSING_HOOK_TAIL_RMDIR),
+        ("_uwmh_tail_metadata", WRAPPER_MISSING_HOOK_TAIL_METADATA),
         ("_scandir_open_warn_head", SCANDIR_OPEN_WARNING_HEAD),
         ("_scandir_open_warn_mid", SCANDIR_OPEN_WARNING_MIDDLE),
         ("_scandir_errno_warn_head", SCANDIR_ERRNO_WARNING_HEAD),
@@ -1152,6 +1172,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // dispatcher itself answers with a buffer/length pair, so the code — which decides
     // whether a closing flush failed — has nowhere else to travel.
     out.push_str(&comm_directive("_user_filter_last_psfs", 8, target));
+    // _uwmh_head / _uwmh_tail: the (ptr, len) pairs naming the CALLER and the missing method for
+    // the next wrapper path-operation dispatch. One runtime helper serves unlink/rename/mkdir/
+    // rmdir and the whole stream_metadata family, so it cannot know which builtin called it; the
+    // lowering publishes the pair before dispatching and the helper reads it only on the
+    // missing-method path, which runs no user code, so nothing can overwrite it in between.
+    out.push_str(&comm_directive("_uwmh_head", 16, target));
+    out.push_str(&comm_directive("_uwmh_tail", 16, target));
     // _user_filter_consumed_scratch: the storage `filter()`'s by-reference `&$consumed` binds to.
     // An untyped by-ref parameter is an Int by-ref, so the method writes a plain i64 THROUGH the
     // address it is handed — exactly like `stream_open`'s `&$opened_path` scratch. It used to be

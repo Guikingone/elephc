@@ -45,6 +45,16 @@ const STREAM_BUFFER_NONE: usize = 0;
 const STREAM_BUFFER_FULL: usize = 2;
 /// The chunk size php passes as `$arg2` when the requested buffer size is zero.
 const DEFAULT_CHUNK_SIZE: usize = 1024;
+use crate::codegen_support::runtime::data::{
+    WRAPPER_MISSING_HOOK_HEAD_CHGRP, WRAPPER_MISSING_HOOK_HEAD_CHMOD,
+    WRAPPER_MISSING_HOOK_HEAD_CHOWN, WRAPPER_MISSING_HOOK_HEAD_MKDIR,
+    WRAPPER_MISSING_HOOK_HEAD_RENAME, WRAPPER_MISSING_HOOK_HEAD_RMDIR,
+    WRAPPER_MISSING_HOOK_HEAD_TOUCH, WRAPPER_MISSING_HOOK_HEAD_UNLINK,
+    WRAPPER_MISSING_HOOK_TAIL_METADATA, WRAPPER_MISSING_HOOK_TAIL_MKDIR,
+    WRAPPER_MISSING_HOOK_TAIL_RENAME, WRAPPER_MISSING_HOOK_TAIL_RMDIR,
+    WRAPPER_MISSING_HOOK_TAIL_UNLINK,
+};
+
 /// `stream_set_write_buffer()`'s answer for a stream that is not a userspace wrapper.
 const NATIVE_WRITE_BUFFER_RESULT: i64 = -1;
 /// `stream_set_read_buffer()`'s answer for a stream that is not a userspace wrapper.

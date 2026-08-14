@@ -316,6 +316,44 @@ pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Publishes the caller/method names the wrapper path-op helper warns with when the hook is absent.
+///
+/// `__rt_user_wrapper_path_op` serves unlink/rename/mkdir/rmdir and the whole `stream_metadata`
+/// family, so it cannot know which builtin reached it; php names the CALLER
+/// ("Warning: chmod(): W::stream_metadata is not implemented!"), which only the lowering knows.
+/// The helper reads these only on the missing-method path, which runs no user code, so no
+/// dispatch can overwrite them in between.
+pub(super) fn emit_publish_missing_hook_message(
+    ctx: &mut FunctionContext<'_>,
+    head_symbol: &str,
+    head_len: usize,
+    tail_symbol: &str,
+    tail_len: usize,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", head_symbol);
+            ctx.emitter.instruction(&format!("mov x10, #{}", head_len));
+            abi::emit_symbol_address(ctx.emitter, "x11", "_uwmh_head");
+            ctx.emitter.instruction("stp x9, x10, [x11]");                      // publish the caller's half
+            abi::emit_symbol_address(ctx.emitter, "x9", tail_symbol);
+            ctx.emitter.instruction(&format!("mov x10, #{}", tail_len));
+            abi::emit_symbol_address(ctx.emitter, "x11", "_uwmh_tail");
+            ctx.emitter.instruction("stp x9, x10, [x11]");                      // publish the method's half
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", head_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_uwmh_head");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the caller's half
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", head_len));
+            abi::emit_symbol_address(ctx.emitter, "r9", tail_symbol);
+            abi::emit_symbol_address(ctx.emitter, "r10", "_uwmh_tail");
+            ctx.emitter.instruction("mov QWORD PTR [r10], r9");                 // publish the method's half
+            ctx.emitter.instruction(&format!("mov QWORD PTR [r10 + 8], {}", tail_len));
+        }
+    }
+}
+
 /// Emits `mkdir()`'s wrapper-vs-filesystem dispatch, threading `$permissions` and `$recursive`.
 ///
 /// Both are RUNTIME values, so unlike [`emit_single_path_wrapper_dispatch_with_options`] they are
@@ -600,6 +638,13 @@ pub(super) fn lower_rename_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &In
     super::super::ensure_arg_count(inst, "rename", 2)?;
     let from = expect_operand(inst, 0)?;
     let to = expect_operand(inst, 1)?;
+    emit_publish_missing_hook_message(
+        ctx,
+        "_uwmh_head_rename",
+        WRAPPER_MISSING_HOOK_HEAD_RENAME.len(),
+        "_uwmh_tail_rename",
+        WRAPPER_MISSING_HOOK_TAIL_RENAME.len(),
+    );
     let wrapper = ctx.next_label("rename_wrapper");
     let after = ctx.next_label("rename_after");
     match ctx.emitter.target.arch {

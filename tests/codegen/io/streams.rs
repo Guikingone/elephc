@@ -10413,6 +10413,50 @@ fclose($f);
     assert_eq!(out, "bool(false)\nint(42)\nbool(false)\nbool(false)\n");
 }
 
+/// The path operations warn by class and method too, naming the BUILTIN that called them.
+///
+/// These share one runtime helper across unlink/rename/mkdir/rmdir and the whole
+/// `stream_metadata` family, so the helper cannot know which builtin reached it — php names the
+/// caller, and `chmod`/`touch`/`chown` all name `stream_metadata` rather than a method of their
+/// own. Each wording measured against php 8.5.6.
+#[test]
+fn test_missing_wrapper_path_hooks_warn_naming_their_caller() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+var_dump(unlink("bare://a"));
+var_dump(rename("bare://a", "bare://b"));
+var_dump(mkdir("bare://d"));
+var_dump(rmdir("bare://d"));
+var_dump(chmod("bare://a", 0644));
+var_dump(touch("bare://a"));
+var_dump(chown("bare://a", 501));
+var_dump(@unlink("bare://a"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(false)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: unlink(): Bare::unlink is not implemented!\n\
+         Warning: rename(): Bare::rename is not implemented!\n\
+         Warning: mkdir(): Bare::mkdir is not implemented!\n\
+         Warning: rmdir(): Bare::rmdir is not implemented!\n\
+         Warning: chmod(): Bare::stream_metadata is not implemented!\n\
+         Warning: touch(): Bare::stream_metadata is not implemented!\n\
+         Warning: chown(): Bare::stream_metadata is not implemented!\n",
+        "the caller's own name on every line, and nothing from the suppressed call"
+    );
+}
+
 /// The wrapper marker must NOT fire on a class that merely owns generic names.
 ///
 /// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary

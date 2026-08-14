@@ -197,6 +197,51 @@ pub(crate) const WRAPPER_MISSING_HOOK_TAIL_STAT: &str = "::stream_stat is not im
 /// `stream_lock`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_LOCK: &str = "::stream_lock is not implemented!\n";
 
+/// The path-operation heads, one per PHP function that can reach a wrapper path hook.
+///
+/// These differ from the stream-instance heads only in that ONE runtime helper serves them all:
+/// `__rt_user_wrapper_path_op` cannot know which builtin called it, so the lowering publishes the
+/// pair into `_uwmh_head`/`_uwmh_tail` before dispatching. Note `chmod`/`touch`/`chown`/`chgrp`
+/// all name `stream_metadata`, not a method of their own — measured on php 8.5.6.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_UNLINK: &str = "Warning: unlink(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_RENAME: &str = "Warning: rename(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_MKDIR: &str = "Warning: mkdir(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_RMDIR: &str = "Warning: rmdir(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_CHMOD: &str = "Warning: chmod(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_TOUCH: &str = "Warning: touch(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_CHOWN: &str = "Warning: chown(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_CHGRP: &str = "Warning: chgrp(): ";
+
+/// `unlink`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_UNLINK: &str = "::unlink is not implemented!\n";
+
+/// `rename`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_RENAME: &str = "::rename is not implemented!\n";
+
+/// `mkdir`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_MKDIR: &str = "::mkdir is not implemented!\n";
+
+/// `rmdir`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_UNLINK`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_RMDIR: &str = "::rmdir is not implemented!\n";
+
+/// `stream_metadata`'s tail, shared by chmod/touch/chown/chgrp.
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_METADATA: &str =
+    "::stream_metadata is not implemented!\n";
+
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///
 /// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No
