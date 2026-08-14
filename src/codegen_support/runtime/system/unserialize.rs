@@ -1143,7 +1143,7 @@ fn emit_unserialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp QWORD PTR [rax], 6");                              // does the alias point at an object?
     emitter.instruction("jne __rt_unser_at_ref_boxed");                         // non-objects need no retain
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the fresh box across the retain
-    emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // object pointer
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // object pointer, where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the shared object
     emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the fresh box
     emitter.label("__rt_unser_at_ref_boxed");

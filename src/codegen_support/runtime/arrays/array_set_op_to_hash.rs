@@ -243,9 +243,10 @@ pub fn emit_array_set_op_to_hash(emitter: &mut Emitter, label: &str, op: SetOpTo
 /// Output: rax = new owned hash whose integer keys are the surviving elements' source indices
 ///
 /// The runtime helpers do NOT share one x86 convention: `__rt_str_persist` reads its string in
-/// `rax`/`rdx` and answers there, while `__rt_incref`, `__rt_str_eq`, `__rt_hash_new` and
-/// `__rt_hash_set` take the SysV integer argument registers. Each call site below follows the
-/// convention of the helper it calls, exactly as `__rt_array_slice_to_hash` does.
+/// `rax`/`rdx` and answers there, `__rt_incref` reads its pointer in `rax` (NOT `rdi` — its own
+/// body opens with `test rax, rax`), and only `__rt_str_eq`, `__rt_hash_new` and `__rt_hash_set`
+/// take the SysV integer argument registers. Each call site below follows the convention of the
+/// helper it calls.
 fn emit_array_set_op_to_hash_linux_x86_64(emitter: &mut Emitter, label: &str, op: SetOpToHash) {
     let cap_ok = format!("{}_cap_ok", label);
     let outer = format!("{}_outer", label);
@@ -376,7 +377,7 @@ fn emit_array_set_op_to_hash_linux_x86_64(emitter: &mut Emitter, label: &str, op
     emitter.instruction(&format!("jl {}", keep_set));                           // scalar elements need no retain
     emitter.instruction("cmp r8, 7");                                           // is the survivor above the heap-backed tag range?
     emitter.instruction(&format!("jg {}", keep_set));                           // non-heap tags need no retain
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 48]");                       // load the heap-backed survivor pointer
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the heap-backed survivor pointer where __rt_incref reads it on x86_64
     emitter.instruction("call __rt_incref");                                    // retain the heap-backed survivor for the result hash
     emitter.instruction(&format!("jmp {}", keep_set));                          // continue to insertion
     emitter.label(&keep_str);
