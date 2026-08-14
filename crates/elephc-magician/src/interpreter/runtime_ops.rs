@@ -439,6 +439,17 @@ pub trait RuntimeValueOps {
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 
+    /// Raises the `@` diagnostic-suppression depth for the expression being evaluated.
+    ///
+    /// php's error-suppression operator silences every diagnostic raised while its inner
+    /// expression evaluates — value and exceptions pass through untouched. The depth
+    /// nests, because `@` expressions do.
+    fn suppress_begin(&mut self);
+
+    /// Lowers the `@` diagnostic-suppression depth; the pair must unwind on EVERY exit,
+    /// exceptional ones included, or one caught throw would silence the rest of the run.
+    fn suppress_end(&mut self);
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 

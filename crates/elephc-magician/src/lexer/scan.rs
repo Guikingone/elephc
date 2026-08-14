@@ -312,6 +312,10 @@ impl<'a> Lexer<'a> {
                 self.bump_char();
                 Ok(TokenKind::Backslash)
             }
+            '@' => {
+                self.bump_char();
+                Ok(TokenKind::At)
+            }
             '#' if self.peek_next_char() == Some('[') => {
                 self.bump_char();
                 self.bump_char();

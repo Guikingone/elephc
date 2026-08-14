@@ -104,6 +104,8 @@ pub(super) struct FakeOps {
     pub(super) output: String,
     pub(super) releases: Vec<RuntimeCellHandle>,
     pub(super) warnings: Vec<String>,
+    /// `@` suppression depth; while non-zero, `warning()` records nothing.
+    pub(super) suppress_depth: u32,
     pub(super) fail_array_set_call: Option<usize>,
     pub(super) array_set_calls: usize,
     pub(super) ob_stack: Vec<FakeObLevel>,

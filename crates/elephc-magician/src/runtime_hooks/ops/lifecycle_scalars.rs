@@ -56,11 +56,25 @@ macro_rules! impl_lifecycle_scalar_ops {
     }
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
+    ///
+    /// A non-zero `@` depth swallows the message entirely, mirroring the compiled
+    /// runtime's `__rt_diag_push_suppression` counter for eval-originated diagnostics.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.suppress_depth > 0 {
+            return Ok(());
+        }
         unsafe {
             __elephc_eval_warning(message.as_ptr(), message.len() as u64);
         }
         Ok(())
+    }
+
+    fn suppress_begin(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_add(1);
+    }
+
+    fn suppress_end(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_sub(1);
     }
 
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
