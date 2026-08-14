@@ -3817,9 +3817,12 @@ echo $row[1];
 
 unlink("a.txt");
 "#;
+    // php -n 8.5.6 answers ["o", "e"]: fgetcsv strips the record's trailing newline
+    // BEFORE splitting on the separator. The previous "o:e\n" expectation pinned the
+    // explode()-based READ_CSV that kept the terminator glued to the last field.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_current", source),
-        "o:e\n"
+        "o:e"
     );
 }
 
