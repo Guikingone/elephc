@@ -310,7 +310,13 @@ fn emit_scandir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_scandir_ret");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return the destination string array pointer in the canonical x86_64 integer result register
-    emitter.instruction("add rsp, 32");                                         // release the temporary scandir() spill slots before returning
+    // The release MUST match the prologue's `sub rsp, 64`. It said 32 — so `pop rbp` read
+    // the saved-errno spill slot (rbp = 2, ENOENT) and `ret` jumped to the DIR* slot (NULL
+    // on a failed open, a heap address on a successful one): every x86 scandir call
+    // segfaulted, success and failure alike, which is exactly what CI's twelve red
+    // linux-x86_64 shards had in common. AArch64 tears its frame down by absolute offsets
+    // and never had the mismatch.
+    emitter.instruction("add rsp, 64");                                         // release the temporary scandir() spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the directory entry array
     emitter.instruction("ret");                                                 // return the array of directory entry names to the caller
 }

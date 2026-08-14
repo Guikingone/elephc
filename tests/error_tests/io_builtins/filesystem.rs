@@ -137,9 +137,13 @@ fn test_error_getcwd_wrong_args() {
 }
 
 /// Verifies `scandir()` rejects zero arguments with arity error.
+///
+/// The wording follows the signature: php declares
+/// `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, ...)`,
+/// so since the sorting order landed the range is 1 or 2, not exactly 1.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes exactly 1 argument");
+    expect_error("<?php scandir();", "scandir() takes 1 or 2 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.
