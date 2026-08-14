@@ -241,7 +241,12 @@ pub(super) fn emit_url_stat_field_or_fallback(
             abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
             ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether a registered wrapper scheme matched
             ctx.emitter.instruction(&format!("cbz w9, {}", fallback));          // fall back to filesystem stat when no wrapper matched
-            ctx.emitter.instruction("mov x1, #1");                              // a matched wrapper is a successful stat for int|false consumers
+            // A matched SCHEME is not a successful stat. A wrapper with no `url_stat()`, or one
+            // answering false, leaves the -1 sentinel here, and marking that a success made
+            // `filesize()` report int(-1) where php reports false. Neither field the selector can
+            // name — size nor mode — is ever legitimately negative.
+            ctx.emitter.instruction("cmn x0, #1");                              // did the field lookup produce the -1 sentinel?
+            ctx.emitter.instruction("cset x1, ne");                             // success only when it did not
             ctx.emitter.instruction(&format!("b {}", done));                    // keep the wrapper field result
             ctx.emitter.label(&fallback);
             ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for filesystem fallback
@@ -262,7 +267,10 @@ pub(super) fn emit_url_stat_field_or_fallback(
             ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether a registered wrapper scheme matched
             ctx.emitter.instruction("test r9d, r9d");                           // test the url_stat matched flag
             ctx.emitter.instruction(&format!("jz {}", fallback));               // fall back to filesystem stat when no wrapper matched
-            ctx.emitter.instruction("mov rdx, 1");                              // a matched wrapper is a successful stat for int|false consumers
+            // See the AArch64 counterpart: a matched scheme is not a successful stat.
+            ctx.emitter.instruction("cmp rax, -1");                             // did the field lookup produce the -1 sentinel?
+            ctx.emitter.instruction("setne dl");                                // success only when it did not
+            ctx.emitter.instruction("movzx rdx, dl");
             ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the wrapper field result
             ctx.emitter.label(&fallback);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for filesystem fallback

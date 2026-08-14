@@ -240,7 +240,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #24]");                                   // save the requested read length across the helper call
 
     emit_aarch64_handle_lookup(emitter, "__rt_uwfread_empty");                  // resolve obj into x0, fall through to empty-string on missing handles
-    emit_aarch64_method_lookup(emitter, "__rt_uwfread_empty", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11
+    emit_aarch64_method_lookup(emitter, "__rt_uwfread_missing", VTABLE_SLOT_READ); // resolve stream_read method pointer into x11
 
     // -- call stream_read($this, $count) → returns string in x1/x2 --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
@@ -249,6 +249,18 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+
+    // -- the class does not implement stream_read: php answers FALSE, not "" --
+    // Measured on php 8.5.6 with `stream_eof` present so the read is genuinely attempted; php
+    // emits no warning here, unlike the write side. The zero flag is what the builtin reads as
+    // failure, so the empty pair below never reaches the caller as a string.
+    emitter.label("__rt_uwfread_missing");
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #0");
+    emitter.instruction("mov x0, #0");                                          // failure flag → fread() answers false
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_uwfread_empty");
     emitter.instruction("mov x1, #0");                                          // empty-string pointer for the missing stream_read fallback
@@ -272,7 +284,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested read length
 
     emit_x86_handle_lookup(emitter, "__rt_uwfread_empty_x86");                  // resolve obj into rdi, fall through on missing handles
-    emit_x86_method_lookup(emitter, "__rt_uwfread_empty_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11
+    emit_x86_method_lookup(emitter, "__rt_uwfread_missing_x86", VTABLE_SLOT_READ); // resolve stream_read method pointer into r11
 
     // -- call stream_read($this, $count) → returns string in rax/rdx --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
@@ -281,6 +293,15 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
+
+    // -- the class does not implement stream_read: php answers FALSE, not "" --
+    emitter.label("__rt_uwfread_missing_x86");
+    emitter.instruction("xor eax, eax");
+    emitter.instruction("xor edx, edx");
+    emitter.instruction("xor ecx, ecx");                                        // failure flag → fread() answers false
+    emitter.instruction("add rsp, 16");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the failure result
 
     emitter.label("__rt_uwfread_empty_x86");
     emitter.instruction("xor eax, eax");                                        // empty-string pointer for the missing stream_read fallback

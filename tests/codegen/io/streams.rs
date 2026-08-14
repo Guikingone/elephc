@@ -10379,6 +10379,40 @@ fclose($f);
     );
 }
 
+/// A wrapper missing `stream_read`/`url_stat` answers FALSE, not an empty string or -1.
+///
+/// Both were silent wrong values rather than missing diagnostics. `fread()` handed back `""`,
+/// which reads as a successful empty read; php answers false. `filesize()` handed back the -1 the
+/// field lookup uses as its sentinel, because a matched SCHEME was being treated as a successful
+/// stat — a wrapper with no `url_stat()` matches the scheme and produces nothing. Measured on
+/// php 8.5.6, including the two controls: a wrapper that does implement `url_stat()` keeps its
+/// size, and an absent ordinary file keeps its own false.
+#[test]
+fn test_missing_read_and_stat_hooks_answer_false_not_a_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+class HasStat {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+    function url_stat($path, $flags) { return ["size" => 42]; }
+}
+stream_wrapper_register("bare", "Bare");
+stream_wrapper_register("hs", "HasStat");
+var_dump(@filesize("bare://y"));
+var_dump(@filesize("hs://y"));
+var_dump(@filesize("/definitely/not/here"));
+$f = fopen("bare://x", "r");
+var_dump(fread($f, 5));
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(42)\nbool(false)\nbool(false)\n");
+}
+
 /// The wrapper marker must NOT fire on a class that merely owns generic names.
 ///
 /// `mkdir`/`rmdir`/`unlink`/`rename` are ordinary method names on ordinary
