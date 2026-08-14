@@ -34,6 +34,10 @@ use super::{
     SOCKET_FAILED_UNABLE,
     SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
     STR_REPEAT_TIMES_MSG,
+    WRAPPER_MISSING_HOOK_HEAD_FEOF, WRAPPER_MISSING_HOOK_HEAD_FLOCK,
+    WRAPPER_MISSING_HOOK_HEAD_FSTAT, WRAPPER_MISSING_HOOK_HEAD_FWRITE,
+    WRAPPER_MISSING_HOOK_TAIL_EOF, WRAPPER_MISSING_HOOK_TAIL_LOCK,
+    WRAPPER_MISSING_HOOK_TAIL_STAT, WRAPPER_MISSING_HOOK_TAIL_WRITE,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -168,6 +172,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_pf_w_create_mid", PF_WARN_CREATE_MID),
         ("_pf_w_create_end", PF_WARN_CREATE_END),
         ("_pf_w_open_mid", PF_WARN_OPEN_MID),
+        ("_uwmh_head_fwrite", WRAPPER_MISSING_HOOK_HEAD_FWRITE),
+        ("_uwmh_head_feof", WRAPPER_MISSING_HOOK_HEAD_FEOF),
+        ("_uwmh_head_fstat", WRAPPER_MISSING_HOOK_HEAD_FSTAT),
+        ("_uwmh_head_flock", WRAPPER_MISSING_HOOK_HEAD_FLOCK),
+        ("_uwmh_tail_write", WRAPPER_MISSING_HOOK_TAIL_WRITE),
+        ("_uwmh_tail_eof", WRAPPER_MISSING_HOOK_TAIL_EOF),
+        ("_uwmh_tail_stat", WRAPPER_MISSING_HOOK_TAIL_STAT),
+        ("_uwmh_tail_lock", WRAPPER_MISSING_HOOK_TAIL_LOCK),
         ("_scandir_open_warn_head", SCANDIR_OPEN_WARNING_HEAD),
         ("_scandir_open_warn_mid", SCANDIR_OPEN_WARNING_MIDDLE),
         ("_scandir_errno_warn_head", SCANDIR_ERRNO_WARNING_HEAD),

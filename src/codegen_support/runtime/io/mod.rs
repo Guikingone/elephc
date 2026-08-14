@@ -308,7 +308,7 @@ pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,
     emit_user_wrapper_fseek, emit_user_wrapper_fstat, emit_user_wrapper_ftell,
-    emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite,
+    emit_user_wrapper_ftruncate, emit_user_wrapper_fwrite, emit_wrapper_missing_hook_warning,
 };
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;

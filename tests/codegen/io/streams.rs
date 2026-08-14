@@ -8533,9 +8533,10 @@ fclose($h);
 /// Verifies compiled PHP output for fopen user wrapper fflush dispatches to stream flush.
 #[test]
 fn test_fopen_user_wrapper_fflush_dispatches_to_stream_flush() {
-    // Phase 10 follow-up: fflush() dispatches into the wrapper's stream_flush
-    // and returns its bool result. Without stream_flush, the helper reports
-    // success — "nothing to flush" is a benign default.
+    // fflush() dispatches into the wrapper's stream_flush and returns its bool
+    // result. Without stream_flush php answers FALSE, measured on 8.5.6 — the
+    // "nothing to flush is a benign success" default this used to assert was the
+    // helper's own convention, not php's.
     let out = compile_and_run(
         r#"<?php
 class FlushW {
@@ -8554,7 +8555,7 @@ $g = fopen("noflush://x", "r");
 echo fflush($g) ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "1|1");
+    assert_eq!(out, "1|0");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fseek dispatches to stream seek.
@@ -10328,6 +10329,54 @@ fclose($b);
         "int(10)\nABCDEFGHIJ\nint(7)\nabcdefghij\nint(0)\nABCDEFGHIJ\nint(10)\n"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// php warns, by name, for every `streamWrapper` hook the registered class does not implement.
+///
+/// elephc answered silently, and two of the answers were wrong as well: `fwrite()` reported 0
+/// bytes where php reports false, and `fflush()` reported success where php reports false.
+/// Every wording below was measured against php 8.5.6 on a wrapper declaring only `stream_open`;
+/// note that `feof()` alone also says what php assumed instead. `@` still silences all of them.
+///
+/// `stream_read` is deliberately absent from this list: php 8.5.6 emits NO warning for a missing
+/// `stream_read`, measured with `stream_eof` present so the read is genuinely attempted.
+#[test]
+fn test_missing_wrapper_hooks_warn_by_class_and_method() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+$f = fopen("bare://x", "r+");
+var_dump(fwrite($f, "abc"));
+var_dump(feof($f));
+var_dump(fstat($f));
+var_dump(flock($f, LOCK_EX));
+var_dump(fflush($f));
+echo "--- suppressed ---\n";
+var_dump(@fwrite($f, "abc"));
+var_dump(@feof($f));
+var_dump(@fstat($f));
+var_dump(@flock($f, LOCK_EX));
+fclose($f);
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n\
+         --- suppressed ---\nbool(false)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: fwrite(): Bare::stream_write is not implemented!\n\
+         Warning: feof(): Bare::stream_eof is not implemented! Assuming EOF\n\
+         Warning: fstat(): Bare::stream_stat is not implemented!\n\
+         Warning: flock(): Bare::stream_lock is not implemented!\n",
+        "one line per missing hook, naming the class, and nothing from the suppressed calls"
+    );
 }
 
 /// The wrapper marker must NOT fire on a class that merely owns generic names.

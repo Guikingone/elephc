@@ -98,6 +98,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_php_filter_dynamic(emitter);
     io::emit_data_stream_dynamic(emitter);
     io::emit_fwrite(emitter);
+    io::emit_wrapper_missing_hook_warning(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
     io::emit_user_wrapper_fwrite(emitter);

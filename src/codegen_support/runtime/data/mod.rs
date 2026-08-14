@@ -162,6 +162,41 @@ pub(crate) const PF_WARN_CREATE_END: &str = ")\n";
 /// Opens the failed-open line, between the callee name and the URL it names.
 pub(crate) const PF_WARN_OPEN_MID: &str = "(";
 
+/// The halves php wraps around a wrapper class's name when a `streamWrapper` hook is missing.
+///
+/// php warns on every call into a hook the registered class does not implement, naming the CALLER
+/// and then the class and method: `Warning: fwrite(): M::stream_write is not implemented!`. Only
+/// the class name is a run-time value, so each site hands
+/// `__rt_wrapper_missing_hook_warning` the fixed text before and after it. All measured against
+/// php 8.5.6 — note `feof()`'s tail, which alone says what php assumed instead.
+///
+/// `stream_read` is deliberately absent: php 8.5.6 emits NO warning for a missing `stream_read`,
+/// measured with `stream_eof` present so the read is really attempted. The audit that prompted
+/// this listed one; the measurement refuses it.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FWRITE: &str = "Warning: fwrite(): ";
+
+/// `feof()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FEOF: &str = "Warning: feof(): ";
+
+/// `fstat()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FSTAT: &str = "Warning: fstat(): ";
+
+/// `flock()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FLOCK: &str = "Warning: flock(): ";
+
+/// `stream_write`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_WRITE: &str = "::stream_write is not implemented!\n";
+
+/// `stream_eof`'s tail, the only one that also reports what php assumed.
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_EOF: &str =
+    "::stream_eof is not implemented! Assuming EOF\n";
+
+/// `stream_stat`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_STAT: &str = "::stream_stat is not implemented!\n";
+
+/// `stream_lock`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_LOCK: &str = "::stream_lock is not implemented!\n";
+
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///
 /// php-src writes TWO lines for one failure — `scandir(/no/such): Failed to open directory: No
