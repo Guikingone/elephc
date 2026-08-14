@@ -24,6 +24,14 @@ trade-offs.
   pass driver after lowering. Controlled by `--ir-opt`. See
   [The EIR Design](../internals/the-ir.md#optimization-passes).
 
+Declaration reachability favors correctness over minimum size. Runtime-computed
+functions, methods, classes, callables, aliases, and Reflection may therefore
+retain a wider declaration family than the eventual runtime value needs. On
+macOS, linker atom splitting remains limited to the runtime object: generated
+user metadata and address-taken callable labels can rely on one contiguous user
+object, so user declarations are removed by the AST pass instead of by
+`.subsections_via_symbols`.
+
 ## EIR optimization passes
 
 After the AST is lowered to EIR and validated, a fixed-point pass driver runs the

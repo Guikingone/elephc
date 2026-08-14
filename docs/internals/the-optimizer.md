@@ -311,6 +311,16 @@ storage itself. Likewise, an expression call such as `($value)()` intentionally
 sets both the dynamic-function and dynamic-method hazards because the value may
 be a function, closure, or callable array. Keeping every method of every live
 class in that case is a documented precision cost, not a correctness defect.
+Two-element array literals are treated as possible callable arrays even when
+they are ordinary data, for the same reason: the resulting over-retention is
+safe, while rejecting a runtime callable would not be.
+
+Compiler-internal declaration factories are scanned at their semantic call
+site. In particular, the runtime class selected by `PDO::prepare` roots the
+instantiable `PDOStatement` subclass family, while other non-literal
+`__elephc_new_without_constructor` calls fall back to the global dynamic-class
+hazard. This coupling must stay synchronized with PDO's validation and lowering
+until the dependency is represented in shared builtin metadata.
 
 Pruning the AST alone would be ineffective because EIR lowering reads flattened
 methods from `CheckResult`. The pass therefore filters `method_decls` and all
@@ -319,6 +329,16 @@ related method maps, resolves inherited implementations through
 flattened declarations, rebuilds instance and static vtable slots in survivor
 order, removes dead extern schemas and link requirements, and keeps the checked
 metadata synchronized with the remaining AST.
+
+Linker dead stripping is deliberately secondary. Linux user functions already
+live in separate text sections. The macOS runtime object uses
+`.subsections_via_symbols` to discard independent `__rt_*` helpers, but the
+generated user object does not: its address-taken callable labels and contiguous
+metadata are not yet modeled as independently rooted Mach-O atoms. Declaration
+reachability is therefore responsible for removing user functions and methods
+on macOS. Enabling user-object atom splitting requires explicit relocation and
+metadata roots plus callable regression coverage; applying the runtime-object
+strategy directly can produce dangling callable descriptors.
 
 ## Effect summaries: purity and `may_throw`
 

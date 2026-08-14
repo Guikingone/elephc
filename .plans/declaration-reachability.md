@@ -30,7 +30,7 @@
 - [x] Task 4: Prelude inventory and `--with-<crate>` force-keep
 - [x] Task 5: Method-level pruning on live classes, including vtable rebuild
 - [x] Task 6: Retire the web-only function prune; keep OPcache inject-time pay-for-use
-- [x] Task 7: User-assembly dead-strip parity (safety net, all targets)
+- [x] Task 7: Validate linker dead-strip boundaries and keep macOS user assembly intact
 - [x] Task 8: Docs, ROADMAP, and README
 
 ---
@@ -283,15 +283,19 @@ Injectors stay responsible for *whether* to inject the prelude at all (`inject_i
 - **SPL / datetime / reflection on-demand lowering:** keep it. Those methods are not AST declarations; they are synthetic. Do not try to express them in this pass.
 - **Runtime `__rt_*` dead-strip:** keep it. Orthogonal. This pass reduces *user* assembly and the references that pin bridge objects.
 
-### User-assembly dead-strip (Task 7, after the prune)
+### Linker dead-strip boundary (Task 7, after the prune)
 
-Even a correct prune leaves some unreferenced labels (property thunks, leftover wrappers). Make user objects as strippable as the runtime object on every target:
+Linker dead stripping remains a safety net, not a substitute for the AST pass.
+Linux user functions already use `.section .text.<name>` from
+`Emitter::label_global`. On macOS, only the runtime object opts into
+`.subsections_via_symbols`: generated user metadata contains contiguous tables,
+and callable descriptors may reach internal labels through data rather than a
+direct call relocation. Treating every global user symbol as an independent atom
+can therefore leave a descriptor pointing at stripped code.
 
-- Linux already emits `.section .text.<name>` from `Emitter::label_global`.
-- macOS user objects currently do **not** set `dead_strip` or emit `.subsections_via_symbols`. The runtime object does. Enable the same atom split for executable user assembly (`!pic`).
-- cdylib stays unstripped (exported surface must remain).
-
-This is a safety net, not a substitute for the AST pass. Vtables still pin live-class methods; only the AST prune can drop those.
+The macOS user object and cdylib stay intact. Declaration reachability removes
+dead user declarations before assembly, while the existing runtime-object path
+continues to discard independent `__rt_*` helpers.
 
 ### Non-goals (v1)
 
@@ -324,7 +328,7 @@ Modify:
 - `src/progress.rs` — phase label
 - `src/pdo_prelude.rs`, `src/tz_prelude.rs`, `src/image_prelude.rs`, `src/hash_prelude.rs`, `src/var_export_prelude.rs`, `src/list_id_prelude.rs`, `src/opcache_prelude/injection.rs`, `src/web_prelude.rs`, `src/version_prelude.rs` — fill inventory (and web: delete function prune once replaced)
 - `src/ir_lower/program/class_methods.rs` — debug assertion that `method_decls` ⊆ AST
-- `src/codegen_support/emit.rs`, `src/codegen/mod.rs` / user-asm finalize — macOS user-object `.subsections_via_symbols` for executables
+- `src/codegen_support/emit.rs`, `src/codegen/mod.rs` / user-asm finalize — preserve the runtime-only macOS `.subsections_via_symbols` boundary
 - `tests/codegen/cli.rs` — existing web prune test must keep passing
 - `tests/codegen/mod.rs` — register the new test file
 - `docs/internals/the-optimizer.md`, `docs/compiling/compilation-pipeline.md`, `docs/compiling/optimization.md`, `README.md`, `ROADMAP.md`
@@ -1208,7 +1212,7 @@ git commit -m "refactor: drop web-only declaration prune in favor of the shared 
 
 ---
 
-### Task 7: User-assembly dead-strip parity (safety net, all targets)
+### Task 7: Validate linker dead-strip boundaries (all targets)
 
 **Files:**
 - Modify: `src/codegen_support/emit.rs` / user-asm finalize (`src/codegen/mod.rs` `generate_user_asm_from_ir_with_options`)
@@ -1216,70 +1220,52 @@ git commit -m "refactor: drop web-only declaration prune in favor of the shared 
 
 **Interfaces:**
 - Consumes: existing runtime `dead_strip` + `.subsections_via_symbols` path in `src/codegen_support/driver_support.rs`
-- Produces: executable user objects split into per-symbol atoms on macOS the same way the runtime object already is; Linux unchanged (already per-section)
+- Produces: an explicit boundary: Linux user functions remain per-section, macOS user assembly remains one linker atom, and macOS runtime helpers remain per-symbol atoms
 
-- [x] **Step 1: Write a test that an unreferenced user label can be stripped even if emitted**
+- [x] **Step 1: Cover declaration pruning and linker-sensitive callable reachability**
 
-Prefer a fixture the AST pass cannot delete but the linker can, e.g. an internal helper that is emitted and then not referenced. If that is too synthetic, assert the user assembly for an executable contains `.subsections_via_symbols` on macOS and `.section .text._fn_` on Linux.
+Keep the declaration-level assembly shape tests. Add a managed-native regression
+whose instance callable is retained through descriptor data and invoked by a
+bridge callback. This catches dangling callable targets that a direct-call-only
+fixture cannot expose.
 
 ```rust
 #[test]
-fn test_user_assembly_is_prepared_for_link_dead_strip() {
-    let dir = make_cli_test_dir("elephc_user_dead_strip_shape");
-    let (user_asm, _, _) = compile_source_to_asm_with_options(
-        "<?php echo 1;",
-        &dir,
-        8_388_608,
-        false,
-        false,
-    );
-    if cfg!(target_os = "macos") {
-        assert!(
-            user_asm.contains(".subsections_via_symbols"),
-            "macOS user assembly must be atom-split for -dead_strip"
-        );
-    } else {
-        assert!(
-            user_asm.contains(".section .text."),
-            "Linux user assembly must use per-function sections for --gc-sections"
-        );
-    }
-    let _ = fs::remove_dir_all(&dir);
+fn test_managed_regex_instance_callable_survives_dead_strip() {
+    // The bridge reaches the method through a callable descriptor, not a direct call edge.
+    let out = compile_cli_file_and_run_with_managed_pcre2(/* callable fixture */, &[]);
+    assert_eq!(out, "descriptor:descriptor:");
 }
 ```
 
-cdylib must **not** gain `.subsections_via_symbols` stripping of exports. Gate on `Emit::Executable` / `!pic`, matching the runtime object.
+- [x] **Step 2: Reproduce the unsafe macOS experiment**
 
-- [x] **Step 2: Run; macOS test should fail today**
+Applying the runtime object's `.subsections_via_symbols` path to executable user
+assembly reproduces a SIGSEGV when the managed regex bridge invokes the
+address-taken instance callable. Preserving the user object as one atom restores
+the descriptor target.
 
-```bash
-cargo test --test codegen_tests test_user_assembly_is_prepared_for_link_dead_strip
-```
+- [x] **Step 3: Keep user-object atom splitting disabled on macOS**
 
-- [x] **Step 3: Enable user-object dead_strip for executables**
-
-Mirror `generate_runtime_with_features_pic`:
-
-- `dead_strip = !pic && target.platform == Platform::MacOS`
-- localize internal labels if the user object uses the same `label()` helpers for intra-function branches (only if that does not break user function epilogue labels — those are `label_global` and must stay global)
-- append `.subsections_via_symbols` at the end of **executable** user assembly
-
-Do not change cdylib emission.
-
-If localizing internal labels is risky for user functions (lots of named block labels), do **not** rename them. On Mach-O, `.subsections_via_symbols` already splits on *global* symbols (`_fn_*`, `_method_*`). That is enough. Skip `localize_internal_labels` for user asm unless a test proves an internal label starts a new atom and breaks a function.
+Do not set `Emitter::dead_strip`, localize internal user labels, or append
+`.subsections_via_symbols` in `generate_user_asm_from_ir_with_options`. Keep
+those operations in runtime-object generation only. Linux remains unchanged and
+cdylib exports remain intact.
 
 - [x] **Step 4: Run dead-strip + reachability tests**
 
 ```bash
-cargo test --test codegen_tests test_user_assembly_is_prepared_for_link_dead_strip
+cargo test --test codegen_tests test_user_assembly_respects_linker_dead_strip_boundaries
 cargo test --test codegen_tests test_hello_world_after_dead_strip
 cargo test --test codegen_tests test_pdo_query_only
+cargo nextest run --profile ci --test codegen_tests \
+  -E 'test(test_managed_regex_instance_callable_survives_dead_strip)'
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat: split executable user assembly for linker dead-strip"
+git commit -m "fix: preserve address-taken user callable labels"
 ```
 
 ---
