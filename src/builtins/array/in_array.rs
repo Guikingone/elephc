@@ -33,7 +33,13 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !matches!(
+        arr_ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.span,
             "in_array() second argument must be array",

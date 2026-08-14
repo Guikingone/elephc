@@ -132,7 +132,14 @@ pub(super) fn lower_method_call_with_receiver(
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let prepared = sig
+        .as_ref()
+        .and_then(|signature| ref_place_args::prepare_ref_place_args(ctx, signature, args));
+    let call_args = prepared
+        .as_ref()
+        .map(|(call_args, _)| call_args.as_slice())
+        .unwrap_or(args);
+    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -152,6 +159,9 @@ pub(super) fn lower_method_call_with_receiver(
         sig.as_ref(),
         expr.span,
     );
+    if let Some((_, plans)) = prepared {
+        ref_place_args::write_back_ref_place_args(ctx, plans);
+    }
     release_owning_receiver_temporary(ctx, object, expr.span);
     call
 }

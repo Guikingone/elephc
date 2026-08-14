@@ -24,6 +24,8 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     // no-ops otherwise. Always emitted so the EIR calls resolve.
     io::emit_http_response_code(emitter, features.web);
     io::emit_header(emitter, features.web);
+    io::emit_header_remove(emitter, features.web);
+    io::emit_headers_sent(emitter);
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);

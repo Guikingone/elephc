@@ -1973,6 +1973,38 @@ fn test_preg_replace_pattern() {
     assert_eq!(out, "aXbXcX");
 }
 
+/// Verifies the optional limit stops replacement after the requested number of matches.
+#[test]
+fn test_preg_replace_limit() {
+    let out = compile_and_run(r#"<?php echo preg_replace("/a/", "x", "aaaa", 2);"#);
+    assert_eq!(out, "xxaa");
+}
+
+/// Verifies an undefined by-reference counter receives the completed replacement count.
+#[test]
+fn test_preg_replace_initializes_count_output() {
+    let out = compile_and_run(
+        r#"<?php
+$result = preg_replace("/a/", "x", "aaaa", 2, $count);
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "xxaa|2");
+}
+
+/// Verifies named arguments retain source evaluation order and bind the counter destination.
+#[test]
+fn test_preg_replace_named_count_output() {
+    let out = compile_and_run(
+        r#"<?php
+$count = 99;
+$result = preg_replace(subject: "aaa", count: $count, replacement: "x", pattern: "/a/");
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "xxx|3");
+}
+
 /// Verifies PCRE lazy quantifiers keep their non-greedy behavior through PCRE2.
 #[test]
 fn test_preg_replace_pcre_lazy_quantifier() {
@@ -1990,8 +2022,13 @@ fn test_preg_replace_unicode_property_number() {
 /// Verifies `preg_replace` returns the subject unchanged when the pattern has no matches.
 #[test]
 fn test_preg_replace_no_match() {
-    let out = compile_and_run(r#"<?php echo preg_replace("/xyz/", "ABC", "hello world");"#);
-    assert_eq!(out, "hello world");
+    let out = compile_and_run(
+        r#"<?php
+$count = 99;
+echo preg_replace("/xyz/", "ABC", "hello world", -1, $count) . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "hello world|0");
 }
 
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
@@ -2011,6 +2048,24 @@ echo $result;
 "#,
     );
     assert_eq!(out, "price: [123] and [456]");
+}
+
+/// Verifies callback replacement honors the limit and initializes its by-reference counter.
+#[test]
+fn test_preg_replace_callback_limit_and_count() {
+    let out = compile_and_run(
+        r#"<?php
+$result = preg_replace_callback(
+    "/[0-9]+/",
+    function($matches): string { return "[" . $matches[0] . "]"; },
+    "a1 b22 c333",
+    2,
+    $count
+);
+echo $result . "|" . $count;
+"#,
+    );
+    assert_eq!(out, "a[1] b[22] c333|2");
 }
 
 /// Verifies `preg_replace_callback` exposes both complete match `$matches[0]` and numbered
@@ -3250,4 +3305,90 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 "#,
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
+}
+
+/// Verifies POSIX shell quoting wraps the argument and escapes embedded single quotes.
+#[test]
+fn test_escapeshellarg_compatibility_helper() {
+    let out = compile_and_run(r#"<?php echo escapeshellarg("a'b c");"#);
+    assert_eq!(out, "'a'\\''b c'");
+}
+
+/// Verifies unsupported process-title mutation is represented by PHP's boolean failure result.
+#[test]
+fn test_cli_set_process_title_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo cli_set_process_title("elephc-test") ? "changed" : "unsupported";"#,
+    );
+    assert_eq!(out, "unsupported");
+}
+
+/// The ext/proctitle spelling follows the same unsupported-but-safe compatibility result.
+#[test]
+fn test_setproctitle_compatibility_alias() {
+    let out = compile_and_run(
+        r#"<?php echo setproctitle("elephc-test") ? "changed" : "unsupported";"#,
+    );
+    assert_eq!(out, "unsupported");
+}
+
+/// Verifies `unpack()` accepts a runtime string stored behind a gradual `Mixed` result.
+#[test]
+fn test_unpack_repeated_integer_sequence_from_mixed_string() {
+    let out = compile_and_run(
+        r#"<?php
+function binary_address(mixed $address): mixed {
+    return $address;
+}
+$words = unpack('n*', binary_address("\x00\x01\x00\x02"));
+echo count($words), ':', $words[2];
+"#,
+    );
+    assert_eq!(out, "2:2");
+}
+
+/// Verifies `preg_grep()` preserves original numeric keys while selecting matching strings.
+#[test]
+fn test_preg_grep_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["apple", "banana", "apricot"];
+$matches = preg_grep('/^a/', $values);
+foreach ($matches as $key => $value) {
+    echo $key . ':' . $value . ';';
+}
+"#,
+    );
+    assert_eq!(out, "0:apple;2:apricot;");
+}
+
+/// Verifies `PREG_GREP_INVERT` keeps only values that do not match the pattern.
+#[test]
+fn test_preg_grep_invert() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["apple", "banana", "apricot"];
+$matches = preg_grep('/^a/', $values, PREG_GREP_INVERT);
+foreach ($matches as $key => $value) {
+    echo $key . ':' . $value . ';';
+}
+"#,
+    );
+    assert_eq!(out, "1:banana;");
+}
+
+/// Verifies supported `filter_var()` validation covers boolean, integer, and IP success/failure paths.
+#[test]
+fn test_filter_var_validation_compatibility() {
+    let out = compile_and_run(
+        r#"<?php
+echo filter_var("yes", FILTER_VALIDATE_BOOLEAN) ? "T" : "F";
+echo filter_var("no", FILTER_VALIDATE_BOOLEAN) ? "T" : "F";
+echo "|", filter_var("42", FILTER_VALIDATE_INT);
+echo "|", filter_var("not-an-int", FILTER_VALIDATE_INT) === false ? "invalid" : "valid";
+echo "|", filter_var("127.0.0.1", FILTER_VALIDATE_IP);
+echo "|", filter_var("999.0.0.1", FILTER_VALIDATE_IP) === false ? "invalid" : "valid";
+"#,
+    );
+    assert_eq!(out, "TF|42|invalid|127.0.0.1|invalid");
 }

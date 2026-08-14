@@ -16,7 +16,8 @@ pub(super) fn lower_new_object(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    if php_symbol_key(class_name.as_str().trim_start_matches('\\')) == "reflectionclass" {
+    let class_key = php_symbol_key(class_name.as_str().trim_start_matches('\\'));
+    if class_key == "reflectionclass" {
         if let Some(operands) = lower_reflection_class_constructor_operands(ctx, args) {
             let php_type = PhpType::Object(class_name.as_str().to_string());
             return emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span);
@@ -51,8 +52,43 @@ pub(super) fn lower_new_object(
     }
     let sig = constructor_signature(ctx, class_name).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
     let php_type = PhpType::Object(class_name.as_str().to_string());
     emit_fixed_object_new(ctx, class_name.as_str(), operands, php_type, expr.span)
+}
+
+
+/// Appends the source argument count to an introspection-aware optional constructor tail.
+///
+/// Default materialization erases whether an optional regular parameter was supplied. The
+/// hidden variadic array is private compiler ABI, so its final element carries that count while
+/// preserving any genuine surplus arguments that precede it.
+pub(super) fn append_optional_constructor_argc_marker(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    operands: &[ValueId],
+    expr: &Expr,
+) {
+    let Some(sig) = sig else {
+        return;
+    };
+    if !crate::func_args::sig_collects_surplus_args(sig)
+        || !sig.defaults.iter().any(Option::is_some)
+    {
+        return;
+    }
+    let Some(variadic_tail) = operands.last().copied() else {
+        return;
+    };
+    let marker = lower_int_literal(ctx, args.len() as i64, expr);
+    ctx.emit_void(
+        Op::ArrayPush,
+        vec![variadic_tail, marker.value],
+        None,
+        Op::ArrayPush.default_effects(),
+        Some(expr.span),
+    );
 }
 
 /// Emits fixed-class object construction and releases owned constructor argument temporaries.
@@ -67,6 +103,9 @@ pub(super) fn emit_fixed_object_new(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
+    if reflection_object_new_requires_eval_context(ctx, class_name, &operands) {
+        ctx.declare_eval_context_local();
+    }
     let data = ctx.intern_class_name(class_name);
     let object = ctx.emit_value(
         Op::ObjectNew,
@@ -84,6 +123,41 @@ pub(super) fn emit_fixed_object_new(
         span,
     );
     object
+}
+
+/// Returns whether a fixed Reflection construction needs runtime metadata and its persistent
+/// eval context rather than compile-time literal metadata.
+fn reflection_object_new_requires_eval_context(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    operands: &[ValueId],
+) -> bool {
+    if !matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenum"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    ) {
+        return false;
+    }
+    operands.iter().any(|operand| {
+        let ty = ctx.builder.value_php_type(*operand).codegen_repr();
+        matches!(
+            ty,
+            PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        ) || (ty == PhpType::Str
+            && !matches!(
+                ctx.builder.value_defining_op(*operand),
+                Some(Op::ConstStr | Op::ConstClassName)
+            ))
+    })
 }
 
 /// Lowers `ReflectionClass(object)` while preserving object operands for runtime class metadata.
@@ -131,10 +205,25 @@ pub(super) fn lower_reflection_method_constructor_operands(
 pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let object = lower_expr(ctx, inner);
     let object_ty = ctx.builder.value_php_type(object.value);
-    let Some((class_name, false)) = singular_object_class(&object_ty) else {
-        unreachable!("clone expressions must be type-checked as non-null objects before lowering");
+    let (object, class_name, invoke_static_hook) = if let Some((class_name, false)) =
+        singular_object_class(&object_ty)
+    {
+        (object, class_name.to_string(), true)
+    } else if matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && crate::types::checker::type_is_gradual_object_family(&object_ty)
+    {
+        let unboxed = ctx.emit_value(
+            Op::MixedUnbox,
+            vec![object.value],
+            Some(Immediate::Bool(true)),
+            PhpType::Object("object".to_string()),
+            Op::MixedUnbox.default_effects(),
+            Some(inner.span),
+        );
+        (unboxed, "object".to_string(), false)
+    } else {
+        unreachable!("clone expressions must be type-checked as object-capable values before lowering");
     };
-    let class_name = class_name.to_string();
     let data = ctx.intern_class_name(&class_name);
     let result_ty = PhpType::Object(class_name.clone());
     let cloned = ctx.emit_value(
@@ -145,6 +234,10 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
         Op::ObjectCloneShallow.default_effects(),
         Some(expr.span),
     );
+    if !invoke_static_hook {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+        return cloned;
+    }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
         // The generic method-call path releases an owning temporary receiver after the call.
         // Keep an independent owner for the clone expression result while `__clone()` borrows

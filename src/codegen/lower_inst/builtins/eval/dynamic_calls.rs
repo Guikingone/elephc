@@ -238,6 +238,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_method_call(
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
 }
@@ -276,6 +277,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_static_method_call(
     emit_eval_status_check(ctx);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    emit_eval_result_as_type(ctx, &inst.result_php_type)?;
     abi::emit_release_temporary_stack(ctx.emitter, stack_bytes);
     store_if_result(ctx, inst)
 }

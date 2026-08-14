@@ -51,3 +51,5 @@ mod reflection_functions;
 mod reflection_methods;
 #[path = "oop/reflection_construction.rs"]
 mod reflection_construction;
+#[path = "oop/reflection_regressions.rs"]
+mod reflection_regressions;

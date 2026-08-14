@@ -28,6 +28,8 @@ pub(crate) mod date_constants;
 pub(crate) mod ent_constants;
 /// PHP `E_*` error-level integer constants (`error_reporting` bitmask levels).
 pub(crate) mod error_constants;
+/// `ext/filter` validation identifiers, flags, and static option parsing.
+pub(crate) mod filter_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
@@ -48,10 +50,14 @@ mod result;
 mod schema;
 /// `ext/session` integer constants (`PHP_SESSION_*`).
 pub(crate) mod session_constants;
+/// Core and standard-extension predefined integer constants.
+pub(crate) mod standard_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 pub(crate) mod stream_constants;
 pub(crate) mod string_constants;
+/// Version-sensitive integer constants exposed by PHP's tokenizer surface.
+pub(crate) mod token_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 

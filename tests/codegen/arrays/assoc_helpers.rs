@@ -284,3 +284,63 @@ echo $saved[1];
     );
     assert_eq!(out, "8");
 }
+
+/// Verifies `array_fill_keys()` iterates a gradual array operand.
+#[test]
+fn test_array_fill_keys_gradual_operand() {
+    let output = compile_and_run(
+        r#"<?php
+function fill(mixed $keys): array { return array_fill_keys($keys, 7); }
+$result = fill(["a", "b"]);
+echo $result["a"].$result["b"];
+"#,
+    );
+    assert_eq!(output, "77");
+}
+
+// --- Associative array function tests ---
+
+/// Verifies conditional literal-string hash keys retain the string result layout consumed by
+/// `str_replace()`, even when the source hash key metadata was widened while merging branches.
+#[test]
+fn test_assoc_array_keys_gradual_keys_into_string_consumer() {
+    let out = compile_and_run(
+        r#"<?php
+function replaceKey(?string $scriptNonce, ?string $styleNonce): string {
+    $replacements = [];
+    if (null !== $scriptNonce) {
+        $replacements["<script>"] = $scriptNonce;
+    }
+    if (null !== $styleNonce) {
+        $replacements["<style>"] = $styleNonce;
+    }
+
+    $keys = array_keys($replacements);
+    return $keys[0]."|".$keys[1];
+}
+
+echo replaceKey("script", "style");
+"#,
+    );
+    assert_eq!(out, "<script>|<style>");
+}
+
+/// Verifies a boxed Mixed needle scans Mixed-valued associative storage with PHP loose and strict
+/// comparison semantics, including concrete hash entries that require temporary boxing.
+#[test]
+fn test_assoc_in_array_mixed_needle_loose_and_strict() {
+    let out = compile_and_run(
+        r#"<?php
+function containsMixed(mixed $needle, array $haystack, bool $strict): bool {
+    return in_array($needle, $haystack, $strict);
+}
+
+$values = ["int" => 12, "string" => "12", "bool" => true];
+echo containsMixed(12, $values, true) ? "1" : "0";
+echo containsMixed("12", $values, true) ? "1" : "0";
+echo containsMixed(false, ["value" => 0], false) ? "1" : "0";
+echo containsMixed(false, ["value" => 0], true) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, "1110");
+}

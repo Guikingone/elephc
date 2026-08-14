@@ -162,6 +162,8 @@ pub(crate) fn build_enum_info(
         None => None,
     };
 
+    validate_enum_interfaces(name, implements, resolved_backing.is_some(), span, checker)?;
+
     let mut seen_case_names = HashSet::new();
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
@@ -448,10 +450,7 @@ pub(crate) fn insert_enum_metadata(
         constant_attribute_args.insert(case.name.clone(), case.attribute_args.clone());
     }
 
-    let interfaces: Vec<String> = implements
-        .iter()
-        .map(|interface| interface.as_str().to_string())
-        .collect();
+    let interfaces = enum_interface_names(implements, backing_type.is_some(), checker);
 
     checker.classes.insert(
         name.to_string(),
@@ -540,6 +539,105 @@ pub(crate) fn insert_enum_metadata(
     );
     *next_class_id += 1;
     Ok(())
+}
+
+/// Validates PHP's reserved enum-interface rules before enum metadata is registered.
+fn validate_enum_interfaces(
+    enum_name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    for interface in implements {
+        let interface_name = interface.as_str();
+        let interface_key = php_symbol_key(interface_name);
+        if interface_key == php_symbol_key("UnitEnum")
+            || interface_key == php_symbol_key("BackedEnum")
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Enum {} cannot explicitly implement interface {}",
+                    enum_name, interface_name
+                ),
+            ));
+        }
+        if !is_backed && checker.interface_extends_interface(interface_name, "BackedEnum") {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Non-backed enum {} cannot implement interface BackedEnum",
+                    enum_name
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Returns an enum's explicit, implicit, and inherited interfaces in PHP-visible order.
+fn enum_interface_names(
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    checker: &Checker,
+) -> Vec<String> {
+    let explicit = implements
+        .iter()
+        .map(|interface| canonical_interface_name(checker, interface.as_str()))
+        .collect::<Vec<_>>();
+    let mut interfaces = explicit.clone();
+    push_unique_interface_name("UnitEnum", &mut interfaces);
+    if is_backed {
+        push_unique_interface_name("BackedEnum", &mut interfaces);
+    }
+    for interface_name in &explicit {
+        append_interface_parents(interface_name, checker, &mut interfaces);
+    }
+    interfaces
+}
+
+/// Resolves one interface name to the declaration's canonical spelling.
+fn canonical_interface_name(checker: &Checker, interface_name: &str) -> String {
+    let key = php_symbol_key(interface_name);
+    checker
+        .interfaces
+        .keys()
+        .find(|candidate| php_symbol_key(candidate) == key)
+        .cloned()
+        .unwrap_or_else(|| interface_name.to_string())
+}
+
+/// Appends the transitive parents of one enum interface without duplicates.
+fn append_interface_parents(
+    interface_name: &str,
+    checker: &Checker,
+    interfaces: &mut Vec<String>,
+) {
+    let canonical = canonical_interface_name(checker, interface_name);
+    let Some(interface) = checker.interfaces.get(&canonical) else {
+        return;
+    };
+    let parents = interface.parents.clone();
+    for parent in parents {
+        let parent = canonical_interface_name(checker, &parent);
+        if push_unique_interface_name(&parent, interfaces) {
+            append_interface_parents(&parent, checker, interfaces);
+        }
+    }
+}
+
+/// Adds one interface name when no PHP-case-insensitive equivalent is present.
+fn push_unique_interface_name(interface_name: &str, interfaces: &mut Vec<String>) -> bool {
+    let key = php_symbol_key(interface_name);
+    if interfaces
+        .iter()
+        .any(|candidate| php_symbol_key(candidate) == key)
+    {
+        return false;
+    }
+    interfaces.push(interface_name.to_string());
+    true
 }
 
 /// Appends one synthetic public readonly enum case property to class metadata.

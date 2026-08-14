@@ -140,6 +140,31 @@ impl Checker {
         ))
     }
 
+    /// Infers a class constant read whose receiver is an object-valued expression.
+    pub(crate) fn infer_dynamic_scoped_constant_access(
+        &mut self,
+        receiver: &Expr,
+        name: &str,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let receiver_type = self.infer_type(receiver, env)?;
+        let PhpType::Object(class_name) = receiver_type.codegen_repr() else {
+            return Err(CompileError::new(
+                receiver.span,
+                &format!(
+                    "Dynamic class constant receiver must have one known object type, got {}",
+                    receiver_type
+                ),
+            ));
+        };
+        self.infer_scoped_constant_access(
+            &StaticReceiver::Named(crate::names::Name::from(class_name)),
+            name,
+            expr,
+        )
+    }
+
     /// Returns whether a scoped-constant receiver is known in static class-like metadata.
     fn scoped_constant_receiver_is_known(&self, class_name: &str) -> bool {
         self.classes.contains_key(class_name)

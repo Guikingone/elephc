@@ -9,6 +9,35 @@
 
 use crate::support::*;
 
+/// Verifies class-like existence probes accept runtime strings and search the
+/// appropriate closed-world metadata table case-insensitively.
+#[test]
+fn test_dynamic_class_like_existence_probes() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeNamedClass {}
+interface RuntimeNamedInterface {}
+trait RuntimeNamedTrait {}
+enum RuntimeNamedEnum { case Ready; }
+
+function hasClass(string $name): bool { return class_exists($name, false); }
+function hasInterface(string $name): bool { return interface_exists($name, false); }
+function hasTrait(string $name): bool { return trait_exists($name, false); }
+function hasEnum(string $name): bool { return enum_exists($name, false); }
+
+echo hasClass('runtimenamedclass') ? '1' : '0';
+echo hasInterface('RUNTIMENAMEDINTERFACE') ? '1' : '0';
+echo hasTrait('RuntimeNamedTrait') ? '1' : '0';
+echo hasEnum('runtimenamedenum') ? '1' : '0';
+echo hasClass('MissingClass') ? '1' : '0';
+echo hasInterface('MissingInterface') ? '1' : '0';
+echo hasTrait('MissingTrait') ? '1' : '0';
+echo hasEnum('MissingEnum') ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "11110000");
+}
+
 // --- ::class magic constant ---
 
 /// Verifies `ClassName::class` resolves to the unqualified class name `C`.
@@ -90,6 +119,15 @@ fn test_object_class_name_accepts_object_union() {
         "<?php class Left {} class Right {} function pick(bool $left): Left|Right { return $left ? new Left() : new Right(); } echo pick(false)::class;",
     );
     assert_eq!(out, "Right");
+}
+
+/// Verifies a gradual nullable receiver resolves `::class` from its runtime object payload.
+#[test]
+fn test_object_class_name_accepts_gradual_nullable_object() {
+    let out = compile_and_run(
+        "<?php class GradualClassName {} $value = $argc > 0 ? new GradualClassName() : null; echo $value::class;",
+    );
+    assert_eq!(out, "GradualClassName");
 }
 
 /// Verifies an object-valued expression before `::class` is evaluated exactly once.

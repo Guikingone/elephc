@@ -18,7 +18,13 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
         return lower_nullable_prop_set(ctx, inst, object, value, &class_name, &property);
     }
     if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Mixed) {
-        return lower_mixed_prop_set(ctx, object, value, &property);
+        return lower_mixed_prop_set(ctx, object, value, &property, inst);
+    }
+    if matches!(
+        ctx.value_php_type(object)?.codegen_repr(),
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+    ) {
+        return lower_generic_object_prop_set(ctx, object, value, &property, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, &property);
@@ -26,16 +32,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
         return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
     }
-    let slot = match resolve_property_slot(ctx, object, &property, inst) {
-        Ok(slot) => slot,
-        Err(_) => {
-            return super::lower_generic_object_prop_set(ctx, object, value, &property, inst)
-        }
-    };
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
-    if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
-        return super::lower_generic_object_prop_set(ctx, object, value, &property, inst);
-    }
+    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {
@@ -85,7 +84,7 @@ pub(super) fn lower_const_dynamic_prop_set(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
     ) {
-        return lower_mixed_prop_set(ctx, object, value, property);
+        return lower_mixed_prop_set(ctx, object, value, property, inst);
     }
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_set(ctx, object, value, property);
@@ -428,7 +427,7 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 
 /// Lowers `unset($object->property)` for a declared, accessible instance property.
 ///
-/// PHP removes the property from the instance; a *typed* property becomes
+/// PHP removes the property from the instance; a declared property becomes
 /// "uninitialized" again. elephc renders declared properties from a fixed per-class
 /// descriptor and cannot drop a slot, so the slot is stamped with the shared
 /// uninitialized-typed-property marker — exactly the state a typed property without
@@ -443,29 +442,346 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
 /// removal path and matches PHP exactly: the key disappears, `isset()` answers false,
 /// the value renderers stop listing it, and a later write re-appends it.
 ///
-/// Every other slot shape is REFUSED rather than silently skipped. A by-reference
-/// property slot holds an object-owned ref-cell pointer that the destructor still has
-/// to free and that a later write would write THROUGH — reviving the alias PHP's
-/// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
-/// A packed field and an undeclared slot have no removable storage at all. Skipping
-/// them quietly left `isset()` answering `true` after an `unset()`, so they now name
-/// themselves instead.
+/// Reference-backed properties detach onto a fresh uninitialized cell, preserving the
+/// previous alias while ensuring later writes initialize only the property again.
 pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     if let Some(hash_offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
-        return lower_dynamic_prop_unset(ctx, object, &property, hash_offset);
+        return lower_const_dynamic_prop_unset(ctx, object, &property, hash_offset);
     }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
-        return Err(CodegenIrError::unsupported(format!(
-            "unset() of {} {}::${}",
-            reason, slot.class_name, slot.property
-        )));
-    }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
-    release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
-    emit_property_uninitialized_marker(ctx, &slot, base_reg);
+    emit_property_slot_unset(ctx, base_reg, &slot)
+}
+
+/// Lowers `unset($object->$name)` by dispatching the runtime string to declared property slots.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    if object_is_builtin_stdclass(ctx, object)? {
+        return lower_runtime_stdclass_prop_unset(ctx, object, property_value);
+    }
+    match ctx.value_php_type(object)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_runtime_mixed_prop_unset(ctx, object, property_value, inst)
+        }
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty() => {
+            lower_runtime_generic_object_prop_unset(ctx, object, property_value, inst)
+        }
+        PhpType::Object(class_name) => {
+            lower_runtime_object_prop_unset(ctx, object, property_value, &class_name, inst)
+        }
+        object_ty => Err(CodegenIrError::unsupported(format!(
+            "{} for receiver PHP type {:?}",
+            inst.op.name(),
+            object_ty
+        ))),
+    }
+}
+
+/// Dispatches a runtime property name across the declared slots of one known class.
+fn lower_runtime_object_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    let slots = declared_dynamic_property_slots(ctx, class_name, inst)?
+        .into_iter()
+        .filter(|slot| !slot.is_packed)
+        .collect::<Vec<_>>();
+    let match_labels = slots
+        .iter()
+        .map(|slot| ctx.next_label(&format!("dyn_prop_unset_{}", label_fragment(&slot.property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_prop_unset_miss");
+    let done_label = ctx.next_label("dyn_prop_unset_done");
+    let dynamic_hash_offset = dynamic_property_hash_storage_offset_for_class(ctx, class_name)?;
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        emit_property_slot_unset(ctx, base_reg, slot)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    if let Some(hash_offset) = dynamic_hash_offset {
+        emit_dynamic_hash_unset_for_stacked_name(ctx, 16, 0, hash_offset);
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&done_label);
     Ok(())
+}
+
+/// Dispatches a runtime property unset across every declared raw-object class candidate.
+fn lower_runtime_generic_object_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    let candidates = declared_mixed_property_get_candidates(ctx, inst)?
+        .into_iter()
+        .filter(|candidate| !candidate.slot.is_packed)
+        .collect::<Vec<_>>();
+    let done_label = ctx.next_label("object_dyn_prop_unset_done");
+    let miss_label = ctx.next_label("object_dyn_prop_unset_miss");
+    let stdclass_label = ctx.next_label("object_dyn_prop_unset_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "object_dyn_prop_unset_{}",
+                label_fragment(&candidate.slot.property)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
+    }
+    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        emit_property_slot_unset(ctx, base_reg, &candidate.slot)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_dynamic_hash_unset_for_stacked_name(ctx, 16, 0, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Dispatches a runtime property unset after unboxing a gradual `Mixed` receiver.
+fn lower_runtime_mixed_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+    inst: &Instruction,
+) -> Result<()> {
+    let candidates = declared_mixed_property_get_candidates(ctx, inst)?
+        .into_iter()
+        .filter(|candidate| !candidate.slot.is_packed)
+        .collect::<Vec<_>>();
+    let done_label = ctx.next_label("mixed_dyn_prop_unset_done");
+    let miss_label = ctx.next_label("mixed_dyn_prop_unset_miss");
+    let stdclass_label = ctx.next_label("mixed_dyn_prop_unset_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_dyn_prop_unset_{}",
+                label_fragment(&candidate.slot.property)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_if_mixed_unboxed_not_object(ctx, &done_label);
+    push_mixed_unboxed_object_payload(ctx);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        emit_branch_if_mixed_dynamic_property_candidate_matches(ctx, candidate, label);
+    }
+    emit_branch_if_stacked_object_is_stdclass(ctx, 16, &stdclass_label);
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        emit_property_slot_unset(ctx, base_reg, &candidate.slot)?;
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_dynamic_hash_unset_for_stacked_name(ctx, 16, 0, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Unsets a runtime-named property in a statically known stdClass hash.
+fn lower_runtime_stdclass_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property_value: ValueId,
+) -> Result<()> {
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_dynamic_hash_unset_for_stacked_name(ctx, 16, 0, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Removes the stacked runtime name from an object's hash field and stores back COW relocation.
+fn emit_dynamic_hash_unset_for_stacked_name(
+    ctx: &mut FunctionContext<'_>,
+    object_stack_offset: usize,
+    name_stack_offset: usize,
+    hash_offset: usize,
+) {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, object_stack_offset);
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
+            ctx.emitter
+                .instruction(&format!("ldr x0, [x9, #{}]", hash_offset));       // load the hash backing the dynamic-property table
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", name_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", name_stack_offset + 24);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+            abi::emit_store_to_address(ctx.emitter, "x0", "x9", hash_offset);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", 0);
+            ctx.emitter.instruction(&format!(
+                "mov rdi, QWORD PTR [r11 + {}]",
+                hash_offset
+            )); // load the hash backing the dynamic-property table
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", name_stack_offset + 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", name_stack_offset + 24);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, "r11");
+            abi::emit_store_to_address(ctx.emitter, "rax", "r11", hash_offset);
+        }
+    }
+}
+
+/// Returns the hash field used for runtime-created properties on one known class.
+fn dynamic_property_hash_storage_offset_for_class(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Result<Option<usize>> {
+    let normalized = class_name.trim_start_matches('\\');
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(normalized)
+        .ok_or_else(|| CodegenIrError::unsupported(format!("unknown class {}", normalized)))?;
+    Ok(class_info
+        .allow_dynamic_properties
+        .then(|| dynamic_property_hash_offset(class_info.properties.len())))
+}
+
+/// Transitions one resolved property slot to PHP's uninitialized state.
+fn emit_property_slot_unset(
+    ctx: &mut FunctionContext<'_>,
+    base_reg: &str,
+    slot: &PropertySlot,
+) -> Result<()> {
+    if slot.is_packed {
+        return Err(CodegenIrError::unsupported(format!(
+            "prop_unset for packed property {}::${}",
+            slot.class_name, slot.property
+        )));
+    }
+    if slot.is_reference {
+        emit_owned_reference_property_cell(ctx, base_reg, slot.offset);
+        let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            marker_reg,
+            UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+        );
+        abi::emit_store_to_address(ctx.emitter, marker_reg, base_reg, slot.offset + 8);
+        return Ok(());
+    }
+    let write_uninitialized = ctx.next_label("prop_unset_write_uninitialized");
+    emit_branch_if_property_marker_uninitialized(
+        ctx,
+        base_reg,
+        slot.offset,
+        &write_uninitialized,
+    );
+    release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
+    ctx.emitter.label(&write_uninitialized);
+    emit_property_uninitialized_marker(ctx, slot, base_reg);
+    Ok(())
+}
+
+/// Branches when a fixed property slot already carries the uninitialized marker.
+fn emit_branch_if_property_marker_uninitialized(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    offset: usize,
+    target_label: &str,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let sentinel_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    abi::emit_load_from_address(ctx.emitter, marker_reg, object_reg, offset + 8);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        sentinel_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the fixed-slot marker with the uninitialized state
+            ctx.emitter
+                .instruction(&format!("b.eq {}", target_label));               // branch without reading an unset property payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the fixed-slot marker with the uninitialized state
+            ctx.emitter
+                .instruction(&format!("je {}", target_label));                 // branch without reading an unset property payload
+        }
+    }
 }

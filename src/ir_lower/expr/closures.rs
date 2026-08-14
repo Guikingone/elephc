@@ -150,6 +150,39 @@ pub(super) fn lower_closure_with_context(
         captured_values.push(ClosureCapture { value: captured.value });
         capture_params.push((capture.clone(), php_type, by_ref));
     }
+    // Closures keep the late-static class of their defining method just as PHP does. It is an
+    // implementation-only capture: user-visible closure signatures and named-argument planning
+    // must not see it, while the closure body needs a real local slot for `static::class`,
+    // `static::method()`, and late-bound static properties. Nested closures naturally forward the
+    // same hidden value because their parent closure owns this slot too.
+    let called_class_param = function::CALLED_CLASS_ID_PARAM;
+    if ctx.current_class.is_some()
+        && (ctx.local_slots.contains_key(called_class_param)
+            || ctx.local_slots.contains_key("this"))
+        && !capture_params
+            .iter()
+            .any(|(name, _, _)| name == called_class_param)
+    {
+        let called_class = ctx.emit_value(
+            Op::LoadCalledClassId,
+            Vec::new(),
+            None,
+            PhpType::Int,
+            Op::LoadCalledClassId.default_effects(),
+            Some(expr.span),
+        );
+        ctx.emit_void(
+            Op::ClosureCapture,
+            vec![called_class.value],
+            None,
+            Op::ClosureCapture.default_effects(),
+            Some(expr.span),
+        );
+        captured_values.push(ClosureCapture {
+            value: called_class.value,
+        });
+        capture_params.push((called_class_param.to_string(), PhpType::Int, false));
+    }
     let name = ctx.next_closure_name();
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
@@ -233,10 +266,24 @@ pub(super) fn stmt_contains_eval_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. } => {
             expr_contains_eval_call(index) || expr_contains_eval_call(value)
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_contains_eval_call(index) || expr_contains_eval_call(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_contains_eval_call(property)
+                || index.as_ref().is_some_and(expr_contains_eval_call)
+                || expr_contains_eval_call(value)
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_contains_eval_call(target) || expr_contains_eval_call(value)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_contains_eval_call(object) || expr_contains_eval_call(value)
         }
@@ -337,6 +384,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
             expr_contains_eval_call(value) || instance_of_target_contains_eval_call(target)
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -438,6 +486,12 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_contains_eval_call(property)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_contains_eval_call(receiver)
+        }
     }
 }
 
@@ -461,4 +515,3 @@ pub(super) fn callable_target_contains_eval_call(target: &CallableTarget) -> boo
 pub(super) fn is_eval_call_name(name: &Name) -> bool {
     php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval"
 }
-

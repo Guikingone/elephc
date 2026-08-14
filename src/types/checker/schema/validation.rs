@@ -16,9 +16,12 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::Checker;
 
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
-/// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
+/// annotations through the checker. Untyped by-value parameters retain the specialization
+/// sentinel, while untyped by-reference parameters use writable `Mixed` storage.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
-/// Infers return type from method body when no return annotation is present.
+/// Infers return type from a concrete method body when no return annotation is present. A
+/// bodyless untyped interface or abstract method returns gradual `Mixed` because its implementor
+/// may return any PHP value.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
@@ -29,7 +32,7 @@ pub(crate) fn build_method_sig(
         .params
         .iter()
         .enumerate()
-        .map(|(i, (n, type_ann, _, _))| {
+        .map(|(i, (n, type_ann, _, is_ref))| {
             // PHP's __unserialize($data) always receives the associative array
             // produced by __serialize(). A bare `array` hint resolves to an indexed
             // Array(Mixed) (rejecting $data['key']); type the first parameter as a
@@ -52,6 +55,7 @@ pub(crate) fn build_method_sig(
                     method.span,
                     &format!("Method parameter ${}", n),
                 )?,
+                None if *is_ref => PhpType::Mixed,
                 None => PhpType::Int,
             };
             Ok((n.clone(), ty))
@@ -78,6 +82,7 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
+        None if !method.has_body => PhpType::Mixed,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
     if method.variadic.is_some() {
@@ -221,8 +226,9 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
         .count()
 }
 
-/// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
-/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
+/// Validates that `child_sig` accepts every argument shape accepted by `parent_sig`.
+/// Optional additions and variadic widening are allowed, while required parameters,
+/// by-reference positions, and a parent's unbounded variadic tail remain invariant.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
@@ -233,24 +239,41 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
 ) -> Result<(), CompileError> {
-    // The hidden variadic that collects surplus positional arguments for
-    // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
-    // inherited signature that does not carry it cannot dispatch to a body that does.
-    // Report that directly instead of the generic parameter-count mismatch, which names a
-    // parameter the source never wrote.
+    // The hidden variadic that supports PHP's runtime argument-introspection functions is
+    // part of the generated ABI even though it is invisible in the source signature.
     if crate::func_args::sig_collects_surplus_args(child_sig)
         != crate::func_args::sig_collects_surplus_args(parent_sig)
     {
         return Err(CompileError::new(
             span,
             &format!(
-                "func_num_args()/func_get_args()/func_get_arg() are not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
+                "Runtime argument introspection is not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
                 owner_name, method_name, context, kind
             ),
         ));
     }
 
-    if child_sig.params.len() != parent_sig.params.len() {
+    let child_hidden_tail = usize::from(crate::func_args::sig_collects_surplus_args(child_sig));
+    let parent_hidden_tail = usize::from(crate::func_args::sig_collects_surplus_args(parent_sig));
+    let child_visible_count = child_sig.params.len().saturating_sub(child_hidden_tail);
+    let parent_visible_count = parent_sig.params.len().saturating_sub(parent_hidden_tail);
+    let child_source_variadic = child_sig
+        .variadic
+        .as_deref()
+        .filter(|name| *name != crate::func_args::HIDDEN_ARGS_PARAM)
+        .is_some();
+    let parent_source_variadic = parent_sig
+        .variadic
+        .as_deref()
+        .filter(|name| *name != crate::func_args::HIDDEN_ARGS_PARAM)
+        .is_some();
+    let child_fixed_count = child_visible_count.saturating_sub(usize::from(child_source_variadic));
+    let parent_fixed_count =
+        parent_visible_count.saturating_sub(usize::from(parent_source_variadic));
+
+    if (!child_source_variadic && child_fixed_count < parent_fixed_count)
+        || (parent_source_variadic && !child_source_variadic)
+    {
         return Err(CompileError::new(
             span,
             &format!(
@@ -260,47 +283,57 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    if child_sig.ref_params != parent_sig.ref_params {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change pass-by-reference parameters when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
+    for parent_index in 0..parent_fixed_count {
+        let parent_ref = parent_sig
+            .ref_params
+            .get(parent_index)
+            .copied()
+            .unwrap_or(false);
+        let child_ref_index = if parent_index < child_fixed_count {
+            parent_index
+        } else {
+            child_fixed_count
+        };
+        let child_ref = child_sig
+            .ref_params
+            .get(child_ref_index)
+            .copied()
+            .unwrap_or(false);
+        if parent_ref != child_ref {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
+    }
+    if parent_source_variadic {
+        let parent_ref = parent_sig
+            .ref_params
+            .get(parent_fixed_count)
+            .copied()
+            .unwrap_or(false);
+        let child_ref = child_sig
+            .ref_params
+            .get(child_fixed_count)
+            .copied()
+            .unwrap_or(false);
+        if parent_ref != child_ref {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot change pass-by-reference parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
-    let child_defaults: Vec<bool> = child_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    let parent_defaults: Vec<bool> = parent_sig
-        .defaults
-        .iter()
-        .map(|default| default.is_some())
-        .collect();
-    if child_defaults != parent_defaults {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change optional parameter layout when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    if child_sig.variadic != parent_sig.variadic {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change variadic parameter shape when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    if required_param_count(child_sig) != required_param_count(parent_sig) {
+    let child_required = required_param_count(child_sig);
+    let parent_required = required_param_count(parent_sig);
+    if child_required > parent_required {
         return Err(CompileError::new(
             span,
             &format!(
@@ -308,6 +341,22 @@ pub(crate) fn validate_signature_compatibility(
                 context, kind, owner_name, method_name
             ),
         ));
+    }
+
+    for child_index in parent_fixed_count..child_fixed_count {
+        if child_sig
+            .defaults
+            .get(child_index)
+            .map_or(true, |default| default.is_none())
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot add required parameters when {} {}: {}::{}",
+                    context, kind, owner_name, method_name
+                ),
+            ));
+        }
     }
 
     Ok(())

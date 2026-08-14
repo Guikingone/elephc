@@ -1,13 +1,13 @@
 //! Purpose:
-//! Resolves static Composer autoload mappings and supported SPL registration patterns.
-//! Prefixes Composer `autoload.files` and inlines class files discovered by the AOT autoload registry.
+//! Resolves static namespace mappings and supported SPL registration patterns.
+//! Prefixes eagerly loaded sources and inlines class files discovered by the AOT registry.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()`
 //!
 //! Key details:
 //! - Runtime autoload callbacks cannot run in native binaries; supported rules are interpreted at compile time.
-//! - Composer files execute before the entry program while class-triggered files splice before first use.
+//! - Eager files execute before the entry program while class-triggered files splice before first use.
 //! - `run_collecting_included` additionally surfaces the canonical path of every file the pass
 //!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
@@ -18,7 +18,7 @@ mod registry;
 mod rule;
 mod walk;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
@@ -29,6 +29,21 @@ use crate::parser::ast::Stmt;
 use crate::span::Span;
 
 use walk::{collect_declared_fqns, collect_reference_points};
+
+/// Physical source paths for declarations introduced by static source loading.
+#[derive(Debug, Default)]
+pub struct DeclarationSourceFiles {
+    pub class_likes: HashMap<String, String>,
+    pub functions: HashMap<String, String>,
+}
+
+impl DeclarationSourceFiles {
+    /// Merges declaration paths from another loaded source set.
+    fn extend(&mut self, other: DeclarationSourceFiles) {
+        self.class_likes.extend(other.class_likes);
+        self.functions.extend(other.functions);
+    }
+}
 
 /// Built-in class-like names that exist in every PHP environment (e.g. `Exception`,
 /// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
@@ -51,6 +66,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "Error",
     "ArithmeticError",
     "UnhandledMatchError",
+    "__PHP_Incomplete_Class",
     "Exception",
     "Fiber",
     "FiberError",
@@ -78,6 +94,7 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "RecursiveFilterIterator",
     "RecursiveIterator",
     "RecursiveIteratorIterator",
+    "RecursiveTreeIterator",
     "ReflectionAttribute",
     "ReflectionClass",
     "ReflectionObject",
@@ -112,8 +129,8 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
 
 /// Run the autoload pass over a fully resolver+name_resolver-processed
 /// program. For every canonical class reference that isn't declared in
-/// the program, look it up first in the composer.json PSR-4 index and
-/// then in the user-registered closure rules; parse the referenced file,
+/// the program, look it up first in the static namespace index and then in
+/// user-registered closure rules; parse the referenced file,
 /// run resolver+name_resolver on it, and append. Iterate until stable.
 ///
 /// This is the loaded-set-discarding wrapper over [`run_collecting_included`], kept for the
@@ -130,8 +147,8 @@ pub fn run(
 
 /// Same as [`run`], but also returns the CANONICAL path of every source file this pass
 /// pulled into the program, each exactly once:
-/// - Composer `autoload.files` (the always-included list),
-/// - every PSR-4 / SPL-rule class file resolved by the fixpoint below,
+/// - manifest-declared eager sources,
+/// - every static-mapping or SPL-rule class file resolved by the fixpoint below,
 /// - every `include`/`require` target those files themselves pull in (an autoloaded class
 ///   file that `require`s a helper compiles that helper into the binary too, so it is just
 ///   as much a cached script).
@@ -158,29 +175,39 @@ pub fn run_collecting_included(
 
 /// Runs autoload expansion while applying conditional symbols to every physical file loaded.
 pub fn run_collecting_included_with_defines(
-    mut program: Program,
+    program: Program,
     base_dir: &Path,
     registry: &Registry,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    run_collecting_included_with_defines_and_sources(program, base_dir, registry, defines)
+        .map(|(program, files, _)| (program, files))
+}
+
+/// Runs autoload expansion and retains physical source paths for introduced declarations.
+pub fn run_collecting_included_with_defines_and_sources(
+    mut program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), CompileError> {
     if registry.is_empty() {
-        return Ok((program, Vec::new()));
+        return Ok((program, Vec::new(), DeclarationSourceFiles::default()));
     }
     let mut included: HashSet<PathBuf> = HashSet::new();
     let mut nested_includes: HashSet<PathBuf> = HashSet::new();
-    const MAX_ITERATIONS: usize = 64;
-
+    let mut declaration_sources = DeclarationSourceFiles::default();
     // -- prefix always-included files first --
-    // composer.json's `autoload.files` declares files that must always be
-    // included. Prefix them in Composer order so their top-level statements
-    // execute before the entry program.
+    // Eager source manifests declare files that must always be included. Preserve
+    // declaration order so their top-level statements execute before the entry program.
     let mut prefix: Program = Vec::new();
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            let (loaded, loaded_includes) =
+            let (loaded, loaded_includes, loaded_sources) =
                 load_autoloaded_file(&canonical, base_dir, defines)?;
             nested_includes.extend(loaded_includes);
+            declaration_sources.extend(loaded_sources);
             prefix.extend(loaded);
         }
     }
@@ -189,7 +216,7 @@ pub fn run_collecting_included_with_defines(
         program = prefix;
     }
 
-    for _ in 0..MAX_ITERATIONS {
+    loop {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
         let reference_points = collect_reference_points(&program);
@@ -201,9 +228,10 @@ pub fn run_collecting_included_with_defines(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    let (loaded, loaded_includes) =
+                    let (loaded, loaded_includes, loaded_sources) =
                         load_autoloaded_file(&canonical, base_dir, defines)?;
                     nested_includes.extend(loaded_includes);
+                    declaration_sources.extend(loaded_sources);
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -222,7 +250,7 @@ pub fn run_collecting_included_with_defines(
     included.extend(nested_includes);
     let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
     loaded_files.sort();
-    Ok((program, loaded_files))
+    Ok((program, loaded_files, declaration_sources))
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another
@@ -240,8 +268,8 @@ fn seed_builtin_declared_fqns(declared: &mut HashSet<String>) {
     }
 }
 
-/// Try the resolution chain in order: composer.json PSR-4 first, then each
-/// user-registered closure rule. Returns the first rule that produces a
+/// Tries the resolution chain in order: static namespace mappings first, then
+/// each user-registered closure rule. Returns the first rule that produces a
 /// path matching an existing file on disk.
 fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     if let Some(path) = registry.psr4().lookup(fqn) {
@@ -264,8 +292,8 @@ fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
-) -> Result<(Program, Vec<PathBuf>), CompileError> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
+) -> Result<(Program, Vec<PathBuf>, DeclarationSourceFiles), CompileError> {
+    let content = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
             &format!("Autoload: cannot read '{}': {}", path.display(), e),
@@ -286,8 +314,84 @@ fn load_autoloaded_file(
     )?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
+    let declaration_sources = declaration_source_files(&canonicalized, &file_label);
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
-    Ok((canonicalized, nested_includes))
+    Ok((canonicalized, nested_includes, declaration_sources))
+}
+
+/// Collects canonical declaration names associated with one physical source file.
+fn declaration_source_files(program: &Program, source_file: &str) -> DeclarationSourceFiles {
+    let mut sources = DeclarationSourceFiles::default();
+    collect_declaration_source_files(program, source_file, &mut sources);
+    sources
+}
+
+/// Recurses through transparent statement wrappers while recording declaration paths.
+fn collect_declaration_source_files(
+    program: &Program,
+    source_file: &str,
+    sources: &mut DeclarationSourceFiles,
+) {
+    for stmt in program {
+        match &stmt.kind {
+            crate::parser::ast::StmtKind::ClassDecl { name, .. }
+            | crate::parser::ast::StmtKind::InterfaceDecl { name, .. }
+            | crate::parser::ast::StmtKind::TraitDecl { name, .. }
+            | crate::parser::ast::StmtKind::EnumDecl { name, .. }
+            | crate::parser::ast::StmtKind::PackedClassDecl { name, .. } => {
+                sources
+                    .class_likes
+                    .insert(
+                        crate::names::php_symbol_key(name.trim_start_matches('\\')),
+                        source_file.to_string(),
+                    );
+            }
+            crate::parser::ast::StmtKind::FunctionDecl { name, .. } => {
+                sources
+                    .functions
+                    .insert(
+                        crate::names::php_symbol_key(name.trim_start_matches('\\')),
+                        source_file.to_string(),
+                    );
+            }
+            crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
+            | crate::parser::ast::StmtKind::Synthetic(body) => {
+                collect_declaration_source_files(body, source_file, sources);
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies loaded declaration paths use PHP's case-insensitive symbol keys.
+    #[test]
+    fn declaration_source_files_normalize_class_and_function_names() {
+        let tokens = crate::lexer::tokenize(
+            "<?php namespace Demo; class Thing {} function execute(): void {}",
+        )
+        .expect("tokenization should succeed");
+        let parsed = crate::parser::parse(&tokens).expect("parsing should succeed");
+        let resolved = crate::name_resolver::resolve(parsed).expect("resolution should succeed");
+        let sources = declaration_source_files(&resolved, "/tmp/Thing.php");
+        assert_eq!(
+            sources
+                .class_likes
+                .get(&crate::names::php_symbol_key("DEMO\\THING"))
+                .map(String::as_str),
+            Some("/tmp/Thing.php")
+        );
+        assert_eq!(
+            sources
+                .functions
+                .get(&crate::names::php_symbol_key("DEMO\\EXECUTE"))
+                .map(String::as_str),
+            Some("/tmp/Thing.php")
+        );
+    }
 }

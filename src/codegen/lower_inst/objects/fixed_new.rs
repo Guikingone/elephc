@@ -36,6 +36,13 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
     if let Some(class_id) = throwable_payload_class_id(ctx, &class_name) {
         return lower_builtin_throwable_new(ctx, inst, &class_name, class_id);
     }
+    if !ctx.module.class_infos.contains_key(&class_name)
+        && !ctx.module.extern_class_infos.contains_key(&class_name)
+        && !ctx.module.packed_class_infos.contains_key(&class_name)
+    {
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", class_name));
+        return Ok(());
+    }
     let constructor_key = php_symbol_key("__construct");
     let (
         class_id,
@@ -45,6 +52,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         owned_reference_property_offsets,
         property_defaults,
         constructor_impl,
+        initialize_inherited_builtin_throwable,
     ) = {
         let class_info =
             ctx.module.class_infos.get(&class_name).ok_or_else(|| {
@@ -57,37 +65,55 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             )));
         }
         let property_defaults = collect_property_defaults(class_info, inst)?;
+        let mut initialize_inherited_builtin_throwable = false;
         let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-            if constructor.params.len() != inst.operands.len() {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct with {} args for {} params",
-                    class_name,
-                    inst.operands.len(),
-                    constructor.params.len()
-                )));
-            }
             let impl_class = class_info
                 .method_impl_classes
                 .get(&constructor_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
             if !class_method_already_emitted(ctx, &impl_class, &constructor_key, false) {
-                return Err(CodegenIrError::unsupported(format!(
-                    "constructor call to {}::__construct without an emitted EIR method body",
-                    impl_class
-                )));
+                if super::super::is_throwable_like_class(ctx, &class_name)
+                    && is_builtin_throwable_payload_class(&impl_class)
+                {
+                    if inst.operands.len() > 3 {
+                        return Err(CodegenIrError::unsupported(format!(
+                            "{}::__construct with {} EIR operands",
+                            class_name,
+                            inst.operands.len()
+                        )));
+                    }
+                    initialize_inherited_builtin_throwable = true;
+                } else {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "constructor call to {}::__construct without an emitted EIR method body",
+                        impl_class
+                    )));
+                }
             }
-            let param_types = constructor
-                .params
-                .iter()
-                .map(|(_, ty)| ty.codegen_repr())
-                .collect::<Vec<_>>();
-            Some(ConstructorCallTarget {
-                impl_class,
-                param_types,
-                ref_params: constructor.ref_params.clone(),
-                sig: constructor.clone(),
-            })
+            if initialize_inherited_builtin_throwable {
+                None
+            } else {
+                if constructor.params.len() != inst.operands.len() {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "constructor call to {}::__construct with {} args for {} params",
+                        class_name,
+                        inst.operands.len(),
+                        constructor.params.len()
+                    )));
+                }
+                let param_types = constructor
+                    .params
+                    .iter()
+                    .map(|(_, ty)| ty.codegen_repr())
+                    .collect::<Vec<_>>();
+                Some(ConstructorCallTarget {
+                    impl_class,
+                    param_types,
+                    ref_params: constructor.ref_params.clone(),
+                    sig: constructor.clone(),
+                })
+            }
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(
                 "constructor arguments for class {} without __construct",
@@ -106,6 +132,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
             owned_ref_offsets,
             property_defaults,
             constructor_impl,
+            initialize_inherited_builtin_throwable,
         )
     };
     emit_object_allocation(
@@ -121,7 +148,14 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
         .ok_or_else(|| CodegenIrError::invalid_module("object_new missing result value"))?;
     ctx.store_result_value(result)?;
     emit_property_defaults(ctx, result, &property_defaults)?;
-    if let Some(constructor) = constructor_impl {
+    if initialize_inherited_builtin_throwable {
+        ctx.load_value_to_result(result)?;
+        preserve_throwable_for_init(ctx);
+        emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
+        emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
+        emit_throwable_previous_field(ctx, inst.operands.get(2).copied())?;
+        restore_throwable_after_init(ctx);
+    } else if let Some(constructor) = constructor_impl {
         emit_constructor_call(
             ctx,
             result,

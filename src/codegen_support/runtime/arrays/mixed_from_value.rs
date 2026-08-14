@@ -91,6 +91,8 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // nested mixed cells must also be retained
     emitter.instruction("cmp x0, #10");                                         // does this mixed payload hold a callable descriptor?
     emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // callable descriptors are retained for the boxed owner
+    emitter.instruction("cmp x0, #11");                                         // does this mixed payload hold a managed reference cell?
+    emitter.instruction("b.eq __rt_mixed_from_value_retain");                   // boxed references retain their cell ownership share
     emitter.instruction("cmp x0, #9");                                          // does this mixed payload hold a PHP resource?
     emitter.instruction("b.eq __rt_mixed_from_value_resource");                 // resources need a display id bound before they can be shown
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // scalars can be boxed without additional retention
@@ -173,6 +175,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain nested mixed cells before storing them inside the parent mixed cell
     emitter.instruction("cmp rax, 10");                                         // detect callable descriptors that participate in callable ownership
     emitter.instruction("je __rt_mixed_from_value_retain");                     // retain callable descriptors before storing them inside the mixed cell
+    emitter.instruction("cmp rax, 11");                                         // detect managed reference-cell payloads
+    emitter.instruction("je __rt_mixed_from_value_retain");                     // boxed references retain their cell ownership share
     emitter.instruction("cmp rax, 9");                                          // detect PHP resources, which carry a displayed id rather than ownership
     emitter.instruction("je __rt_mixed_from_value_resource");                   // resources need a display id bound before they can be shown
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // scalars can be boxed directly without additional ownership work

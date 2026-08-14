@@ -129,6 +129,12 @@ pub(super) fn resolve_expr(
                 })
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => ExprKind::ArrayReference(Box::new(resolve_expr(
+            value,
+            current_namespace,
+            imports,
+            symbols,
+        ))),
         ExprKind::Match {
             subject,
             arms,
@@ -286,6 +292,12 @@ pub(super) fn resolve_expr(
             },
             name: name.clone(),
         },
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(resolve_expr(receiver, current_namespace, imports, symbols)),
+                name: name.clone(),
+            }
+        }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver: match receiver {
                 StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(

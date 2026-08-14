@@ -11,8 +11,14 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget};
-use crate::parser::stmt::parse_name;
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::stmt::{
+    assignment_target_append_stmt,
+    is_valid_reference_source,
+    lower_destructuring_assignment_expression,
+    parse_name,
+    try_parse_destructuring_assignment_expression_pattern,
+};
 use crate::span::Span;
 
 use super::assignment_targets::{
@@ -68,7 +74,22 @@ fn parse_expr_bp_inner(
     pos: &mut usize,
     min_bp: u8,
 ) -> Result<Expr, CompileError> {
-    let mut lhs = parse_prefix(tokens, pos)?;
+    let mut lhs = if min_bp <= 7 {
+        let span = tokens
+            .get(*pos)
+            .map(|(_, metadata)| metadata.span)
+            .unwrap_or(Span::dummy());
+        match try_parse_destructuring_assignment_expression_pattern(tokens, pos, span)? {
+            Some(pattern) => {
+                let value = parse_expr_bp(tokens, pos, 6)?;
+                let span = span.merge(value.span);
+                lower_destructuring_assignment_expression(pattern, value, span)
+            }
+            None => parse_prefix(tokens, pos)?,
+        }
+    } else {
+        parse_prefix(tokens, pos)?
+    };
 
     loop {
         if *pos >= tokens.len() {
@@ -78,12 +99,65 @@ fn parse_expr_bp_inner(
         match &tokens[*pos].0 {
             Token::LBracket => {
                 let span = tokens[*pos].1.span;
+                if matches!(
+                    (
+                        tokens.get(*pos + 1).map(|(token, _)| token),
+                        tokens.get(*pos + 2).map(|(token, _)| token),
+                    ),
+                    (Some(Token::RBracket), Some(Token::Assign))
+                ) {
+                    *pos += 3; // consume `[] =`
+                    let rhs = parse_expr_bp(tokens, pos, 6)?;
+                    let span = span.merge(rhs.span);
+                    let mut lowerer = AssignmentExpressionLowerer::new(span);
+                    let append_target = lowerer.stabilize_non_local_target(lhs, &rhs);
+                    let result = lowerer.bind_result_value(rhs);
+                    let mut prelude = lowerer.finish();
+                    prelude.push(assignment_target_append_stmt(
+                        append_target,
+                        result.clone(),
+                        span,
+                    )?);
+                    lhs = Expr::new(
+                        ExprKind::Assignment {
+                            target: Box::new(result.clone()),
+                            value: Box::new(result),
+                            result_target: None,
+                            prelude,
+                            conditional_value_temp: None,
+                        },
+                        span,
+                    );
+                    continue;
+                }
                 *pos += 1;
                 let index = parse_expr(tokens, pos)?;
                 if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
                     return Err(CompileError::new(span, "Expected ']'"));
                 }
                 *pos += 1;
+                // Rewrite the supported `$GLOBALS['name']` subset to an unforgeable variable
+                // alias. Later checker/lowering phases route that alias directly to the program's
+                // `_eir_global_name` storage instead of treating `$GLOBALS` as an ordinary array.
+                if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    let ExprKind::StringLiteral(key) = &index.kind else {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::DYNAMIC_KEY_MESSAGE,
+                        ));
+                    };
+                    if !crate::globals_array::is_php_variable_name(key) {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::BARE_USE_MESSAGE,
+                        ));
+                    }
+                    lhs = Expr::new(
+                        ExprKind::Variable(crate::globals_array::alias_name(key)),
+                        lhs.span,
+                    );
+                    continue;
+                }
                 lhs = Expr::new(
                     ExprKind::ArrayAccess {
                         array: Box::new(lhs),
@@ -151,10 +225,19 @@ fn parse_expr_bp_inner(
                         span,
                     );
                 } else {
-                    return Err(CompileError::new(
+                    let ExprKind::StringLiteral(name) = member.kind else {
+                        return Err(CompileError::new(
+                            span,
+                            "Dynamic class access without a call requires a constant name",
+                        ));
+                    };
+                    lhs = Expr::new(
+                        ExprKind::DynamicScopedConstantAccess {
+                            receiver: Box::new(lhs),
+                            name,
+                        },
                         span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
-                    ));
+                    );
                 }
             }
             Token::Arrow | Token::QuestionArrow => {
@@ -293,6 +376,35 @@ fn parse_expr_bp_inner(
                     break;
                 }
             }
+            Token::PlusPlus | Token::MinusMinus => {
+                if !is_non_local_assignment_target(&lhs) {
+                    return Err(CompileError::new(lhs.span, "Invalid increment target"));
+                }
+                let increment = tokens[*pos].0 == Token::PlusPlus;
+                let span = lhs.span.merge(tokens[*pos].1.span);
+                *pos += 1;
+                let op = if increment { BinOp::Add } else { BinOp::Sub };
+                let one = Expr::new(ExprKind::IntLiteral(1), span);
+                let mut lowerer = AssignmentExpressionLowerer::new(span);
+                let target = lowerer.stabilize_non_local_target(lhs, &one);
+                let old_value = lowerer.bind_result_value(target.clone());
+                let value = assignment_value(
+                    old_value.clone(),
+                    AssignmentOperator::Compound(op),
+                    one,
+                    span,
+                );
+                lhs = Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(target),
+                        value: Box::new(value),
+                        result_target: Some(Box::new(old_value)),
+                        prelude: lowerer.finish(),
+                        conditional_value_temp: None,
+                    },
+                    span,
+                );
+            }
             _ => break,
         }
     }
@@ -360,16 +472,62 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp {
+            // PHP binds assignment to the adjacent lvalue even when that lvalue is the operand of
+            // a tighter prefix/infix expression: `!$x = value` means `!($x = value)`. Only yield
+            // to the enclosing Pratt frame when the expression accumulated so far is not itself
+            // an assignment target.
+            let lhs_is_target = is_assignment_expression_target(&lhs);
+            if l_bp < min_bp && !lhs_is_target {
                 break;
             }
 
-            if !is_assignment_expression_target(&lhs) {
+            if !lhs_is_target {
                 return Err(CompileError::new(lhs.span, "Invalid assignment target"));
             }
 
             let span = tokens[*pos].1.span;
             *pos += 1;
+            if matches!(op, AssignmentOperator::Assign)
+                && matches!(
+                    tokens.get(*pos).map(|(token, _)| token),
+                    Some(Token::Ampersand)
+                )
+            {
+                let ExprKind::Variable(target_name) = &lhs.kind else {
+                    return Err(CompileError::new(
+                        lhs.span,
+                        "Reference assignment expression target must be a variable",
+                    ));
+                };
+                let target_name = target_name.clone();
+                let target = lhs.clone();
+                *pos += 1;
+                let source = parse_expr_bp(tokens, pos, r_bp)?;
+                if !is_valid_reference_source(&source.kind) {
+                    return Err(CompileError::new(
+                        source.span,
+                        "Reference assignment source must be a variable, array/property element, or a by-reference call",
+                    ));
+                }
+                let span = span.merge(source.span);
+                lhs = Expr::new(
+                    ExprKind::Assignment {
+                        target: Box::new(target.clone()),
+                        value: Box::new(target),
+                        result_target: None,
+                        prelude: vec![Stmt::new(
+                            StmtKind::RefAssign {
+                                target: target_name,
+                                source,
+                            },
+                            span,
+                        )],
+                        conditional_value_temp: None,
+                    },
+                    span,
+                );
+                continue;
+            }
             let rhs = parse_expr_bp(tokens, pos, r_bp)?;
             // Widen only the END so the span covers through the value expression;
             // the start stays on the operator token, keeping diagnostics anchored.
@@ -521,7 +679,7 @@ fn starts_unparenthesized_arrow_function(tokens: &[SpannedToken], pos: usize) ->
 ///
 /// `Named` holds a static identifier string. `Dynamic` holds an expression
 /// inside braces (`{$expr}`) used for computed property/method names.
-enum ObjectMember {
+pub(super) enum ObjectMember {
     Named(String),
     Dynamic(Expr),
 }
@@ -540,7 +698,7 @@ enum ObjectMember {
 /// # Inputs
 /// - `arrow_span`: span of the `->` or `?->` token, used for error reporting
 /// - `nullsafe`: whether the operator was `?->` (changes error messages)
-fn parse_object_member(
+pub(super) fn parse_object_member(
     tokens: &[SpannedToken],
     pos: &mut usize,
     arrow_span: Span,
@@ -674,7 +832,7 @@ fn assignment_value(target: Expr, op: AssignmentOperator, rhs: Expr, span: Span)
 ///
 /// Handles the PHP 8.0 class-name forms and the dynamic expression form:
 /// - `self`, `parent`, `static` keyword → `InstanceOfTarget::Name`
-/// - Variable or parenthesized expression → parsed as `Expr`, wrapped in
+/// - Variable, `$this`, or parenthesized expression → parsed as `Expr`, wrapped in
 ///   `InstanceOfTarget::Expr` with binding power 36 (above comparisons)
 /// - Class/interface name → resolved via `parse_name` into a qualified `Name`
 ///
@@ -698,7 +856,7 @@ fn parse_instanceof_target(
             *pos += 1;
             Ok(InstanceOfTarget::Name(Name::unqualified("static")))
         }
-        Some(Token::Variable(_)) | Some(Token::LParen) => {
+        Some(Token::Variable(_)) | Some(Token::This) | Some(Token::LParen) => {
             let target = parse_expr_bp(tokens, pos, 36)?;
             Ok(InstanceOfTarget::Expr(Box::new(target)))
         }

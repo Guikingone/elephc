@@ -12,7 +12,6 @@ mod assign;
 mod blocks;
 mod declare;
 mod ffi;
-mod goto_unsupported;
 mod names;
 mod namespace_use;
 mod oop;
@@ -30,13 +29,24 @@ use crate::span::Span;
 
 pub use ffi::parse_extern_stmts;
 pub use blocks::{parse_block, parse_body};
+pub(crate) use blocks::parse_executable_block;
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
-pub(crate) use assign::can_replay_assignment_target;
+pub(crate) use assign::{
+    assignment_target_append_stmt, assignment_target_store_stmt,
+    can_replay_assignment_target,
+    is_valid_reference_source,
+};
 pub(crate) use blocks::{expect_semicolon, expect_token};
 pub(crate) use names::{name_part_from_token, name_starts_at, parse_name, parse_unqualified_name};
-pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
+pub(crate) use assign::{
+    lower_destructuring_assignment_expression,
+    parse_destructuring_pattern_unpack,
+    starts_destructuring_pattern,
+    try_parse_destructuring_assignment_expression_pattern,
+};
 pub(crate) use recovery::recover_to_statement_boundary;
+pub(in crate::parser) use simple::try_parse_value_include;
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {
@@ -161,9 +171,9 @@ fn parse_stmt_dispatch(
                 keyword, span,
             ))
         }
-        Token::Goto => Err(goto_unsupported::reject_goto_statement(span)),
-        Token::Identifier(label) if goto_unsupported::starts_goto_label(tokens, *pos) => {
-            Err(goto_unsupported::reject_goto_label(label, span))
+        Token::Goto => crate::parser::terminal_goto::parse_goto(tokens, pos, span),
+        Token::Identifier(_) if crate::parser::terminal_goto::starts_label(tokens, *pos) => {
+            crate::parser::terminal_goto::parse_label(tokens, pos, span)
         }
         Token::Static => {
             if *pos + 1 < tokens.len() && tokens[*pos + 1].0 == Token::DoubleColon {
@@ -185,6 +195,26 @@ fn parse_stmt_dispatch(
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
         Token::Identifier(_)
         | Token::Enum
+        | Token::StringLiteral(_)
+        | Token::IntLiteral(_)
+        | Token::FloatLiteral(_)
+        | Token::True
+        | Token::False
+        | Token::Null
+        | Token::Inf
+        | Token::Nan
+        | Token::PhpIntMax
+        | Token::PhpIntMin
+        | Token::PhpFloatMax
+        | Token::PhpFloatMin
+        | Token::PhpFloatEpsilon
+        | Token::MPi
+        | Token::ME
+        | Token::MSqrt2
+        | Token::MPi2
+        | Token::MPi4
+        | Token::MLog2e
+        | Token::MLog10e
         | Token::Self_
         | Token::Parent
         | Token::Backslash

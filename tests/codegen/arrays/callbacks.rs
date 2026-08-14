@@ -121,6 +121,45 @@ foreach ($b as $v) { echo $v; }
     assert_eq!(out, "3246");
 }
 
+/// Verifies omitting the callback applies PHP truthiness to integer array elements.
+#[test]
+fn test_array_filter_without_callback_uses_php_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+$filtered = array_filter([0, 1, 2, 0, 3]);
+echo implode(',', $filtered);
+"#,
+    );
+    assert_eq!(out, "1,2,3");
+}
+
+/// Verifies the null callback filters boxed heterogeneous elements with PHP truthiness.
+#[test]
+fn test_array_filter_null_callback_uses_boxed_truthiness() {
+    let out = compile_and_run(
+        r#"<?php
+$filtered = array_filter([0, "0", "", 2, "ok", false, null], null, ARRAY_FILTER_USE_KEY);
+echo count($filtered) . '|' . $filtered[0] . '|' . $filtered[1];
+"#,
+    );
+    assert_eq!(out, "2|2|ok");
+}
+
+/// Verifies an untyped array boundary is checked and filtered through gradual array storage.
+#[test]
+fn test_array_filter_without_callback_accepts_gradual_array() {
+    let out = compile_and_run(
+        r#"<?php
+function keep_truthy($values) {
+    return array_filter($values);
+}
+$filtered = keep_truthy([0, 4, 0, 5]);
+echo count($filtered);
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 // Tests `array_filter` with a typed builtin callback (`str_starts_with`) applied to
 // string values, verifying correct filtering and mixed string output.
 /// Verifies that array filter string values.
@@ -1761,4 +1800,67 @@ echo array_reduce($w, fn($c, $v) => $c + strlen($v) + 1, 0);
 "#,
     );
     assert_eq!(out, "1");
+}
+
+/// A literal string callback over a runtime-produced array keeps its known string return ABI.
+/// The backend previously forced the descriptor wrapper to Mixed while the EIR result remained
+/// `array<string>`, producing an unsupported result-element mismatch.
+#[test]
+fn test_array_map_literal_string_callback_over_runtime_array_keeps_result_type() {
+    let out = compile_and_run(
+        r#"<?php
+function source(): array { return ['ada', 'lin']; }
+$mapped = array_map('strtoupper', source());
+echo implode(',', $mapped);
+"#,
+    );
+    assert_eq!(out, "ADA,LIN");
+}
+
+/// Verifies a statically associative Mixed/Mixed source uses the key-preserving gradual map path.
+#[test]
+fn test_array_map_assoc_mixed_source_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array {
+    $values = [];
+    $values["first"] = 1;
+    $values["second"] = "two";
+    return $values;
+}
+$mapped = array_map(static fn (mixed $value): string => gettype($value), build());
+foreach ($mapped as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+"#,
+    );
+    assert_eq!(out, "first=integer;second=string;");
+}
+
+/// Verifies a gradual source is runtime-validated, preserves indexed and associative keys, and
+/// releases its normalized hash after transferring the mapped result into a Mixed cell.
+#[test]
+fn test_array_map_gradual_runtime_shapes_are_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function mapGradual(callable $callback, mixed $values): mixed {
+    return array_map($callback, $values);
+}
+$callback = static fn (mixed $value): string => gettype($value);
+foreach (mapGradual($callback, [1, "x"]) as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+echo "|";
+foreach (mapGradual($callback, [2 => "a", "b" => 9]) as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "0=integer;1=string;|2=string;b=integer;");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
 }

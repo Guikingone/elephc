@@ -195,7 +195,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         "SplHeap" => &["current", "key", "next", "rewind", "valid", "count"],
         "SplMaxHeap" | "SplMinHeap" => &["compare"],
         "SplPriorityQueue" => &["current", "key", "next", "rewind", "valid", "count"],
-        "SplObjectStorage" => &[
+        "SplObjectStorage" | "WeakMap" => &[
             "current",
             "key",
             "next",
@@ -221,6 +221,7 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
             "valid",
             "getInnerIterator",
         ],
+        "RecursiveTreeIterator" => &["setPrefixPart"],
         "SplFileInfo" => &["__toString"],
         "SplFileObject" => &[
             "current",
@@ -240,4 +241,3 @@ pub(super) fn required_builtin_spl_metadata_methods(class_name: &str) -> &'stati
         _ => &[],
     }
 }
-

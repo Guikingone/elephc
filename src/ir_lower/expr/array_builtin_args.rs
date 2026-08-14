@@ -110,6 +110,21 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_array_splice_args(ctx, sig, args)
         }
+        _ if matches!(canonical.as_str(), "array_keys" | "array_values")
+            && !crate::types::call_args::has_named_args(args)
+            && !args.iter().any(is_spread_arg) =>
+        {
+            let mut operands = lower_args_with_signature(ctx, sig, args);
+            if let Some(&array) = operands.first() {
+                if matches!(
+                    ctx.builder.value_php_type(array).codegen_repr(),
+                    PhpType::Mixed | PhpType::Union(_)
+                ) {
+                    operands[0] = convert_mixed_array_to_assoc_hash(ctx, array, args[0].span);
+                }
+            }
+            operands
+        }
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {
@@ -117,6 +132,35 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Converts a boxed gradual array operand into an independently owned Mixed-valued hash.
+fn convert_mixed_array_to_assoc_hash(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: crate::ir::ValueId,
+    span: Span,
+) -> crate::ir::ValueId {
+    let source = LoweredValue {
+        value,
+        ir_type: value_ir_type(&ctx.builder.value_php_type(value)),
+    };
+    let converted = ctx
+        .emit_value(
+            Op::MixedToHash,
+            vec![value],
+            None,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            },
+            Op::MixedToHash.default_effects(),
+            Some(span),
+        )
+        .value;
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    converted
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.
@@ -288,4 +332,3 @@ pub(super) fn lower_value_sort_comparator_closure(
     )
     .value
 }
-

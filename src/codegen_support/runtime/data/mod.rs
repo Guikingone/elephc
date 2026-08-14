@@ -8,6 +8,10 @@
 //! Key details:
 //! - Symbol names and table layouts are link-time ABI shared with generated code and runtime helper labels.
 
+mod class_methods_registry;
+mod class_relation_registry;
+mod const_registry;
+mod member_exists_registry;
 mod fixed;
 /// Also home of `escaped_bytes()`, the crate's single assembler-string escaper:
 /// reachable outside this module so non-runtime emitters (`crate::debug_info`)
@@ -15,6 +19,16 @@ mod fixed;
 pub(crate) mod instanceof;
 mod user;
 
+/// Emit the closed-world class/interface/trait registry data tables for runtime lookups.
+pub(crate) use const_registry::emit_class_registry_data;
+/// Emit the closed-world per-class public-method payload registry.
+pub(crate) use class_methods_registry::emit_class_methods_registry_data;
+/// Emit the closed-world per-class relation payload registry.
+pub(crate) use class_relation_registry::emit_class_relation_registry_data;
+/// Emit the closed-world constant/enum registry data tables for runtime lookups.
+pub(crate) use const_registry::emit_const_registry_data;
+/// Emit the closed-world member-existence registry backing dynamic member names.
+pub(crate) use member_exists_registry::emit_member_exists_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;

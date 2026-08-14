@@ -106,9 +106,7 @@ fn contextual_closure_sig(
                         callback.span,
                         &format!("Closure parameter ${}", name),
                     )?;
-                    let specialized_ty =
-                        Checker::specialize_generic_array_param_hint(&declared_ty, actual_ty);
-                    (specialized_ty.clone(), specialized_ty, true)
+                    (declared_ty.clone(), declared_ty, true)
                 } else {
                     (declared_ty.clone(), declared_ty, true)
                 }
@@ -153,27 +151,35 @@ fn contextual_closure_sig(
     }))
 }
 
-/// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject)`.
+/// Type-checks a call to PHP `preg_replace_callback(pattern, callback, subject, limit, count)`.
 ///
-/// Validates exactly 3 arguments, infers types for the pattern and subject
-/// expressions, synthesizes an `array<string>` type for the `$matches` callback
-/// parameter, and delegates to `check_known_callable_call` to verify the closure
-/// signature. Returns `PhpType::Str` on success.
+/// Validates the public arity, leaves the optional counter destination write-only,
+/// synthesizes an `array<string>` type for the callback parameter, and verifies the
+/// callable signature. Returns `PhpType::Str` on success.
 pub(crate) fn check(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> BuiltinResult {
-    if args.len() != 3 {
+    if !(3..=5).contains(&args.len()) {
         return Err(CompileError::new(
             span,
-            "preg_replace_callback() takes exactly 3 arguments",
+            "preg_replace_callback() takes 3 to 5 arguments",
         ));
     }
 
     checker.infer_type(&args[0], env)?;
     checker.infer_type(&args[2], env)?;
+    if args.len() >= 4 {
+        checker.infer_type(&args[3], env)?;
+    }
+    if args.len() >= 5 && !checker.is_by_ref_argument_lvalue(&args[4], env)? {
+        return Err(CompileError::new(
+            args[4].span,
+            "preg_replace_callback() parameter $count must be passed a variable",
+        ));
+    }
 
     let callback_args = vec![matches_arg(span)];
     if let Some(sig) = contextual_closure_sig(checker, &args[1], &[matches_type()], env)? {

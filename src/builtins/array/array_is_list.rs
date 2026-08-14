@@ -40,7 +40,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !matches!(
         ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
     ) {
         return Err(CompileError::new(
             cx.span,

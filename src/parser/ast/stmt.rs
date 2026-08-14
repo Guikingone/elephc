@@ -293,6 +293,12 @@ pub enum StmtKind {
         property: String,
         value: Expr,
     },
+    /// Binds a declared instance property to the reference cell owned by another property.
+    PropertyRefAssign {
+        object: Box<Expr>,
+        property: String,
+        source: Expr,
+    },
     StaticPropertyAssign {
         receiver: StaticReceiver,
         property: String,
@@ -307,6 +313,21 @@ pub enum StmtKind {
         receiver: StaticReceiver,
         property: String,
         index: Expr,
+        value: Expr,
+    },
+    /// Binds one static-property array element by reference to another element.
+    StaticPropertyElementRefAssign {
+        receiver: StaticReceiver,
+        property: String,
+        index: Expr,
+        source: Expr,
+    },
+    /// Writes a direct value, indexed element, or appended element through a computed static-property name.
+    DynamicStaticPropertyWrite {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+        index: Option<Expr>,
+        append: bool,
         value: Expr,
     },
     PropertyArrayPush {

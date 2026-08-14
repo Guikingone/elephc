@@ -8,13 +8,14 @@ sidebar:
 ## arsort()
 
 ```php
-function arsort(array $array): bool
+function arsort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array in descending order and maintains index association.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

@@ -655,6 +655,23 @@ fn test_foreach_int() {
     assert_eq!(out, "123");
 }
 
+/// Foreach writes complex key and value lvalues before executing each iteration body.
+#[test]
+fn test_foreach_property_key_and_value_targets() {
+    let out = compile_and_run(
+        "<?php
+        class ForeachTarget {
+            public string $key = '';
+            public int $value = 0;
+        }
+        $target = new ForeachTarget();
+        foreach (['first' => 1, 'second' => 2] as $target->key => $target->value) {
+        }
+        echo $target->key, ':', $target->value;",
+    );
+    assert_eq!(out, "second:2");
+}
+
 /// Verifies foreach value by reference mutates indexed array.
 #[test]
 fn test_foreach_value_by_reference_mutates_indexed_array() {
@@ -1628,3 +1645,233 @@ var_dump(isset($neverIndexed["k"]));
     );
     assert_eq!(out, "bool(false)\n");
 }
+
+/// Verifies nested associative unsets write a COW-split child back into its indexed parent.
+///
+/// The sibling source hash must retain both removed keys, and addressing a missing outer index
+/// must stay a no-op instead of autovivifying a new parent element.
+#[test]
+fn test_unset_nested_assoc_child_preserves_cow_and_missing_parent() {
+    let out = compile_and_run(
+        r#"<?php
+function cleanTrace(mixed $trace): mixed {
+    unset($trace[0]["args"], $trace[0]["object"]);
+    $before = count($trace);
+    unset($trace[3]["missing"]);
+    echo ":" . $before . "=" . count($trace);
+    return $trace;
+}
+$shared = ["args" => [1, 2], "object" => "obj", "keep" => "yes"];
+$trace = cleanTrace([$shared]);
+echo isset($trace[0]["args"]) ? "1" : "0";
+echo isset($trace[0]["object"]) ? "1" : "0";
+echo ":" . $trace[0]["keep"] . ":";
+echo isset($shared["args"]) ? "1" : "0";
+echo isset($shared["object"]) ? "1" : "0";
+"#,
+    );
+    assert_eq!(out, ":1=100:yes:11");
+}
+
+/// Verifies nested associative unset writes a COW-relocated root back through a by-ref parameter.
+#[test]
+fn test_unset_nested_assoc_through_by_ref_parameter_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+function stripDefaults(array &$content): void {
+    unset($content['services']['_defaults']);
+}
+$sharedServices = ['_defaults' => ['autowire' => true], 'keep' => 'yes'];
+$content = ['services' => $sharedServices];
+$copy = $content;
+stripDefaults($content);
+echo isset($content['services']['_defaults']) ? '1' : '0';
+echo ':' . $content['services']['keep'] . ':';
+echo isset($copy['services']['_defaults']) ? '1' : '0';
+echo isset($sharedServices['_defaults']) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "0:yes:11");
+}
+
+/// Verifies a two-level unset rooted at a gradual instance property writes the COW result back.
+#[test]
+fn test_unset_nested_gradual_instance_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class TraceState {
+    private mixed $started;
+
+    public function __construct(mixed $started) { $this->started = $started; }
+
+    public function drop(string $id): void {
+        unset($this->started[$id]["out"]);
+        unset($this->started["missing"]["out"]);
+    }
+
+    public function values(): mixed { return $this->started; }
+}
+$shared = ["out" => "payload", "keep" => "yes"];
+$state = new TraceState(["job" => $shared]);
+$state->drop("job");
+$values = $state->values();
+echo isset($values["job"]["out"]) ? "1" : "0";
+echo ":" . $values["job"]["keep"] . ":";
+echo isset($shared["out"]) ? "1" : "0";
+echo ":" . count($values);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1");
+}
+
+/// Verifies a two-level unset rooted at a gradual static property writes the COW result back.
+#[test]
+fn test_unset_nested_gradual_static_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticTraceState {
+    private static mixed $started;
+
+    public static function initialize(mixed $started): void { self::$started = $started; }
+    public static function drop(string $id): void {
+        unset(self::$started[$id]['out']);
+        unset(self::$started['missing']['out']);
+    }
+    public static function values(): mixed { return self::$started; }
+}
+$shared = ['out' => 'payload', 'keep' => 'yes'];
+StaticTraceState::initialize(['job' => $shared]);
+StaticTraceState::drop('job');
+$values = StaticTraceState::values();
+echo isset($values['job']['out']) ? '1' : '0';
+echo ':' . $values['job']['keep'] . ':';
+echo isset($shared['out']) ? '1' : '0';
+echo ':' . count($values);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1");
+}
+
+/// Verifies a three-level cookie-map unset writes every COW-split child back through a
+/// declared generic `array` property whose runtime storage has been promoted to a hash.
+#[test]
+fn test_unset_three_level_declared_array_property_preserves_cow() {
+    let out = compile_and_run(
+        r#"<?php
+class HeaderCookies {
+    protected array $cookies = [];
+
+    public function set(string $domain, string $path, string $name, string $value): void {
+        $this->cookies[$domain][$path][$name] = $value;
+    }
+
+    public function remove(string $domain, string $path, string $name): void {
+        unset($this->cookies[$domain][$path][$name]);
+    }
+
+    public function all(): array { return $this->cookies; }
+}
+
+$headers = new HeaderCookies();
+$headers->set('example.test', '/', 'drop', 'payload');
+$headers->set('example.test', '/', 'keep', 'yes');
+$before = $headers->all();
+$headers->remove('example.test', '/', 'drop');
+$after = $headers->all();
+echo isset($after['example.test']['/']['drop']) ? '1' : '0';
+echo ':' . $after['example.test']['/']['keep'];
+echo ':' . (isset($before['example.test']['/']['drop']) ? '1' : '0');
+echo ':' . count($after['example.test']['/']);
+echo ':' . count($after);
+"#,
+    );
+    assert_eq!(out, "0:yes:1:1:1");
+}
+
+/// Verifies all three unset keys retain PHP source-order evaluation when the outer parent is
+/// absent, without autovivifying the empty root array.
+#[test]
+fn test_unset_three_level_missing_parent_evaluates_all_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function outerKey(): string { echo 'o'; return 'missing'; }
+function middleKey(): string { echo 'm'; return 'path'; }
+function leafKey(): string { echo 'l'; return 'name'; }
+$values = [];
+unset($values[outerKey()][middleKey()][leafKey()]);
+echo ':' . count($values);
+"#,
+    );
+    assert_eq!(out, "oml:0");
+}
+
+/// Verifies `unset` dispatches a declared static WeakMap subscript to `offsetUnset`.
+#[test]
+fn test_unset_static_weak_map_entry_dispatches_array_access() {
+    let out = compile_and_run(
+        r#"<?php
+class ActiveObjects {
+    private static WeakMap $entries;
+    public static function run(): void {
+        self::$entries = new WeakMap();
+        $object = new stdClass();
+        self::$entries[$object] = true;
+        unset(self::$entries[$object]);
+        echo count(self::$entries);
+    }
+}
+ActiveObjects::run();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// Verifies static indexed, associative, and nullable-array properties are sparsified and written
+/// back when one of their elements is unset.
+#[test]
+fn test_unset_static_property_array_elements() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticUnsetBox {
+    public static array $indexed = ['a', 'b', 'c'];
+    public static array $assoc = ['keep' => 1, 'drop' => 2];
+    public static ?array $nullable = null;
+    public static function run(): void {
+        self::$nullable = ['left' => 3, 'right' => 4];
+        unset(self::$indexed[1]);
+        unset(self::$assoc['drop']);
+        unset(self::$nullable['right']);
+    }
+}
+StaticUnsetBox::run();
+foreach (StaticUnsetBox::$indexed as $k => $v) { echo "$k=$v "; }
+echo '|';
+foreach (StaticUnsetBox::$assoc as $k => $v) { echo "$k=$v "; }
+echo '|';
+foreach (StaticUnsetBox::$nullable as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "0=a 2=c |keep=1 |left=3 ");
+}
+
+/// Verifies a boxed `Mixed` needle compares against concrete integer-array elements with PHP's
+/// loose and strict rules by boxing each element at the comparison boundary.
+#[test]
+fn test_in_array_mixed_needle_over_integer_array() {
+    let out = compile_and_run(
+        r#"<?php
+function picked(mixed $value): mixed { return $value; }
+var_dump(in_array(picked(2), [1, 2, 3], true));
+var_dump(in_array(picked("2"), [1, 2, 3], true));
+var_dump(in_array(picked("2"), [1, 2, 3]));
+var_dump(in_array(picked(false), [0, 1]));
+var_dump(in_array(picked(true), [0]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+// --- Long-form `array(...)` literal ---

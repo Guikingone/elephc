@@ -38,14 +38,25 @@ pub(super) fn lower_stdclass_prop_set(
     Ok(())
 }
 
-/// Lowers a named property write through the runtime Mixed object-property setter.
+/// Lowers a named property write through declared-class dispatch for a boxed Mixed receiver.
 pub(super) fn lower_mixed_prop_set(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
     value: ValueId,
     property: &str,
+    inst: &Instruction,
 ) -> Result<()> {
-    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    let value_ty = ctx.value_php_type(value)?;
+    let candidates = declared_mixed_property_candidates(ctx, property, inst)?
+        .into_iter()
+        .filter(|candidate| {
+            ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst).is_ok()
+        })
+        .collect::<Vec<_>>();
+    if !candidates.is_empty() {
+        return lower_declared_mixed_prop_set(ctx, object, value, property, inst, candidates);
+    }
+    let value_ty = value_ty.codegen_repr();
     materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     let (label, len) = ctx.data.add_string(property.as_bytes());
@@ -64,6 +75,162 @@ pub(super) fn lower_mixed_prop_set(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_property_set");
+    Ok(())
+}
+
+/// Lowers a named property write through PHP's bare `object` pseudo-type.
+///
+/// The receiver is an unboxed object payload whose concrete class remains runtime-only. Dispatch
+/// therefore mirrors generic property reads, while candidate collection excludes declared slots
+/// that cannot accept the replacement value.
+pub(super) fn lower_generic_object_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?;
+    let candidates = declared_mixed_property_candidates(ctx, property, inst)?
+        .into_iter()
+        .filter(|candidate| {
+            ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst).is_ok()
+        })
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("generic_object_prop_set_miss");
+    let done_label = ctx.next_label("generic_object_prop_set_done");
+    let stdclass_label = ctx.next_label("generic_object_prop_set_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "generic_object_prop_set_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
+        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_set_from_loaded_object(ctx, value, property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    let message = format!(
+        "Fatal error: Cannot write undeclared property ${} through an object receiver\n",
+        property
+    );
+    emit_fatal_message(ctx, message.as_bytes());
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Dispatches a named Mixed-receiver property write across every declared owner of that slot.
+fn lower_declared_mixed_prop_set(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    value: ValueId,
+    property: &str,
+    inst: &Instruction,
+    candidates: Vec<MixedPropertyCandidate>,
+) -> Result<()> {
+    let null_label = ctx.next_label("mixed_prop_set_null");
+    let miss_label = ctx.next_label("mixed_prop_set_miss");
+    let done_label = ctx.next_label("mixed_prop_set_done");
+    let stdclass_label = ctx.next_label("mixed_prop_set_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "mixed_prop_set_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    ctx.load_value_to_reg(object, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_mixed_object_payload_or_null(ctx, &null_label);
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    let value_ty = ctx.value_php_type(value)?;
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        ensure_property_value_supported(ctx, &candidate.slot, value, &value_ty, inst)?;
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_reg_move(ctx.emitter, base_reg, result_reg);
+        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_set_from_loaded_object(ctx, value, property)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    let message = format!(
+        "Fatal error: Cannot write undeclared property ${} through a mixed receiver\n",
+        property
+    );
+    emit_fatal_message(ctx, message.as_bytes());
+
+    ctx.emitter.label(&null_label);
+    emit_property_assign_on_null_fatal(ctx, property);
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Stores a boxed value into a stdClass whose raw object pointer is in the result register.
+fn emit_stdclass_set_from_loaded_object(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    materialize_dynamic_property_mixed_value(ctx, value, &value_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let (label, len) = ctx.data.add_string(property.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x3");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_set");
     Ok(())
 }
 
@@ -153,20 +320,9 @@ pub(super) fn lower_nullable_prop_set(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
-    let slot = match resolve_property_slot_for_class(ctx, class_name, property, inst) {
-        Ok(slot) => slot,
-        Err(_) => {
-            return lower_nullable_runtime_object_prop_set(
-                ctx, inst, object, value, None, property,
-            )
-        }
-    };
+    let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
     let value_ty = ctx.value_php_type(value)?;
-    if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
-        return lower_nullable_runtime_object_prop_set(
-            ctx, inst, object, value, None, property,
-        );
-    }
+    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
     let null_label = ctx.next_label("nullable_prop_set_null");
     let done_label = ctx.next_label("nullable_prop_set_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);

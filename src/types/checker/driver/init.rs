@@ -12,15 +12,18 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::filter_constants::FILTER_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::standard_constants::STANDARD_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::types::token_constants::TOKEN_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -94,6 +97,9 @@ impl Checker {
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in FILTER_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in MATH_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -133,6 +139,17 @@ impl Checker {
         constants.insert("M_LOG10E".to_string(), PhpType::Float);
         constants.insert("PHP_EOL".to_string(), PhpType::Str);
         constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
+        constants.insert("PHP_MAXPATHLEN".to_string(), PhpType::Int);
+        constants.insert("LC_NUMERIC".to_string(), PhpType::Int);
+        for (name, _value) in STANDARD_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _values) in TOKEN_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in DATE_STRING_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Str);
+        }
 
         Self {
             target_platform,
@@ -143,6 +160,7 @@ impl Checker {
             constants,
             closure_return_types: HashMap::new(),
             callable_sigs: HashMap::new(),
+            static_property_callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
             strict_types: false,
@@ -184,12 +202,16 @@ impl Checker {
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             current_loop_storage_scope: "main".to_string(),
+            declared_local_types: HashMap::new(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
             string_incdec_locals: HashSet::new(),
+            by_ref_local_storage_types: HashMap::new(),
+            string_suffix_locals: HashMap::new(),
+            dynamic_ref_local_types: HashMap::new(),
         }
     }
 }

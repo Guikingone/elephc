@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::names::Name;
-use crate::parser::ast::{ClassMethod, Expr, TypeExpr, Visibility};
+use crate::parser::ast::{ClassMethod, Expr, ExprKind, TypeExpr, Visibility};
 use crate::types::{traits::FlattenedClass, ClassInfo, PhpType};
 
 use super::builtin_types::InterfaceDeclInfo;
@@ -30,13 +30,17 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SplObserver",
     "SplSubject",
     "Stringable",
+    "Reflector",
+    "UnitEnum",
+    "BackedEnum",
 ];
 
-/// Injects PHP SPL builtin interfaces into the type environment.
+/// Injects PHP core and SPL builtin interfaces into the type environment.
 ///
 /// Adds `Traversable`, `Iterator`, `IteratorAggregate`, `ArrayAccess`, `Countable`,
 /// `OuterIterator`, `RecursiveIterator`, `SeekableIterator`, `SplObserver`, `SplSubject`,
-/// and `Stringable` as declared interfaces with their full method signatures.
+/// `Stringable`, `Reflector`, `UnitEnum`, and `BackedEnum` as declared interfaces with their
+/// full method signatures.
 ///
 /// ## Errors
 /// Returns an error if any user-defined interface or class has a PHP-case-insensitive
@@ -260,6 +264,66 @@ pub(crate) fn inject_builtin_interfaces(
         },
     );
 
+    interface_map.insert(
+        "Reflector".to_string(),
+        InterfaceDeclInfo {
+            name: "Reflector".to_string(),
+            extends: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![
+                builtin_interface_method("__toString", TypeExpr::Str),
+                builtin_reflector_get_attributes_method(),
+            ],
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
+    interface_map.insert(
+        "UnitEnum".to_string(),
+        InterfaceDeclInfo {
+            name: "UnitEnum".to_string(),
+            extends: Vec::new(),
+            properties: Vec::new(),
+            methods: vec![builtin_static_interface_method(
+                "cases",
+                Vec::new(),
+                TypeExpr::Array(Box::new(mixed_type())),
+            )],
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
+    interface_map.insert(
+        "BackedEnum".to_string(),
+        InterfaceDeclInfo {
+            name: "BackedEnum".to_string(),
+            extends: vec!["UnitEnum".to_string()],
+            properties: Vec::new(),
+            methods: vec![
+                builtin_static_interface_method(
+                    "from",
+                    vec![(
+                        "value",
+                        TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Int]),
+                    )],
+                    TypeExpr::Named(Name::unqualified("static")),
+                ),
+                builtin_static_interface_method(
+                    "tryFrom",
+                    vec![(
+                        "value",
+                        TypeExpr::Union(vec![TypeExpr::Str, TypeExpr::Int]),
+                    )],
+                    TypeExpr::Nullable(Box::new(TypeExpr::Named(Name::unqualified("static")))),
+                ),
+            ],
+            span: crate::span::Span::dummy(),
+            constants: Vec::new(),
+        },
+    );
+
     Ok(())
 }
 
@@ -371,6 +435,53 @@ fn builtin_interface_method_with_params(
         by_ref_return: false,
         body: Vec::new(),
         span: crate::span::Span::dummy(),
+        attributes: Vec::new(),
+    }
+}
+
+/// Builds a public static method contract for a builtin interface.
+fn builtin_static_interface_method(
+    name: &str,
+    params: Vec<(&str, TypeExpr)>,
+    return_type: TypeExpr,
+) -> ClassMethod {
+    let mut method = builtin_interface_method_with_params(name, params, return_type);
+    method.is_static = true;
+    method
+}
+
+/// Builds the common optional-argument `getAttributes()` contract used by supported reflectors.
+fn builtin_reflector_get_attributes_method() -> ClassMethod {
+    let span = crate::span::Span::dummy();
+    ClassMethod {
+        name: "getAttributes".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: true,
+        is_final: false,
+        has_body: false,
+        params: vec![
+            (
+                "name".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                Some(Expr::new(ExprKind::Null, span)),
+                false,
+            ),
+            (
+                "flags".to_string(),
+                Some(TypeExpr::Int),
+                Some(Expr::new(ExprKind::IntLiteral(0), span)),
+                false,
+            ),
+        ],
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Array(Box::new(mixed_type()))),
+        by_ref_return: false,
+        body: Vec::new(),
+        span,
         attributes: Vec::new(),
     }
 }

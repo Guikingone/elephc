@@ -2,7 +2,7 @@
 title: "rsort() — internals"
 description: "Compiler internals for rsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 65
+  order: 66
 ---
 
 ## `rsort()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function rsort(array $array): bool
+function rsort(array $array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

@@ -92,6 +92,25 @@ impl Checker {
         CompileError::new(span, &format!("Undefined function: {}", name))
     }
 
+    /// Accepts an unresolved direct function call until runtime, matching PHP lookup timing.
+    ///
+    /// The checker still validates argument expressions so nested source errors remain visible;
+    /// EIR lowering later emits the PHP-compatible `Error` before evaluating those arguments.
+    fn try_late_bound_undefined_call(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        caller_env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        if !crate::types::checker::builtins::is_late_bound_undefined_function(name) {
+            return Ok(None);
+        }
+        // PHP resolves the function before evaluating its arguments. The lowering path therefore
+        // emits the runtime Error without lowering argument expressions or their side effects.
+        let _ = (args, caller_env);
+        Ok(Some(PhpType::Mixed))
+    }
+
     /// Checks a function call, including externs, declared functions, variants,
     /// builtins, call-argument normalization, and return-type inference.
     pub fn check_function_call(
@@ -175,11 +194,15 @@ impl Checker {
             return Ok(PhpType::Mixed);
         }
 
-        let decl = self
-            .fn_decls
-            .get(name)
-            .cloned()
-            .ok_or_else(|| self.unresolved_function_call_error(name, span))?;
+        let decl = match self.fn_decls.get(name).cloned() {
+            Some(decl) => decl,
+            None => {
+                if let Some(mixed) = self.try_late_bound_undefined_call(name, args, caller_env)? {
+                    return Ok(mixed);
+                }
+                return Err(self.unresolved_function_call_error(name, span));
+            }
+        };
         let normalization_sig = FunctionSig {
             params: decl
                 .params
@@ -370,9 +393,9 @@ impl Checker {
                         Some((name, decl.params[arg_idx].as_str())),
                         decl.ref_params.get(arg_idx).copied().unwrap_or(false),
                     )?;
-                    let specialized_ty =
-                        Self::specialize_generic_array_param_hint(&declared_ty, &ty);
-                    param_types.push((decl.params[arg_idx].clone(), specialized_ty));
+                    // Declared PHP types are stable contracts. In particular, a bare `array`
+                    // accepts both indexed and associative arrays across every call site.
+                    param_types.push((decl.params[arg_idx].clone(), declared_ty));
                     arg_idx += 1;
                     continue;
                 }

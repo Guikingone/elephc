@@ -2,7 +2,7 @@
 title: "fileowner() — internals"
 description: "Compiler internals for fileowner(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 127
+  order: 128
 ---
 
 ## `fileowner()` — internals

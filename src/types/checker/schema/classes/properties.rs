@@ -795,12 +795,17 @@ fn php_property_types_invariant(parent: &PhpType, child: &PhpType) -> bool {
 /// Refines a declared generic `array` property type using its default value. PHP's `array` hint is
 /// ambiguous between list and hash storage; an associative literal default (`['a' => 1]`) is stored
 /// as `AssocArray` so string-key access type-checks, mirroring how untyped associative-default
-/// properties are inferred. Non-array hints, missing defaults, and positional/empty array defaults
-/// keep the declared type unchanged.
+/// properties are inferred. Its key and value storage are both widened to `Mixed`: the PHP
+/// `array` hint constrains only the container, so specializing either dimension from the default
+/// would reject a later valid whole-array assignment. Non-array hints, missing defaults, and
+/// positional/empty array defaults keep the declared type unchanged.
 fn refine_declared_array_type_from_default(declared_ty: PhpType, default: Option<&Expr>) -> PhpType {
     if let (PhpType::Array(_), Some(default)) = (&declared_ty, default) {
         if matches!(default.kind, ExprKind::ArrayLiteralAssoc(_)) {
-            return infer_untyped_property_default_type(default);
+            return PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            };
         }
     }
     declared_ty

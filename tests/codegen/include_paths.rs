@@ -9,6 +9,54 @@
 
 use crate::support::*;
 
+/// Verifies a variable include path executes the selected file in the caller's scope.
+#[test]
+fn test_runtime_dynamic_include_variable_path_shares_scope() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { $prefix = 'runtime'; include $path; } load('piece.php');",
+            ),
+            ("piece.php", "<?php echo $prefix . '-include';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "runtime-include");
+}
+
+/// Verifies a dynamic require expression returns the included file's explicit value.
+#[test]
+fn test_runtime_dynamic_require_expression_returns_value() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { return require $path; } echo load('value.php');",
+            ),
+            ("value.php", "<?php return 'dynamic-value';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "dynamic-value");
+}
+
+/// Verifies dynamic include_once canonicalizes and executes one selected path only once.
+#[test]
+fn test_runtime_dynamic_include_once_tracks_loaded_path() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php function load($path) { include_once $path; } load('once.php'); load('./once.php');",
+            ),
+            ("once.php", "<?php echo 'once';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "once");
+}
+
 // `require __DIR__ . '/...';` is the most common idiomatic include pattern
 // in PHP. After magic-constant substitution, __DIR__ becomes a string literal
 // and the resolver's path folder concatenates it with the trailing literal.

@@ -650,16 +650,6 @@ fn test_error_reflection_function_constructor_unknown_function() {
     );
 }
 
-/// Verifies that `new ReflectionFunction()` rejects dynamic function names
-/// because runtime function reflection lookup metadata is not available.
-#[test]
-fn test_error_reflection_function_constructor_dynamic_function_name() {
-    expect_error(
-        "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
-        "requires a string literal function name",
-    );
-}
-
 /// Verifies `ReflectionFunction` rejects attributes whose arguments cannot yet
 /// be materialized into `ReflectionAttribute` metadata.
 #[test]
@@ -696,16 +686,6 @@ fn test_error_reflection_class_undefined_class() {
     expect_error(
         "<?php $r = new ReflectionClass('Missing');",
         "ReflectionClass::__construct(): undefined class 'Missing'",
-    );
-}
-
-/// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
-/// "requires a string literal class name".
-#[test]
-fn test_error_reflection_class_dynamic_argument() {
-    expect_error(
-        "<?php $name = 'C'; class C {} $r = new ReflectionClass($name);",
-        "requires a string literal class name",
     );
 }
 

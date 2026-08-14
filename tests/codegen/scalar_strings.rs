@@ -203,6 +203,15 @@ fn test_exit_code() {
     assert_eq!(out, "before");
 }
 
+/// Verifies a runtime `Mixed` integer can supply the process exit status.
+#[test]
+fn test_exit_accepts_mixed_integer_status() {
+    let out = compile_and_run(
+        "<?php function status(): mixed { return 0; } echo \"before\"; exit(status()); echo \"after\";",
+    );
+    assert_eq!(out, "before");
+}
+
 // --- $argc ---
 
 /// Compiles `<?php echo $argc;` and asserts stdout is `1` (test binary is run with no extra args).
@@ -226,4 +235,3 @@ fn test_argv_first_entry_exists() {
     let out = compile_and_run("<?php echo $argv[0];");
     assert!(out.ends_with("/test"), "unexpected argv[0]: {out}");
 }
-

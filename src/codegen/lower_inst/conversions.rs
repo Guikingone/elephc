@@ -61,9 +61,105 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::I64 => lower_cast_to_int(ctx, inst),
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
+        IrType::Heap(crate::ir::IrHeapKind::Array) => lower_cast_to_array(ctx, inst),
+        IrType::Heap(crate::ir::IrHeapKind::Object) => lower_cast_to_object(ctx, inst),
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
+        ))),
+    }
+}
+
+/// Lowers an associative-array cast to a fresh hash-backed stdClass instance.
+fn lower_cast_to_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let source_type = ctx.value_php_type(value)?.codegen_repr();
+    match source_type {
+        PhpType::AssocArray { .. } => {
+            let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(value, first_arg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");
+        }
+        PhpType::Array(_) => lower_array_storage_to_owned_hash(ctx, value)?,
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "object cast for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    if first_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, first_arg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+    if first_arg != result_reg {
+        abi::emit_reg_move(ctx.emitter, first_arg, result_reg);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stdclass_from_hash");
+    store_if_result(ctx, inst)
+}
+
+/// Produces an owned hash from storage that may already be a runtime-promoted hash.
+fn lower_array_storage_to_owned_hash(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let hash = ctx.next_label("object_cast_array_hash");
+            let done = ctx.next_label("object_cast_array_done");
+            ctx.load_value_to_reg(value, "x0")?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp x0, #3");                              // distinguish a dynamically promoted hash from indexed storage
+            ctx.emitter.instruction(&format!("b.eq {}", hash));                // clone an existing hash so the stdClass remains isolated
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&hash);
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");      // duplicate promoted associative storage for object value semantics
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            let hash = ctx.next_label("object_cast_array_hash");
+            let done = ctx.next_label("object_cast_array_done");
+            ctx.load_value_to_reg(value, "rax")?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+            ctx.emitter.instruction("cmp rax, 3");                             // distinguish a dynamically promoted hash from indexed storage
+            ctx.emitter.instruction(&format!("je {}", hash));                 // clone an existing hash so the stdClass remains isolated
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&hash);
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_clone_shallow");      // duplicate promoted associative storage for object value semantics
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
+}
+
+/// Lowers PHP's `(array)` cast from a boxed runtime value to owned Mixed-element storage.
+fn lower_cast_to_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, value)?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_from_mixed");
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed => {
+            ctx.load_value_to_result(value)?;
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(_) => super::arrays::lower_array_to_mixed(ctx, inst),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array cast for PHP type {:?}",
+            other
         ))),
     }
 }

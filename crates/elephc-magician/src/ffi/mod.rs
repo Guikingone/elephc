@@ -16,10 +16,15 @@ pub mod declared_symbols;
 pub(crate) mod dynamic_destructors;
 pub(crate) mod ob_handlers;
 pub mod execute;
+pub mod include;
+#[cfg(not(test))]
+pub mod extract;
 #[cfg(not(test))]
 pub mod function_calls;
 pub mod native_functions;
 pub mod native_methods;
+#[cfg(not(test))]
+pub mod reflection_construction;
 #[cfg(not(test))]
 pub mod object_construction;
 #[cfg(not(test))]
@@ -35,10 +40,15 @@ pub use callables::*;
 pub use context::*;
 pub use declared_symbols::*;
 pub use execute::*;
+pub use include::*;
+#[cfg(not(test))]
+pub use extract::*;
 #[cfg(not(test))]
 pub use function_calls::*;
 pub use native_functions::*;
 pub use native_methods::*;
+#[cfg(not(test))]
+pub use reflection_construction::*;
 #[cfg(not(test))]
 pub use object_construction::*;
 #[cfg(not(test))]

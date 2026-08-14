@@ -2,19 +2,22 @@
 title: "mkdir()"
 description: "Makes a directory."
 sidebar:
-  order: 147
+  order: 148
 ---
 
 ## mkdir()
 
 ```php
-function mkdir(string $directory): bool
+function mkdir(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool
 ```
 
 Makes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$permissions` (`int`), default `511`, optional
+- `$recursive` (`bool`), default `false`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 

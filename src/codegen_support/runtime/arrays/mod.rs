@@ -31,11 +31,13 @@ mod array_fill_keys_refcounted;
 mod array_fill_refcounted;
 mod array_fill_str;
 mod array_filter;
+mod array_filter_mixed;
 mod array_filter_refcounted;
 mod array_find_any_all;
 mod array_flip;
 mod array_flip_string;
 mod array_free_deep;
+mod array_from_mixed;
 mod array_get_mixed_key;
 mod array_grow;
 mod array_hash_union;
@@ -50,6 +52,7 @@ mod array_map;
 mod array_map_mixed;
 mod array_map_str;
 mod array_merge;
+mod array_merge_str;
 mod array_merge_into;
 mod array_merge_into_refcounted;
 mod array_merge_recursive;
@@ -105,10 +108,14 @@ mod decref_array;
 mod decref_hash;
 mod decref_mixed;
 mod decref_object;
+mod mixed_pop_shift;
+mod mixed_from_array_kind;
+mod mixed_to_owned_hash;
 mod gc_collect_cycles;
 mod gc_collect_cycles_x86_64;
 mod gc_mark_reachable;
 mod gc_note_child_ref;
+mod global_ref_cell;
 mod hash_count;
 mod hash_append;
 mod hash_clone_shallow;
@@ -116,6 +123,8 @@ mod hash_fnv1a;
 mod hash_free_deep;
 mod hash_get;
 mod hash_grow;
+mod hash_ref_element;
+mod hash_bind_ref_element;
 mod hash_array_union;
 mod hash_key_eq;
 mod hash_key_hash;
@@ -133,6 +142,7 @@ mod hash_spread;
 mod hash_sum_mixed;
 mod hash_to_mixed;
 mod hash_union;
+mod hash_unshift_mixed;
 mod hash_unset;
 mod heap_alloc;
 mod heap_debug_check_live;
@@ -141,7 +151,9 @@ mod heap_debug_report;
 mod heap_debug_validate_free_list;
 mod heap_kind;
 mod heap_free;
+mod in_array_mixed_container;
 mod in_array_mixed_int;
+mod ksort;
 mod min_max_container;
 mod natsort;
 mod object_free_deep;
@@ -171,6 +183,7 @@ mod mixed_strict_eq;
 mod mixed_unbox;
 mod mixed_write_stdout;
 mod refcount;
+mod ref_cell;
 mod shuffle;
 mod slice_bounds;
 mod sort_int;
@@ -230,6 +243,8 @@ pub use array_fill_str::emit_array_fill_str;
 /// Emit string array fill helper.
 pub use array_filter::emit_array_filter;
 /// Emit array filter helper.
+pub use array_filter_mixed::emit_array_filter_mixed;
+/// Emit runtime-dispatched array filter support for boxed gradual arrays.
 pub use array_filter_refcounted::emit_array_filter_refcounted;
 /// Emit refcounted array filter helper.
 pub use array_find_any_all::emit_array_find_any_all;
@@ -243,6 +258,8 @@ pub use hash_flip::{emit_hash_flip, ARRAY_FLIP_SKIPPED_MESSAGES};
 pub use hash_map::{emit_hash_map, HashMapResultKind};
 /// Emit associative (hash) array map helper and its callback result-kind selector.
 pub use array_free_deep::emit_array_free_deep;
+/// Emits the `(array)` cast dispatcher for a boxed runtime value.
+pub use array_from_mixed::emit_array_from_mixed;
 /// Emit deep array free helper.
 pub use array_grow::emit_array_grow;
 /// Emit array grow helper.
@@ -267,6 +284,8 @@ pub use array_map_mixed::emit_array_map_mixed;
 pub use array_map_str::{emit_array_map_str, emit_array_map_str_owned};
 /// Emit array merge helper.
 pub use array_merge::emit_array_merge;
+/// Emit the string-slot array merge helper.
+pub use array_merge_str::emit_array_merge_str;
 /// Emit array merge-into helper.
 pub use array_merge_into::emit_array_merge_into;
 pub use array_merge_into_refcounted::emit_array_merge_into_refcounted;
@@ -373,6 +392,14 @@ pub use decref_any::emit_decref_any;
 /// Emit generic reference decrement helper.
 pub use decref_mixed::emit_decref_mixed;
 /// Emit Mixed reference decrement helper.
+pub use mixed_pop_shift::{
+    emit_hash_pop, emit_hash_shift, emit_indexed_pop, emit_indexed_shift, emit_mixed_box_raw,
+};
+/// Emit in-place pop/shift helpers for boxed gradual array containers.
+pub use mixed_from_array_kind::emit_mixed_from_array_kind;
+/// Emit runtime-kind-aware boxing for an erased array/hash pointer.
+pub use mixed_to_owned_hash::emit_mixed_to_owned_hash;
+/// Emit gradual boxed-array to independently owned hash conversion.
 pub use hash_count::emit_hash_count;
 /// Emit hash count helper.
 pub use hash_append::emit_hash_append;
@@ -385,6 +412,14 @@ pub use gc_mark_reachable::emit_gc_mark_reachable;
 /// Emit GC mark reachable helper.
 pub use gc_note_child_ref::emit_gc_note_child_ref;
 /// Emit GC note child reference helper.
+pub use global_ref_cell::emit_global_ref_cell;
+/// Emit request-global reference-cell ownership helpers.
+pub use ref_cell::{
+    emit_deref_if_reference, emit_ref_cell_alloc, emit_ref_cell_decref,
+    emit_ref_cell_free_deep, emit_ref_cell_incref, emit_ref_cell_release_claim,
+    emit_ref_cell_store,
+};
+/// Emit managed PHP reference-cell ownership and dereference helpers.
 pub use hash_fnv1a::emit_hash_fnv1a;
 /// Emit FNV-1a hash helper.
 pub use hash_free_deep::emit_hash_free_deep;
@@ -393,6 +428,10 @@ pub use hash_get::emit_hash_get;
 /// Emit hash get helper.
 pub use hash_grow::emit_hash_grow;
 /// Emit hash grow helper.
+pub use hash_ref_element::emit_hash_ref_element;
+/// Emit associative element promotion to a managed reference cell.
+pub use hash_bind_ref_element::emit_hash_bind_ref_element;
+/// Emit associative element binding to an existing managed reference cell.
 pub use hash_array_union::emit_hash_array_union;
 /// Emit hash array union helper.
 pub use hash_key_eq::emit_hash_key_eq;
@@ -414,6 +453,7 @@ pub use hash_new::emit_hash_new;
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
 pub use hash_sort::emit_hash_sort;
+pub use ksort::emit_ksort;
 /// Emit the hash key/value insertion-order sort helpers.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.
@@ -423,6 +463,8 @@ pub use hash_to_mixed::emit_hash_to_mixed;
 /// Emit hash-to-Mixed conversion helper.
 pub use hash_union::emit_hash_union;
 /// Emit hash union helper.
+pub use hash_unshift_mixed::emit_hash_unshift_mixed;
+/// Emit boxed-value prepend support for associative arrays.
 pub use hash_unset::emit_hash_unset;
 /// Emit hash unset (single-key removal) helper.
 pub use heap_alloc::emit_heap_alloc;
@@ -439,6 +481,8 @@ pub use heap_kind::emit_heap_kind;
 /// Emit heap kind check helper.
 pub use heap_free::emit_heap_free;
 /// Emit heap free helper.
+pub use in_array_mixed_container::emit_in_array_mixed_container;
+/// Emit membership over indexed or associative arrays stored in boxed gradual values.
 pub use in_array_mixed_int::emit_in_array_mixed_int;
 /// Emit integer membership over boxed-Mixed indexed arrays.
 pub use foreach_non_iterable_warning::{

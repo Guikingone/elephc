@@ -51,6 +51,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     match ty {
         PhpType::Array(elem) => Ok(*elem),
         PhpType::AssocArray { value, .. } => Ok(*value),
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(cx.span, "array_pop() argument must be array")),
     }
 }

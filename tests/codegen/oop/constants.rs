@@ -164,6 +164,23 @@ echo $b->describe();
     assert_eq!(out, "42");
 }
 
+/// Verifies an object-typed receiver resolves its class constant without runtime string dispatch.
+#[test]
+fn test_class_constant_access_through_typed_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    public const IGNORE = 7;
+}
+function read(Container $container): int {
+    return $container::IGNORE;
+}
+echo read(new Container());
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies interface constant.
 #[test]
 fn test_interface_constant() {
@@ -181,6 +198,60 @@ echo $b->get();
 "#,
     );
     assert_eq!(out, "100");
+}
+
+/// Verifies nested trait composition imports constants and binds `__CLASS__` to the consumer.
+#[test]
+fn test_trait_constants_are_flattened_into_consuming_class() {
+    let out = compile_and_run(
+        r#"<?php
+trait InnerConstants {
+    private const VALUES = ['ready'];
+    protected const OWNER = __CLASS__;
+}
+trait OuterConstants { use InnerConstants; }
+class ConstantReader {
+    use OuterConstants;
+    public static function render(): string {
+        return self::VALUES[0].':'.self::OWNER;
+    }
+}
+echo ConstantReader::render();
+"#,
+    );
+    assert_eq!(out, "ready:ConstantReader");
+}
+
+/// Verifies identical trait and class constant declarations compose without a conflict.
+#[test]
+fn test_compatible_trait_constant_declarations_compose() {
+    let out = compile_and_run(
+        r#"<?php
+trait FirstConstants { public const VALUE = 9; }
+trait SecondConstants { public const VALUE = 9; }
+class CompatibleConstants {
+    use FirstConstants, SecondConstants;
+    public const VALUE = 9;
+}
+echo CompatibleConstants::VALUE;
+"#,
+    );
+    assert_eq!(out, "9");
+}
+
+/// Verifies an incompatible class declaration cannot replace an imported trait constant.
+#[test]
+fn test_incompatible_trait_constant_declaration_fails() {
+    let err = compile_expect_type_error(
+        r#"<?php
+trait ImportedConstants { public const VALUE = 9; }
+class IncompatibleConstants {
+    use ImportedConstants;
+    public const VALUE = 10;
+}
+"#,
+    );
+    assert!(err.contains("incompatible duplicate constant 'VALUE'"), "{err}");
 }
 
 /// Verifies final class constants cannot be redeclared by subclasses.

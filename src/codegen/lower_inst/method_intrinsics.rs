@@ -23,6 +23,22 @@ pub(super) fn lower_interface_method_call(
         let object = expect_operand(inst, 0)?;
         return lower_throwable_standard_method(ctx, inst, object, method_name);
     }
+    let normalized_interface = interface_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    if ctx
+        .module
+        .interface_infos
+        .get(normalized_interface)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .is_none()
+    {
+        return lower_narrowed_interface_method_call(
+            ctx,
+            inst,
+            normalized_interface,
+            method_name,
+        );
+    }
     let (normalized, method_key, callee_sig) =
         resolve_interface_call_signature(ctx, interface_name, method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(callee_sig.params.len() + 1);
@@ -100,6 +116,18 @@ pub(super) fn lower_nullable_receiver_method_call(
             method_name,
         );
     }
+    if !class_declares_method(ctx, class_name, method_name)
+        && !narrowed_interface_candidates(ctx, class_name, method_name, inst.operands.len())?
+            .is_empty()
+    {
+        return lower_narrowed_nullable_interface_method_call(
+            ctx,
+            inst,
+            object,
+            class_name.trim_start_matches('\\'),
+            method_name,
+        );
+    }
     let target = resolve_method_call_target(ctx, class_name, method_name, inst.operands.len())?;
     let receiver_ty = PhpType::Object(class_name.to_string());
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
@@ -169,6 +197,21 @@ pub(super) fn lower_nullable_receiver_interface_method_call(
     }
     let normalized = interface_name.trim_start_matches('\\');
     let method_key = php_symbol_key(method_name);
+    if ctx
+        .module
+        .interface_infos
+        .get(normalized)
+        .and_then(|interface_info| interface_info.methods.get(&method_key))
+        .is_none()
+    {
+        return lower_narrowed_nullable_interface_method_call(
+            ctx,
+            inst,
+            object,
+            normalized,
+            method_name,
+        );
+    }
     let callee_sig = ctx
         .module
         .interface_infos
@@ -433,4 +476,3 @@ pub(super) fn lower_callback_filter_accept_intrinsic(
         "callback_filter_accept",
     )
 }
-

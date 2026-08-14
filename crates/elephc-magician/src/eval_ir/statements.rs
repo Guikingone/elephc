@@ -21,6 +21,10 @@ pub enum EvalStmt {
         index: EvalExpr,
         value: EvalExpr,
     },
+    ArrayDestructure {
+        targets: Vec<Option<String>>,
+        value: EvalExpr,
+    },
     Break,
     Continue,
     DoWhile {

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Injects `SplObjectStorage` metadata backed by per-instance arrays.
+//! Injects `SplObjectStorage` and `WeakMap` metadata backed by per-instance arrays.
 //! Provides object identity storage, info payloads, ArrayAccess, Countable, and Iterator methods.
 //!
 //! Called from:
@@ -40,6 +40,17 @@ pub(super) fn insert_class(class_map: &mut HashMap<String, FlattenedClass>) {
             trait_aliases: Vec::new(),
         },
     );
+    if let Some(storage) = class_map.get("SplObjectStorage").cloned() {
+        class_map.insert("WeakMap".to_string(), weak_map_class(storage));
+    }
+}
+
+/// Models `WeakMap` through the flattened object-identity storage surface used by this compiler.
+fn weak_map_class(mut storage: FlattenedClass) -> FlattenedClass {
+    storage.name = "WeakMap".to_string();
+    storage.extends = None;
+    storage.is_final = true;
+    storage
 }
 
 /// Returns hidden storage properties for objects, attached info values, and cursor position.

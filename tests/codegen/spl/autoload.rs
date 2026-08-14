@@ -5,7 +5,7 @@
 //! - `cargo test --test codegen_tests` through Rust's test harness.
 //!
 //! Key details:
-//! - Multi-file fixtures exercise composer.json autoload sections and compile-time SPL rule extraction.
+//! - Multi-file fixtures exercise manifest autoload sections and compile-time SPL rule extraction.
 
 use crate::support::*;
 
@@ -16,7 +16,7 @@ fn test_psr4_single_namespace_autoload() {
     let out = compile_and_run_files(
         &[
             (
-                "composer.json",
+                "module.json",
                 r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
             ),
             (
@@ -31,6 +31,62 @@ fn test_psr4_single_namespace_autoload() {
         "main.php",
     );
     assert_eq!(out, "hi");
+}
+
+/// Verifies a definite class-string fallback seeds PSR-4 for a later dynamic `new` target.
+#[test]
+fn test_psr4_dynamic_new_from_literal_array_default() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "public/composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "public/src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime { public function run(): string { return \"dynamic\"; } }\n",
+            ),
+            ("public/autoload.php", "<?php\nreturn 1;\n"),
+            (
+                "public/bootstrap.php",
+                "<?php\nif ((require_once __DIR__ . '/autoload.php') !== 1) {\n    return;\n}\n$options = [];\n$options['runtime'] ??= 'App\\\\Runtime';\n$runtime = new $options['runtime']();\necho $runtime->run();\n",
+            ),
+            (
+                "public/main.php",
+                "<?php\nrequire_once dirname(__DIR__) . '/public/bootstrap.php';\n",
+            ),
+        ],
+        "public/main.php",
+    );
+    assert_eq!(out, "dynamic");
+}
+
+/// Verifies a front controller below the manifest root discovers the parent autoload index and
+/// uses a class-string default from an included runtime bootstrap to seed dynamic `new`.
+#[test]
+fn test_psr4_dynamic_runtime_from_parent_manifest_root() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Runtime.php",
+                "<?php\nnamespace App;\nclass Runtime { public function run(): string { return \"parent-root\"; } }\n",
+            ),
+            (
+                "vendor/autoload_runtime.php",
+                "<?php\n$_SERVER = [];\n$_ENV = [];\n$_SERVER['APP_RUNTIME'] ??= $_ENV['APP_RUNTIME'] ?? 'App\\\\Runtime';\n$runtime = new $_SERVER['APP_RUNTIME']();\necho $runtime->run();\n",
+            ),
+            (
+                "public/index.php",
+                "<?php\nrequire_once dirname(__DIR__) . '/vendor/autoload_runtime.php';\n",
+            ),
+        ],
+        "public/index.php",
+    );
+    assert_eq!(out, "parent-root");
 }
 
 /// Verifies PSR-4 nested namespace autoload.
@@ -83,6 +139,64 @@ fn test_psr4_transitive_autoload() {
         "main.php",
     );
     assert_eq!(out, "hi Ada");
+}
+
+/// Verifies transitive class discovery reaches a fixpoint beyond an arbitrary depth cap.
+#[test]
+fn test_autoload_transitive_fixpoint_has_no_depth_cap() {
+    const DEPTH: usize = 70;
+    let mut owned_files = vec![(
+        "composer.json".to_string(),
+        r#"{"autoload":{"psr-4":{"Chain\\":"src/"}}}"#.to_string(),
+    )];
+    for index in 0..DEPTH {
+        let next = if index + 1 == DEPTH {
+            "public function value(): string { return 'done'; }".to_string()
+        } else {
+            format!(
+                "public function value(): string {{ return (new Node{}())->value(); }}",
+                index + 1
+            )
+        };
+        owned_files.push((
+            format!("src/Node{index}.php"),
+            format!("<?php\nnamespace Chain;\nclass Node{index} {{ {next} }}\n"),
+        ));
+    }
+    owned_files.push((
+        "main.php".to_string(),
+        "<?php\necho (new Chain\\Node0())->value();\n".to_string(),
+    ));
+    let files = owned_files
+        .iter()
+        .map(|(path, source)| (path.as_str(), source.as_str()))
+        .collect::<Vec<_>>();
+
+    let out = compile_and_run_files(&files, "main.php");
+    assert_eq!(out, "done");
+}
+
+/// Verifies dormant object annotations do not demand or execute an autoloaded source.
+#[test]
+fn test_object_type_declarations_do_not_trigger_autoload() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"Optional\\":"src/"}}}"#,
+            ),
+            (
+                "src/Dependency.php",
+                "<?php\nnamespace Optional;\necho 'loaded';\nclass Dependency {}\n",
+            ),
+            (
+                "main.php",
+                "<?php\nfunction accept(Optional\\Dependency $value): Optional\\Dependency { return $value; }\nclass Holder { public Optional\\Dependency $value; }\necho 'done';\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "done");
 }
 
 /// Verifies that incremental-hash usage found only after PSR-4 expansion receives the late hash
@@ -206,10 +320,10 @@ fn test_psr4_vendor_autoload() {
     assert_eq!(out, "WIDGET");
 }
 
-/// Verifies no composer JSON compiles normally.
+/// Verifies a project without an autoload manifest compiles normally.
 #[test]
-fn test_no_composer_json_compiles_normally() {
-    // Program without composer.json must still compile; autoload index is empty and class loads via include path.
+fn test_no_autoload_manifest_compiles_normally() {
+    // A manifest-free program must still compile; the autoload index is empty and the class loads via include path.
     let out = compile_and_run_files(
         &[(
             "main.php",
@@ -520,7 +634,7 @@ fn test_register_unregister_round_trip() {
 /// Verifies register with use capture falls back to PSR-4.
 #[test]
 fn test_register_with_use_capture_falls_back_to_psr4() {
-    // Closure with `use ($base)` capture is rejected by collector; PSR-4 from composer.json takes over.
+    // Closure capture is rejected by the collector; the manifest PSR-4 mapping takes over.
     let out = compile_and_run_files(
         &[
             (
@@ -636,7 +750,7 @@ echo $b->tag();
     assert_eq!(out, "1b");
 }
 
-// --- composer.json autoload sections ---
+// --- supported manifest autoload sections ---
 
 /// Verifies autoload files section always inlines.
 #[test]
@@ -662,10 +776,10 @@ fn test_autoload_files_section_always_inlines() {
     assert_eq!(out, "HELLO");
 }
 
-/// Verifies autoload files section executes before main in composer order.
+/// Verifies the eager-file section executes before main in declaration order.
 #[test]
-fn test_autoload_files_section_executes_before_main_in_composer_order() {
-    // Files autoload sections execute in composer.json order before main.php.
+fn test_autoload_files_section_executes_before_main_in_declaration_order() {
+    // Eager-file entries execute in manifest order before main.php.
     let out = compile_and_run_files(
         &[
             (

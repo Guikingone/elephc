@@ -57,6 +57,29 @@ pub(super) fn lower_property_array_push(
         return;
     }
 
+    if let Some(property_ty) = object_property_type(ctx, object.value, property)
+        .filter(|ty| property_type_uses_mixed_array_storage(ty))
+    {
+        let data = ctx.intern_string(property);
+        let property_value = ctx.emit_value(
+            Op::PropGet,
+            vec![object.value],
+            Some(Immediate::Data(data)),
+            property_ty,
+            Op::PropGet.default_effects(),
+            Some(span),
+        );
+        let value = lower_expr(ctx, value);
+        ctx.emit_void(
+            Op::MixedArrayAppend,
+            vec![property_value.value, value.value],
+            None,
+            Op::MixedArrayAppend.default_effects(),
+            Some(span),
+        );
+        return;
+    }
+
     let value = lower_expr(ctx, value);
     let data = ctx.intern_string(property);
     ctx.emit_void(
@@ -66,6 +89,25 @@ pub(super) fn lower_property_array_push(
         effects_lookup::runtime_effects(),
         Some(span),
     );
+}
+
+/// Returns whether a declared array-like property is represented by one boxed Mixed cell.
+fn property_type_uses_mixed_array_storage(property_ty: &PhpType) -> bool {
+    match property_ty.codegen_repr() {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => {
+            let mut saw_array = false;
+            for member in members {
+                match member.codegen_repr() {
+                    PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
+                    PhpType::Void | PhpType::Never => {}
+                    _ => return false,
+                }
+            }
+            saw_array
+        }
+        _ => false,
+    }
 }
 
 /// Lowers `$object->prop[index] = value`.
@@ -95,6 +137,32 @@ pub(super) fn lower_property_array_assign(
         let index = lower_expr(ctx, index);
         let value = lower_expr(ctx, value);
         let value = coerce_indexed_array_set_value(ctx, &property_ty, value, Some(span));
+        if property_ty.codegen_repr() == PhpType::Array(Box::new(PhpType::Mixed))
+            && index_is_boxed_mixed_key(index.ir_type)
+        {
+            let rewritten = ctx.emit_value(
+                Op::ArraySetMixedKey,
+                vec![property_value.value, index.value, value.value],
+                None,
+                property_ty.clone(),
+                Op::ArraySetMixedKey.default_effects(),
+                Some(span),
+            );
+            ctx.emit_void(
+                Op::PropSet,
+                vec![object.value, rewritten.value],
+                Some(Immediate::Data(data)),
+                Op::PropSet.default_effects(),
+                Some(span),
+            );
+            release_rewritten_property_value_after_retaining_store(
+                ctx,
+                &property_ty,
+                rewritten,
+                span,
+            );
+            return;
+        }
         ctx.emit_void(
             Op::ArraySet,
             vec![property_value.value, index.value, value.value],
@@ -230,7 +298,7 @@ pub(super) fn release_property_array_insert_value_after_retain(
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
-pub(crate) fn release_rewritten_property_value_after_retaining_store(
+pub(in crate::ir_lower) fn release_rewritten_property_value_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     property_value: LoweredValue,

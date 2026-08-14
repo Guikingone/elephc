@@ -21,6 +21,8 @@ mod eval_bridge;
 mod eval_scope;
 mod exceptions;
 mod fibers;
+/// `ext/filter` parsers used by `filter_var()` specialized lowering.
+mod filter;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
@@ -40,7 +42,11 @@ mod system;
 /// zval pack/unpack bridge helpers (elephc values ↔ PHP zval structs).
 mod zval;
 
-pub(crate) use data::emit_runtime_data_fixed;
+pub(crate) use data::{
+    emit_class_methods_registry_data, emit_class_registry_data,
+    emit_class_relation_registry_data, emit_const_registry_data,
+    emit_member_exists_registry_data, emit_runtime_data_fixed,
+};
 /// PHP's process exit status for an uncaught exception, shared with the codegen guards in
 /// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
 /// reaching `__rt_report_uncaught_exception`.

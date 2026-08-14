@@ -22,6 +22,9 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             emit_boxed_string_literal_default_to_result(ctx, value)
         }
         ReflectionConstantValue::Null => emit_boxed_null_literal_to_result(ctx),
+        ReflectionConstantValue::Array(value) => {
+            emit_reflection_default_value_as_mixed(ctx, value)
+        }
         ReflectionConstantValue::EnumCase {
             enum_name,
             case_name,
@@ -301,4 +304,3 @@ pub(super) fn emit_reflection_static_property_hash_insert(ctx: &mut FunctionCont
         }
     }
 }
-

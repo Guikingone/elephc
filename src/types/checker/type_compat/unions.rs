@@ -58,6 +58,7 @@ impl Checker {
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
+            PhpType::Callable if actual.is_closure_object() => true,
             // PHP coercive mode: scalars accept Mixed with runtime narrowing.
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
                 if matches!(actual, PhpType::Mixed) =>
@@ -164,76 +165,6 @@ impl Checker {
         matches!(ty, PhpType::Union(_)) && self.type_supports_mixed_int_dispatch(ty)
     }
 
-    /// Computes the merged type when assigning `new_ty` to a variable that already has
-    /// `existing` type. Returns `Some(merged)` when types are compatible for compound assignment
-    /// (e.g., `+=`), or `None` when the types cannot be merged (e.g., two incompatible scalars).
-    pub(crate) fn merged_assignment_type(
-        &self,
-        existing: &PhpType,
-        new_ty: &PhpType,
-    ) -> Option<PhpType> {
-        if self.type_accepts(existing, new_ty) {
-            return Some(existing.clone());
-        }
-        if matches!(existing, PhpType::Union(_)) {
-            return None;
-        }
-        if existing == new_ty {
-            return Some(existing.clone());
-        }
-        if matches!(existing, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
-            && matches!(new_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-        {
-            return Some(new_ty.clone());
-        }
-        if matches!(new_ty, PhpType::Array(inner) if matches!(inner.as_ref(), PhpType::Never))
-            && matches!(existing, PhpType::Array(_) | PhpType::AssocArray { .. })
-        {
-            return Some(existing.clone());
-        }
-        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
-            return Some(PhpType::Mixed);
-        }
-        if *new_ty == PhpType::Void {
-            return Some(existing.clone());
-        }
-        if *existing == PhpType::Void {
-            return Some(new_ty.clone());
-        }
-        if matches!(existing, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
-            && matches!(new_ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float)
-        {
-            return Some(existing.clone());
-        }
-        if Self::pointer_types_compatible(existing, new_ty) {
-            return Some(match (existing, new_ty) {
-                (PhpType::Pointer(Some(left)), PhpType::Pointer(Some(right))) if left == right => {
-                    PhpType::Pointer(Some(left.clone()))
-                }
-                (PhpType::Pointer(None), PhpType::Pointer(Some(tag)))
-                | (PhpType::Pointer(Some(tag)), PhpType::Pointer(None)) => {
-                    PhpType::Pointer(Some(tag.clone()))
-                }
-                _ => PhpType::Pointer(None),
-            });
-        }
-        if PhpType::resource_types_compatible(existing, new_ty) {
-            return Some(match (existing, new_ty) {
-                (PhpType::Resource(Some(left)), PhpType::Resource(Some(right)))
-                    if left == right =>
-                {
-                    PhpType::Resource(Some(left.clone()))
-                }
-                (PhpType::Resource(None), PhpType::Resource(Some(kind)))
-                | (PhpType::Resource(Some(kind)), PhpType::Resource(None)) => {
-                    PhpType::Resource(Some(kind.clone()))
-                }
-                _ => PhpType::Resource(None),
-            });
-        }
-        None
-    }
-
     /// Computes the merged array element type when writing a value of `new_ty` into an
     /// array that already has `existing` element type. Returns `Some(merged)` for compatible
     /// types (same, `Never`, `Mixed`, or compatible objects), or `None` otherwise.
@@ -286,9 +217,10 @@ impl Checker {
     /// Specializes a bare PHP `array` parameter without pinning object elements to one class.
     ///
     /// PHP does not expose array element generics, so a concrete object element inferred from
-    /// one call site is not a valid contract for later calls. Indexed object arrays therefore
-    /// stay `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an
-    /// object value to `Mixed`. Scalar element types remain specialized for existing inference.
+    /// one call site is not a valid contract for later calls. An empty literal contributes no
+    /// element evidence and therefore keeps the generic declaration. Indexed object arrays stay
+    /// `Array(Mixed)`, while associative arrays retain their key/storage shape but erase an object
+    /// value to `Mixed`. Scalar element types remain specialized for existing inference.
     pub(crate) fn specialize_generic_array_param_hint(
         declared_ty: &PhpType,
         actual_ty: &PhpType,
@@ -297,6 +229,9 @@ impl Checker {
             return declared_ty.clone();
         }
         match actual_ty {
+            PhpType::Array(element) if matches!(element.as_ref(), PhpType::Never) => {
+                declared_ty.clone()
+            }
             PhpType::Array(element)
                 if matches!(element.as_ref(), PhpType::Object(_))
                     || matches!(element.as_ref(), PhpType::Union(members) if members

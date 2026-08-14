@@ -44,6 +44,10 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         }
         "preg_match" => eval_dynamic_preg_match_call(evaluated_args, context, values)?,
         "preg_match_all" => eval_dynamic_preg_match_all_call(evaluated_args, context, values)?,
+        "preg_replace" => eval_dynamic_preg_replace_call(evaluated_args, context, values)?,
+        "preg_replace_callback" => {
+            eval_dynamic_preg_replace_callback_call(evaluated_args, context, values)?
+        }
         "is_callable" => {
             Some(eval_is_callable_call_with_evaluated_args(
                 evaluated_args,
@@ -241,7 +245,7 @@ fn eval_dynamic_preg_match_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags"],
+        &["pattern", "subject", "matches", "flags", "offset"],
         evaluated_args,
         false,
     )?;
@@ -254,8 +258,9 @@ fn eval_dynamic_preg_match_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
     let (result, matches_array) =
-        eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
 }
@@ -267,7 +272,7 @@ fn eval_dynamic_preg_match_all_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags"],
+        &["pattern", "subject", "matches", "flags", "offset"],
         evaluated_args,
         false,
     )?;
@@ -280,9 +285,79 @@ fn eval_dynamic_preg_match_all_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
     let (result, matches_array) =
-        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, offset, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic `preg_replace()` call when `$count` is a writable lvalue.
+fn eval_dynamic_preg_replace_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "replacement", "subject", "limit", "count"],
+        evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let replacement = required_evaluated_ref_arg(&bound, 1)?;
+    let subject = required_evaluated_ref_arg(&bound, 2)?;
+    let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
+        return Ok(None);
+    };
+    let Some(target) = count.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let (result, replacement_count) = eval_preg_replace_result_with_count(
+        pattern.value,
+        replacement.value,
+        subject.value,
+        limit,
+        values,
+    )?;
+    let replacement_count = values.int(replacement_count)?;
+    eval_write_preg_matches_target(target, replacement_count, context, values)?;
+    Ok(Some(result))
+}
+
+/// Evaluates a dynamic callback replacement call when `$count` is writable.
+fn eval_dynamic_preg_replace_callback_call(
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(
+        &["pattern", "callback", "subject", "limit", "count"],
+        evaluated_args,
+        false,
+    )?;
+    let pattern = required_evaluated_ref_arg(&bound, 0)?;
+    let callback = required_evaluated_ref_arg(&bound, 1)?;
+    let subject = required_evaluated_ref_arg(&bound, 2)?;
+    let Some(count) = optional_evaluated_ref_arg(&bound, 4) else {
+        return Ok(None);
+    };
+    let Some(target) = count.ref_target.as_ref() else {
+        return Ok(None);
+    };
+    let limit = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let (result, replacement_count) =
+        eval_preg_replace_callback_result_with_count_from_scope(
+            pattern.value,
+            callback.value,
+            subject.value,
+            limit,
+            None,
+            context,
+            values,
+        )?;
+    let replacement_count = values.int(replacement_count)?;
+    eval_write_preg_matches_target(target, replacement_count, context, values)?;
     Ok(Some(result))
 }
 

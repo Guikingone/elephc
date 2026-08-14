@@ -36,6 +36,7 @@ pub(super) fn emit_reflection_owner_object(
         &uninitialized_marker_offsets,
         &[],
     )?;
+    emit_reflection_source_properties(ctx, class_name, metadata)?;
     if let Some(reflected_name) = metadata.reflected_name.as_deref() {
         emit_reflection_owner_string_property_by_name(ctx, class_name, "__name", reflected_name)?;
         if is_reflection_class_owner || class_name == "ReflectionEnum" {
@@ -315,6 +316,12 @@ pub(super) fn emit_reflection_owner_object(
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
     }
     if class_name == "ReflectionMethod" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__class",
+            metadata.parent_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_bool_property(
             ctx,
@@ -376,6 +383,105 @@ pub(super) fn emit_reflection_owner_object(
     }
     emit_reflection_member_flag_properties(ctx, class_name, metadata.member_flags)?;
     Ok(())
+}
+
+/// Populates the source-file and line slots shared by class-like and callable reflection owners.
+fn emit_reflection_source_properties(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Result<()> {
+    if !matches!(
+        class_name,
+        "ReflectionClass"
+            | "ReflectionObject"
+            | "ReflectionEnum"
+            | "ReflectionFunction"
+            | "ReflectionMethod"
+    ) {
+        return Ok(());
+    }
+    let Some(source_path) = reflection_source_file(ctx, class_name, metadata) else {
+        return Ok(());
+    };
+    let (start_line, end_line) = reflection_source_lines(ctx, class_name, metadata);
+    emit_reflection_owner_string_property_by_name(
+        ctx,
+        class_name,
+        "__file_name",
+        &source_path,
+    )?;
+    emit_reflection_owner_int_property(ctx, class_name, "__start_line", start_line as i64)?;
+    emit_reflection_owner_int_property(ctx, class_name, "__end_line", end_line as i64)?;
+    Ok(())
+}
+
+/// Resolves the physical source path for one reflected declaration.
+fn reflection_source_file(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> Option<String> {
+    if class_name == "ReflectionFunction" {
+        return metadata
+            .reflected_name
+            .as_deref()
+            .and_then(|name| {
+                ctx.module
+                    .declared_function_source_files
+                    .get(&php_symbol_key(name))
+            })
+            .cloned()
+            .or_else(|| ctx.module.source_path.clone());
+    }
+    let reflected_class = if class_name == "ReflectionMethod" {
+        metadata.parent_class_name.as_deref()
+    } else {
+        metadata.reflected_name.as_deref()
+    };
+    reflected_class
+        .and_then(|name| {
+            ctx.module
+                .declared_class_source_files
+                .get(&php_symbol_key(name))
+        })
+        .cloned()
+        .or_else(|| ctx.module.source_path.clone())
+}
+
+/// Resolves the best available declaration line range for one reflected owner.
+fn reflection_source_lines(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    metadata: &ReflectionOwnerMetadata,
+) -> (u32, u32) {
+    if class_name == "ReflectionFunction" {
+        return metadata
+            .reflected_name
+            .as_deref()
+            .and_then(|name| ctx.module.declared_function_source_lines.get(name).copied())
+            .unwrap_or((0, 0));
+    }
+    let reflected_class = if class_name == "ReflectionMethod" {
+        metadata.parent_class_name.as_deref()
+    } else {
+        metadata.reflected_name.as_deref()
+    };
+    let Some(reflected_class) = reflected_class else {
+        return (0, 0);
+    };
+    if let Some(info) = ctx.module.class_infos.get(reflected_class) {
+        return (info.declaration_span.line, info.declaration_span.end_line);
+    }
+    if let Some(info) = ctx.module.interface_infos.get(reflected_class) {
+        return (info.declaration_span.line, info.declaration_span.end_line);
+    }
+    ctx.module
+        .declared_trait_source_lines
+        .get(reflected_class)
+        .copied()
+        .map(|line| (line, line))
+        .unwrap_or((0, 0))
 }
 
 /// Stores an integer immediate into a Reflection object's property slot.
@@ -474,4 +580,3 @@ pub(super) fn reflection_name_parts(reflected_name: &str) -> (&str, &str) {
         None => ("", reflected_name),
     }
 }
-

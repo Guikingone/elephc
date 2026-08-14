@@ -38,7 +38,7 @@ type AstParams = [(
 
 const EVAL_AOT_SCOPE_PARAM: &str = "__eir_eval_scope";
 
-const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+pub(crate) const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
 
 /// Compile-time callable binding to seed for a self-recursive closure capture.
 struct RecursiveClosureBinding {
@@ -81,6 +81,8 @@ pub(crate) fn lower_main(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         "main".to_string(),
         constants,
         None,
@@ -119,10 +121,18 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
     env
 }
 
-/// Collects PHP variable names that any function-like body declares with `global`.
+/// Collects PHP variable names that must live in program-global storage.
+///
+/// Explicit `global $x` declarations and `$GLOBALS['x']` aliases name the same slot. Collecting
+/// both prevents a top-level `$x` from remaining frame-local while a function reads the global.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     collect_global_var_names_in_body(statements, &mut names);
+    let mut usage = crate::ast_usage::Usage::default();
+    for stmt in statements {
+        usage.merge(crate::ast_usage::collect_stmt(stmt));
+    }
+    names.extend(usage.globals_keys);
     names
 }
 
@@ -276,6 +286,8 @@ pub(crate) fn lower_user_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         name.to_string(),
         constants,
         None,
@@ -377,6 +389,8 @@ pub(crate) fn lower_class_method(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -443,6 +457,8 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         "main".to_string(),
         constants,
         None,
@@ -549,6 +565,8 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         "main".to_string(),
         constants,
         None,
@@ -649,6 +667,8 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.builtin_call_types,
         &check_result.loop_storage_types,
         &check_result.string_incdec_locals,
+        &check_result.by_ref_local_storage_types,
+        &check_result.dynamic_ref_local_types,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
@@ -814,6 +834,7 @@ fn lower_closure_function_with_signature(
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
     attach_generator_source_if_needed(&mut function, body, signature.params.len());
+    function.lexical_class = parent.current_class.clone();
     let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
@@ -845,6 +866,8 @@ fn lower_closure_function_with_signature(
         parent.builtin_call_types,
         parent.loop_storage_types,
         parent.string_incdec_locals,
+        parent.by_ref_local_storage_types,
+        parent.dynamic_ref_local_types,
         loop_storage_scope,
         &parent.constants,
         parent.current_class.clone(),
@@ -882,6 +905,8 @@ fn lower_body_into_function(
     builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
     string_incdec_locals: &std::collections::HashSet<(String, String)>,
+    by_ref_local_storage_types: &std::collections::HashMap<(String, String), PhpType>,
+    dynamic_ref_local_types: &std::collections::HashMap<(String, String), PhpType>,
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
@@ -928,6 +953,8 @@ fn lower_body_into_function(
         builtin_call_types,
         loop_storage_types,
         string_incdec_locals,
+        by_ref_local_storage_types,
+        dynamic_ref_local_types,
         loop_storage_scope,
         constants,
         top_level_env,

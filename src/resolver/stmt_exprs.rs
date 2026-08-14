@@ -181,6 +181,22 @@ pub(super) fn resolve_stmt_exprs(
             property,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(resolve_expr(
+                *object,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            property,
+            source: resolve_expr(source, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -242,6 +258,48 @@ pub(super) fn resolve_stmt_exprs(
             receiver,
             property,
             index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
+            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
+            source: resolve_expr(source, base_dir, declared_once, include_chain, state, function_variants)?,
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(resolve_expr(
+                *property,
+                base_dir,
+                declared_once,
+                include_chain,
+                state,
+                function_variants,
+            )?),
+            index: index
+                .map(|index| {
+                    resolve_expr(
+                        index,
+                        base_dir,
+                        declared_once,
+                        include_chain,
+                        state,
+                        function_variants,
+                    )
+                })
+                .transpose()?,
+            append,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::If {

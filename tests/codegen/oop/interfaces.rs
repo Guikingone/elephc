@@ -491,3 +491,27 @@ echo (new AlwaysCopyable())->copy()->label();
     );
     assert_eq!(out, "copy");
 }
+
+/// Narrowed interface dispatch excludes unrelated same-name methods with incompatible ABIs.
+#[test]
+fn test_narrowed_interface_method_filters_unrelated_candidates() {
+    let out = compile_and_run(
+        r#"<?php
+interface Runner {}
+class StringRunner implements Runner {
+    public function run(string $value): string { return $value; }
+}
+class Unrelated {
+    public function run(?int $value): string { return 'wrong'; }
+}
+function invoke(Runner $runner): string {
+    if ($runner instanceof StringRunner) {
+        return $runner->run('ok');
+    }
+    return 'miss';
+}
+echo invoke(new StringRunner());
+"#,
+    );
+    assert_eq!(out, "ok");
+}

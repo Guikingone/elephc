@@ -51,6 +51,14 @@ pub(super) fn reflection_enum_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_enum = const_string_or_class_operand(ctx, enum_operand, "ReflectionEnum")?;
+    reflection_enum_metadata_for_name(ctx, &reflected_enum)
+}
+
+/// Resolves ReflectionEnum metadata for a class-like name selected at runtime.
+pub(super) fn reflection_enum_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_enum: &str,
+) -> Result<ReflectionOwnerMetadata> {
     let mut metadata = reflection_class_metadata_for_name(ctx, &reflected_enum)?;
     let Some(enum_name) = metadata.reflected_name.as_deref() else {
         return Ok(empty_reflection_metadata());
@@ -311,8 +319,8 @@ pub(super) fn reflection_shallow_class_metadata_for_name(
     Ok(metadata)
 }
 
-/// Resolves `ReflectionEnum` metadata for nested enum-case slots.
-pub(super) fn reflection_enum_metadata_for_name(
+/// Resolves shallow `ReflectionEnum` metadata for nested enum-case slots.
+pub(super) fn reflection_shallow_enum_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_enum: &str,
 ) -> Result<ReflectionOwnerMetadata> {
@@ -340,4 +348,3 @@ pub(super) fn reflection_enum_metadata_for_name(
     metadata.parent_class_name = None;
     Ok(metadata)
 }
-

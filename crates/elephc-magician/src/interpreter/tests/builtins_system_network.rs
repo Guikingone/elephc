@@ -527,6 +527,8 @@ echo getenv(name: "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func("getenv", "ELEPHC_EVAL_ENV_TEST") . ":";
 echo call_user_func_array("putenv", ["assignment" => "ELEPHC_EVAL_ENV_TEST=spread"]) ? "set" : "bad";
 echo ":" . getenv("ELEPHC_EVAL_ENV_TEST") . ":";
+echo getenv()["ELEPHC_EVAL_ENV_TEST"] . ":";
+echo getenv(null, true)["ELEPHC_EVAL_ENV_TEST"] . ":";
 putenv("ELEPHC_EVAL_ENV_TEST");
 echo getenv("ELEPHC_EVAL_ENV_TEST") === "" ? "empty" : "bad";
 echo ":"; echo function_exists("getenv");
@@ -538,7 +540,7 @@ return function_exists("putenv");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "direct:named:named:set:spread:empty:1");
+    assert_eq!(values.output, "direct:named:named:set:spread:spread:spread:empty:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval shell process builtins capture or echo stdout across all call paths.

@@ -2,7 +2,7 @@
 title: "key() — internals"
 description: "Compiler internals for key(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 56
+  order: 57
 ---
 
 ## `key()` — internals

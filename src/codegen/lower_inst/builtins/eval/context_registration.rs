@@ -69,6 +69,11 @@ pub(super) fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruc
             ..
         })
     );
+    mark_eval_strict_php_value(ctx, strict_php);
+}
+
+/// Writes an explicitly preserved source-profile flag into the active eval context.
+pub(super) fn mark_eval_strict_php_value(ctx: &mut FunctionContext<'_>, strict_php: bool) {
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(strict_php));
     let symbol = ctx

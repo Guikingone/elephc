@@ -7,7 +7,12 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - Boxed reference markers stay in their buckets so later updates can write
+//!   through to the original variable storage without changing marker ownership.
 
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -181,6 +186,10 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
     emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
+    emitter.instruction("cmp x13, #11");                                        // is the existing element a reference write-through target?
+    emitter.instruction("b.eq __rt_hash_set_update_ref");                       // update the shared cell instead of replacing the bucket
+    emitter.instruction("cmp x13, #7");                                         // can the existing bucket hold a boxed by-reference marker?
+    emitter.instruction("b.eq __rt_hash_set_update_boxed");                     // inspect boxed Mixed payloads before replacing them
     emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
     emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
     emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
@@ -190,6 +199,49 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, #4");                                         // is the overwritten value a heap-backed payload?
     emitter.instruction("b.hs __rt_hash_set_release_any");                      // tags 4-7 all release through the uniform dispatcher
     emitter.instruction("b __rt_hash_set_write_value");                         // scalars/bools/floats do not need release before overwrite
+
+    emitter.label("__rt_hash_set_update_boxed");
+    emitter.instruction("ldr x9, [x12, #24]");                                  // load the existing boxed Mixed payload
+    emitter.instruction("cbz x9, __rt_hash_set_write_value");                   // a legacy null pointer has no marker or owned payload
+    emitter.instruction("ldr x10, [x9]");                                       // inspect the boxed Mixed's internal tag
+    emitter.instruction(&format!("cmp x10, #{}", INVOKER_ARG_REF_CELL_TAG));   // does this marker borrow invoker argument storage?
+    emitter.instruction("b.eq __rt_hash_set_update_boxed_ref");                 // preserve the marker and write through it
+    emitter.instruction(&format!("cmp x10, #{}", ARRAY_GLOBAL_REF_CELL_TAG)); // does this marker own global-variable reference storage?
+    emitter.instruction("b.eq __rt_hash_set_update_boxed_ref");                 // global markers share the same payload contract
+    emitter.instruction(&format!("cmp x10, #{}", ARRAY_LOCAL_REF_CELL_TAG));  // does this marker own promoted local reference storage?
+    emitter.instruction("b.ne __rt_hash_set_release_any");                      // ordinary boxed Mixed values retain normal replacement ownership
+    emitter.label("__rt_hash_set_update_boxed_ref");
+    emitter.instruction("ldr x10, [sp, #40]");                                  // load the incoming hash value tag
+    emitter.instruction("cmp x10, #7");                                         // reference-marker writes arrive as fresh boxed Mixed values
+    emitter.instruction("b.ne __rt_hash_set_release_any");                      // keep the conservative replacement path for non-boxed callers
+    emitter.instruction("ldr x10, [x9, #8]");                                   // load the original variable storage address
+    emitter.instruction("ldr x11, [x9, #16]");                                  // load the original variable's runtime storage tag
+    emitter.instruction("cmp x11, #7");                                         // does the original variable store a boxed Mixed handle?
+    emitter.instruction("b.eq __rt_hash_set_update_boxed_ref_mixed");           // transfer the replacement box directly for Mixed storage
+    emitter.instruction("ldr x9, [sp, #24]");                                   // load the fresh replacement Mixed wrapper
+    emitter.instruction("ldr x11, [x9, #8]");                                   // extract its low payload word
+    emitter.instruction("str x11, [x10]");                                      // write the low payload through to the original variable
+    emitter.instruction("ldr x11, [x9, #16]");                                  // extract its high payload word
+    emitter.instruction("str x11, [x10, #8]");                                  // write the high payload through to the original variable
+    emitter.instruction("mov x0, x9");                                          // pass only the consumed wrapper to the raw heap free helper
+    emitter.instruction("bl __rt_heap_free");                                   // keep the transferred payload alive while releasing its wrapper
+    emitter.instruction("b __rt_hash_set_done");                                // leave the boxed marker installed in the hash bucket
+    emitter.label("__rt_hash_set_update_boxed_ref_mixed");
+    emitter.instruction("ldr x9, [sp, #24]");                                   // load the fresh boxed Mixed handle
+    emitter.instruction("str x9, [x10]");                                       // transfer the handle into the original Mixed variable slot
+    emitter.instruction("b __rt_hash_set_done");                                // leave the boxed marker installed in the hash bucket
+
+    emitter.label("__rt_hash_set_update_ref");
+    emitter.instruction("ldr x9, [x12, #24]");                                  // load the existing managed reference-cell pointer
+    emitter.instruction("str x9, [sp, #48]");                                   // preserve the cell across the inner-value release
+    emitter.instruction("ldr x0, [x9]");                                        // load the cell's previous inner value
+    emitter.instruction("bl __rt_decref_any");                                  // release the previous heap-backed inner value when needed
+    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the managed reference cell
+    emitter.instruction("ldr x13, [sp, #24]");                                  // load the replacement low payload word
+    emitter.instruction("str x13, [x9]");                                       // write through the shared reference cell
+    emitter.instruction("ldr x13, [sp, #40]");                                  // load the replacement runtime value tag
+    emitter.instruction("str x13, [x9, #8]");                                   // publish the new inner value tag
+    emitter.instruction("b __rt_hash_set_done");                                // keep the bucket's cell pointer and tag unchanged
 
     emitter.label("__rt_hash_set_release_any");
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the previous heap-backed value pointer from the entry
@@ -361,6 +413,10 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_update");
     emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
+    emitter.instruction("cmp r13, 11");                                         // is the existing element a reference write-through target?
+    emitter.instruction("je __rt_hash_set_update_ref_x");                       // update the shared cell instead of replacing the bucket
+    emitter.instruction("cmp r13, 7");                                          // can the existing bucket hold a boxed by-reference marker?
+    emitter.instruction("je __rt_hash_set_update_boxed_x");                     // inspect boxed Mixed payloads before replacing them
     emitter.instruction("cmp r13, 8");                                          // check whether the overwritten value is PHP null
     emitter.instruction("je __rt_hash_set_write_value_x");                      // null owns no heap payload and can be overwritten directly
     emitter.instruction("cmp r13, 1");                                          // check whether the overwritten value is an owned string
@@ -370,6 +426,52 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, 4");                                          // check whether the overwritten value is heap backed
     emitter.instruction("jae __rt_hash_set_release_any_x");                     // arrays, hashes, objects, and boxed mixed values need release
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // scalar values own no heap payload
+
+    emitter.label("__rt_hash_set_update_boxed_x");
+    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // load the existing boxed Mixed payload
+    emitter.instruction("test r14, r14");                                       // check for a legacy null boxed pointer
+    emitter.instruction("jz __rt_hash_set_write_value_x");                      // a null pointer owns no marker or heap payload
+    emitter.instruction("mov r13, QWORD PTR [r14]");                            // inspect the boxed Mixed's internal tag
+    emitter.instruction(&format!("cmp r13, {}", INVOKER_ARG_REF_CELL_TAG));    // does this marker borrow invoker argument storage?
+    emitter.instruction("je __rt_hash_set_update_boxed_ref_x");                 // preserve the marker and write through it
+    emitter.instruction(&format!("cmp r13, {}", ARRAY_GLOBAL_REF_CELL_TAG));  // does this marker own global-variable reference storage?
+    emitter.instruction("je __rt_hash_set_update_boxed_ref_x");                 // global markers share the same payload contract
+    emitter.instruction(&format!("cmp r13, {}", ARRAY_LOCAL_REF_CELL_TAG));   // does this marker own promoted local reference storage?
+    emitter.instruction("jne __rt_hash_set_release_any_x");                     // ordinary boxed Mixed values retain normal replacement ownership
+    emitter.label("__rt_hash_set_update_boxed_ref_x");
+    emitter.instruction("cmp QWORD PTR [rbp - 48], 7");                         // reference-marker writes arrive as fresh boxed Mixed values
+    emitter.instruction("jne __rt_hash_set_release_any_x");                     // keep the conservative replacement path for non-boxed callers
+    emitter.instruction("mov r10, QWORD PTR [r14 + 8]");                        // load the original variable storage address
+    emitter.instruction("mov r11, QWORD PTR [r14 + 16]");                       // load the original variable's runtime storage tag
+    emitter.instruction("cmp r11, 7");                                          // does the original variable store a boxed Mixed handle?
+    emitter.instruction("je __rt_hash_set_update_boxed_ref_mixed_x");           // transfer the replacement box directly for Mixed storage
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the fresh replacement Mixed wrapper
+    emitter.instruction("mov r11, QWORD PTR [rax + 8]");                        // extract its low payload word
+    emitter.instruction("mov QWORD PTR [r10], r11");                            // write the low payload through to the original variable
+    emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // extract its high payload word
+    emitter.instruction("mov QWORD PTR [r10 + 8], r11");                        // write the high payload through to the original variable
+    emitter.instruction("call __rt_heap_free");                                 // keep the transferred payload alive while releasing its wrapper
+    emitter.instruction("jmp __rt_hash_set_update_done_x");                     // leave the boxed marker installed in the hash bucket
+    emitter.label("__rt_hash_set_update_boxed_ref_mixed_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the fresh boxed Mixed handle
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // transfer the handle into the original Mixed variable slot
+    emitter.instruction("jmp __rt_hash_set_update_done_x");                     // leave the boxed marker installed in the hash bucket
+
+    emitter.label("__rt_hash_set_update_ref_x");
+    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // preserve the existing cell in a callee-saved register
+    emitter.instruction("mov rax, QWORD PTR [r14]");                            // load the cell's previous inner value
+    emitter.instruction("call __rt_decref_any");                                // release the previous heap-backed inner value when needed
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the replacement low payload word
+    emitter.instruction("mov QWORD PTR [r14], rax");                            // write through the shared reference cell
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the replacement runtime value tag
+    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // publish the new inner value tag
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash pointer
+    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14
+    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13
+    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12
+    emitter.instruction("add rsp, 96");                                         // release the hash-set spill area
+    emitter.instruction("pop rbp");                                             // restore the caller frame
+    emitter.instruction("ret");                                                 // return after reference write-through
 
     emitter.label("__rt_hash_set_release_any_x");
     emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // pass the overwritten heap-backed payload to the uniform release dispatcher
@@ -395,6 +497,7 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r12 + 32], r13");                       // overwrite the stored high payload word in the existing hash entry
     emitter.instruction("mov r13, QWORD PTR [rbp - 48]");                       // reload the replacement runtime value tag for the existing key slot
     emitter.instruction("mov QWORD PTR [r12 + 40], r13");                       // overwrite the stored runtime value tag in the existing hash entry
+    emitter.label("__rt_hash_set_update_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer after an in-place value update
     emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the update path
     emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the update path

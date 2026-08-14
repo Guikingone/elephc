@@ -81,6 +81,7 @@ impl Checker {
                     )?;
                     (declared_ty.clone(), declared_ty)
                 }
+                None if *is_ref => (PhpType::Mixed, PhpType::Mixed),
                 None => match contextual_param_types.get(idx) {
                     Some(hint) => (hint.clone(), hint.clone()),
                     None => (PhpType::Int, PhpType::Mixed),

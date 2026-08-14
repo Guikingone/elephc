@@ -9,12 +9,31 @@
 
 use super::*;
 
+/// Lowers a resolver-preserved dynamic include/require through the eval bridge.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_include(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    once: bool,
+    required: bool,
+    strict_php: bool,
+) -> Result<()> {
+    eval::lower_dynamic_include(ctx, inst, once, required, strict_php)
+}
+
 /// Lowers a statically-known eval fragment through the current bridge fallback path.
 pub(in crate::codegen::lower_inst) fn lower_eval_literal_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     eval::lower_eval(ctx, inst)
+}
+
+/// Lowers `extract()` through the eval bridge's materialized activation scope.
+pub(in crate::codegen::lower_inst) fn lower_extract(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_extract(ctx, inst)
 }
 
 /// Lowers a direct EIR eval-scope lookup by static variable name.
@@ -55,6 +74,14 @@ pub(in crate::codegen::lower_inst) fn lower_eval_object_new(
     inst: &Instruction,
 ) -> Result<()> {
     eval::lower_eval_object_new(ctx, inst)
+}
+
+/// Lowers a runtime-metadata construction while preserving a statically typed object result.
+pub(in crate::codegen::lower_inst) fn lower_eval_native_object_new(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    eval::lower_eval_native_object_new(ctx, inst)
 }
 
 /// Lowers fallback construction of a runtime class name through eval dynamic metadata.
@@ -284,4 +311,3 @@ pub(in crate::codegen::lower_inst) fn lower_eval_static_property_set(
 ) -> Result<()> {
     eval::lower_eval_static_property_set(ctx, inst, value, class_name, property_name)
 }
-

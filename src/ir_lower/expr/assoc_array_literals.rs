@@ -21,10 +21,45 @@ pub(super) fn lower_assoc_array_literal(ctx: &mut LoweringContext<'_, '_>, pairs
     );
     for (key, value) in pairs {
         let key = lower_expr(ctx, key);
-        let value = lower_expr(ctx, value);
+        let value = lower_array_reference_or_value(ctx, value);
         ctx.emit_void(Op::HashSet, vec![hash.value, key.value, value.value], None, Op::HashSet.default_effects(), Some(expr.span));
     }
     hash
+}
+
+/// Lowers an ordinary array value or an owning marker for a referenced variable.
+pub(in crate::ir_lower) fn lower_array_reference_or_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: &Expr,
+) -> LoweredValue {
+    let ExprKind::ArrayReference(inner) = &value.kind else {
+        return lower_expr(ctx, value);
+    };
+    let ExprKind::Variable(name) = &inner.kind else {
+        unreachable!("array reference markers require a variable source");
+    };
+    if crate::superglobals::is_superglobal(name) {
+        let data = ctx.intern_global_storage_name(name);
+        return ctx.emit_value(
+            Op::InvokerRefArg,
+            Vec::new(),
+            Some(Immediate::GlobalName(data)),
+            PhpType::Mixed,
+            Op::InvokerRefArg.default_effects(),
+            Some(value.span),
+        );
+    }
+    ctx.promote_local_ref_cell(name, Some(value.span));
+    let local_type = ctx.local_type(name);
+    let slot = ctx.declare_local(name, local_type);
+    ctx.emit_value(
+        Op::ArrayLocalRefCell,
+        Vec::new(),
+        Some(Immediate::LocalSlot(slot)),
+        PhpType::Mixed,
+        Op::ArrayLocalRefCell.default_effects(),
+        Some(value.span),
+    )
 }
 
 /// Returns the associative-array type for a literal that contains at least one associative
@@ -93,6 +128,7 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
 ) -> PhpType {
     match &value.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::ArrayReference(_) => PhpType::Mixed,
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
             .map(|(_, ty)| ir_array_storage_type(ty))
@@ -103,12 +139,18 @@ pub(super) fn assoc_array_literal_value_type_for_ir(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             scoped_constant_value_type_for_ir(ctx, receiver, name, value)
         }
+        ExprKind::DynamicScopedConstantAccess { .. } => PhpType::Mixed,
         ExprKind::Variable(name) => ir_array_storage_type(
             ctx.local_types
                 .get(name)
                 .cloned()
                 .unwrap_or_else(|| infer_expr_type_syntactic(value)),
         ),
+        ExprKind::This => ctx
+            .current_class
+            .as_ref()
+            .map(|class_name| PhpType::Object(class_name.clone()))
+            .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value))),
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
@@ -270,4 +312,3 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

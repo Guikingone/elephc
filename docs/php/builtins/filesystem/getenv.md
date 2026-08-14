@@ -2,19 +2,20 @@
 title: "getenv()"
 description: "Gets the value of an environment variable."
 sidebar:
-  order: 133
+  order: 134
 ---
 
 ## getenv()
 
 ```php
-function getenv(string $name): mixed
+function getenv(string $name = null, bool $local_only = false): mixed
 ```
 
 Gets the value of an environment variable.
 
 **Parameters**:
-- `$name` (`string`)
+- `$name` (`string`), default `null`, optional
+- `$local_only` (`bool`), default `false`, optional
 
 **Returns**: `mixed`
 

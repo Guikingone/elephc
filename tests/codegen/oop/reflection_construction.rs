@@ -11,6 +11,71 @@
 
 use super::*;
 
+/// Verifies member reflectors accept an object and derive its declaring class at runtime.
+#[test]
+fn test_reflection_member_constructors_accept_object() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class RuntimeReflectionOwner {
+    public const LABEL = "constant";
+    public string $value = "property";
+    public function run(): void {}
+}
+
+$object = new RuntimeReflectionOwner();
+echo (new ReflectionMethod($object, "run"))->getName() . ":";
+echo (new ReflectionProperty($object, "value"))->getName() . ":";
+echo (new ReflectionClassConstant($object, "LABEL"))->getValue();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "run:value:constant");
+}
+
+/// Verifies ReflectionClass resolves a case-insensitive class name held in a runtime string.
+#[test]
+fn test_reflection_class_accepts_runtime_class_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class DynamicReflectionTarget {}
+$name = strtolower("DynamicReflectionTarget");
+$reflection = new ReflectionClass($name);
+echo $reflection->getName();
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "DynamicReflectionTarget");
+}
+
+/// Verifies an unknown runtime class name raises a catchable ReflectionException.
+#[test]
+fn test_reflection_class_runtime_unknown_name_throws() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$name = strtolower("DefinitelyMissing");
+try {
+    new ReflectionClass($name);
+} catch (ReflectionException $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert!(
+        out.success,
+        "program failed: stdout={:?} stderr={}",
+        out.stdout, out.stderr
+    );
+    assert_eq!(out.stdout, "Class \"definitelymissing\" does not exist");
+}
+
 /// Verifies `ReflectionObject` inherits working construction helpers from `ReflectionClass`.
 #[test]
 fn test_reflection_object_construction_helpers_use_runtime_class() {

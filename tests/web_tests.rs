@@ -376,6 +376,28 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// Verifies a returned array can retain a live alias to a request superglobal.
+#[test]
+fn web_array_reference_tracks_superglobal_reassignment() {
+    let dir = make_test_dir("web_superglobal_array_reference");
+    let src = r#"<?php
+function request_data(): array {
+    return ['session' => &$_SESSION];
+}
+$request = request_data();
+$_SESSION = ['token' => 'updated'];
+echo $request['session']['token'];
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("updated"), "body: {:?}", resp);
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
@@ -467,6 +489,43 @@ fn web_server_superglobal_populated() {
     let resp = http_request(&addr, "GET", "/foo?a=1", &[], "");
     let _ = child.kill(); let _ = child.wait();
     assert!(resp.ends_with("GET /foo?a=1"), "body: {:?}", resp);
+}
+
+/// Verifies entry-script server variables identify the compiled front controller.
+#[test]
+fn web_server_script_superglobals_match_compiled_entrypoint() {
+    let dir = make_test_dir("web_server_script_sg");
+    let src = "<?php echo $_SERVER['SCRIPT_FILENAME'] . '|' . $_SERVER['DOCUMENT_ROOT'] . '|' . $_SERVER['SCRIPT_NAME'] . '|' . $_SERVER['PHP_SELF'];";
+    let bin = compile_web(&dir, src, "app");
+    let entry = dir.join("app.php").canonicalize().unwrap();
+    let expected = format!(
+        "{}|{}|/app.php|/app.php",
+        entry.display(),
+        entry.parent().unwrap().display(),
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with(&expected), "body: {:?}", resp);
+}
+
+/// Verifies dynamic eval fragments inherit request superglobals through the bridge.
+#[test]
+fn web_dynamic_eval_sees_request_superglobals() {
+    let dir = make_test_dir("web_dynamic_eval_superglobal");
+    let src = "<?php eval($_GET['code']);";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let code = "echo%20empty%28%24_SERVER%5B%27SCRIPT_FILENAME%27%5D%29%20%3F%20%27empty%27%20%3A%20basename%28%24_SERVER%5B%27SCRIPT_FILENAME%27%5D%29%3B";
+    let resp = http_request(&addr, "GET", &format!("/?code={code}"), &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(resp.ends_with("app.php"), "body: {:?}", resp);
 }
 
 /// Verifies $_GET is parsed from the query string, with percent-decoding.
@@ -1184,7 +1243,7 @@ fn web_multipart_file_contents_readable() {
 /// Verifies a namespaced --web program (classes under a namespace) compiles and
 /// serves. The B1 uncaught-exception wrap must not reorder top-level namespace
 /// declarations away from the classes they scope (it skips the wrap entirely when
-/// namespaces are present). Regression for the web-framework example.
+/// namespaces are present). Regression for namespaced web entry points.
 #[test]
 fn web_namespaced_program_serves() {
     let dir = make_test_dir("web_namespaced");

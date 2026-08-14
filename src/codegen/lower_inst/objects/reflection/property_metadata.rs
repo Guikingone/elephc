@@ -21,8 +21,17 @@ pub(super) fn reflection_property_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionProperty")?;
+    reflection_property_metadata_for_name(ctx, &reflected_class, property_operand)
+}
+
+/// Resolves ReflectionProperty metadata for a runtime-selected declaring class.
+pub(super) fn reflection_property_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    property_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let property_name = const_required_string_operand(ctx, property_operand, "ReflectionProperty")?;
-    Ok(resolve_reflection_class(ctx, &reflected_class)
+    Ok(resolve_reflection_class(ctx, reflected_class)
         .and_then(|(_, info)| {
             let declaring_class_name =
                 reflection_property_declaring_class_name(info, &property_name);
@@ -238,4 +247,3 @@ pub(super) fn reflection_parameter_member_for_selector(
         ReflectionParameterSelector::Position(_) => None,
     }
 }
-

@@ -16,6 +16,23 @@ use crate::types::{EnumInfo, PhpType, TypeEnv};
 
 use super::super::Checker;
 
+/// Reports whether a type can hold an object at runtime despite lacking a concrete object type.
+///
+/// Concrete objects and callables are object-family values in PHP. Mixed values and unions that
+/// contain one of those members defer their actual object contract to the runtime boundary.
+pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(_) | PhpType::Callable | PhpType::Mixed => true,
+        PhpType::Union(members) => members.iter().any(|member| {
+            matches!(
+                member,
+                PhpType::Object(_) | PhpType::Callable | PhpType::Mixed
+            )
+        }),
+        _ => false,
+    }
+}
+
 impl Checker {
     /// Checks whether the current class context can access a member with the given visibility
     /// declared in `declaring_class`. Public members are always accessible; protected members
@@ -334,16 +351,15 @@ impl Checker {
         None
     }
 
-    /// Propagates a resolved constructor argument type into the corresponding constructor
-    /// parameter and property slot for all classes that share an inherited property from
-    /// `declaring_class`. Used to sharpen types across an inheritance hierarchy after
-    /// constructor argument type inference.
+    /// Propagates a resolved constructor argument type into the corresponding property slot for
+    /// every class that shares the inherited property, and into constructor parameters that map
+    /// to that same property. Declared parameters and unrelated constructor positions remain
+    /// unchanged.
     pub(crate) fn propagate_constructor_arg_type(
         &mut self,
         instantiated_class: &str,
         param_index: usize,
         arg_ty: &PhpType,
-        param_has_declared_type: bool,
     ) {
         let Some((prop_name, declaring_class)) =
             self.classes.get(instantiated_class).and_then(|class_info| {
@@ -383,7 +399,19 @@ impl Checker {
                 }
             }
 
-            if !param_has_declared_type {
+            let constructor_maps_same_property = class_info
+                .constructor_param_to_prop
+                .get(param_index)
+                .and_then(|mapped| mapped.as_ref())
+                .is_some_and(|mapped| mapped == &prop_name);
+            let constructor_param_is_declared = class_info
+                .methods
+                .get("__construct")
+                .and_then(|sig| sig.declared_params.get(param_index))
+                .copied()
+                .unwrap_or(false);
+
+            if constructor_maps_same_property && !constructor_param_is_declared {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
                         *param_ty = arg_ty.clone();

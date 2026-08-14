@@ -92,6 +92,13 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "FNM_PATHNAME" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME)),
         "FNM_PERIOD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_PERIOD)),
         "FNM_CASEFOLD" => Some(EvalPredefinedConstant::Int(EVAL_FNM_CASEFOLD)),
+        "GLOB_ERR" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_ERR)),
+        "GLOB_MARK" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_MARK)),
+        "GLOB_NOCHECK" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_NOCHECK)),
+        "GLOB_NOSORT" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_NOSORT)),
+        "GLOB_BRACE" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_BRACE)),
+        "GLOB_NOESCAPE" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_NOESCAPE)),
+        "GLOB_ONLYDIR" => Some(EvalPredefinedConstant::Int(EVAL_GLOB_ONLYDIR)),
         "LOCK_SH" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_SH)),
         "LOCK_EX" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)),
         "LOCK_UN" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)),
@@ -182,7 +189,7 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),
         "DIRECTORY_SEPARATOR" => Some(EvalPredefinedConstant::String("/")),
-        _ => None,
+        _ => crate::eval_php_profile::eval_token_id(name).map(EvalPredefinedConstant::Int),
     }
 }
 

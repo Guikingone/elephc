@@ -479,6 +479,21 @@ fn sid_constant_resolves_to_empty_string() {
     assert_eq!(out, "[]|bool(true)\n");
 }
 
+/// Verifies `defined()` accepts a runtime string and probes both present and absent names.
+#[test]
+fn test_defined_accepts_dynamic_constant_names() {
+    let out = compile_and_run(
+        r#"<?php
+const PRESENT_DYNAMIC_NAME = 42;
+$present = 'PRESENT_' . 'DYNAMIC_NAME';
+$missing = strtolower('MISSING_DYNAMIC_NAME');
+echo defined($present) ? 'Y' : 'N';
+echo defined($missing) ? 'Y' : 'N';
+"#,
+    );
+    assert_eq!(out, "YN");
+}
+
 /// Verifies a ternary in a function where both branches return strings produces correct output
 /// for both positive and non-positive inputs.
 #[test]
@@ -550,4 +565,18 @@ echo constant("APP_X"), "|", \constant("APP_X");
 "#,
     );
     assert_eq!(out, "11|11");
+}
+
+/// Verifies `constant()` resolves a runtime-computed global name through the emitted registry.
+#[test]
+fn test_constant_accepts_dynamic_global_name() {
+    let out = compile_and_run(
+        r#"<?php
+const RUNTIME_CONSTANT_NAME = "resolved";
+$prefix = "RUNTIME_";
+$name = $prefix . "CONSTANT_NAME";
+echo constant($name);
+"#,
+    );
+    assert_eq!(out, "resolved");
 }

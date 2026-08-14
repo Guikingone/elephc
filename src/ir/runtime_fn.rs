@@ -126,6 +126,7 @@ pub enum RuntimeFnId {
     EnumExists,
     FunctionExists,
     GetClass,
+    GetDebugType,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
@@ -470,15 +471,20 @@ pub enum RuntimeFnId {
     Date,
     DateDefaultTimezoneGet,
     DateDefaultTimezoneSet,
+    Constant,
     Define,
     Defined,
+    ErrorLog,
     Exec,
+    Extract,
     ExtensionLoaded,
     Getdate,
     Getenv,
     Gmdate,
     Gmmktime,
     Header,
+    HeaderRemove,
+    HeadersSent,
     Hrtime,
     HttpResponseCode,
     JsonDecode,
@@ -492,17 +498,20 @@ pub enum RuntimeFnId {
     Passthru,
     PhpUname,
     Phpversion,
+    PregGrep,
     PregMatch,
     PregMatchAll,
     PregReplace,
     PregSplit,
     Putenv,
     Serialize,
+    Setlocale,
     ShellExec,
     Sleep,
     Strtotime,
     System,
     Time,
+    Unpack,
     Unserialize,
     Usleep,
     GetResourceId,
@@ -815,6 +824,7 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
+            RuntimeFnId::GetDebugType |
             RuntimeFnId::Gettype |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
@@ -904,6 +914,11 @@ impl RuntimeFnId {
             | RuntimeFnId::ChunkSplit
             | RuntimeFnId::ParseUrl
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::Constant => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
@@ -945,6 +960,7 @@ impl RuntimeFnId {
             RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits()
                         | crate::ir::Effects::ALLOC_CONCAT.bits(),
                 )
             }
@@ -967,7 +983,9 @@ impl RuntimeFnId {
                         | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
-            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            RuntimeFnId::ErrorLog | RuntimeFnId::Sleep | RuntimeFnId::Usleep => {
+                crate::ir::Effects::WRITES_PROCESS
+            }
             // `intval($value, $base)` only inspects the subject's bytes: the string parser
             // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
             // handing a non-string payload to the ordinary integer cast.
@@ -1108,6 +1126,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::PregMatch
+                | RuntimeFnId::PregGrep
                 | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::PregReplace
                 | RuntimeFnId::PregReplaceCallback
@@ -1248,6 +1267,7 @@ impl RuntimeFnId {
                 // brand-new tally hash and modes 3-4 hand back a `__rt_str_persist`-owned
                 // byte list, so nothing returned can alias the subject string.
                 | RuntimeFnId::CountChars
+                | RuntimeFnId::Constant
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
@@ -1266,6 +1286,10 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                // Every form returns independent storage: unnamed lookups allocate a fresh
+                // hash, while named and dynamically nullable lookups box a copied string or
+                // that fresh hash. No returned cell borrows argument storage.
+                | RuntimeFnId::Getenv
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -1291,6 +1315,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
                 | RuntimeFnId::ParseUrl
+                | RuntimeFnId::PregGrep
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -1337,6 +1362,7 @@ impl RuntimeFnId {
                 // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
                 // leaked the literal replacement array on every call.
                 | RuntimeFnId::ArraySplice
+                | RuntimeFnId::Unpack
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
@@ -1440,6 +1466,7 @@ impl RuntimeFnId {
             RuntimeFnId::EnumExists => "enum_exists",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
@@ -1784,15 +1811,20 @@ impl RuntimeFnId {
             RuntimeFnId::Date => "date",
             RuntimeFnId::DateDefaultTimezoneGet => "date_default_timezone_get",
             RuntimeFnId::DateDefaultTimezoneSet => "date_default_timezone_set",
+            RuntimeFnId::Constant => "constant",
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
+            RuntimeFnId::ErrorLog => "error_log",
             RuntimeFnId::Exec => "exec",
+            RuntimeFnId::Extract => "extract",
             RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
+            RuntimeFnId::HeaderRemove => "header_remove",
+            RuntimeFnId::HeadersSent => "headers_sent",
             RuntimeFnId::Hrtime => "hrtime",
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
@@ -1806,17 +1838,20 @@ impl RuntimeFnId {
             RuntimeFnId::Passthru => "passthru",
             RuntimeFnId::PhpUname => "php_uname",
             RuntimeFnId::Phpversion => "phpversion",
+            RuntimeFnId::PregGrep => "preg_grep",
             RuntimeFnId::PregMatch => "preg_match",
             RuntimeFnId::PregMatchAll => "preg_match_all",
             RuntimeFnId::PregReplace => "preg_replace",
             RuntimeFnId::PregSplit => "preg_split",
             RuntimeFnId::Putenv => "putenv",
             RuntimeFnId::Serialize => "serialize",
+            RuntimeFnId::Setlocale => "setlocale",
             RuntimeFnId::ShellExec => "shell_exec",
             RuntimeFnId::Sleep => "sleep",
             RuntimeFnId::Strtotime => "strtotime",
             RuntimeFnId::System => "system",
             RuntimeFnId::Time => "time",
+            RuntimeFnId::Unpack => "unpack",
             RuntimeFnId::Unserialize => "unserialize",
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",

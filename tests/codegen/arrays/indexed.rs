@@ -9,6 +9,24 @@
 
 use crate::support::*;
 
+/// Verifies an append assignment is valid in expression position, evaluates its RHS once, mutates
+/// the destination array, and yields the appended value as the expression result.
+#[test]
+fn test_array_append_assignment_expression_returns_value() {
+    let out = compile_and_run(
+        r#"<?php
+function appendedValue(): int {
+    echo "E";
+    return 7;
+}
+$operands = [0];
+$result = ($operands[] = appendedValue());
+echo $operands[0], $operands[1], $result;
+"#,
+    );
+    assert_eq!(out, "E077");
+}
+
 #[path = "indexed/aggregates.rs"]
 mod aggregates;
 #[path = "indexed/heterogeneous.rs"]

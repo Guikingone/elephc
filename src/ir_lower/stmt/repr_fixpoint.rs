@@ -391,6 +391,12 @@ impl<'a> ConversionScan<'a> {
                 self.expr(object);
                 self.expr(value);
             }
+            StmtKind::PropertyRefAssign { object, property: _, source } => {
+                self.hiding();
+                self.mutation();
+                self.expr(object);
+                self.expr(source);
+            }
             StmtKind::PropertyArrayPush { object, property: _, value } => {
                 self.mutation();
                 self.expr(object);
@@ -413,6 +419,29 @@ impl<'a> ConversionScan<'a> {
             StmtKind::StaticPropertyArrayAssign { receiver: _, property: _, index, value } => {
                 self.mutation();
                 self.expr(index);
+                self.expr(value);
+            }
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver: _,
+                property: _,
+                index,
+                source,
+            } => {
+                self.mutation();
+                self.expr(index);
+                self.expr(source);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                property,
+                index,
+                value,
+                ..
+            } => {
+                self.mutation();
+                self.expr(property);
+                if let Some(index) = index {
+                    self.expr(index);
+                }
                 self.expr(value);
             }
             StmtKind::Include { path, once: _, required: _ } => {
@@ -704,6 +733,7 @@ impl<'a> ConversionScan<'a> {
                 }
             }
             ExprKind::Negate(inner)
+            | ExprKind::ArrayReference(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
@@ -779,6 +809,8 @@ impl<'a> ConversionScan<'a> {
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. }
             | ExprKind::MagicConstant(_) => {}
+            ExprKind::DynamicStaticPropertyAccess { property, .. } => self.expr(property),
+            ExprKind::DynamicScopedConstantAccess { receiver, .. } => self.expr(receiver),
         }
     }
 

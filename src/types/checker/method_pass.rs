@@ -25,8 +25,9 @@ impl Checker {
     ///
     /// For non-static methods, `$this` is inserted into the per-method `TypeEnv` as an
     /// `Object` of the declaring class. Parameters are resolved against declared type hints
-    /// or inferred from the class signature; variadic parameters use `PhpType::Array(Int)`
-    /// as a fallback.
+    /// or inferred from the class signature. Untyped parameters without an observed call-site
+    /// specialization are checked as gradual `Mixed`; variadic parameters use
+    /// `PhpType::Array(Int)` as a fallback.
     ///
     /// Sets `self.current_class`, `self.current_method`, and `self.current_method_is_static`
     /// during body checking to enable context-sensitive diagnostics.
@@ -68,35 +69,17 @@ impl Checker {
                                 method.span,
                                 &format!("Method parameter ${}", pname),
                             )?;
-                            // A generic `array` hint is sharpened to the call-site array shape
-                            // recorded on the stored signature, mirroring how free-function
-                            // `array` parameters are specialized (issue #406). Without this a
-                            // method `array` parameter stays an integer-indexed list and rejects
-                            // string-key access / mis-encodes associative arrays.
-                            if Self::is_generic_array_hint(&declared) {
-                                sig_params
-                                    .as_ref()
-                                    .and_then(|p| p.get(i))
-                                    .map(|(_, t)| t.clone())
-                                    .filter(|t| {
-                                        matches!(
-                                            t,
-                                            PhpType::Array(_) | PhpType::AssocArray { .. }
-                                        )
-                                    })
-                                    .map(|t| {
-                                        Self::specialize_generic_array_param_hint(&declared, &t)
-                                    })
-                                    .unwrap_or(declared)
-                            } else {
-                                declared
-                            }
+                            // A declared bare `array` remains generic. Call boundaries normalize
+                            // concrete indexed/hash payloads while the method body dispatches on
+                            // the runtime array kind, so one call site cannot narrow the contract.
+                            declared
                         } else {
-                            sig_params
+                            let inferred = sig_params
                                 .as_ref()
                                 .and_then(|p| p.get(i))
                                 .map(|(_, t)| t.clone())
-                                .unwrap_or(PhpType::Int)
+                                .unwrap_or(PhpType::Int);
+                            self.method_body_param_type(class, method, i, inferred)
                         };
                         // PHP's __unserialize($data) always receives the associative
                         // array produced by __serialize(); a bare `array` hint resolves
@@ -182,6 +165,35 @@ impl Checker {
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Returns the body-checking type for an untyped method parameter.
+    ///
+    /// Class schemas retain `Int` as the unspecialized legacy sentinel. A real call records the
+    /// parameter in `param_specialization_seen`, including the homogeneous integer case where the
+    /// stored type remains `Int`. Without that evidence PHP's untyped parameter is gradual
+    /// `Mixed`; using the sentinel in its body creates false diagnostics and disagrees with the
+    /// boxed PHP parameter contract used by EIR lowering.
+    fn method_body_param_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        index: usize,
+        inferred: PhpType,
+    ) -> PhpType {
+        if inferred != PhpType::Int {
+            return inferred;
+        }
+        let owner = if method.is_static {
+            format!("static:{}::{}", class.name, method.name)
+        } else {
+            format!("{}::{}", class.name, php_symbol_key(&method.name))
+        };
+        if self.param_specialization_seen.contains(&(owner, index)) {
+            inferred
+        } else {
+            PhpType::Mixed
+        }
     }
 
     /// Builds the PHP-local base environment shared by all method bodies.

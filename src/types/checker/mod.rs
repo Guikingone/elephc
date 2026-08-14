@@ -51,6 +51,10 @@ pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
 pub(crate) use inference::closure_body_uses_this;
 pub(crate) use builtin_types::InterfaceDeclInfo;
+pub(crate) use builtin_types::{
+    reflection_virtual_property_backing, reflection_virtual_property_type,
+};
+pub(crate) use type_compat::type_is_gradual_object_family;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
 
@@ -79,6 +83,11 @@ pub(crate) struct Checker {
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Callable signatures for closures stored in static properties, keyed `Class::$prop`.
+    ///
+    /// This map is program-wide rather than part of the per-body callable state: a static
+    /// property is one shared slot whose signature must remain visible across method bodies.
+    pub static_property_callable_sigs: HashMap<String, FunctionSig>,
     /// Tracks source-declared callable parameters in the active function body.
     pub callable_param_names: HashSet<String>,
     /// Tracks callable signatures inferred for user-function callable parameters,
@@ -215,6 +224,10 @@ pub(crate) struct Checker {
     pub finally_break_continue_bases: Vec<usize>,
     /// Stable function-like scope key used to disambiguate identical loop spans.
     pub current_loop_storage_scope: String,
+    /// Explicit local type declarations keyed by function-like scope and variable name.
+    /// Ordinary PHP locals may change type after any assignment; only this extension syntax
+    /// keeps a declaration contract across later writes.
+    pub declared_local_types: HashMap<(String, String), PhpType>,
     /// Warnings raised during type checking (e.g. `#[\Deprecated]` call sites).
     /// Merged with AST-only warnings from `collect_warnings` before being returned
     /// in `CheckResult`.
@@ -238,8 +251,28 @@ pub(crate) struct Checker {
     /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
     /// instead of widening the slot at the increment. Recorded here because the checker
     /// already visits every expression with a typed environment, so no second AST walk is
-    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
+    /// needed. See `crate::ir_lower::context::LoweringContext::required_local_storage_type`.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Checker-selected boxed storage contracts for caller locals passed through
+    /// source-declared by-reference parameters whose writable type is represented as `Mixed`.
+    pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// String suffixes known for locals in a function-like scope.
+    ///
+    /// A binding such as `$property = $type.'Passes'` records `"Passes"`. Dynamic property
+    /// reference checking uses that constraint to select only representation-compatible slots.
+    pub string_suffix_locals: HashMap<(String, String), String>,
+    /// Checker-proven types for locals introduced by dynamic property reference binds.
+    pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
+}
+
+impl Checker {
+    /// Returns whether unresolved class names may be deferred to PHP's runtime `Error` path.
+    ///
+    /// Function, method, and closure bodies can contain optional-extension code that is never
+    /// reached. Top-level fixed construction remains a compile-time diagnostic for compatibility.
+    pub(crate) fn allows_absent_runtime_class(&self) -> bool {
+        !self.null_probe_scope_is_top_level || self.eval_barrier_active
+    }
 }
 
 #[derive(Clone)]
@@ -319,6 +352,8 @@ pub fn check_types(
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,
+        by_ref_local_storage_types: checker.by_ref_local_storage_types,
+        dynamic_ref_local_types: checker.dynamic_ref_local_types,
     })
 }
 

@@ -854,3 +854,85 @@ echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $
     );
     assert_eq!(out, "1|1|4|3|3|INF|8|-4");
 }
+
+/// Verifies a Throwable subclass with additional instance storage keeps the general object layout
+/// while its inherited builtin constructor initializes the canonical message, code, and previous
+/// slots consumed by the Throwable intrinsics.
+#[test]
+fn test_inherited_builtin_exception_constructor_with_own_property() {
+    let out = compile_and_run(
+        r#"<?php
+class DetailedException extends RuntimeException {
+    public string $path = "unset";
+}
+$previous = new Exception("cause");
+$error = new DetailedException("boom", 17, $previous);
+$error->path = "config";
+echo $error->getMessage(), ":", $error->getCode(), ":", $error->path, ":", $error->getPrevious()->getMessage();
+"#,
+    );
+    assert_eq!(out, "boom:17:config:cause");
+}
+
+/// Verifies an otherwise-empty Throwable subclass with a user-defined parent constructor and
+/// storage reaches the general object backend instead of the compact builtin Throwable path.
+#[test]
+fn test_throwable_child_inherits_user_constructor_and_property_layout() {
+    let dir = make_cli_test_dir("elephc_throwable_child_user_parent_layout");
+    let (user_asm, _runtime_asm, _requirements) = compile_source_to_asm_with_options(
+        r#"<?php
+class ContextError extends Error {
+    public array $context;
+
+    public function __construct(string $message, array $context) {
+        parent::__construct($message);
+        $this->context = $context;
+    }
+}
+
+class ChildContextError extends ContextError {}
+
+$error = new ChildContextError("boom", ["source" => "child"]);
+echo $error->getMessage(), ":", $error->context["source"];
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+    assert!(!user_asm.is_empty());
+}
+
+/// Verifies gradual `mixed` throws transfer valid Throwables and raise PHP's dynamic Errors for
+/// scalar or non-Throwable object payloads.
+#[test]
+fn test_throw_mixed_runtime_validation() {
+    let out = compile_and_run(
+        r#"<?php
+function throw_mixed(mixed $value): void { throw $value; }
+
+try {
+    throw_mixed(new RuntimeException("ok"));
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+
+try {
+    throw_mixed(42);
+} catch (Error $error) {
+    echo ":", $error->getMessage();
+}
+
+class NotThrowable {}
+try {
+    throw_mixed(new NotThrowable());
+} catch (Error $error) {
+    echo ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "ok:Can only throw objects:Cannot throw objects that do not implement Throwable"
+    );
+}

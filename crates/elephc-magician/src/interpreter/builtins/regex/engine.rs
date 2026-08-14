@@ -85,14 +85,18 @@ impl Regex {
         self.capture_slots
     }
 
-    /// Returns whether this regex matches the subject.
-    pub(in crate::interpreter) fn is_match(&self, subject: &[u8]) -> bool {
-        self.captures(subject).is_some()
-    }
-
     /// Returns the first capture set for this regex and subject.
     pub(in crate::interpreter) fn captures<'a>(&self, subject: &'a [u8]) -> Option<Captures<'a>> {
-        self.exec_at(subject, 0)
+        self.captures_at(subject, 0)
+    }
+
+    /// Returns the first capture set at or after a byte offset in the subject.
+    pub(in crate::interpreter) fn captures_at<'a>(
+        &self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> Option<Captures<'a>> {
+        self.exec_at(subject, start)
     }
 
     /// Returns every non-overlapping capture set for this regex and subject.
@@ -100,8 +104,17 @@ impl Regex {
         &self,
         subject: &'a [u8],
     ) -> std::vec::IntoIter<Captures<'a>> {
+        self.captures_iter_at(subject, 0)
+    }
+
+    /// Returns every non-overlapping capture set at or after a byte offset.
+    pub(in crate::interpreter) fn captures_iter_at<'a>(
+        &self,
+        subject: &'a [u8],
+        start: usize,
+    ) -> std::vec::IntoIter<Captures<'a>> {
         let mut captures = Vec::new();
-        let mut cursor = 0;
+        let mut cursor = start;
         while cursor <= subject.len() {
             let Some(next) = self.exec_at(subject, cursor) else {
                 break;

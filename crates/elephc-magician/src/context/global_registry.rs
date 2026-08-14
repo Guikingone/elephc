@@ -1,11 +1,11 @@
 //! Purpose:
-//! Manages native-frame called-class overrides and the process-global eval class snapshot.
+//! Manages native-frame called-class overrides plus process-global eval class and include state.
 //!
 //! Called from:
-//! - Native bridge entry points and per-context class-like synchronization.
+//! - Native bridge entry points, include execution, and per-context class-like synchronization.
 //!
 //! Key details:
-//! - Overrides are thread-local guards; global declarations are mutex-protected outside tests.
+//! - Overrides are thread-local guards; global declarations and include keys are mutex-protected outside tests.
 
 use super::*;
 
@@ -133,6 +133,25 @@ pub(super) struct GlobalEvalClassRegistry {
 pub(super) fn global_eval_classes() -> &'static Mutex<GlobalEvalClassRegistry> {
     GLOBAL_EVAL_CLASSES.get_or_init(|| Mutex::new(GlobalEvalClassRegistry::default()))
 }
+
+/// Returns the process-local registry shared by every generated-code eval context.
+#[cfg(not(test))]
+pub(super) fn global_eval_included_files() -> &'static Mutex<HashSet<String>> {
+    GLOBAL_EVAL_INCLUDED_FILES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Clears the process-local include registry at a generated web request boundary.
+#[cfg(not(test))]
+pub(crate) fn reset_global_eval_included_files() {
+    let mut files = global_eval_included_files()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    files.clear();
+}
+
+/// Keeps crate unit tests isolated without introducing process-global include state.
+#[cfg(test)]
+pub(crate) fn reset_global_eval_included_files() {}
 
 /// Records one eval-declared class so later eval contexts can see PHP-global metadata.
 #[cfg(not(test))]

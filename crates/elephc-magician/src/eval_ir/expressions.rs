@@ -161,6 +161,19 @@ pub enum EvalExpr {
         value: Box<EvalExpr>,
         default: Box<EvalExpr>,
     },
+    NullCoalesceAssign {
+        target: Box<EvalExpr>,
+        default: Box<EvalExpr>,
+    },
+    CompoundAssign {
+        target: Box<EvalExpr>,
+        op: EvalBinOp,
+        value: Box<EvalExpr>,
+    },
+    Assign {
+        target: Box<EvalExpr>,
+        value: Box<EvalExpr>,
+    },
     NullsafePropertyGet {
         object: Box<EvalExpr>,
         property: String,

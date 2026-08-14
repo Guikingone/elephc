@@ -59,6 +59,7 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
             expr_uses_this(target) || expr_uses_this(value)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_uses_this(object) || expr_uses_this(value)
         }
@@ -72,6 +73,9 @@ fn stmt_uses_this(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_uses_this(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_uses_this(index) || expr_uses_this(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_uses_this(index) || expr_uses_this(source)
         }
         StmtKind::If {
             condition,
@@ -241,6 +245,7 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(value, span)
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_must_not_use_this(object, span)?;
             expr_must_not_use_this(value, span)
@@ -260,6 +265,10 @@ fn stmt_must_not_use_this(stmt: &Stmt, span: Span) -> Result<(), CompileError> {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_must_not_use_this(index, span)?;
             expr_must_not_use_this(value, span)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_must_not_use_this(index, span)?;
+            expr_must_not_use_this(source, span)
         }
         StmtKind::If {
             condition,

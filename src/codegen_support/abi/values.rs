@@ -15,7 +15,10 @@ use crate::types::PhpType;
 
 use super::calls::{emit_call_label, emit_pop_reg, emit_push_reg};
 use super::frame::{emit_load_from_address, load_at_offset, store_at_offset};
-use super::registers::{float_result_reg, int_result_reg, string_result_regs};
+use super::registers::{
+    float_result_reg, int_result_reg, secondary_scratch_reg, string_result_regs,
+};
+use super::emit_reg_move;
 use crate::codegen_support::sentinels::tagged_scalar_tag_reg;
 
 /// Stores the current result value (in result registers) of the given type at a stack frame offset.
@@ -92,7 +95,8 @@ pub fn emit_incref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 ///
 /// Dispatches to the appropriate runtime helper based on the PHP type:
 /// - `Mixed`/`Union` → `__rt_decref_mixed`
-/// - `Array` → `__rt_decref_array`
+/// - generic `Array<Mixed>` → `__rt_decref_any` because string-key writes may promote it to hash storage
+/// - other `Array` values → `__rt_decref_array`
 /// - `AssocArray` → `__rt_decref_hash`
 /// - `Object` → `__rt_decref_object`
 /// - `Iterable` → `__rt_decref_any` (inspects heap kind)
@@ -102,6 +106,9 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
     match ty {
         PhpType::Mixed | PhpType::Union(_) => {
             emit_call_label(emitter, "__rt_decref_mixed"); // release mixed cell reference
+        }
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
+            emit_call_label(emitter, "__rt_decref_any"); // release generic PHP array storage after possible hash promotion
         }
         PhpType::Array(_) => {
             emit_call_label(emitter, "__rt_decref_array"); // release indexed array reference
@@ -130,17 +137,29 @@ pub fn emit_decref_if_refcounted(emitter: &mut Emitter, ty: &PhpType) {
 /// Pops the preserved cell pointer and calls `__rt_heap_free` to release the cell.
 /// Used during function epilogue for local variables that held borrowed or owned refs.
 pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_ty: &PhpType) {
-    emit_push_reg(emitter, cell_reg); // preserve the owned reference cell pointer while releasing its payload
+    emit_reg_move(emitter, int_result_reg(emitter), cell_reg);
+    emit_call_label(emitter, "__rt_ref_cell_release_claim");
+    // `emit_branch_if_int_result_zero` uses the numeric `1f` label internally on AArch64 to
+    // widen the conditional branch. Keep this outer skip on a distinct numeric label so the
+    // zero result cannot accidentally fall through into final-owner destruction.
+    emit_branch_if_int_result_zero(emitter, "2f");
+    emit_push_reg(emitter, int_result_reg(emitter)); // preserve the final-owner cell pointer while releasing its payload
     match value_ty.codegen_repr() {
         PhpType::Str => {
+            let cell_reg = secondary_scratch_reg(emitter);
+            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
             emit_call_label(emitter, "__rt_heap_free_safe"); // release the owned string payload stored inside the local reference cell
         }
         ty if ty.is_refcounted() => {
+            let cell_reg = secondary_scratch_reg(emitter);
+            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
             emit_decref_if_refcounted(emitter, &ty);
         }
         PhpType::Callable => {
+            let cell_reg = secondary_scratch_reg(emitter);
+            emit_reg_move(emitter, cell_reg, int_result_reg(emitter));
             emit_load_from_address(emitter, int_result_reg(emitter), cell_reg, 0);
             callable_descriptor::emit_release_current_descriptor(emitter);
         }
@@ -148,6 +167,7 @@ pub fn emit_release_local_ref_cell(emitter: &mut Emitter, cell_reg: &str, value_
     }
     emit_pop_reg(emitter, int_result_reg(emitter)); // restore the owned reference cell pointer for heap release
     emit_call_label(emitter, "__rt_heap_free"); // release the local reference cell itself
+    emitter.label("2");
 }
 
 /// Loads a value of the given type from a stack frame offset into result registers.
@@ -201,7 +221,7 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
             emitter.instruction(&format!("cbnz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is nonzero
-            emitter.instruction(&format!("b {}", label));                      // branch with the wider unconditional range when the result is zero
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is zero
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {
@@ -225,7 +245,7 @@ pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
             emitter.instruction(&format!("cbz {}, 1f", int_result_reg(emitter))); // skip the long branch when the coerced truthiness result is zero
-            emitter.instruction(&format!("b {}", label));                      // branch with the wider unconditional range when the result is nonzero
+            emitter.instruction(&format!("b {}", label));                       // branch with the wider unconditional range when the result is nonzero
             emitter.label("1");
         }
         crate::codegen_support::platform::Arch::X86_64 => {

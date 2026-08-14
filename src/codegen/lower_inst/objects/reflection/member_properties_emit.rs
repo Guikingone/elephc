@@ -242,7 +242,7 @@ pub(super) fn emit_reflection_enum_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(enum_name) = enum_name {
-        let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
+        let enum_metadata = reflection_shallow_enum_metadata_for_name(ctx, enum_name)?;
         emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
         emit_box_current_value_as_mixed(
             ctx.emitter,
@@ -293,4 +293,3 @@ pub(super) fn emit_reflection_parameter_array_property_by_name(
     abi::emit_pop_reg(ctx.emitter, result_reg);
     Ok(())
 }
-

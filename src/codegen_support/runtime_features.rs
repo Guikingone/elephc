@@ -61,6 +61,14 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
+    /// True when non-literal constant or enum queries need closed-world tables.
+    pub const_introspection: bool,
+    /// True when non-literal class/interface/trait queries need closed-world tables.
+    pub class_introspection: bool,
+    /// True when dynamic class relation queries need per-class payload tables.
+    pub class_relation_introspection: bool,
+    /// True when dynamic class-member queries need method/property payload tables.
+    pub class_methods_introspection: bool,
     /// True when the program lowers a `__elephc_pdo_adapter_addr` call (the PDO
     /// Tier-D prelude decomposing a callback into descriptor + adapter pointers),
     /// which takes the address of a `__rt_pdo_*` adapter. Emitting the adapter under
@@ -80,6 +88,10 @@ impl RuntimeFeatures {
             eval_bridge: false,
             eval_scope: false,
             web: false,
+            const_introspection: false,
+            class_introspection: false,
+            class_relation_introspection: false,
+            class_methods_introspection: false,
             pdo_udf: false,
         }
     }
@@ -95,6 +107,10 @@ impl RuntimeFeatures {
             eval_bridge: true,
             eval_scope: true,
             web: true,
+            const_introspection: true,
+            class_introspection: true,
+            class_relation_introspection: true,
+            class_methods_introspection: true,
             pdo_udf: true,
         }
     }
@@ -254,6 +270,7 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
@@ -262,6 +279,19 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_has_regex_call(index) || expr_has_regex_call(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_has_regex_call(index) || expr_has_regex_call(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_has_regex_call(property)
+                || index.as_ref().is_some_and(expr_has_regex_call)
+                || expr_has_regex_call(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_regex_call(target) || expr_has_regex_call(value)
@@ -376,6 +406,7 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
                 }
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -478,12 +509,14 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         }
         ExprKind::FirstClassCallable(CallableTarget::StaticMethod { .. }) => false,
         ExprKind::ObjectClassName { object } => expr_has_regex_call(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_regex_call(property),
         ExprKind::StaticPropertyAccess { receiver, .. }
         | ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => {
             static_receiver_has_regex_call(receiver)
         }
         ExprKind::BufferNew { len, .. } => expr_has_regex_call(len),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_has_regex_call(receiver),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_has_regex_call)
                 || value.as_deref().is_some_and(expr_has_regex_call)
@@ -577,6 +610,7 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
@@ -585,6 +619,19 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_needs_descriptor_invoker(index) || expr_needs_descriptor_invoker(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_needs_descriptor_invoker(index) || expr_needs_descriptor_invoker(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_needs_descriptor_invoker(property)
+                || index.as_ref().is_some_and(expr_needs_descriptor_invoker)
+                || expr_needs_descriptor_invoker(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_needs_descriptor_invoker(target) || expr_needs_descriptor_invoker(value)
@@ -709,6 +756,7 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         }
         ExprKind::InstanceOf { value, .. } => expr_needs_descriptor_invoker(value),
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -805,10 +853,16 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         }
         ExprKind::FirstClassCallable(_) => false,
         ExprKind::ObjectClassName { object } => expr_needs_descriptor_invoker(object),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_needs_descriptor_invoker(property)
+        }
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_needs_descriptor_invoker(len),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_needs_descriptor_invoker(receiver)
+        }
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_needs_descriptor_invoker)
                 || value.as_deref().is_some_and(expr_needs_descriptor_invoker)
@@ -1195,6 +1249,7 @@ mod tests {
             eval_scope: false,
             web: false,
             pdo_udf: false,
+            ..RuntimeFeatures::none()
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

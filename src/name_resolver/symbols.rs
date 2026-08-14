@@ -14,6 +14,7 @@ use crate::parser::ast::{Stmt, StmtKind};
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
 
 const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
+    "__PHP_Incomplete_Class",
     "ArrayAccess",
     "AppendIterator",
     "ArrayIterator",
@@ -41,6 +42,7 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "RecursiveFilterIterator",
     "RecursiveIterator",
     "RecursiveIteratorIterator",
+    "RecursiveTreeIterator",
     "SeekableIterator",
     "SortDirection",
     "SplDoublyLinkedList",
@@ -72,6 +74,7 @@ impl Symbols {
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
+            .or_else(|| super::canonical_compat_prelude_function_name(name))
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,

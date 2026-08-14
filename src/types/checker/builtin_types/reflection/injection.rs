@@ -22,6 +22,7 @@ pub(crate) fn inject_builtin_reflection(
         "ReflectionClass",
         "ReflectionObject",
         "ReflectionEnum",
+        "ReflectionFunctionAbstract",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -101,7 +102,7 @@ pub(crate) fn inject_builtin_reflection(
                 builtin_reflection_class_bool_method("isRepeated", "__is_repeated"),
             ],
             attributes: Vec::new(),
-            constants: Vec::new(),
+            constants: vec![builtin_class_const("IS_INSTANCEOF", 2)],
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
         },
@@ -112,14 +113,12 @@ pub(crate) fn inject_builtin_reflection(
         builtin_reflection_object_class(),
     );
     class_map.insert("ReflectionEnum".to_string(), builtin_reflection_enum_class());
-    class_map.insert("ReflectionFunction".to_string(), builtin_reflection_function());
-    class_map.insert(
-        "ReflectionMethod".to_string(),
-        builtin_reflection_owner_class(
+    let mut reflection_function = builtin_reflection_function();
+    let mut reflection_method = builtin_reflection_owner_class(
             "ReflectionMethod",
             true,
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
+                ("class_name", Some(class_string_or_object_type()), None, false),
                 (
                     "method_name",
                     Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
@@ -127,15 +126,28 @@ pub(crate) fn inject_builtin_reflection(
                     false,
                 ),
             ],
-        ),
     );
+    let reflection_function_abstract = builtin_reflection_function_abstract_class(
+        &reflection_function,
+        &reflection_method,
+    );
+    reflection_function.extends = Some("ReflectionFunctionAbstract".to_string());
+    reflection_function.is_final = false;
+    reflection_method.extends = Some("ReflectionFunctionAbstract".to_string());
+    reflection_method.is_final = false;
+    class_map.insert(
+        "ReflectionFunctionAbstract".to_string(),
+        reflection_function_abstract,
+    );
+    class_map.insert("ReflectionFunction".to_string(), reflection_function);
+    class_map.insert("ReflectionMethod".to_string(), reflection_method);
     class_map.insert(
         "ReflectionProperty".to_string(),
         builtin_reflection_owner_class(
             "ReflectionProperty",
             true,
             vec![
-                ("class_name", Some(TypeExpr::Str), None, false),
+                ("class_name", Some(class_string_or_object_type()), None, false),
                 ("property_name", Some(TypeExpr::Str), None, false),
             ],
         ),
@@ -164,7 +176,7 @@ pub(crate) fn inject_builtin_reflection(
                 class_name,
                 true,
                 vec![
-                    ("class_name", Some(TypeExpr::Str), None, false),
+                    ("class_name", Some(class_string_or_object_type()), None, false),
                     ("constant_name", Some(TypeExpr::Str), None, false),
                 ],
             ),

@@ -153,6 +153,56 @@ echo $result[2];
     assert_eq!(out, "101102103");
 }
 
+/// Verifies `instanceof Closure` keeps the callable descriptor representation for calls and
+/// callable-typed argument passing after narrowing a union.
+#[test]
+fn test_instanceof_closure_narrowing_remains_callable() {
+    let out = compile_and_run(
+        r#"<?php
+function invoke_narrowed_callable(callable $callback, string $value): string {
+    return $callback($value);
+}
+
+function invoke_closure_or_string(Closure|string $candidate): string {
+    if (!$candidate instanceof Closure) {
+        return $candidate;
+    }
+
+    return $candidate('direct') . ':' . invoke_narrowed_callable($candidate, 'passed');
+}
+
+$callback = static fn (string $value): string => strtoupper($value);
+echo invoke_closure_or_string($callback);
+"#,
+    );
+    assert_eq!(out, "DIRECT:PASSED");
+}
+
+/// Verifies a callable selected from a gradual union is validated and invoked at runtime.
+#[test]
+fn test_gradual_union_callable_invocation() {
+    let out = compile_and_run(
+        r#"<?php
+$candidate = $argc > 0 ? static fn (string $value): string => strtoupper($value) : null;
+echo $candidate('ready');
+"#,
+    );
+    assert_eq!(out, "READY");
+}
+
+/// Verifies a gradual union can supply a runtime-validated spread to an indirect callable.
+#[test]
+fn test_gradual_union_callable_spread() {
+    let out = compile_and_run(
+        r#"<?php
+$callback = static fn (int $left, int $right): int => $left + $right;
+$args = $argc > 0 ? [20, 22] : null;
+echo $callback(...$args);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies `array_map` with a closure that captures a variable via `use ($factor)`.
 #[test]
 fn test_captured_closure_array_map() {
@@ -453,6 +503,23 @@ echo ($use_left ? $left->wrap(...) : $right->wrap(...))(...$args);
         user_asm
     );
     let _ = fs::remove_dir_all(dir);
+}
+
+/// Verifies a descriptor call passes through a sole spread stored behind a Mixed array slot.
+#[test]
+fn test_direct_callable_expr_single_mixed_spread_uses_descriptor_invoker() {
+    let out = compile_and_run(
+        r#"<?php
+$add = $argc > 0
+    ? static fn(int $left, int $right): int => $left + $right
+    : static fn(int $left, int $right): int => $left - $right;
+$state = ["callable" => $add, "args" => [20, 22], "marker" => 1];
+$app = $state["callable"];
+$args = $state["args"];
+echo $app(...$args);
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies direct descriptor calls with positional+spread args build invoker containers.
@@ -1431,4 +1498,49 @@ echo $fib(10);
 "#,
     );
     assert_eq!(out, "55");
+}
+
+/// Verifies a closure retains its lexical class for a `self::` static-method call.
+#[test]
+fn test_closure_retains_lexical_class_for_self_static_method_call() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticMethodOwner {
+    private static function label(): string { return 'owner'; }
+    public static function callback(): Closure { return static fn (): string => self::label(); }
+}
+echo ClosureStaticMethodOwner::callback()();
+"#,
+    );
+    assert_eq!(out, "owner");
+}
+
+/// Verifies a closure retains its lexical class for private `self::$property` access.
+#[test]
+fn test_closure_retains_lexical_class_for_self_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticPropertyOwner {
+    private static string $label = 'property';
+    public static function callback(): Closure { return static fn (): string => self::$label; }
+}
+echo ClosureStaticPropertyOwner::callback()();
+"#,
+    );
+    assert_eq!(out, "property");
+}
+
+/// Verifies a closure forwards the defining call's late-static class id to `static::class`.
+#[test]
+fn test_closure_forwards_late_static_class_id() {
+    let out = compile_and_run(
+        r#"<?php
+class ClosureStaticBase {
+    public static function callback(): Closure { return static fn (): string => static::class; }
+}
+class ClosureStaticChild extends ClosureStaticBase {}
+echo ClosureStaticChild::callback()();
+"#,
+    );
+    assert_eq!(out, "ClosureStaticChild");
 }

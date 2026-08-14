@@ -157,6 +157,18 @@ impl Emitter {
         self.buf
     }
 
+    /// Records the current end of the output buffer for a possible rollback.
+    pub fn checkpoint(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Discards output emitted after a previously recorded checkpoint.
+    pub fn rollback_to(&mut self, checkpoint: usize) {
+        if checkpoint <= self.buf.len() {
+            self.buf.truncate(checkpoint);
+        }
+    }
+
     // ── Platform-aware relocation helpers ─────────────────────────────
 
     /// Emit `adrp reg, sym@PAGE` (macOS) or `adrp reg, sym` (Linux).

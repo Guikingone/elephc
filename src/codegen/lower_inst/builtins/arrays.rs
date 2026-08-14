@@ -41,6 +41,8 @@ mod map_dispatch;
 mod map_results;
 mod reduce_sets;
 mod misc_dispatch;
+mod pop_shift_dynamic;
+pub(in crate::codegen::lower_inst) mod union_type_guard;
 mod callback_builtins;
 mod sort_dispatch;
 mod type_validation;

@@ -16,6 +16,9 @@ pub(super) fn lower_static_callable_call(
     callback_args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if callback_args.iter().any(is_spread_arg) && !has_static_call_spread_args(callback_args) {
+        return None;
+    }
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();

@@ -16,7 +16,7 @@ use super::*;
 /// be freed (a per-write heap leak that exhausts the heap under `--web`). Non-string
 /// refcounted values (objects, arrays) are moved, or retained only when borrowed,
 /// by the write itself, so they must not be released here.
-pub(super) fn release_persisted_string_operand(
+pub(in crate::ir_lower) fn release_persisted_string_operand(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -77,7 +77,7 @@ pub(super) fn lower_array_assign(
 ) {
     let array_value = ctx.load_local(array, Some(span));
     let mut index_value = lower_expr(ctx, index);
-    let mut value_value = lower_expr(ctx, value);
+    let mut value_value = lower_array_reference_or_value(ctx, value);
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either
@@ -110,6 +110,32 @@ pub(super) fn lower_array_assign(
         let buffer_ty = ctx.builder.value_php_type(array_value.value);
         value_value = coerce_buffer_set_value(ctx, &buffer_ty, value_value, Some(value.span));
     }
+    if op == Op::HashSet {
+        let current_ty = ctx.builder.value_php_type(array_value.value);
+        let value_ty = ctx.builder.value_php_type(value_value.value);
+        if let Some(updated_ty) = assoc_array_write_updated_type(current_ty, value_ty) {
+            ctx.prepare_mutated_local_owner(array, array_value, updated_ty.clone(), Some(span));
+            let converted = ctx.emit_value(
+                Op::HashToMixed,
+                vec![array_value.value],
+                None,
+                updated_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(span),
+            );
+            ctx.emit_void(
+                Op::HashSet,
+                vec![converted.value, index_value.value, value_value.value],
+                None,
+                Op::HashSet.default_effects(),
+                Some(span),
+            );
+            release_persisted_string_operand(ctx, index_value, span);
+            release_persisted_string_operand(ctx, value_value, span);
+            ctx.store_prepared_mutated_local(array, converted, updated_ty, Some(span));
+            return;
+        }
+    }
     if op == Op::ArraySet {
         let (array_value, updated_ty, needs_storeback) =
             prepare_indexed_array_local_set(ctx, array_value, value_value, span);
@@ -141,6 +167,26 @@ pub(super) fn lower_array_assign(
     );
     release_persisted_string_operand(ctx, index_value, span);
     release_persisted_string_operand(ctx, value_value, span);
+}
+
+/// Returns the widened associative-array type needed by a heterogeneous local write.
+///
+/// A concrete hash value representation cannot describe a later value of another PHP type.
+/// Widening to `Mixed` forces `HashToMixed` to preserve the earlier entries' runtime tags before
+/// the new entry is inserted, so later gradual reads and callback boundaries see each real type.
+fn assoc_array_write_updated_type(current_ty: PhpType, value_ty: PhpType) -> Option<PhpType> {
+    let PhpType::AssocArray { key, value } = current_ty.codegen_repr() else {
+        return None;
+    };
+    let current_value = normalize_array_write_element_type(value.codegen_repr());
+    let written_value = normalize_array_write_element_type(value_ty.codegen_repr());
+    if current_value == PhpType::Mixed || current_value == written_value {
+        return None;
+    }
+    Some(PhpType::AssocArray {
+        key,
+        value: Box::new(PhpType::Mixed),
+    })
 }
 
 /// Coerces a buffer element write value into the scalar storage accepted by `BufferSet`.
@@ -245,4 +291,3 @@ pub(super) fn promoted_assoc_array_type(current_ty: PhpType, value_ty: PhpType) 
         value: Box::new(assoc_value_ty),
     }
 }
-

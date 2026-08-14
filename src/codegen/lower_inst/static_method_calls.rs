@@ -25,6 +25,14 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
     {
         return Ok(());
     }
+    if !ctx.module.class_infos.contains_key(receiver.as_str())
+        && !ctx.module.extern_class_infos.contains_key(receiver.as_str())
+        && !ctx.module.packed_class_infos.contains_key(receiver.as_str())
+        && !builtins::has_eval_context(ctx)
+    {
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", receiver));
+        return Ok(());
+    }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
         return lower_static_runtime_intrinsic(
@@ -314,8 +322,11 @@ pub(super) fn is_lexical_instance_static_receiver(receiver: &str) -> bool {
     matches!(receiver.trim_start_matches('\\'), "self" | "parent")
 }
 
-/// Returns the class name encoded in the current EIR class-method function name.
+/// Returns the lexical class recorded for a closure or encoded in a class-method function name.
 pub(super) fn current_method_class<'a>(ctx: &'a FunctionContext<'_>) -> Result<&'a str> {
+    if let Some(lexical_class) = ctx.function.lexical_class.as_deref() {
+        return Ok(lexical_class);
+    }
     ctx.function
         .name
         .rsplit_once("::")

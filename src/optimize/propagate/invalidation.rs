@@ -76,6 +76,7 @@ impl Invalidation {
 /// extraction and call handling cannot drift between two implementations.
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
     match &expr.kind {
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_invalidation(property),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(
@@ -96,6 +97,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => Invalidation::none(),
         ExprKind::ObjectClassName { object } => expr_invalidation(object),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_invalidation(receiver),
         // Creating a closure executes nothing, but its by-ref captures alias
         // the outer variables from this point on: any existing fact for them
         // must die here (the volatility ledger only blocks *future* facts).
@@ -119,6 +121,9 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::BufferNew { len: inner, .. }
         | ExprKind::NamedArg { value: inner, .. } => expr_invalidation(inner),
+        // A reference-capable array element can retain access to request-global
+        // storage after this expression, so no propagated local fact is safe.
+        ExprKind::ArrayReference(_) => Invalidation::All,
         ExprKind::Clone(inner) => expr_invalidation(inner).union(top_level_globals_guard(
             Effect::PURE
                 .with_side_effects()
@@ -525,6 +530,8 @@ pub(crate) fn foreach_invalidation(
 /// precision as `expr_invalidation`.
 pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
     match &stmt.kind {
+        StmtKind::DynamicStaticPropertyWrite { .. }
+        | StmtKind::StaticPropertyElementRefAssign { .. } => Invalidation::All,
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
             block_invalidation(stmts)
         }
@@ -682,6 +689,7 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             inv
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_invalidation(object).union(expr_invalidation(value))
         }

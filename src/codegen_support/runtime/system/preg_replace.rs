@@ -14,8 +14,8 @@ const PREG_REPLACE_NMATCH: usize = 100;
 
 /// __rt_preg_replace: replace all regex matches in subject string.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=replacement ptr, x4=replacement len,
-///         x5=subject ptr, x6=subject len
-/// Output: x1=result ptr, x2=result len
+///         x5=subject ptr, x6=subject len, x7=replacement limit
+/// Output: x1=result ptr, x2=result len, x3=replacement count
 pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_replace_linux_x86_64(emitter);
@@ -32,7 +32,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     let replacement_len_off = replacement_ptr_off + 8;
     let subject_ptr_off = replacement_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -59,6 +61,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x4, [sp, #{}]", replacement_len_off));    // replacement len
     emitter.instruction(&format!("str x5, [sp, #{}]", subject_ptr_off));        // subject ptr
     emitter.instruction(&format!("str x6, [sp, #{}]", subject_len_off));        // subject len
+    emitter.instruction(&format!("str x7, [sp, #{}]", limit_off));              // replacement limit
+    emitter.instruction(&format!("str xzr, [sp, #{}]", count_off));             // initialize replacement count
 
     // -- strip delimiters from pattern --
     emitter.instruction("bl __rt_preg_strip");                                  // → x1, x2, x3=flags
@@ -99,6 +103,8 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_loop");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cbz x9, __rt_preg_replace_tail");                      // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // current pos
     emitter.instruction("ldrb w9, [x1]");                                       // check for end
     emitter.instruction("cbz w9, __rt_preg_replace_done");                      // end of string
@@ -192,6 +198,15 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     // -- advance past match --
     emitter.label("__rt_preg_replace_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pos
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", count_off));              // reload completed replacement count
+    emitter.instruction("add x9, x9, #1");                                      // count this completed replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", count_off));              // publish updated replacement count
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cmp x9, #0");                                          // negative limits remain unlimited
+    emitter.instruction("b.le __rt_preg_replace_limit_ready");                  // keep unlimited limit unchanged
+    emitter.instruction("sub x9, x9, #1");                                      // consume one allowed replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", limit_off));              // save remaining replacement limit
+    emitter.label("__rt_preg_replace_limit_ready");
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_pairs_off + 8));    // load full-match signed-64-bit end
     emitter.instruction("cmp x9, #0");                                          // zero-length match ?
     emitter.instruction("b.gt __rt_preg_replace_advance_ok");                   // non-empty match advances by rm_eo
@@ -238,6 +253,7 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // original subject len
 
     emitter.label("__rt_preg_replace_ret");
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", count_off));              // return completed replacement count beside string result
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address beyond ARM64 pair-load range
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // deallocate stack frame
@@ -247,8 +263,9 @@ pub(crate) fn emit_preg_replace(emitter: &mut Emitter) {
 /// x86_64 Linux-specific implementation of `__rt_preg_replace`.
 ///
 /// Inputs (System V AMD64 ABI): rdi=pattern ptr, rsi=pattern len,
-///   rdx=replacement ptr, rcx=replacement len, r8=subject ptr, r9=subject len
-/// Outputs: rax=result ptr, rdx=result len
+///   rdx=replacement ptr, rcx=replacement len, r8=subject ptr, r9=subject len;
+///   the internal helper convention carries the replacement limit in r10.
+/// Outputs: rax=result ptr, rdx=result len, rcx=replacement count
 ///
 /// On regex compilation failure, returns the original subject unchanged.
 /// Handles backreference expansion (`$0`..`$99`, `\0`..`\99`) in replacement strings.
@@ -264,7 +281,9 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     let replacement_len_off = replacement_ptr_off + 8;
     let subject_ptr_off = replacement_len_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -285,6 +304,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", replacement_len_off)); // preserve the elephc replacement length across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve the elephc subject pointer across regex helper calls
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve the elephc subject length across regex helper calls
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", limit_off));  // preserve the caller-provided replacement limit
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", count_off));    // initialize completed replacement count
     emitter.instruction("mov rax, rdi");                                        // move the elephc pattern pointer into the delimiter-strip helper input register
     emitter.instruction("mov rdx, rsi");                                        // move the elephc pattern length into the delimiter-strip helper input register
     emitter.instruction("call __rt_preg_strip");                                // strip slash delimiters and gather supported regex flags from the pattern literal
@@ -314,6 +335,8 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", current_pos_off)); // initialize the current subject cursor from the start of the null-terminated subject string
 
     emitter.label("__rt_preg_replace_loop_linux_x86_64");
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // check whether the caller allowed another replacement
+    emitter.instruction("je __rt_preg_replace_tail_linux_x86_64");              // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload the current subject C-string cursor before the next regexec() probe
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // stop the replacement loop once the current subject cursor reaches the trailing null terminator
     emitter.instruction("test r9d, r9d");                                       // treat the terminating null byte as the end-of-subject condition
@@ -404,6 +427,11 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_preg_replace_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // preserve the updated replacement output write cursor before advancing the subject cursor
+    emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", count_off));    // count the completed replacement
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // negative replacement limits remain unlimited
+    emitter.instruction("jle __rt_preg_replace_limit_ready_linux_x86_64");      // keep an unlimited limit unchanged
+    emitter.instruction(&format!("sub QWORD PTR [rsp + {}], 1", limit_off));    // consume one allowed replacement
+    emitter.label("__rt_preg_replace_limit_ready_linux_x86_64");
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_pairs_off + 8)); // load full-match signed-64-bit end
     emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches so the replacement loop still makes forward progress
     emitter.instruction("jg __rt_preg_replace_advance_ok_linux_x86_64");        // trust rm_eo directly when the regex consumed at least one byte
@@ -445,6 +473,7 @@ fn emit_preg_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return the original elephc subject length when regex compilation fails
 
     emitter.label("__rt_preg_replace_ret_linux_x86_64");
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", count_off));  // return completed replacement count beside string result
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release the opaque-handle, fixed-pair, and replacement spill storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the regex-replace helper completes
     emitter.instruction("ret");                                                 // return the preg_replace() string result in rax/rdx

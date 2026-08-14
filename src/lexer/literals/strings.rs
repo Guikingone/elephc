@@ -10,7 +10,7 @@
 
 use super::super::cursor::Cursor;
 use super::super::token::{spanned, SpannedToken, Token};
-use super::identifiers::is_ident_continue;
+use super::identifiers::{is_ident_continue, is_ident_start};
 use crate::errors::CompileError;
 use crate::span::Span;
 use std::iter::Peekable;
@@ -172,6 +172,10 @@ fn interpolate(
                     continue;
                 }
                 input.advance_escape(); // consume '$'
+                if !input.peek_escape().is_some_and(is_ident_start) {
+                    current.push('$');
+                    continue;
+                }
                 let mut name = String::new();
                 while let Some(ch) = input.peek_escape() {
                     if is_ident_continue(ch) {

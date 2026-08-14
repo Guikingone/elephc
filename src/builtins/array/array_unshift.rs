@@ -44,7 +44,13 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     for index in 1..cx.args.len() {
         cx.checker.infer_type(&cx.args[index], cx.env)?;
     }
-    if !matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+    if !matches!(
+        arr_ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    ) {
         return Err(CompileError::new(
             cx.span,
             "array_unshift() first argument must be array",

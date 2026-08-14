@@ -441,6 +441,9 @@ pub(super) fn lower_in_array_with_mode(
     array_ty: PhpType,
     mode: InArrayMode,
 ) -> Result<()> {
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_in_array_mixed_container(ctx, needle, array, &needle_ty, mode);
+    }
     if search::try_lower_assoc_in_array(
         ctx,
         needle,
@@ -490,8 +493,8 @@ pub(super) fn lower_in_array_with_mode(
                 needle,
                 array,
                 &element_ty,
-                "__rt_php_compare",
-                true,
+                "__rt_mixed_loose_eq",
+                false,
             )?
         }
         InArrayCase::MixedIntExact => lower_in_array_mixed_int(ctx, needle, array, true)?,
@@ -506,7 +509,7 @@ pub(super) fn lower_in_array_with_mode(
             lower_in_array_mixed_mixed(ctx, needle, array, "__rt_mixed_strict_eq", false)?
         }
         InArrayCase::MixedMixedLoose => {
-            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_php_compare", true)?
+            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_mixed_loose_eq", false)?
         }
         InArrayCase::StrArrayMixedNeedleStrict => {
             lower_in_array_concrete_mixed_needle(
@@ -524,8 +527,8 @@ pub(super) fn lower_in_array_with_mode(
                 needle,
                 array,
                 &PhpType::Str,
-                "__rt_php_compare",
-                true,
+                "__rt_mixed_loose_eq",
+                false,
             )?
         }
     }

@@ -5,7 +5,7 @@
 //! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
 //!
 //! Key details:
-//! - PCNTL calls must not block compilation of runtime-dead Symfony Console bodies.
+//! - PCNTL calls must not block compilation of runtime-dead code paths.
 //! - Reaching one of these stubs terminates with a precise diagnostic instead of silently
 //!   pretending that signal handlers or alarms were installed.
 

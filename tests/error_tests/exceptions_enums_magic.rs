@@ -533,6 +533,24 @@ fn test_error_enum_trait_with_property() {
     );
 }
 
+/// Verifies enums cannot explicitly list the interface they already implement implicitly.
+#[test]
+fn test_error_enum_cannot_explicitly_implement_unit_enum() {
+    expect_error(
+        "<?php enum State implements UnitEnum { case Ready; }",
+        "Enum State cannot explicitly implement interface UnitEnum",
+    );
+}
+
+/// Verifies pure enums cannot implement a user interface derived from the backed-enum contract.
+#[test]
+fn test_error_pure_enum_cannot_implement_backed_enum_descendant() {
+    expect_error(
+        "<?php interface BackedMarker extends BackedEnum {} enum State implements BackedMarker { case Ready; }",
+        "Non-backed enum State cannot implement interface BackedEnum",
+    );
+}
+
 /// Verifies that an enum method body is type-checked like a class method: a declared return type
 /// that does not match the returned value is rejected. Regression test — enum method bodies
 /// previously bypassed type checking entirely.

@@ -129,6 +129,7 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::Include { path: expr, .. } => scan_expr(expr, usage),
         StmtKind::RefAssign { source, .. } => scan_expr(source, usage),
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             scan_expr(object, usage);
             scan_expr(value, usage);
@@ -146,6 +147,22 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             scan_expr(index, usage);
+            scan_expr(value, usage);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            scan_expr(index, usage);
+            scan_expr(source, usage);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            scan_expr(property, usage);
+            if let Some(index) = index {
+                scan_expr(index, usage);
+            }
             scan_expr(value, usage);
         }
         StmtKind::NestedArrayAssign { target, value } => {
@@ -356,6 +373,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -505,6 +523,8 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => scan_expr(property, usage),
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => scan_expr(receiver, usage),
     }
 }

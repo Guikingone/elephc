@@ -2,7 +2,7 @@
 title: "stream_context_get_default() — internals"
 description: "Compiler internals for stream_context_get_default(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 219
 ---
 
 ## `stream_context_get_default()` — internals

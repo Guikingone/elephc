@@ -9,6 +9,62 @@
 
 use super::*;
 
+/// Loads the raw reference-cell pointer selected by a runtime property name.
+pub(in crate::codegen::lower_inst) fn lower_dynamic_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property_value = expect_operand(inst, 1)?;
+    let class_name = dynamic_property_object_class(ctx, object, inst)?;
+    ensure_runtime_dynamic_property_name(ctx, property_value, inst)?;
+    let slots = declared_dynamic_property_slots(ctx, &class_name, inst)?
+        .into_iter()
+        .filter(|slot| slot.is_reference)
+        .collect::<Vec<_>>();
+    if slots.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for class {} without reference-property candidates",
+            inst.op.name(),
+            class_name
+        )));
+    }
+    let match_labels = slots
+        .iter()
+        .map(|slot| ctx.next_label(&format!("dyn_propref_{}", label_fragment(&slot.property))))
+        .collect::<Vec<_>>();
+    let miss_label = ctx.next_label("dyn_propref_miss");
+    let done_label = ctx.next_label("dyn_propref_done");
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(property_value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        emit_branch_if_dynamic_name_matches(ctx, &slot.property, label);
+    }
+    abi::emit_jump(ctx.emitter, &miss_label);
+
+    for (slot, label) in slots.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 16);
+        let result_reg = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_from_address(ctx.emitter, result_reg, base_reg, slot.offset);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done_label);
+    store_ref_cell_pointer_result(ctx, inst)
+}
+
 /// Lowers a runtime-name dynamic property read from a statically known `stdClass`.
 pub(super) fn lower_runtime_dynamic_stdclass_prop_get(
     ctx: &mut FunctionContext<'_>,

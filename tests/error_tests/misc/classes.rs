@@ -591,6 +591,15 @@ class MyThrowable implements MyThrowableInterface {
     );
 }
 
+/// Verifies a non-enum class cannot implement an interface derived from `UnitEnum`.
+#[test]
+fn test_error_non_enum_class_cannot_implement_unit_enum_descendant() {
+    expect_error(
+        "<?php interface EnumMarker extends UnitEnum {} class State implements EnumMarker {}",
+        "Non-enum class State cannot implement interface UnitEnum",
+    );
+}
+
 /// Verifies the error diagnostic for instantiate abstract class.
 #[test]
 fn test_error_instantiate_abstract_class() {

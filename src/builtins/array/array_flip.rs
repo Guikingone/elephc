@@ -9,8 +9,9 @@
 //!   result is an associative array whose key type is derived from the input value
 //!   type (via `array_key_type_from_value_type`). An indexed array flips to
 //!   `AssocArray<key-from-elem, Int>`; an associative array flips to
-//!   `AssocArray<key-from-value, old-key>`. A check hook is required because the
-//!   return type depends on the inferred argument type.
+//!   `AssocArray<key-from-value, old-key>`. Gradual inputs retain a gradual result
+//!   and are validated at runtime. A check hook is required because the return type
+//!   depends on the inferred argument type.
 //! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
 //!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
 
@@ -48,6 +49,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(array_key_type_from_value_type(*value)),
             value: key,
         }),
+        PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         _ => Err(CompileError::new(
             cx.span,
             "array_flip() argument must be array",

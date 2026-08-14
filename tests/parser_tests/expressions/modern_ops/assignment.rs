@@ -296,3 +296,22 @@ fn test_null_coalesce_assignment_expression_stabilizes_computed_mutated_index() 
         other => panic!("expected Echo, got {:?}", other),
     }
 }
+
+/// Keeps a ternary wholly inside the right-hand side of a property null-coalesce assignment.
+#[test]
+fn test_property_null_coalesce_assignment_owns_ternary_rhs() {
+    let stmts = parse_source(
+        "<?php $obj->cached ??= false === ($position = find()) ? '' : slice($position);",
+    );
+    let StmtKind::PropertyAssign { value, .. } = &stmts[0].kind else {
+        panic!("expected property assignment, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::NullCoalesce { default, .. } = &value.kind else {
+        panic!("expected null-coalesce value, got {:?}", value.kind);
+    };
+    assert!(
+        matches!(default.kind, ExprKind::Ternary { .. }),
+        "expected ternary RHS, got {:?}",
+        default.kind
+    );
+}

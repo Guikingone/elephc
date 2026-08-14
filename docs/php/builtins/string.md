@@ -89,6 +89,7 @@ sidebar:
 | [`trim()`](./string/trim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`ucwords()`](./string/ucwords.md) | `(string $string, string $separators = ' \t\r\n\x0c\x0b'): string` | `string` | ✓ | ✓ |
+| [`unpack()`](./string/unpack.md) | `(string $format, string $string, int $offset = 0): mixed` | `mixed` | ✓ | — |
 | [`urldecode()`](./string/urldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`urlencode()`](./string/urlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`vprintf()`](./string/vprintf.md) | `(string $format, array $values): int` | `int` | ✓ | ✓ |

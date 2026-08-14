@@ -160,6 +160,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
             expr_refs_ve(value) || instanceof_target_refs_ve(target)
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -229,9 +230,11 @@ fn expr_refs_ve(expr: &Expr) -> bool {
             expr_refs_ve(object) || expr_refs_ve(property)
         }
         ExprKind::StaticPropertyAccess { .. } => false,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_ve(property),
         ExprKind::BufferNew { len, .. } => expr_refs_ve(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
         ExprKind::ObjectClassName { object } => expr_refs_ve(object),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => expr_refs_ve(receiver),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_refs_ve)
@@ -385,10 +388,26 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_refs_ve(object) || expr_refs_ve(value)
         }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_refs_ve(object) || expr_refs_ve(source)
+        }
         StmtKind::StaticPropertyAssign { value, .. }
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs_ve(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_ve(index) || expr_refs_ve(value)
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_refs_ve(index) || expr_refs_ve(source)
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            expr_refs_ve(property)
+                || index.as_ref().is_some_and(expr_refs_ve)
+                || expr_refs_ve(value)
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_ve(object) || expr_refs_ve(value)

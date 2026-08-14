@@ -496,7 +496,7 @@ pub fn emit_store_result_to_symbol(
                     emitter.instruction(&format!("pop {}", ptr_reg));           // restore the incoming string pointer result after the release helper call
                 }
             }
-        } else if ty.is_refcounted() {
+        } else if ty.is_refcounted() || matches!(ty, PhpType::Callable) {
             match emitter.target.arch {
                 Arch::AArch64 => {
                     emitter.instruction("str x0, [sp, #-16]!");                 // preserve the incoming heap pointer while decreffing the previous symbol payload

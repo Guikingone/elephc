@@ -111,3 +111,35 @@ fn emit_header_x86_64(emitter: &mut Emitter, web: bool) {
 
     emitter.instruction("ret");                                                 // return to the caller (header() is void)
 }
+
+/// Emits the web-gated `header_remove()` runtime bridge.
+pub fn emit_header_remove(emitter: &mut Emitter, web: bool) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_header_remove_x86_64(emitter, web);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: header_remove ---");
+    emitter.label_global("__rt_header_remove");
+    if web {
+        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // preserve frame and return address across the bridge call
+        emitter.instruction("mov x29, sp");                                    // establish a frame pointer for the C ABI call
+        emitter.bl_c("elephc_web_header_remove");
+        emitter.instruction("ldp x29, x30, [sp], #16");                        // restore the caller frame
+    }
+    emitter.instruction("ret");
+}
+
+/// Emits the x86_64 Linux variant of the web-gated `header_remove()` helper.
+fn emit_header_remove_x86_64(emitter: &mut Emitter, web: bool) {
+    emitter.blank();
+    emitter.comment("--- runtime: header_remove ---");
+    emitter.label_global("__rt_header_remove");
+    if web {
+        emitter.instruction("push rbp");                                       // preserve the caller frame and align the bridge call
+        emitter.instruction("mov rbp, rsp");
+        emitter.bl_c("elephc_web_header_remove");
+        emitter.instruction("pop rbp");
+    }
+    emitter.instruction("ret");
+}

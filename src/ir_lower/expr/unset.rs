@@ -31,6 +31,10 @@ pub(super) fn lower_unset_locals(
             | ExprKind::NullsafePropertyAccess { object, property } => {
                 lower_unset_property_access(ctx, object, property, arg);
             }
+            ExprKind::DynamicPropertyAccess { object, property }
+            | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
+                lower_unset_dynamic_property_access(ctx, object, property, arg);
+            }
             _ => {}
         }
     }
@@ -45,13 +49,73 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
         ExprKind::ArrayAccess { array, .. } => {
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
+                || unset_array_access_has_property_array_receiver(ctx, array)
+                || unset_array_access_has_static_property_receiver(ctx, array)
+                || crate::ir_lower::stmt::nested_local_hash_unset_supported(ctx, arg)
+                || crate::ir_lower::stmt::nested_property_hash_unset_supported(ctx, arg)
+                || crate::ir_lower::stmt::nested_static_property_hash_unset_supported(ctx, arg)
         }
         ExprKind::PropertyAccess { object, property }
         | ExprKind::NullsafePropertyAccess { object, property } => {
             unset_property_access_has_direct_lowering(ctx, object, property)
         }
+        ExprKind::DynamicPropertyAccess { .. }
+        | ExprKind::NullsafeDynamicPropertyAccess { .. } => true,
         _ => false,
     }
+}
+
+/// Lowers `unset($object->$property)` after preserving PHP's receiver/name evaluation order.
+fn lower_unset_dynamic_property_access(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &Expr,
+    expr: &Expr,
+) {
+    let object = lower_expr(ctx, object);
+    let property = lower_expr(ctx, property);
+    let property = coerce_to_string_at_span(ctx, property, Some(expr.span));
+    ctx.emit_void(
+        Op::DynamicPropUnset,
+        vec![object.value, property.value],
+        None,
+        Op::DynamicPropUnset.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
+}
+
+/// Returns true when an array-access unset receiver is a declared static property whose storage
+/// can be converted to a sparse hash and written back through the static-property slot.
+fn unset_array_access_has_static_property_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind else {
+        return false;
+    };
+    matches!(
+        static_property_result_type(ctx, receiver, property, array).codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    )
+}
+
+/// Returns true when an array-access unset receiver is a declared instance property with concrete
+/// array storage that can be loaded, sparsified, mutated, and written back directly in EIR.
+fn unset_array_access_has_property_array_receiver(
+    ctx: &LoweringContext<'_, '_>,
+    array: &Expr,
+) -> bool {
+    let ExprKind::PropertyAccess { object, property } = &array.kind else {
+        return false;
+    };
+    matches!(
+        property_access_expr_type_for_ir(ctx, object, property)
+            .map(|ty| ty.codegen_repr()),
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. })
+    )
 }
 
 /// Returns true when an array-access unset receiver is a plain array/hash local whose element the
@@ -68,12 +132,9 @@ pub(super) fn unset_array_access_has_local_array_receiver(
     let ExprKind::Variable(name) = &array.kind else {
         return false;
     };
-    if ctx.is_ref_bound_local(name) {
-        return false;
-    }
     matches!(
         ctx.local_type(name).codegen_repr(),
-        PhpType::AssocArray { .. } | PhpType::Array(_)
+        PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_)
     )
 }
 
@@ -88,6 +149,13 @@ pub(super) fn unset_array_access_has_object_receiver(
             .get(name)
             .cloned()
             .unwrap_or_else(|| infer_expr_type_syntactic(array)),
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            static_property_result_type(ctx, receiver, property, array)
+        }
+        ExprKind::PropertyAccess { object, property } => {
+            property_access_expr_type_for_ir(ctx, object, property)
+                .unwrap_or_else(|| infer_expr_type_syntactic(array))
+        }
         _ => infer_expr_type_syntactic(array),
     };
     type_satisfies_array_access_for_ir(ctx, &ty)
@@ -105,24 +173,45 @@ pub(super) fn lower_unset_array_access(
     index: &Expr,
     expr: &Expr,
 ) {
+    if crate::ir_lower::stmt::lower_nested_local_hash_unset(ctx, expr) {
+        return;
+    }
+    if crate::ir_lower::stmt::lower_nested_property_hash_unset(ctx, expr) {
+        return;
+    }
+    if crate::ir_lower::stmt::lower_nested_static_property_hash_unset(ctx, expr) {
+        return;
+    }
+    if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+        if lower_unset_static_property_array_element(ctx, receiver, property, index, expr) {
+            return;
+        }
+    }
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        if lower_unset_property_array_element(ctx, object, property, index, expr) {
+            return;
+        }
+    }
     if let ExprKind::Variable(name) = &array.kind {
-        if !ctx.is_ref_bound_local(name) {
-            match ctx.local_type(name).codegen_repr() {
-                PhpType::AssocArray { .. } => {
-                    lower_unset_hash_element(ctx, name, array.span, index, expr);
-                    return;
-                }
-                PhpType::Array(elem_ty) => {
-                    let elem_ty = if *elem_ty == PhpType::Never {
-                        PhpType::Mixed
-                    } else {
-                        *elem_ty
-                    };
-                    lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
-                    return;
-                }
-                _ => {}
+        match ctx.local_type(name).codegen_repr() {
+            PhpType::AssocArray { .. } => {
+                lower_unset_hash_element(ctx, name, array.span, index, expr);
+                return;
             }
+            PhpType::Array(elem_ty) => {
+                let elem_ty = if *elem_ty == PhpType::Never {
+                    PhpType::Mixed
+                } else {
+                    *elem_ty
+                };
+                lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
+                return;
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                lower_unset_mixed_array_element(ctx, name, array.span, index, expr);
+                return;
+            }
+            _ => {}
         }
     }
     let synthetic = Expr::new(
@@ -134,6 +223,215 @@ pub(super) fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers `unset(Class::$property[$key])` by promoting the static array to sparse hash storage,
+/// deleting the key, and publishing the possibly relocated container back to the static slot.
+fn lower_unset_static_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let property_expr = Expr::new(
+        ExprKind::StaticPropertyAccess {
+            receiver: receiver.clone(),
+            property: property.to_string(),
+        },
+        expr.span,
+    );
+    let property_ty = static_property_result_type(ctx, receiver, property, &property_expr)
+        .codegen_repr();
+    if !matches!(
+        property_ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return false;
+    }
+    let property_value = lower_static_property_get(ctx, receiver, property, &property_expr);
+    let hash_ty = match &property_ty {
+        PhpType::Array(element) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(element.codegen_repr()),
+        },
+        PhpType::AssocArray { .. } => property_ty.clone(),
+        PhpType::Mixed | PhpType::Union(_) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        _ => return false,
+    };
+    let hash = match property_ty {
+        PhpType::Array(_) => ctx.emit_value(
+            Op::ArrayToHash,
+            vec![property_value.value],
+            None,
+            hash_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(expr.span),
+        ),
+        PhpType::Mixed | PhpType::Union(_) => ctx.emit_value(
+            Op::MixedToHash,
+            vec![property_value.value],
+            None,
+            hash_ty,
+            Op::MixedToHash.default_effects(),
+            Some(expr.span),
+        ),
+        PhpType::AssocArray { .. } => property_value,
+        _ => return false,
+    };
+    let key = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    let stored = if matches!(property_ty, PhpType::Mixed | PhpType::Union(_)) {
+        ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span))
+    } else {
+        hash
+    };
+    let name = format!("{}::{}", receiver_name(receiver), property);
+    let data = ctx.intern_string(&name);
+    ctx.emit_void(
+        Op::StoreStaticProperty,
+        vec![stored.value],
+        Some(Immediate::Data(data)),
+        Op::StoreStaticProperty.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($object->property[$key])` by separating the declared array property, promoting
+/// indexed storage to a sparse hash when needed, deleting the key, and publishing the possibly
+/// relocated container back through the ordinary retaining property store.
+fn lower_unset_property_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    index: &Expr,
+    expr: &Expr,
+) -> bool {
+    let object = lower_expr(ctx, object);
+    let Some(property_ty) = crate::ir_lower::stmt::object_property_type(ctx, object.value, property)
+    else {
+        return false;
+    };
+    let property_ty = property_ty.codegen_repr();
+    if !matches!(property_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return false;
+    }
+    let data = ctx.intern_string(property);
+    let property_value = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        property_ty.clone(),
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    let property_value =
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, property_value, Some(expr.span));
+    let hash_ty = match &property_ty {
+        PhpType::Array(element) => PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(element.codegen_repr()),
+        },
+        PhpType::AssocArray { .. } => property_ty.clone(),
+        _ => unreachable!("array property type checked above"),
+    };
+    let hash = if matches!(property_ty, PhpType::Array(_)) {
+        ctx.emit_value(
+            Op::ArrayToHash,
+            vec![property_value.value],
+            None,
+            hash_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(expr.span),
+        )
+    } else {
+        property_value
+    };
+    let key = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, hash.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::stmt::release_rewritten_property_value_after_retaining_store(
+        ctx,
+        &hash_ty,
+        hash,
+        expr.span,
+    );
+    if ctx.value_is_owning_temporary(key) {
+        crate::ir_lower::ownership::release_if_owned(ctx, key, Some(expr.span));
+    } else {
+        crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    }
+    true
+}
+
+/// Lowers `unset($mixed[$key])` for a gradual local that holds an array at runtime.
+///
+/// `MixedToHash` enforces the runtime array boundary and returns an independently owned sparse
+/// hash, so deleting a key cannot mutate aliases of the original boxed array. The mutated hash is
+/// boxed back into the local's unchanged `Mixed` storage after the previous boxed owner is
+/// released. This is the gradual counterpart of `lower_unset_indexed_element` and preserves PHP's
+/// non-renumbering `unset()` semantics for both indexed and associative runtime arrays.
+fn lower_unset_mixed_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let source = ctx.load_local(name, Some(array_span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        assoc_ty,
+        Op::MixedToHash.default_effects(),
+        Some(array_span),
+    );
+    let key = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.release_stored_local_value(name, slot, Some(expr.span));
+    ctx.store_prepared_mutated_local(name, boxed, PhpType::Mixed, Some(expr.span));
+    ctx.set_local_type(name, PhpType::Mixed);
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
@@ -278,11 +576,9 @@ pub(super) fn property_unset_action(
         if class_info.visible_property_is_declared(property) {
             return Some(UnsetPropertyAction::ClearTyped);
         }
-        // An UNTYPED fixed slot has no "removed" state and no null-capable storage:
-        // PHP's later read must warn and answer `null`, which a slot the checker typed
-        // `Int`/`Str`/... cannot represent. Keep the explicit unsupported diagnostic
-        // rather than leaving a stale value or a garbage payload behind.
-        return Some(UnsetPropertyAction::Fallback);
+        // Untyped and typed fixed slots share the marker-backed absent state. This keeps
+        // `isset()` false and permits a later assignment to initialize the slot again.
+        return Some(UnsetPropertyAction::ClearTyped);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
         Some(UnsetPropertyAction::Magic)
@@ -354,4 +650,3 @@ pub(super) fn lower_nullable_magic_property_unset(
 
     ctx.builder.position_at_end(merge);
 }
-

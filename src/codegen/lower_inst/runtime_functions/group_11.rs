@@ -34,14 +34,23 @@ pub(super) fn lower(
         RuntimeFnId::DateDefaultTimezoneSet => Some({
             crate::codegen::lower_inst::builtins::system::lower_date_default_timezone_set(ctx, inst)
         }),
+        RuntimeFnId::Constant => Some({
+            crate::codegen::lower_inst::builtins::lower_constant(ctx, inst)
+        }),
         RuntimeFnId::Define => Some({
             crate::codegen::lower_inst::builtins::lower_define(ctx, inst)
         }),
         RuntimeFnId::Defined => Some({
             crate::codegen::lower_inst::builtins::lower_defined(ctx, inst)
         }),
+        RuntimeFnId::ErrorLog => Some({
+            crate::codegen::lower_inst::builtins::system::lower_error_log(ctx, inst)
+        }),
         RuntimeFnId::Exec => Some({
             crate::codegen::lower_inst::builtins::system::lower_exec(ctx, inst)
+        }),
+        RuntimeFnId::Extract => Some({
+            crate::codegen::lower_inst::builtins::lower_extract(ctx, inst)
         }),
         RuntimeFnId::ExtensionLoaded => Some({
             crate::codegen::lower_inst::builtins::lower_extension_loaded(ctx, inst)
@@ -60,6 +69,12 @@ pub(super) fn lower(
         }),
         RuntimeFnId::Header => Some({
             crate::codegen::lower_inst::builtins::system::lower_header(ctx, inst)
+        }),
+        RuntimeFnId::HeaderRemove => Some({
+            crate::codegen::lower_inst::builtins::output_buffering::lower_header_remove(ctx, inst)
+        }),
+        RuntimeFnId::HeadersSent => Some({
+            crate::codegen::lower_inst::builtins::output_buffering::lower_headers_sent(ctx, inst)
         }),
         RuntimeFnId::Hrtime => Some({
             crate::codegen::lower_inst::builtins::system::lower_hrtime(ctx, inst)
@@ -100,6 +115,9 @@ pub(super) fn lower(
         RuntimeFnId::Phpversion => Some({
             crate::codegen::lower_inst::builtins::lower_phpversion(ctx, inst)
         }),
+        RuntimeFnId::PregGrep => Some({
+            crate::codegen::lower_inst::builtins::regex::lower_preg_grep(ctx, inst)
+        }),
         RuntimeFnId::PregMatch => Some({
             crate::codegen::lower_inst::builtins::regex::lower_preg_match(ctx, inst)
         }),
@@ -117,6 +135,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::Serialize => Some({
             crate::codegen::lower_inst::builtins::serialize::lower_serialize(ctx, inst)
+        }),
+        RuntimeFnId::Setlocale => Some({
+            crate::codegen::lower_inst::builtins::system::lower_setlocale(ctx, inst)
         }),
         RuntimeFnId::ShellExec => Some({
             crate::codegen::lower_inst::builtins::system::lower_shell_exec(ctx, inst)

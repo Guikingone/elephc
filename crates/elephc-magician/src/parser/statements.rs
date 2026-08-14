@@ -188,6 +188,9 @@ impl Parser {
             TokenKind::PlusPlus | TokenKind::MinusMinus => {
                 self.parse_prefix_inc_dec_stmt(true)
             }
+            TokenKind::LBracket if self.current_starts_array_destructure_assignment() => {
+                self.parse_array_destructure_stmt()
+            }
             TokenKind::DollarIdent(_) if matches!(self.peek(), TokenKind::Arrow) => {
                 self.parse_property_stmt(true)
             }
@@ -399,6 +402,26 @@ impl Parser {
                             .tokens
                             .get(cursor + 1)
                             .is_some_and(|token| assignment_op(token).is_some());
+                    }
+                }
+                Some(TokenKind::Eof) | None => return false,
+                _ => {}
+            }
+            cursor += 1;
+        }
+    }
+
+    /// Returns true when the current bracketed target list is followed by `=`.
+    fn current_starts_array_destructure_assignment(&self) -> bool {
+        let mut cursor = self.pos;
+        let mut depth = 0usize;
+        loop {
+            match self.tokens.get(cursor) {
+                Some(TokenKind::LBracket) => depth += 1,
+                Some(TokenKind::RBracket) => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return matches!(self.tokens.get(cursor + 1), Some(TokenKind::Equal));
                     }
                 }
                 Some(TokenKind::Eof) | None => return false,

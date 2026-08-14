@@ -74,6 +74,11 @@ pub enum ExprKind {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
+    /// A by-reference array element (`[&$value]` or `['key' => &$value]`).
+    ///
+    /// This node is only valid as an array-literal value. Lowering currently accepts
+    /// web superglobals, whose shared storage can outlive the returned array.
+    ArrayReference(Box<Expr>),
     Match {
         subject: Box<Expr>,
         arms: Vec<(Vec<Expr>, Expr)>,
@@ -179,6 +184,11 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         property: String,
     },
+    /// A static property whose name is computed at runtime, such as `self::${$name}`.
+    DynamicStaticPropertyAccess {
+        receiver: StaticReceiver,
+        property: Box<Expr>,
+    },
     MethodCall {
         object: Box<Expr>,
         method: String,
@@ -228,6 +238,11 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         name: String,
     },
+    /// A class constant read through an object or class-string expression (`$object::CONSTANT`).
+    DynamicScopedConstantAccess {
+        receiver: Box<Expr>,
+        name: String,
+    },
     /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`
     /// which uses a fixed class name; this variant carries a `StaticReceiver`
     /// so that codegen can apply late static binding for `static`.
@@ -263,6 +278,7 @@ pub enum CastType {
     String,
     Bool,
     Array,
+    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]

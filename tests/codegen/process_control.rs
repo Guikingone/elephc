@@ -5,10 +5,10 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - PCNTL and Windows-only SAPI calls must lower in runtime-dead framework bodies while retaining
+//! - PCNTL and Windows-only SAPI calls must lower in runtime-dead library bodies while retaining
 //!   an explicit fatal diagnostic if those stubs are ever reached.
 //! - Windows-only SAPI names remain absent from `function_exists()` on supported macOS/Linux
-//!   targets even though direct calls are recognized for framework type checking.
+//!   targets even though direct calls are recognized for static type checking.
 
 use crate::support::*;
 

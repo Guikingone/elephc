@@ -14,8 +14,8 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// __rt_preg_replace_callback: replace regex matches with a callback result.
 /// Input:  x1=pattern ptr, x2=pattern len, x3=callback ptr, x4=callback env ptr,
-///         x5=subject ptr, x6=subject len
-/// Output: x1=result ptr, x2=result len
+///         x5=subject ptr, x6=subject len, x7=replacement limit
+/// Output: x1=result ptr, x2=result len, x3=replacement count
 pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_preg_replace_callback_linux_x86_64(emitter);
@@ -31,7 +31,9 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     let callback_env_off = callback_ptr_off + 8;
     let subject_ptr_off = callback_env_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -65,6 +67,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x4, [sp, #{}]", callback_env_off));       // save optional callback capture environment
     emitter.instruction(&format!("str x5, [sp, #{}]", subject_ptr_off));        // save subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("str x6, [sp, #{}]", subject_len_off));        // save subject length for fallback and C-string conversion
+    emitter.instruction(&format!("str x7, [sp, #{}]", limit_off));              // save replacement limit across callback calls
+    emitter.instruction(&format!("str xzr, [sp, #{}]", count_off));             // initialize completed replacement count
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("bl __rt_preg_strip");                                  // strip slash delimiters and expose supported regex flags
@@ -105,6 +109,8 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop");
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cbz x9, __rt_preg_replace_callback_tail");             // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("ldr x1, [sp, #{}]", current_pos_off));        // load current subject cursor
     emitter.instruction("ldrb w9, [x1]");                                       // read the current subject byte
     emitter.instruction("cbz w9, __rt_preg_replace_callback_done");             // finish when the cursor reaches the null terminator
@@ -238,6 +244,15 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save output write pointer after callback copy
     publish_concat_offset(emitter, output_write_off);
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", count_off));              // reload completed replacement count
+    emitter.instruction("add x9, x9, #1");                                      // count this completed callback replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", count_off));              // publish updated replacement count
+    emitter.instruction(&format!("ldr x9, [sp, #{}]", limit_off));              // reload replacement limit
+    emitter.instruction("cmp x9, #0");                                          // negative limits remain unlimited
+    emitter.instruction("b.le __rt_preg_replace_callback_limit_ready");         // keep unlimited limit unchanged
+    emitter.instruction("sub x9, x9, #1");                                      // consume one allowed replacement
+    emitter.instruction(&format!("str x9, [sp, #{}]", limit_off));              // save remaining replacement limit
+    emitter.label("__rt_preg_replace_callback_limit_ready");
     emitter.instruction(&format!("ldr x14, [sp, #{}]", regmatches_ptr_off));    // load dynamic full-match pair before advancing cursor
     emitter.instruction("ldr x9, [x14, #8]");                                   // load full-match signed-64-bit end
     emitter.instruction("cmp x9, #0");                                          // detect zero-length regex matches
@@ -287,6 +302,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", subject_len_off));        // return original subject length after allocation failure
 
     emitter.label("__rt_preg_replace_callback_ret");
+    emitter.instruction(&format!("ldr x3, [sp, #{}]", count_off));              // return completed replacement count beside string result
     emitter.instruction(&format!("add x9, sp, #{}", save_off));                 // compute save-slot address beyond ARM64 pair-load immediate range
     emitter.instruction("ldp x29, x30, [x9]");                                  // restore frame pointer and return address
     emitter.instruction(&format!("add sp, sp, #{}", stack_size));               // release preg_replace_callback stack frame
@@ -324,7 +340,9 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     let callback_env_off = callback_ptr_off + 8;
     let subject_ptr_off = callback_env_off + 8;
     let subject_len_off = subject_ptr_off + 8;
-    let flags_off = subject_len_off + 8;
+    let limit_off = subject_len_off + 8;
+    let count_off = limit_off + 8;
+    let flags_off = count_off + 8;
     let pattern_cstr_off = flags_off + 8;
     let subject_cstr_off = pattern_cstr_off + 8;
     let output_start_off = subject_cstr_off + 8;
@@ -356,6 +374,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", callback_env_off)); // preserve optional callback capture environment
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", subject_ptr_off)); // preserve subject pointer for fallback and C-string conversion
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", subject_len_off)); // preserve subject length for fallback and C-string conversion
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", limit_off));  // preserve caller-provided replacement limit
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", count_off));    // initialize completed replacement count
 
     // -- strip delimiters and compile PCRE regex --
     emitter.instruction("mov rax, rdi");                                        // move pattern pointer into the delimiter-strip helper input register
@@ -400,6 +420,8 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
 
     // -- replacement loop --
     emitter.label("__rt_preg_replace_callback_loop_linux_x86_64");
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // check whether the caller allowed another replacement
+    emitter.instruction("je __rt_preg_replace_callback_tail_linux_x86_64");     // limit zero copies the remaining subject unchanged
     emitter.instruction(&format!("mov rsi, QWORD PTR [rsp + {}]", current_pos_off)); // reload current subject cursor for regexec
     emitter.instruction("movzx r9d, BYTE PTR [rsi]");                           // read the current subject byte
     emitter.instruction("test r9d, r9d");                                       // check whether the cursor reached the null terminator
@@ -537,6 +559,11 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_preg_replace_callback_advance_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save output write pointer after callback copy
     publish_concat_offset_x86_64(emitter, output_write_off);
+    emitter.instruction(&format!("add QWORD PTR [rsp + {}], 1", count_off));    // count this completed callback replacement
+    emitter.instruction(&format!("cmp QWORD PTR [rsp + {}], 0", limit_off));    // negative replacement limits remain unlimited
+    emitter.instruction("jle __rt_preg_replace_callback_limit_ready_linux_x86_64"); // keep unlimited limit unchanged
+    emitter.instruction(&format!("sub QWORD PTR [rsp + {}], 1", limit_off));    // consume one allowed replacement
+    emitter.label("__rt_preg_replace_callback_limit_ready_linux_x86_64");
     emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // load dynamic full-match pair before advancing cursor
     emitter.instruction("mov r9, QWORD PTR [r10 + 8]");                         // load full-match signed-64-bit end
     emitter.instruction("cmp r9, 0");                                           // detect zero-length regex matches
@@ -587,6 +614,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", subject_len_off)); // return original subject length after allocation failure
 
     emitter.label("__rt_preg_replace_callback_ret_linux_x86_64");
+    emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", count_off));  // return completed replacement count beside string result
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release preg_replace_callback stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code

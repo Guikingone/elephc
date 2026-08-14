@@ -7,7 +7,7 @@
 //! properties (their initializers re-run in the handler body and restore the
 //! defaults), releases and zeroes ordinary globals plus request superglobals
 //! ($_SERVER/$_GET/$_POST) that survive between requests, and resets the
-//! concat-buffer write offset.
+//! dynamic include-once bookkeeping, and the concat-buffer write offset.
 //!
 //! Called from:
 //! - `crate::codegen::block_emit::emit_module()`, after every function and the
@@ -23,6 +23,7 @@
 //! - Function statics are zeroed (value + marker) so their initializers re-run.
 //!   Static properties are NOT zeroed: the handler body re-runs their
 //!   initializers after the reset, which rewrites both value and sentinel.
+//! - The Magician include registry is reset only when the module links the eval bridge.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
@@ -89,7 +90,19 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     // storage and are reassigned by the web prelude every request. Reset them here
     // so stale request arrays are gone before the next prelude builds replacements.
     for name in superglobals::SUPERGLOBALS {
-        emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+        if superglobals::uses_shared_ref_cell(module, name) {
+            emit_shared_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+        } else {
+            emit_superglobal_reset(emitter, &ir_global_symbol(name), &mut labels);
+        }
+    }
+
+    if module.required_runtime_features.eval_bridge {
+        emitter.comment("reset dynamic include_once state for the next request");
+        let symbol = emitter
+            .target
+            .extern_symbol("__elephc_eval_include_request_reset");
+        abi::emit_call_label(emitter, &symbol);
     }
 
     // Clear every lazy enum case slot so request N+1 re-materializes its cases on
@@ -177,11 +190,23 @@ fn emit_static_property_release(
     emitter.label(&skip_label);
 }
 
-/// Releases and zeroes one request superglobal ($_SERVER/$_GET/$_POST), whose
-/// assoc-array hash lives in `_eir_global_*` storage. Guarded against a null
-/// symbol (the very first request, before the prelude's first assignment) so a
-/// null is never released. Zeroing is safe because the prelude reassigns the
-/// symbol right after the reset, and `StoreGlobal` does not read the old value.
+/// Releases and zeroes one referenced request superglobal's ref-cell owner.
+///
+/// The `_eir_global_*` symbol stores a shared cell pointer rather than the hash directly, so a
+/// returned array containing `&$_SESSION` can retain the cell safely. Marker owners may keep the
+/// payload alive until their containing arrays are released; this routine drops only the global
+/// slot's share and then clears the symbol before the next prelude assignment.
+fn emit_shared_superglobal_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
+    let skip_label = labels.next("skip_superglobal");
+    emitter.comment(&format!("reset request superglobal {}", symbol));
+    abi::emit_load_symbol_to_reg(emitter, abi::int_result_reg(emitter), symbol, 0);
+    abi::emit_branch_if_int_result_zero(emitter, &skip_label);
+    abi::emit_call_label(emitter, "__rt_global_ref_cell_decref");
+    abi::emit_store_zero_to_symbol(emitter, symbol, 0);
+    emitter.label(&skip_label);
+}
+
+/// Releases and zeroes one ordinary request superglobal stored as a direct hash pointer.
 fn emit_superglobal_reset(emitter: &mut Emitter, symbol: &str, labels: &mut LabelGen) {
     let ty = superglobals::superglobal_type().codegen_repr();
     let skip_label = labels.next("skip_superglobal");

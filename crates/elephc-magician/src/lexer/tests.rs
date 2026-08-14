@@ -44,6 +44,56 @@ fn var(name: &str) -> TokenKind {
     TokenKind::DollarIdent(name.to_string())
 }
 
+/// Verifies eval numeric literals preserve PHP radix, separator, and exponent semantics.
+#[test]
+fn numeric_literals_preserve_php_radices_and_float_forms() {
+    assert_eq!(
+        kinds("0777; 0o701; 0x1f; 0b1010; 1_000; 012.5; 08e1;"),
+        vec![
+            TokenKind::Int(511),
+            TokenKind::Semicolon,
+            TokenKind::Int(449),
+            TokenKind::Semicolon,
+            TokenKind::Int(31),
+            TokenKind::Semicolon,
+            TokenKind::Int(10),
+            TokenKind::Semicolon,
+            TokenKind::Int(1_000),
+            TokenKind::Semicolon,
+            TokenKind::Float(12.5),
+            TokenKind::Semicolon,
+            TokenKind::Float(80.0),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+/// Verifies malformed radix digits and separator placement are rejected by eval parsing.
+#[test]
+fn malformed_numeric_literals_are_refused() {
+    for source in ["078;", "0o78;", "0xfg;", "0b12;", "1__0;"] {
+        assert_eq!(error(source), EvalParseError::InvalidNumber, "{source}");
+    }
+}
+
+/// Verifies `??=` is emitted as one token without changing `??` or `=` tokenization.
+#[test]
+fn null_coalesce_assignment_stays_one_token() {
+    assert_eq!(
+        kinds("$value ??= $fallback ?? null;"),
+        vec![
+            var("value"),
+            TokenKind::QuestionQuestionEqual,
+            var("fallback"),
+            TokenKind::QuestionQuestion,
+            TokenKind::Ident("null".to_string()),
+            TokenKind::Semicolon,
+            TokenKind::Eof,
+        ]
+    );
+}
+
 /// Verifies a double-quoted literal without interpolation stays exactly ONE string token.
 ///
 /// This is the invariant that keeps constant initializers, property defaults, enum

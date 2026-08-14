@@ -63,6 +63,9 @@ pub(super) fn lower(
         RuntimeFnId::Time => Some({
             crate::codegen::lower_inst::builtins::system::lower_time(ctx, inst)
         }),
+        RuntimeFnId::Unpack => Some({
+            crate::codegen::lower_inst::builtins::unpack::lower_unpack(ctx, inst)
+        }),
         RuntimeFnId::Unserialize => Some({
             crate::codegen::lower_inst::builtins::serialize::lower_unserialize(ctx, inst)
         }),

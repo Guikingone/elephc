@@ -19,6 +19,7 @@ pub mod expr;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 mod stmt;
+mod terminal_goto;
 
 pub(crate) use attributes::{consume_attribute_lists, parse_attribute_lists};
 
@@ -154,6 +155,12 @@ fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<Com
     // Append anonymous-class declarations hoisted out of expression position. Their position in
     // the program does not matter: declaration discovery scans all declarations before use.
     stmts.append(&mut take_anonymous_classes());
+
+    if errors.is_empty() {
+        if let Err(error) = terminal_goto::desugar_scope(&mut stmts) {
+            errors.extend(error.flatten());
+        }
+    }
 
     if errors.is_empty() {
         Ok(stmts)

@@ -240,7 +240,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "__elephcoutputat"
                 | "__elephcremoveat"
         ),
-        "SplObjectStorage" => matches!(
+        "SplObjectStorage" | "WeakMap" => matches!(
             method_key,
             "__construct"
                 | "attach"
@@ -459,6 +459,7 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "__elephcslotfordepth"
                 | "__elephcassumerecursiveiterator"
         ),
+        "RecursiveTreeIterator" => method_key == "setprefixpart",
         "__ElephcAppendIteratorArrayIterator" => matches!(
             method_key,
             "__construct"
@@ -492,4 +493,3 @@ pub(super) fn runtime_intrinsic_method_has_wrapper(
     };
     intrinsic.is_some_and(|intrinsic| intrinsic.runtime_helper().is_some())
 }
-

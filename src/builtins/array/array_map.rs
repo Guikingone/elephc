@@ -12,7 +12,8 @@
 //! - `check` validates that the second argument is an array — indexed or associative — and
 //!   infers the callback return element type; the result preserves the input array element
 //!   type unless the callback returns Mixed. An associative source keeps its KEY type, which
-//!   is what makes the single-array form key-preserving the way php-src is.
+//!   is what makes the single-array form key-preserving the way php-src is. Gradual sources
+//!   are validated at runtime and keep a gradual result contract.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
@@ -111,6 +112,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 key,
                 value: Box::new(mapped_element_type(callback_ret_ty)),
             })
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            check_map_callback(cx, &PhpType::Mixed)?;
+            Ok(PhpType::Mixed)
         }
         _ => Err(CompileError::new(
             cx.span,

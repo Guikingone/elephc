@@ -725,7 +725,7 @@ fn emit_mixed_needle_assoc_value_match_x86_64(
 /// Selects the canonical Mixed equality helper for associative membership mode.
 fn mixed_assoc_comparison_helper(in_array_mode: Option<InArrayMode>) -> Result<&'static str> {
     match in_array_mode {
-        Some(InArrayMode::Loose) => Ok("__rt_php_compare"),
+        Some(InArrayMode::Loose) => Ok("__rt_mixed_loose_eq"),
         Some(InArrayMode::Strict) => Ok("__rt_mixed_strict_eq"),
         None => Err(CodegenIrError::unsupported(
             "Mixed associative-array needle outside in_array".to_string(),
@@ -741,7 +741,7 @@ fn emit_mixed_comparison_branch_aarch64(
 ) -> Result<()> {
     match in_array_mode {
         Some(InArrayMode::Loose) => {
-            ctx.emitter.instruction(&format!("cbz x0, {}", found_label));       // zero from __rt_php_compare means PHP loose equality
+            ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));     // nonzero from __rt_mixed_loose_eq means PHP loose equality
             Ok(())
         }
         Some(InArrayMode::Strict) => {
@@ -763,7 +763,7 @@ fn emit_mixed_comparison_branch_x86_64(
     ctx.emitter.instruction("test rax, rax");                                  // inspect the selected Mixed comparison helper result
     match in_array_mode {
         Some(InArrayMode::Loose) => {
-            ctx.emitter.instruction(&format!("je {}", found_label));           // zero from __rt_php_compare means PHP loose equality
+            ctx.emitter.instruction(&format!("jne {}", found_label));          // nonzero from __rt_mixed_loose_eq means PHP loose equality
             Ok(())
         }
         Some(InArrayMode::Strict) => {

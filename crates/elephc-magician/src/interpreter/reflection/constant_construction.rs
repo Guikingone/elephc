@@ -19,7 +19,7 @@ pub(super) fn eval_reflection_class_constant_new(
         &[String::from("class_name"), String::from("constant_name")],
         evaluated_args,
     )?;
-    let class_name = eval_reflection_string_arg(args[0], values)?;
+    let class_name = eval_reflection_class_target_name(args[0], context, values)?;
     let constant_name = eval_reflection_string_arg(args[1], values)?;
     eval_reflection_class_constant_object_result_or_throw(
         &class_name,
@@ -113,7 +113,7 @@ pub(super) fn eval_reflection_enum_case_new(
         &[String::from("class_name"), String::from("constant_name")],
         evaluated_args,
     )?;
-    let enum_name = eval_reflection_string_arg(args[0], values)?;
+    let enum_name = eval_reflection_class_target_name(args[0], context, values)?;
     let case_name = eval_reflection_string_arg(args[1], values)?;
     let Some(enum_decl) = context.enum_decl(&enum_name) else {
         if eval_reflection_class_constant_metadata(&enum_name, &case_name, context, values)?

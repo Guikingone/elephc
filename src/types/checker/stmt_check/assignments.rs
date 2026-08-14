@@ -189,6 +189,37 @@ impl Checker {
                 stmt.span,
                 env,
             ),
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver,
+                property,
+                index,
+                source,
+            } => {
+                self.infer_type(index, env)?;
+                self.infer_type(source, env)?;
+                static_properties::check_ref_assign_static_prop_element(
+                    self,
+                    receiver,
+                    property,
+                    source,
+                    stmt.span,
+                )
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                value,
+                ..
+            } => static_properties::check_dynamic_static_property_write(
+                self,
+                receiver,
+                property,
+                index.as_ref(),
+                value,
+                stmt.span,
+                env,
+            ),
             StmtKind::PropertyAssign {
                 object,
                 property,
@@ -198,6 +229,18 @@ impl Checker {
                 object,
                 property,
                 value,
+                stmt.span,
+                env,
+            ),
+            StmtKind::PropertyRefAssign {
+                object,
+                property,
+                source,
+            } => properties::check_property_ref_assign(
+                self,
+                object,
+                property,
+                source,
                 stmt.span,
                 env,
             ),
@@ -246,7 +289,9 @@ impl Checker {
     /// leave `self::$p` non-null on both paths.
     fn invalidate_property_narrowings_after_assignment(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
         match &stmt.kind {
-            StmtKind::PropertyAssign { .. } | StmtKind::StaticPropertyAssign { .. } => {
+            StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyRefAssign { .. }
+            | StmtKind::StaticPropertyAssign { .. } => {
                 Self::purge_property_narrowings(env);
                 self.record_property_assignment_narrowing(stmt, env);
             }
@@ -254,7 +299,10 @@ impl Checker {
                 Self::purge_property_narrowings(env)
             }
             StmtKind::StaticPropertyArrayPush { .. }
-            | StmtKind::StaticPropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
+            | StmtKind::StaticPropertyArrayAssign { .. }
+            | StmtKind::StaticPropertyElementRefAssign { .. } => {
+                Self::purge_property_narrowings(env)
+            }
             StmtKind::NestedArrayAssign { target, .. }
                 if assignment_target_may_write_property(target) =>
             {

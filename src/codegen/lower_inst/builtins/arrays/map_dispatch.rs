@@ -22,6 +22,15 @@ pub(super) enum ArrayMapTarget {
     Hash,
 }
 
+/// Runtime location of the single source container consumed by `array_map()`.
+#[derive(Clone, Copy)]
+pub(super) enum ArrayMapSource {
+    /// A statically represented source can be reloaded from its EIR value slot.
+    Static(ValueId),
+    /// A gradual source has been normalized to an owned Mixed-valued hash at the stack base.
+    OwnedMixedHash,
+}
+
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
 ///
 /// Associative sources take the `__rt_hash_map` path, which walks the source hash and reuses
@@ -33,7 +42,10 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
-    let (elem_ty, target) = if matches!(source_ty, PhpType::AssocArray { .. }) {
+    let gradual_source = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let (elem_ty, target) = if gradual_source {
+        (PhpType::Mixed, ArrayMapTarget::Hash)
+    } else if matches!(source_ty, PhpType::AssocArray { .. }) {
         (
             hash_map_source_value_type(&source_ty)?,
             ArrayMapTarget::Hash,
@@ -44,6 +56,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ArrayMapTarget::Indexed,
         )
     };
+    let source = prepare_array_map_source(ctx, array, gradual_source)?;
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
@@ -52,7 +65,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx,
                 inst,
                 callback,
-                array,
+                source,
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
@@ -80,13 +93,20 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
                     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
-                    ctx.load_value_to_reg(array, array_arg_reg)?;
+                    load_array_map_source(ctx, source, array_arg_reg, env_bytes + 16)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
+                    emit_array_map_runtime_call(
+                        ctx,
+                        &elem_ty,
+                        &callback_elem_ty,
+                        env_bytes,
+                        target,
+                    )?;
                     Ok(())
                 },
             )?;
             finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
+            release_array_map_source_preserving_result(ctx, source);
             store_if_result(ctx, inst)?;
             return Ok(());
         }
@@ -97,7 +117,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 ctx,
                 inst,
                 callback,
-                array,
+                source,
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
@@ -113,7 +133,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx,
             inst,
             callback,
-            array,
+            source,
             &elem_ty,
             &callback_elem_ty,
             &result_elem_ty,
@@ -121,7 +141,12 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         );
     }
     let callback_binding =
-        static_sort_callback_binding(ctx, callback, "array_map callback", Some(&[elem_ty]))?;
+        static_sort_callback_binding(
+            ctx,
+            callback,
+            "array_map callback",
+            Some(&[elem_ty.clone()]),
+        )?;
     let callback_elem_ty = array_map_callback_result_element_type(&callback_binding.return_ty)?;
     let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
@@ -129,14 +154,66 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, &elem_ty, &callback_elem_ty, env_bytes, target)?;
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
     finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
+}
+
+/// Normalizes a gradual source to an owned Mixed-valued hash and records it on the stack.
+fn prepare_array_map_source(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    gradual: bool,
+) -> Result<ArrayMapSource> {
+    if !gradual {
+        return Ok(ArrayMapSource::Static(array));
+    }
+    super::misc_dispatch::materialize_owned_mixed_hash_operand(ctx, array, "array_map")?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    Ok(ArrayMapSource::OwnedMixedHash)
+}
+
+/// Loads the selected source container while accounting for callback temporaries above it.
+fn load_array_map_source(
+    ctx: &mut FunctionContext<'_>,
+    source: ArrayMapSource,
+    reg: &str,
+    temporary_bytes: usize,
+) -> Result<()> {
+    match source {
+        ArrayMapSource::Static(value) => {
+            ctx.load_value_to_reg(value, reg)?;
+            Ok(())
+        }
+        ArrayMapSource::OwnedMixedHash => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, reg, temporary_bytes);
+            Ok(())
+        }
+    }
+}
+
+/// Releases an owned gradual source without clobbering the mapped result register.
+fn release_array_map_source_preserving_result(
+    ctx: &mut FunctionContext<'_>,
+    source: ArrayMapSource,
+) {
+    if matches!(source, ArrayMapSource::Static(_)) {
+        return;
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let source_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, source_arg_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
 }
 
 /// Lowers `array_map()` through a descriptor-backed callback wrapper.
@@ -144,7 +221,7 @@ pub(super) fn lower_array_map_descriptor_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     callback: ValueId,
-    array: ValueId,
+    source: ArrayMapSource,
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
@@ -157,11 +234,12 @@ pub(super) fn lower_array_map_descriptor_callback(
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, elem_ty, callback_elem_ty, env_bytes, target)?;
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
 }
 
@@ -170,7 +248,7 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     callback: ValueId,
-    array: ValueId,
+    source: ArrayMapSource,
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
@@ -189,12 +267,13 @@ pub(super) fn lower_array_map_callable_array_descriptor_callback(
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let env_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
-    ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_array_map_source(ctx, source, array_arg_reg, env_bytes)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
+    emit_array_map_runtime_call(ctx, elem_ty, callback_elem_ty, env_bytes, target)?;
     release_descriptor_callback_env_preserving_result(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
+    release_array_map_source_preserving_result(ctx, source);
     store_if_result(ctx, inst)
 }
 

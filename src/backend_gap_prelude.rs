@@ -23,7 +23,7 @@ pub(crate) const IS_COUNTABLE_NAME: &str = "__elephc_is_countable";
 /// Reserved helper used for ordinary positional `array_slice()` calls.
 pub(crate) const ARRAY_SLICE_NAME: &str = "__elephc_array_slice";
 
-/// Reserved helper used for the integer-only `pack()` formats required by Symfony.
+/// Reserved helper used for supported integer-only `pack()` formats.
 pub(crate) const PACK_INTEGER_NAME: &str = "__elephc_pack_integer";
 
 /// Reserved helper used for `random_bytes()`.
@@ -31,6 +31,9 @@ pub(crate) const RANDOM_BYTES_NAME: &str = "__elephc_random_bytes";
 
 /// Reserved helper used for one-argument `sort()` calls on gradual indexed arrays.
 pub(crate) const SORT_MIXED_NAME: &str = "__elephc_sort_mixed";
+
+/// Reserved helper used for one-argument `rsort()` calls on gradual indexed arrays.
+pub(crate) const RSORT_MIXED_NAME: &str = "__elephc_rsort_mixed";
 
 /// Reserved helper used for one-argument `array_unique()` calls on gradual associative arrays.
 pub(crate) const ARRAY_UNIQUE_ASSOC_MIXED_NAME: &str = "__elephc_array_unique_assoc_mixed";
@@ -116,7 +119,7 @@ function __elephc_levenshtein_two_arg(string $first, string $second): int {
 }
 "#;
 
-/// Quote-aware tag scanner for the no-allowlist `strip_tags()` form used by Symfony renderers.
+/// Quote-aware tag scanner for the no-allowlist `strip_tags()` form.
 const STRIP_TAGS_ONE_ARG_SRC: &str = r#"<?php
 function __elephc_strip_tags_one_arg(string $input): string {
     $output = '';
@@ -156,8 +159,12 @@ function __elephc_is_countable(mixed $value): bool {
 "#;
 
 /// Representation-neutral array slicing with PHP key-preservation rules.
+///
+/// The source stays `mixed` so a boxed associative array reaches `count()` and `foreach` through
+/// their runtime-tag-aware paths instead of being reinterpreted as an unboxed array pointer at the
+/// internal helper boundary.
 const ARRAY_SLICE_SRC: &str = r#"<?php
-function __elephc_array_slice(array $input, int $offset, ?int $length = null, bool $preserveKeys = false): array {
+function __elephc_array_slice(mixed $input, int $offset, ?int $length = null, bool $preserveKeys = false): array {
     $count = count($input);
     if ($offset < 0) {
         $start = $count + $offset;
@@ -246,7 +253,7 @@ function __elephc_random_bytes(int $length): string {
 }
 "#;
 
-/// PHP-level implementation of the Randomizer surface currently needed by Symfony.
+/// PHP-level implementation of the currently supported Randomizer surface.
 const RANDOMIZER_SRC: &str = r#"<?php
 namespace Random;
 final class Randomizer {
@@ -271,26 +278,38 @@ final class Randomizer {
 }
 "#;
 
-/// Stable in-place ascending sort using PHP's ordinary comparison semantics.
+/// Stable in-place value sort using PHP's ordinary comparison semantics.
 const SORT_MIXED_SRC: &str = r#"<?php
-function __elephc_sort_mixed(mixed &$values): bool {
-    $values = array_values($values);
-    $count = count($values);
+function __elephc_sort_mixed_direction(mixed &$array, bool $descending): bool {
+    $array = array_values($array);
+    $count = count($array);
     $outer = $count;
     while ($outer > 1) {
         $inner = 0;
         while ($inner + 1 < $outer) {
             $next = $inner + 1;
-            if ($values[$inner] > $values[$next]) {
-                $temporary = $values[$inner];
-                $values[$inner] = $values[$next];
-                $values[$next] = $temporary;
+            $current = $array[$inner];
+            $candidate = $array[$next];
+            $comparison = is_string($current) && is_string($candidate)
+                ? strcmp($current, $candidate)
+                : ($current == $candidate ? 0 : ($current > $candidate ? 1 : -1));
+            $swap = $descending ? $comparison < 0 : $comparison > 0;
+            if ($swap) {
+                $temporary = $array[$inner];
+                $array[$inner] = $array[$next];
+                $array[$next] = $temporary;
             }
             $inner++;
         }
         $outer--;
     }
     return true;
+}
+function __elephc_sort_mixed(mixed &$array): bool {
+    return __elephc_sort_mixed_direction($array, false);
+}
+function __elephc_rsort_mixed(mixed &$array): bool {
+    return __elephc_sort_mixed_direction($array, true);
 }
 "#;
 
@@ -576,6 +595,51 @@ function __elephc_str_getcsv(string $string, string $separator = ',', string $en
 }
 "#;
 
+/// PHP-visible wrapper for the supported `levenshtein()` call shape.
+const LEVENSHTEIN_WRAPPER_SRC: &str = r#"<?php
+function levenshtein(string $first, string $second): int { return __elephc_levenshtein_two_arg($first, $second); }
+"#;
+
+/// PHP-visible wrapper for the supported `strip_tags()` call shape.
+const STRIP_TAGS_WRAPPER_SRC: &str = r#"<?php
+function strip_tags(string $string): string { return __elephc_strip_tags_one_arg($string); }
+"#;
+
+/// PHP-visible wrapper for `is_countable()`.
+const IS_COUNTABLE_WRAPPER_SRC: &str = r#"<?php
+function is_countable(mixed $value): bool { return __elephc_is_countable($value); }
+"#;
+
+/// PHP-visible wrapper for `random_bytes()`.
+const RANDOM_BYTES_WRAPPER_SRC: &str = r#"<?php
+function random_bytes(int $length): string { return __elephc_random_bytes($length); }
+"#;
+
+/// PHP-visible wrapper for `http_build_query()`.
+const HTTP_BUILD_QUERY_WRAPPER_SRC: &str = r#"<?php
+function http_build_query(array $data, string $numericPrefix = '', mixed $argSeparator = null, int $encodingType = 1): string {
+    return __elephc_http_build_query($data, $numericPrefix, $argSeparator, $encodingType);
+}
+"#;
+
+/// PHP-visible wrapper for `escapeshellarg()`.
+const ESCAPESHELLARG_WRAPPER_SRC: &str = r#"<?php
+function escapeshellarg(string $argument): string { return __elephc_escapeshellarg($argument); }
+"#;
+
+/// PHP-visible wrappers for the process-title aliases.
+const CLI_SET_PROCESS_TITLE_WRAPPER_SRC: &str = r#"<?php
+function cli_set_process_title(string $title): bool { return __elephc_cli_set_process_title($title); }
+function setproctitle(string $title): bool { return __elephc_cli_set_process_title($title); }
+"#;
+
+/// PHP-visible wrapper for `str_getcsv()`.
+const STR_GETCSV_WRAPPER_SRC: &str = r#"<?php
+function str_getcsv(string $string, string $separator = ',', string $enclosure = '"', string $escape = "\\"): array {
+    return __elephc_str_getcsv($string, $separator, $enclosure, $escape);
+}
+"#;
+
 /// Prepends each narrow helper whose corresponding PHP builtin is referenced.
 pub fn inject_if_used(program: Program) -> Program {
     let usage = crate::ast_usage::collect(&program);
@@ -590,12 +654,15 @@ pub fn inject_if_used(program: Program) -> Program {
         });
     if usage.references("levenshtein") {
         sources.push(LEVENSHTEIN_TWO_ARG_SRC);
+        sources.push(LEVENSHTEIN_WRAPPER_SRC);
     }
     if usage.references("strip_tags") {
         sources.push(STRIP_TAGS_ONE_ARG_SRC);
+        sources.push(STRIP_TAGS_WRAPPER_SRC);
     }
     if usage.references("is_countable") {
         sources.push(IS_COUNTABLE_SRC);
+        sources.push(IS_COUNTABLE_WRAPPER_SRC);
     }
     if usage.references("array_slice") {
         sources.push(ARRAY_SLICE_SRC);
@@ -605,8 +672,9 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     if usage.references("random_bytes") {
         sources.push(RANDOM_BYTES_SRC);
+        sources.push(RANDOM_BYTES_WRAPPER_SRC);
     }
-    if usage.references("sort") {
+    if usage.references("sort") || usage.references("rsort") {
         sources.push(SORT_MIXED_SRC);
     }
     if usage.references("array_unique") {
@@ -626,12 +694,15 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     if usage.references("http_build_query") {
         sources.push(HTTP_BUILD_QUERY_SRC);
+        sources.push(HTTP_BUILD_QUERY_WRAPPER_SRC);
     }
     if usage.references("escapeshellarg") {
         sources.push(ESCAPESHELLARG_SRC);
+        sources.push(ESCAPESHELLARG_WRAPPER_SRC);
     }
     if usage.references("cli_set_process_title") || usage.references("setproctitle") {
         sources.push(CLI_SET_PROCESS_TITLE_SRC);
+        sources.push(CLI_SET_PROCESS_TITLE_WRAPPER_SRC);
     }
     if usage.references("file_put_contents") {
         sources.push(FILE_PUT_CONTENTS_ARRAY_SRC);
@@ -644,6 +715,7 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     if usage.references("str_getcsv") {
         sources.push(STR_GETCSV_SRC);
+        sources.push(STR_GETCSV_WRAPPER_SRC);
     }
     if sources.is_empty() && !inject_randomizer {
         return program;

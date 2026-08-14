@@ -215,6 +215,10 @@ pub(super) fn lower_reflection_function_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let function_name = reflection_function_reflected_target(ctx, object_expr)?;
+    if method_key == "getclosure" {
+        let target = CallableTarget::Function(Name::from(function_name));
+        return Some(lower_first_class_callable(ctx, &target, expr));
+    }
     let Some(forwarded_args) = (match method_key.as_str() {
         "invoke" => Some(reflection_function_invoke_args(args)),
         "invokeargs" => reflection_function_invoke_args_array(ctx, args),
@@ -324,4 +328,3 @@ pub(super) fn lower_reflection_function_invoke_unsupported(
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }
-

@@ -1078,6 +1078,39 @@ echo $cb(14);
     assert_eq!(out, "42");
 }
 
+/// Verifies that first-class callable syntax can copy an existing callable descriptor.
+#[test]
+fn test_first_class_callable_from_callable_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function triple_copy(int $n): int { return $n * 3; }
+$original = triple_copy(...);
+$copy = $original(...);
+echo $copy(14);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that `$this(...)` dispatches `__invoke` supplied by a runtime subclass.
+#[test]
+fn test_first_class_callable_this_uses_runtime_subclass_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableBase {
+    public function closure(): callable { return $this(...); }
+}
+class CallableChild extends CallableBase {
+    public function __invoke(int $n): int { return $n + 2; }
+}
+$instance = new CallableChild();
+$callback = $instance->closure();
+echo $callback(40);
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
 /// Verifies that fcc variable builtin function target direct call.
 #[test]
 fn test_fcc_variable_builtin_function_target_direct_call() {

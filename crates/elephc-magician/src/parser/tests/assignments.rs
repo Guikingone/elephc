@@ -22,6 +22,139 @@ fn parse_fragment_accepts_assignment_source() {
         }]
     );
 }
+
+/// Verifies null-coalescing assignment is an expression with a writable array target.
+#[test]
+fn parse_fragment_accepts_null_coalesce_assignment_expression() {
+    let program = parse_fragment(br#"return $_SERVER["option"] ??= [];"#)
+        .expect("null-coalescing assignment should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullCoalesceAssign {
+            target: Box::new(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::LoadVar("_SERVER".to_string())),
+                index: Box::new(EvalExpr::Const(EvalConst::String("option".to_string()))),
+            }),
+            default: Box::new(EvalExpr::Array(Vec::new())),
+        }))]
+    );
+}
+
+/// Verifies null-coalescing assignment remains right-associative for variable targets.
+#[test]
+fn parse_fragment_keeps_null_coalesce_assignment_right_associative() {
+    let program =
+        parse_fragment(b"return $left ??= $right ??= 7;").expect("assignment chain should parse");
+    assert_eq!(
+        program.statements(),
+        &[EvalStmt::Return(Some(EvalExpr::NullCoalesceAssign {
+            target: Box::new(EvalExpr::LoadVar("left".to_string())),
+            default: Box::new(EvalExpr::NullCoalesceAssign {
+                target: Box::new(EvalExpr::LoadVar("right".to_string())),
+                default: Box::new(EvalExpr::Const(EvalConst::Int(7))),
+            }),
+        }))]
+    );
+}
+
+/// Verifies a statement-level nested array target remains one writable `??=` expression.
+#[test]
+fn parse_fragment_accepts_nested_array_null_coalesce_assignment() {
+    let program = parse_fragment(br#"$items["outer"]["inner"] ??= 4;"#)
+        .expect("nested null-coalescing assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::Expr(EvalExpr::NullCoalesceAssign { target, .. })]
+            if matches!(target.as_ref(), EvalExpr::ArrayGet { array, .. }
+                if matches!(array.as_ref(), EvalExpr::ArrayGet { .. }))
+    ));
+}
+
+/// Verifies a static-property store can contain a right-associative variable assignment.
+#[test]
+fn parse_fragment_accepts_chained_assignment_expression() {
+    let program = parse_fragment(br#"self::$loader = $loader = new \stdClass();"#)
+        .expect("chained assignment should parse");
+    assert!(matches!(
+        program.statements(),
+        [EvalStmt::StaticPropertySet {
+            value: EvalExpr::Assign { target, .. },
+            ..
+        }] if matches!(target.as_ref(), EvalExpr::LoadVar(name) if name == "loader")
+    ));
+}
+
+/// Verifies a generated runtime bootstrap shape parses as one complete fragment.
+#[test]
+fn parse_fragment_accepts_generated_runtime_bootstrap_shape() {
+    parse_fragment(
+        br#"
+if (true === (require_once __DIR__.'/autoload.php') || empty($_SERVER['SCRIPT_FILENAME'])) {
+    return;
+}
+$app = require $_SERVER['SCRIPT_FILENAME'];
+if (!is_object($app)) {
+    throw new TypeError(sprintf('invalid %s from %s', get_debug_type($app), $_SERVER['SCRIPT_FILENAME']));
+}
+if (is_string($_SERVER['APP_RUNTIME_OPTIONS'] ??= $_ENV['APP_RUNTIME_OPTIONS'] ?? [])) {
+    $_SERVER['APP_RUNTIME_OPTIONS'] = json_decode($_SERVER['APP_RUNTIME_OPTIONS'], true, 512, JSON_THROW_ON_ERROR);
+}
+$_SERVER['APP_RUNTIME'] ??= $_ENV['APP_RUNTIME'] ?? 'Runtime\\DefaultRuntime';
+$runtime = new $_SERVER['APP_RUNTIME']($_SERVER['APP_RUNTIME_OPTIONS'] += [
+    'project_dir' => dirname(__DIR__, 1),
+]);
+[$app, $args] = $runtime->getResolver($app)->resolve();
+$app = $app(...$args);
+exit($runtime->getRunner($app)->run());
+"#,
+    )
+    .expect("generated runtime bootstrap should parse");
+}
+
+/// Verifies a generated autoloader initialization shape parses completely.
+#[test]
+fn parse_fragment_accepts_generated_autoloader_shape() {
+    parse_fragment(
+        br#"
+class GeneratedAutoloaderInitFixture
+{
+    private static $loader;
+    public static function loadClassLoader($class)
+    {
+        if ('Vendor\Autoload\ClassLoader' === $class) {
+            require __DIR__ . '/ClassLoader.php';
+        }
+    }
+    public static function getLoader()
+    {
+        if (null !== self::$loader) {
+            return self::$loader;
+        }
+        require __DIR__ . '/platform_check.php';
+        spl_autoload_register(array('GeneratedAutoloaderInitFixture', 'loadClassLoader'), true, true);
+        self::$loader = $loader = new \Vendor\Autoload\ClassLoader(\dirname(__DIR__));
+        spl_autoload_unregister(array('GeneratedAutoloaderInitFixture', 'loadClassLoader'));
+        require __DIR__ . '/autoload_static.php';
+        call_user_func(\Vendor\Autoload\StaticInitFixture::getInitializer($loader));
+        $loader->register(true);
+        $filesToLoad = \Vendor\Autoload\StaticInitFixture::$files;
+        $requireFile = \Closure::bind(static function ($fileIdentifier, $file) {
+            if (empty($GLOBALS['__autoload_files'][$fileIdentifier])) {
+                $GLOBALS['__autoload_files'][$fileIdentifier] = true;
+                require $file;
+            }
+        }, null, null);
+        foreach ($filesToLoad as $fileIdentifier => $file) {
+            $requireFile($fileIdentifier, $file);
+        }
+        return $loader;
+    }
+}
+"#,
+    )
+    .expect("generated autoloader shape should parse");
+}
+
 /// Verifies reference assignments lower to by-name ReferenceAssign statements.
 #[test]
 fn parse_fragment_accepts_reference_assignment_source() {

@@ -398,7 +398,10 @@ fn lower_loaded_tagged_scalar_to_string(ctx: &mut FunctionContext<'_>) -> Result
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
-fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+///
+/// Kept visible to sibling lowerers so `filter_var(FILTER_DEFAULT)` reuses the exact PHP
+/// boolean-to-string conversion instead of maintaining a second target-specific implementation.
+pub(super) fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let false_label = ctx.next_label("bool_to_str_false");

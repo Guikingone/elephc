@@ -7,8 +7,7 @@
 //! that `is_object`, `get_class`, `instanceof`, and `var_dump` all agree about.
 //!
 //! Called from:
-//! - `crate::pipeline::compile()` via `inject_resolved_if_used`, after Composer
-//!   autoload expansion, and from focused test harnesses via either injector.
+//! - `crate::pipeline::compile()` and focused test harnesses via `inject_if_used`.
 //!
 //! Key details:
 //! - WHY A PRELUDE AND NOT A NATIVE CLASS. Every hash-context `RuntimeFnId` declares
@@ -120,25 +119,4 @@ pub fn inject_if_used(program: crate::parser::ast::Program, force: bool) -> crat
     let mut combined = crate::parser::parse_internal(&tokens).expect("hash prelude must parse");
     combined.extend(program);
     combined
-}
-
-/// Injects and name-resolves the hash prelude after Composer autoload expansion.
-///
-/// PSR-4 files are spliced after the pipeline's main name-resolution pass, so hash-context calls
-/// that live only in those files are invisible to [`inject_if_used`]. This late entry point scans
-/// the complete resolved program, resolves the self-contained prelude in isolation, and prepends
-/// it without re-resolving already-canonical application names. The name resolver's prelude-global
-/// fallback canonicalizes bare namespaced `hash_*` calls while each autoloaded file is resolved.
-pub fn inject_resolved_if_used(
-    program: crate::parser::ast::Program,
-    force: bool,
-) -> Result<crate::parser::ast::Program, crate::errors::CompileError> {
-    if !force && !detect::program_uses_hash_context(&program) {
-        return Ok(program);
-    }
-    let tokens = crate::lexer::tokenize(HASH_PRELUDE_SRC).expect("hash prelude must tokenize");
-    let prelude = crate::parser::parse_internal(&tokens).expect("hash prelude must parse");
-    let mut combined = crate::name_resolver::resolve(prelude)?;
-    combined.extend(program);
-    Ok(combined)
 }

@@ -116,6 +116,41 @@ echo animal(0)->speak() . ":" . animal(1)->speak();
     assert_eq!(out, "woof:meow");
 }
 
+/// Verifies an object-union call dispatches to the member that declares the method even when
+/// another possible member does not declare it.
+#[test]
+fn test_object_union_method_supported_by_one_member() {
+    let out = compile_and_run(
+        r#"<?php
+class ReadyTarget { public function value(): string { return "ready"; } }
+class OtherTarget {}
+function target(bool $ready): ReadyTarget|OtherTarget {
+    return $ready ? new ReadyTarget() : new OtherTarget();
+}
+echo target(true)->value();
+"#,
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Verifies the same partial object-union dispatch raises a runtime error when the selected
+/// member does not declare the method.
+#[test]
+fn test_object_union_missing_runtime_method_fatals() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class ReadyTarget { public function value(): string { return "ready"; } }
+class OtherTarget {}
+function target(bool $ready): ReadyTarget|OtherTarget {
+    return $ready ? new ReadyTarget() : new OtherTarget();
+}
+echo target(false)->value();
+"#,
+    );
+    assert!(!out.success);
+    assert!(out.stderr.contains("Call to a member function value()"));
+}
+
 /// Verifies a dynamic-receiver method call returning a string works end to end.
 #[test]
 fn test_mixed_receiver_string_return() {
@@ -167,4 +202,48 @@ echo make()->add(40, 2);
 "#,
     );
     assert_eq!(out, "42");
+}
+
+/// Verifies a lone same-named method cannot pin a gradual receiver's nominal object return type.
+#[test]
+fn test_mixed_receiver_nominal_object_return_stays_gradual_for_chained_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+class ConcreteConnection {}
+class UnrelatedProvider {
+    public function getConnection(): ConcreteConnection { return new ConcreteConnection(); }
+}
+function optional_adapter(string $class): void {
+    $client = new $class();
+    $client->getConnection()->setSentinelTimeout(1);
+}
+echo "linked";
+"#,
+    );
+    assert_eq!(out, "linked");
+}
+
+/// A local declared through one interface can be narrowed to an unrelated capability interface.
+/// The guarded call must use the proven interface metadata directly instead of depending on
+/// closed-world discovery of a concrete implementation through the original interface.
+#[test]
+fn test_cross_interface_instanceof_narrows_local_for_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+interface BaseHandler { public function open(): bool; }
+interface TimestampHandler { public function validateId(string $id): bool; }
+final class Handler implements BaseHandler, TimestampHandler {
+    public function open(): bool { return true; }
+    public function validateId(string $id): bool { return $id === "ok"; }
+}
+function validate(BaseHandler $handler, string $id): bool {
+    if ($handler instanceof TimestampHandler) {
+        return $handler->validateId($id);
+    }
+    return false;
+}
+echo validate(new Handler(), "ok") ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
 }

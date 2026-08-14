@@ -32,6 +32,7 @@ fn type_spec_str(ty: &TypeSpec) -> String {
         TypeSpec::Str => "string".to_string(),
         TypeSpec::Bool => "bool".to_string(),
         TypeSpec::Mixed => "mixed".to_string(),
+        TypeSpec::ArrayMixed => "array".to_string(),
         TypeSpec::Void => "void".to_string(),
     }
 }

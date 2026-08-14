@@ -47,6 +47,24 @@ const EVAL_PHP_PROFILES: &[(u32, &str)] = &[
     (80600, "8.6.0"),
 ];
 
+/// Version-sensitive tokenizer constants exposed inside runtime eval fragments.
+///
+/// KEEP IN SYNC with `crate::types::token_constants::TOKEN_INT_CONSTANTS` in the compiler.
+const EVAL_TOKEN_IDS: &[(&str, [i64; 7])] = &[
+    ("T_COMMENT", [388, 387, 387, 392, 391, 392, 398]),
+    ("T_DOC_COMMENT", [389, 388, 388, 393, 392, 393, 399]),
+    ("T_OPEN_TAG", [390, 389, 389, 394, 393, 394, 400]),
+    ("T_OPEN_TAG_WITH_ECHO", [391, 390, 390, 395, 394, 395, 401]),
+    ("T_CLOSE_TAG", [392, 391, 391, 396, 395, 396, 402]),
+    ("T_WHITESPACE", [393, 392, 392, 397, 396, 397, 403]),
+    ("T_START_HEREDOC", [394, 393, 393, 398, 397, 398, 404]),
+    ("T_END_HEREDOC", [395, 394, 394, 399, 398, 399, 405]),
+    ("T_DOLLAR_OPEN_CURLY_BRACES", [396, 395, 395, 400, 399, 400, 406]),
+    ("T_CURLY_OPEN", [397, 396, 396, 401, 400, 401, 407]),
+    ("T_PAAMAYIM_NEKUDOTAYIM", [398, 397, 397, 402, 401, 402, 408]),
+    ("T_DOUBLE_COLON", [398, 397, 397, 402, 401, 402, 408]),
+];
+
 thread_local! {
     /// The profile the binary embedding this bridge was compiled for.
     static EVAL_PHP_VERSION_ID: Cell<u32> = const { Cell::new(DEFAULT_EVAL_PHP_VERSION_ID) };
@@ -82,6 +100,24 @@ pub(crate) fn eval_php_version_string() -> &'static str {
 /// `8`, `0` and `""` from 8.2 through 8.5.
 pub(crate) fn eval_php_minor_version() -> i64 {
     i64::from((eval_php_version_id() / 100) % 100)
+}
+
+/// Returns one tokenizer identifier for the active PHP profile.
+pub(crate) fn eval_token_id(name: &str) -> Option<i64> {
+    let profile_index = match eval_php_version_id() {
+        80000 => 0,
+        80100 => 1,
+        80200 => 2,
+        80300 => 3,
+        80400 => 4,
+        80500 => 5,
+        80600 => 6,
+        _ => return None,
+    };
+    EVAL_TOKEN_IDS
+        .iter()
+        .find(|(candidate, _)| *candidate == name)
+        .map(|(_, values)| values[profile_index])
 }
 
 /// RAII guard restoring the previous profile on drop.
@@ -132,6 +168,41 @@ mod tests {
             assert_eq!(eval_php_version_string(), *spelling);
             assert_eq!(eval_php_minor_version(), i64::from((*id / 100) % 100));
         }
+    }
+
+    /// Every supported profile exposes the tokenizer identifier from its parser table.
+    #[test]
+    fn heredoc_token_identifier_follows_the_active_profile() {
+        for ((id, _), expected) in EVAL_PHP_PROFILES
+            .iter()
+            .zip([394, 393, 393, 398, 397, 398, 404])
+        {
+            let _guard = scoped_profile(*id);
+            assert_eq!(eval_token_id("T_START_HEREDOC"), Some(expected));
+        }
+    }
+
+    /// Every supported profile exposes its whitespace-token parser identifier.
+    #[test]
+    fn whitespace_token_identifier_follows_the_active_profile() {
+        for ((id, _), expected) in EVAL_PHP_PROFILES
+            .iter()
+            .zip([393, 392, 392, 397, 396, 397, 403])
+        {
+            let _guard = scoped_profile(*id);
+            assert_eq!(eval_token_id("T_WHITESPACE"), Some(expected));
+        }
+    }
+
+    /// The eval tokenizer registry contains no duplicate names and preserves aliases.
+    #[test]
+    fn tokenizer_registry_is_unique_and_preserves_aliases() {
+        let mut names = EVAL_TOKEN_IDS.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count);
+        assert_eq!(eval_token_id("T_DOUBLE_COLON"), eval_token_id("T_PAAMAYIM_NEKUDOTAYIM"));
     }
 
     /// An unsupported id leaves the active profile alone rather than inventing

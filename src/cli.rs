@@ -10,6 +10,7 @@
 //! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
@@ -94,6 +95,7 @@ Output modes:
   --emit-ir               Emit EIR text instead of compiling
   --emit-asm              Emit assembly (.s) instead of linking
   --emit KIND             Output kind: executable (default) | cdylib
+  --output-dir DIR        Write all generated artifacts beneath DIR
 
 Target:
   --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
@@ -142,6 +144,8 @@ pub(crate) struct CliConfig {
     /// RELIES on invalidation fails loudly rather than silently running stale code.
     pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
+    /// Optional directory receiving every generated compiler artifact.
+    pub(crate) output_dir: Option<PathBuf>,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
     pub(crate) emit: Emit,
@@ -227,6 +231,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut heap_debug = false;
     let mut strict_opcache = false;
     let mut emit_ir = false;
+    let mut output_dir: Option<PathBuf> = None;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
     let mut check_only = false;
@@ -291,6 +296,18 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_opcache = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
+        } else if arg == "--output-dir" {
+            i += 1;
+            let value = required_value(args, i, "Missing directory after --output-dir");
+            if value.is_empty() {
+                fail("Invalid --output-dir: directory cannot be empty");
+            }
+            output_dir = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.strip_prefix("--output-dir=") {
+            if value.is_empty() {
+                fail("Invalid --output-dir: directory cannot be empty");
+            }
+            output_dir = Some(PathBuf::from(value));
         } else if arg == "--emit-asm" {
             emit_asm = true;
         } else if arg == "--emit" {
@@ -436,6 +453,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         heap_debug,
         strict_opcache,
         emit_ir,
+        output_dir,
         null_repr,
         emit_asm,
         emit,
@@ -960,5 +978,30 @@ mod tests {
             panic!("explicit source path must remain a compile command");
         };
         assert_eq!(config.filename, "./native");
+    }
+
+    /// Verifies the split output-directory form stores the requested path.
+    #[test]
+    fn output_dir_split_form_stores_value() {
+        let args = vec![
+            "elephc".into(),
+            "--output-dir".into(),
+            "target/out".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert_eq!(config.output_dir.as_deref(), Some(std::path::Path::new("target/out")));
+    }
+
+    /// Verifies the inline output-directory form parses identically.
+    #[test]
+    fn output_dir_inline_form_stores_value() {
+        let args = vec![
+            "elephc".into(),
+            "--output-dir=build".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert_eq!(config.output_dir.as_deref(), Some(std::path::Path::new("build")));
     }
 }

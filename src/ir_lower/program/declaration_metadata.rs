@@ -112,6 +112,25 @@ pub(super) fn collect_declared_trait_source_lines(program: &Program) -> HashMap<
     lines
 }
 
+/// Collects source line ranges for user-declared functions, keyed by canonical function name.
+pub(super) fn collect_declared_function_source_lines(
+    program: &Program,
+) -> HashMap<String, (u32, u32)> {
+    let mut lines = HashMap::new();
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, .. } => {
+                lines.insert(name.clone(), (stmt.span.line, stmt.span.end_line));
+            }
+            StmtKind::NamespaceBlock { body, .. } | StmtKind::Synthetic(body) => {
+                lines.extend(collect_declared_function_source_lines(body));
+            }
+            _ => {}
+        }
+    }
+    lines
+}
+
 /// Collects direct trait-to-trait use declarations keyed by declaring trait name.
 pub(super) fn collect_declared_trait_uses(program: &Program) -> HashMap<String, Vec<String>> {
     let mut uses = HashMap::new();
@@ -437,4 +456,3 @@ pub(super) fn value_or_void_ir_type(php_type: &PhpType) -> IrType {
         other => IrType::from_php(other),
     }
 }
-

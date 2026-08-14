@@ -11,6 +11,7 @@
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -64,7 +65,8 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
-    let mut shared = SharedCodegenState::new(module);
+    let mut shared = SharedCodegenState::default();
+    let mut inventory = BackendInventory::from_env();
     function_variants::emit_dispatchers(module, emitter, data);
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
@@ -81,14 +83,21 @@ pub(super) fn emit_module(
         .iter()
         .filter(|function| !is_main(function))
     {
-        emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)?;
+        inventory.run(emitter, &function.name, |emitter| {
+            emit_user_function(module, function, emitter, data, &mut shared, regalloc_linear)
+        })?;
     }
     for method in &module.class_methods {
-        emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)?;
+        inventory.run(emitter, &method.name, |emitter| {
+            emit_class_method(module, method, emitter, data, &mut shared, regalloc_linear)
+        })?;
     }
     for closure in &module.closures {
-        emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
+        inventory.run(emitter, &closure.name, |emitter| {
+            emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)
+        })?;
     }
+    inventory.finish()?;
     emit_eir_fiber_wrappers(module, emitter);
     // Enum case materializers are plain out-of-line functions that any user body,
     // method or closure may call, so they must exist in every emit kind — including
@@ -102,18 +111,21 @@ pub(super) fn emit_module(
         .iter()
         .find(|function| is_main(function))
         .ok_or_else(|| CodegenIrError::invalid_module("EIR module has no main function"))?;
-    emit_main_function(
-        module,
-        main,
-        emitter,
-        data,
-        &mut shared,
-        gc_stats,
-        heap_debug,
-        requires_elephc_tls,
-        regalloc_linear,
-        web,
-    )?;
+    inventory.run(emitter, &main.name, |emitter| {
+        emit_main_function(
+            module,
+            main,
+            emitter,
+            data,
+            &mut shared,
+            gc_stats,
+            heap_debug,
+            requires_elephc_tls,
+            regalloc_linear,
+            web,
+        )
+    })?;
+    inventory.finish()?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
     // main body) has been recorded into `data`. The handler prologue's
@@ -122,6 +134,113 @@ pub(super) fn emit_module(
         super::web::emit_web_reset(emitter, module, data);
     }
     Ok(())
+}
+
+/// Environment variable enabling the scan-every-body backend survey.
+const BACKEND_INVENTORY_VAR: &str = "ELEPHC_BACKEND_INVENTORY";
+
+/// Collects one backend refusal per body while discarding partial assembly.
+struct BackendInventory {
+    enabled: bool,
+    scanned: usize,
+    failures: Vec<InventoryFailure>,
+}
+
+/// Records the body, groupable cause, and fully rendered backend refusal.
+struct InventoryFailure {
+    body: String,
+    cause: String,
+    detail: String,
+}
+
+impl BackendInventory {
+    /// Reads the inventory switch from the process environment.
+    fn from_env() -> Self {
+        Self::new(matches!(
+            std::env::var(BACKEND_INVENTORY_VAR).as_deref(),
+            Ok("1")
+        ))
+    }
+
+    /// Builds an inventory with an explicit switch for deterministic tests.
+    fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            scanned: 0,
+            failures: Vec::new(),
+        }
+    }
+
+    /// Emits one body or records its first refusal and rolls its output back.
+    fn run(
+        &mut self,
+        emitter: &mut Emitter,
+        name: &str,
+        emit: impl FnOnce(&mut Emitter) -> Result<()>,
+    ) -> Result<()> {
+        if !self.enabled {
+            return emit(emitter);
+        }
+        self.scanned += 1;
+        let checkpoint = emitter.checkpoint();
+        match emit(emitter) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                emitter.rollback_to(checkpoint);
+                self.failures.push(InventoryFailure {
+                    body: name.to_string(),
+                    cause: cause_key(error.message()),
+                    detail: error.to_string(),
+                });
+                Ok(())
+            }
+        }
+    }
+
+    /// Returns an aggregate error when at least one scanned body refused.
+    fn finish(&self) -> Result<()> {
+        if !self.enabled || self.failures.is_empty() {
+            return Ok(());
+        }
+        Err(CodegenIrError::invalid_module(self.report()))
+    }
+
+    /// Renders a cause histogram followed by per-body diagnostic details.
+    fn report(&self) -> String {
+        let mut report = format!(
+            "backend inventory: {} of {} scanned bodies could not be lowered\n\
+             (first refusal per body only, so this is a floor; no artifact was produced)\n\n\
+             by cause:\n",
+            self.failures.len(), self.scanned
+        );
+        for (cause, count) in self.causes() {
+            let _ = writeln!(report, "  {:>4}  {}", count, cause);
+        }
+        report.push_str("\nby body:\n");
+        for failure in &self.failures {
+            let _ = writeln!(report, "  {}\n        {}", failure.body, failure.detail);
+        }
+        report
+    }
+
+    /// Groups identical causes and sorts them by descending frequency.
+    fn causes(&self) -> Vec<(&str, usize)> {
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for failure in &self.failures {
+            *counts.entry(failure.cause.as_str()).or_insert(0) += 1;
+        }
+        let mut causes: Vec<(&str, usize)> = counts.into_iter().collect();
+        causes.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(right.0)));
+        causes
+    }
+}
+
+/// Removes a trailing body attribution so equivalent causes share one bucket.
+fn cause_key(message: &str) -> String {
+    match message.rfind(" in '") {
+        Some(index) if message.ends_with('\'') => message[..index].to_string(),
+        _ => message.to_string(),
+    }
 }
 
 /// Emits the static EIR Fiber wrappers needed for closure callbacks.
@@ -908,10 +1027,14 @@ fn emit_static_property_default(
     expr: &ExprKind,
 ) -> Result<()> {
     ensure_static_property_default_type_supported(class_name, property, php_type)?;
+    let expr = crate::codegen::literal_defaults::resolve_literal_default_global_constants(
+        expr,
+        &ctx.module.global_constants,
+    );
     let value = literal_default_value(
         &format!("static property {}::${}", class_name, property),
         php_type,
-        expr,
+        &expr,
         "static property initializer",
     )?;
     ctx.emitter.comment(&format!(
@@ -935,8 +1058,8 @@ fn ensure_static_property_default_type_supported(
         | PhpType::Str
         | PhpType::Void
         | PhpType::Never
-        | PhpType::Mixed
         | PhpType::Iterable
+        | PhpType::Mixed
         | PhpType::Object(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -1062,12 +1185,26 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
-        lower_inst::lower_instruction(ctx, *inst_id)?;
+        lower_inst::lower_instruction(ctx, *inst_id).map_err(|error| {
+            let location = instruction_location(ctx, *inst_id);
+            error.at(location)
+        })?;
     }
     let terminator = block.terminator.as_ref().ok_or_else(|| {
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
     lower_term::lower_terminator(ctx, terminator)
+}
+
+/// Describes the source line and opcode associated with an EIR instruction.
+fn instruction_location(ctx: &FunctionContext<'_>, inst_id: InstId) -> String {
+    let Some(inst) = ctx.function.instruction(inst_id) else {
+        return format!("op #{}", inst_id.as_raw());
+    };
+    match inst.span.filter(|span| span.line > 0) {
+        Some(span) => format!("line {}, op {}", span.line, inst.op.name()),
+        None => format!("op {}", inst.op.name()),
+    }
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
@@ -1113,4 +1250,74 @@ fn emit_fn_marker(emitter: &mut Emitter, name: &str, symbol: &str, synthetic: bo
 /// `emit_fn_marker()`.
 fn emit_endfn_marker(emitter: &mut Emitter, name: &str) {
     emitter.comment(&format!("@endfn name={}", name));
+}
+
+#[cfg(test)]
+mod backend_inventory_tests {
+    //! Purpose:
+    //! Regression tests for scan-and-report backend inventory behavior.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Tests use an explicit switch instead of mutating the process environment.
+
+    use super::{BackendInventory, CodegenIrError};
+    use crate::codegen::platform::{Arch, Platform, Target};
+    use crate::codegen_support::emit::Emitter;
+
+    /// Builds a fixed-target emitter whose buffer can be inspected directly.
+    fn emitter() -> Emitter {
+        Emitter::new(Target::new(Platform::Linux, Arch::AArch64))
+    }
+
+    /// Verifies disabled inventory preserves abort-on-first-error behavior.
+    #[test]
+    fn disabled_inventory_propagates_refusals() {
+        let mut inventory = BackendInventory::new(false);
+        let mut emitter = emitter();
+        let outcome = inventory.run(&mut emitter, "f", |_| {
+            Err(CodegenIrError::unsupported("gap"))
+        });
+        assert!(outcome.is_err());
+        assert!(inventory.finish().is_ok());
+    }
+
+    /// Verifies enabled inventory rolls back a failed body and continues scanning.
+    #[test]
+    fn enabled_inventory_rolls_back_and_continues() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        let first = inventory.run(&mut emitter, "failed", |emitter| {
+            emitter.raw("discarded:");
+            Err(CodegenIrError::unsupported("gap"))
+        });
+        let second = inventory.run(&mut emitter, "kept", |emitter| {
+            emitter.raw("kept:");
+            Ok(())
+        });
+        assert!(first.is_ok());
+        assert!(second.is_ok());
+        let output = emitter.output();
+        assert!(!output.contains("discarded:"));
+        assert!(output.contains("kept:"));
+    }
+
+    /// Verifies identical causes are grouped while per-body details remain present.
+    #[test]
+    fn enabled_inventory_groups_equivalent_causes() {
+        let mut inventory = BackendInventory::new(true);
+        let mut emitter = emitter();
+        for body in ["a", "b"] {
+            let _ = inventory.run(&mut emitter, body, |_| {
+                Err(CodegenIrError::unsupported(format!("gap in '{}'", body)))
+            });
+        }
+        let report = inventory.report();
+        assert_eq!(inventory.causes().len(), 1, "{report}");
+        assert!(report.contains("2 of 2 scanned bodies"), "{report}");
+        assert!(report.contains("a"), "{report}");
+        assert!(report.contains("b"), "{report}");
+    }
 }

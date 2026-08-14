@@ -91,6 +91,24 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .with_side_effects()
                 .with_may_throw()
         }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            expr_effect(index)
+                .combine(expr_effect(source))
+                .with_side_effects()
+                .with_may_throw()
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            let mut effect = expr_effect(property).combine(expr_effect(value));
+            if let Some(index) = index {
+                effect = effect.combine(expr_effect(index));
+            }
+            effect.with_side_effects().with_may_throw()
+        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_effect(target)
                 .combine(expr_effect(value))
@@ -100,6 +118,12 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::PropertyAssign { object, value, .. } => {
             expr_effect(object)
                 .combine(expr_effect(value))
+                .with_side_effects()
+                .with_may_throw()
+        }
+        StmtKind::PropertyRefAssign { object, source, .. } => {
+            expr_effect(object)
+                .combine(expr_effect(source))
                 .with_side_effects()
                 .with_may_throw()
         }
@@ -346,6 +370,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 .iter()
                 .map(|(key, value)| expr_effect(key).combine(expr_effect(value))),
         ),
+        ExprKind::ArrayReference(value) => expr_effect(value).with_side_effects(),
         ExprKind::Match {
             subject,
             arms,
@@ -396,9 +421,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .with_writes_globals(),
             }),
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_effect(property).with_may_throw()
+        }
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_effect(receiver).with_may_throw()
+        }
         ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()

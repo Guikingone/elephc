@@ -481,7 +481,12 @@ fn infer_callable_target_runtime_return(
         CallableTarget::Function(name) => checker
             .functions
             .get(name.as_str())
-            .map(|sig| sig.return_type.clone())
+            .cloned()
+            .or_else(|| crate::types::first_class_callable_builtin_sig(name.as_str()))
+            .or_else(|| {
+                crate::types::first_class_callable_builtin_sig(&php_symbol_key(name.as_str()))
+            })
+            .map(|sig| sig.return_type)
             .ok_or_else(|| {
                 CompileError::new(
                     callback.span,
@@ -897,6 +902,12 @@ fn check_callback_builtin_call_in_engine_frame(
             // Keep function-variant discovery, but do not treat scalar dummy args
             // as authoritative parameter types for callbacks over refcounted arrays.
             let _ = checker.check_function_call(cb_name, callback_args, span, env);
+            return Ok(PhpType::Int);
+        }
+        if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
+            if let Some(ret_ty) = checker.check_builtin(&builtin_name, callback_args, span, env)? {
+                return Ok(ret_ty);
+            }
             return Ok(PhpType::Int);
         }
         return checker.check_function_call(cb_name, callback_args, span, env);

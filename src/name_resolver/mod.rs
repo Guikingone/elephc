@@ -132,6 +132,29 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     crate::types::checker::builtins::canonical_builtin_function_name(name)
 }
 
+/// Returns the canonical global name of a function supplied by the late compatibility prelude.
+///
+/// Autoloaded files are name-resolved before that prelude is injected, so namespaced bare calls
+/// need the same PHP global fallback that registry builtins receive.
+pub(crate) fn canonical_compat_prelude_function_name(name: &str) -> Option<String> {
+    const FUNCTIONS: &[&str] = &[
+        "levenshtein",
+        "strip_tags",
+        "is_countable",
+        "random_bytes",
+        "http_build_query",
+        "escapeshellarg",
+        "cli_set_process_title",
+        "setproctitle",
+        "str_getcsv",
+    ];
+    let bare = name.trim_start_matches('\\');
+    FUNCTIONS
+        .iter()
+        .find(|candidate| bare.eq_ignore_ascii_case(candidate))
+        .map(|candidate| (*candidate).to_string())
+}
+
 /// Reports whether `name` matches one of PHP's procedural date/time aliases
 /// (e.g. `date_create`, `idate`, `gmstrftime`). The name set is the same as the one
 /// rewritten by `expressions::rewrite_date_procedural_alias`, minus the per-arity guards,

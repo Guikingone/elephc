@@ -171,6 +171,9 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => false,
             Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::DynamicInclude { .. },
+            )) => true,
+            Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::Function(target),
             )) => matches!(
                 target.result_ownership(),

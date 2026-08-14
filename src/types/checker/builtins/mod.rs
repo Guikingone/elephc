@@ -12,6 +12,7 @@ pub(crate) mod arrays;
 mod callables;
 pub(crate) mod catalog;
 pub(crate) mod io;
+mod late_bound;
 mod language_constructs;
 pub(crate) mod spl;
 
@@ -36,6 +37,8 @@ pub(crate) use callables::{
     contextual_callback_arg_positions,
     runtime_callable_array_type,
 };
+pub(crate) use arrays::array_arg_is_gradually_acceptable;
+pub(crate) use late_bound::is_late_bound_undefined_function;
 
 impl Checker {
     /// Records an external link library required on every target.

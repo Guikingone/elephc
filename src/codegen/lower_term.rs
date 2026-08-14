@@ -113,12 +113,14 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
     let ty = ctx.load_value_to_result(value)?;
     match ty.codegen_repr() {
         PhpType::Object(_) => {}
-        PhpType::Mixed => return super::lower_inst::lower_mixed_throw_value(ctx),
+        PhpType::Mixed | PhpType::Union(_) => {
+            return super::lower_inst::lower_mixed_throw_value(ctx);
+        }
         _ => {
             return Err(CodegenIrError::unsupported(format!(
                 "throw for PHP type {:?}",
                 ty
-            )))
+            )));
         }
     }
     abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), "_exc_value", 0);

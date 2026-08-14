@@ -5,9 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The PHP golden signature is `optional(&["array","callback","initial"], 2, &[null])`.
-//!   The legacy CHECK arm required exactly 3 arguments, so `min_args: 3, max_args: 3`
-//!   reproduce that enforcement in `check_arity` only.
+//! - The PHP signature accepts two or three arguments, with a `null` initial carry by default.
 //! - `check` validates the callback with the inferred initial and array-element types.
 //!   The return type is `PhpType::Int`, matching the legacy arm.
 
@@ -19,8 +17,6 @@ builtin! {
     name: "array_reduce",
     area: Array,
     params: [array: Mixed, callback: Mixed, initial: Mixed = DefaultSpec::Null],
-    min_args: 3,
-    max_args: 3,
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
@@ -32,11 +28,14 @@ builtin! {
 
 /// Validates the callback for an `array_reduce` call and returns `PhpType::Int`.
 ///
-/// Uses the initial-value and array-element types as the two callback parameter contexts.
-/// Arity (exactly 3 args) is pre-validated by `check_arity`.
+/// Uses the initial-value and array-element types as the two callback parameter contexts. A
+/// missing initial value contributes PHP `null` (`Void`) to the callback carry contract.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let initial_ty = cx.checker.infer_type(&cx.args[2], cx.env)?;
+    let initial_ty = match cx.args.get(2) {
+        Some(initial) => cx.checker.infer_type(initial, cx.env)?,
+        None => PhpType::Void,
+    };
     let callback_arg_types = [
         initial_ty,
         crate::types::checker::builtins::array_element_type(&arr_ty),

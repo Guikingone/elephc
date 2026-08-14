@@ -1007,7 +1007,7 @@ pub(super) fn emit_invokable_object_descriptor_value(
 /// Returns one module-wide static descriptor template for a public instance method.
 /// Receiver objects are captured into runtime copies, so the wrapper, invoker, and
 /// immutable descriptor header can be shared by every dynamic call site.
-fn runtime_instance_method_descriptor_template(
+pub(super) fn runtime_instance_method_descriptor_template(
     ctx: &mut FunctionContext<'_>,
     class_name: &str,
     method_name: &str,

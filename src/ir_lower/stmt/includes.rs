@@ -9,7 +9,7 @@
 
 use super::*;
 
-/// Lowers include/require statements through a high-level runtime call.
+/// Lowers a resolver-preserved runtime include/require through the Magician bridge.
 pub(super) fn lower_include(
     ctx: &mut LoweringContext<'_, '_>,
     path: &Expr,
@@ -18,15 +18,21 @@ pub(super) fn lower_include(
     span: Span,
 ) {
     let path = lower_expr(ctx, path);
-    let label = format!("include once={} required={}", once, required);
-    let data = ctx.intern_string(&label);
-    ctx.emit_void(
+    let call = ctx.emit_value(
         Op::RuntimeCall,
         vec![path.value],
-        Some(Immediate::Data(data)),
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::DynamicInclude {
+            once,
+            required,
+            strict_php: crate::strict_php::is_enabled(),
+        })),
+        PhpType::Mixed,
         effects_lookup::runtime_effects(),
         Some(span),
     );
+    release_expr_statement_result(ctx, call, span);
+    ctx.mark_eval_executed();
+    ctx.apply_eval_barrier();
     ctx.clear_static_callable_locals();
 }
 
@@ -83,4 +89,3 @@ pub(super) fn lower_include_once_guard(
     ctx.builder.position_at_end(after_block);
     ctx.clear_static_callable_locals();
 }
-

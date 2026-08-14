@@ -64,6 +64,13 @@ pub(super) fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
+    let prepared = sig.as_ref().and_then(|signature| {
+        ref_place_args::prepare_ref_place_args(ctx, signature, call_args)
+    });
+    let call_args = prepared
+        .as_ref()
+        .map(|(call_args, _)| call_args.as_slice())
+        .unwrap_or(call_args);
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     let operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
@@ -106,6 +113,9 @@ pub(super) fn lower_static_method_call(
         sig.as_ref(),
         expr.span,
     );
+    if let Some((_, plans)) = prepared {
+        ref_place_args::write_back_ref_place_args(ctx, plans);
+    }
     call
 }
 
@@ -422,4 +432,3 @@ pub(super) fn static_receiver_class_name(
         }
     }
 }
-

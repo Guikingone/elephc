@@ -24,6 +24,9 @@ pub enum NameKind {
     FullyQualified,
 }
 
+/// Compiler-private call name used after the resolver preserves a runtime include.
+pub const DYNAMIC_INCLUDE_FUNCTION: &str = "__elephc_dynamic_include";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 /// PHP name with resolution context stored alongside its text parts.
 ///

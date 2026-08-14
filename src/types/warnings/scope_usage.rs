@@ -34,6 +34,11 @@ impl ScopeUsage {
     pub(super) fn read(&mut self, name: &str) {
         self.reads.insert(name.to_string());
     }
+
+    /// Conservatively marks every currently declared local as observable by runtime code.
+    pub(super) fn read_all_declared(&mut self) {
+        self.reads.extend(self.declared.keys().cloned());
+    }
 }
 
 /// Recursively scans top-level statements for functions, methods, and classes,
@@ -198,6 +203,10 @@ pub(super) fn collect_scope_reads(
             | StmtKind::ExprStmt(expr)
             | StmtKind::ConstDecl { value: expr, .. } => collect_expr_reads(expr, scope, warnings),
             StmtKind::Return(Some(expr)) => collect_expr_reads(expr, scope, warnings),
+            StmtKind::Include { path, .. } => {
+                collect_expr_reads(path, scope, warnings);
+                scope.read_all_declared();
+            }
             StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
             StmtKind::If {
                 condition,
@@ -319,6 +328,10 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(object, scope, warnings);
                 collect_expr_reads(value, scope, warnings);
             }
+            StmtKind::PropertyRefAssign { object, source, .. } => {
+                collect_expr_reads(object, scope, warnings);
+                collect_expr_reads(source, scope, warnings);
+            }
             StmtKind::StaticPropertyAssign { value, .. } => {
                 collect_expr_reads(value, scope, warnings);
             }
@@ -327,6 +340,22 @@ pub(super) fn collect_scope_reads(
             }
             StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 collect_expr_reads(index, scope, warnings);
+                collect_expr_reads(value, scope, warnings);
+            }
+            StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+                collect_expr_reads(index, scope, warnings);
+                collect_expr_reads(source, scope, warnings);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                property,
+                index,
+                value,
+                ..
+            } => {
+                collect_expr_reads(property, scope, warnings);
+                if let Some(index) = index {
+                    collect_expr_reads(index, scope, warnings);
+                }
                 collect_expr_reads(value, scope, warnings);
             }
             StmtKind::PropertyArrayPush {
@@ -365,7 +394,6 @@ pub(super) fn collect_scope_reads(
             | StmtKind::NamespaceDecl { .. }
             | StmtKind::NamespaceBlock { .. }
             | StmtKind::UseDecl { .. }
-            | StmtKind::Include { .. }
             | StmtKind::FunctionVariantGroup { .. }
             | StmtKind::FunctionVariantMark { .. }
             | StmtKind::ExternFunctionDecl { .. }

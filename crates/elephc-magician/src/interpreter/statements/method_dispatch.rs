@@ -696,7 +696,7 @@ pub(super) fn eval_closure_object_method_result(
 }
 
 /// Invokes the callable target retained behind a PHP-visible eval `Closure` object.
-pub(super) fn eval_closure_object_invoke_result(
+pub(in crate::interpreter) fn eval_closure_object_invoke_result(
     target: EvalClosureObjectTarget,
     evaluated_args: Vec<EvaluatedCallArg>,
     context: &mut ElephcEvalContext,

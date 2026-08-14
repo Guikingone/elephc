@@ -9,6 +9,16 @@
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
 pub mod autoload;
+/// Gradual and associative `array_merge()` compatibility prelude.
+pub mod array_merge_prelude;
+/// Default-initial-value `array_reduce()` compatibility prelude.
+pub mod array_reduce_prelude;
+/// Single-argument `assert()` compatibility prelude.
+pub mod assert_prelude;
+/// Whole-program PHP symbol usage collection for conditional prelude injection.
+pub mod ast_usage;
+/// Narrow PHP-level fallbacks for builtin shapes not handled natively yet.
+pub mod backend_gap_prelude;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
 /// Single-source builtin registry: catalog, signatures, type-check, and lowering dispatch.
@@ -25,8 +35,12 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
+/// Dynamic-filter dispatch prelude used by source-sensitive `filter_var()` lowering.
+pub mod filter_var_prelude;
 /// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
 pub mod func_args;
+/// `$GLOBALS` literal-key aliasing onto ordinary global storage.
+pub mod globals_array;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod hash_prelude;

@@ -325,6 +325,18 @@ pub(super) fn eval_reflection_property_new_for_object(
         )
         .map(Some);
     }
+    if let Some(property) =
+        eval_reflection_aot_property_metadata_if_exists(&class_name, property_name, context, values)?
+    {
+        return eval_reflection_member_object_result(
+            EVAL_REFLECTION_OWNER_PROPERTY,
+            property_name,
+            &property,
+            context,
+            values,
+        )
+        .map(Some);
+    }
     if !eval_reflection_object_dynamic_property_exists(object, property_name, values)? {
         let message = eval_reflection_missing_member_message(
             EVAL_REFLECTION_OWNER_PROPERTY,

@@ -38,7 +38,7 @@ use super::{
     coerce_loaded_value_to_tagged_scalar, emit_instance_method_descriptor_entry_wrapper,
     emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
-    emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
+    emit_ref_arg_writebacks, exceptions, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
     emit_runtime_callable_invoker_inline, property_values, store_if_result,
     store_method_call_result,
@@ -126,7 +126,7 @@ mod instanceof_entry;
 mod allocation_clone;
 mod interface_layout;
 mod property_resolution;
-mod property_compatibility;
+pub(in crate::codegen::lower_inst) mod property_compatibility;
 mod property_loads;
 mod property_stores;
 mod property_store_values;
@@ -174,6 +174,10 @@ use property_resolution::*;
 #[allow(unused_imports)]
 use property_compatibility::*;
 #[allow(unused_imports)]
+pub(in crate::codegen::lower_inst) use instanceof_helpers::{
+    class_name_immediate, classify_named_target, emit_match_call,
+};
+#[allow(unused_imports)]
 use property_loads::*;
 #[allow(unused_imports)]
 use property_stores::*;
@@ -185,6 +189,7 @@ use typed_property_guards::*;
 use instanceof_helpers::*;
 
 pub(super) use dynamic_property_read_entry::{lower_dynamic_prop_get, lower_nullsafe_prop_get};
+pub(super) use dynamic_property_read_resolution::lower_dynamic_prop_ref_cell;
 pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new, lower_dynamic_object_new_mixed,
     lower_dynamic_object_new_without_constructor_mixed,
@@ -194,12 +199,13 @@ pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };
+pub(super) use property_stores::lower_bind_prop_ref_cell;
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
 };
 pub(super) use runtime_property_writes::{
-    lower_dynamic_prop_set, lower_prop_set, lower_prop_unset,
+    lower_dynamic_prop_set, lower_dynamic_prop_unset, lower_prop_set, lower_prop_unset,
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 
@@ -236,7 +242,7 @@ fn emit_property_uninitialized_marker(
 ///
 /// The receiver register is caller-saved, so it is parked on the temporary stack across
 /// the helper call and reloaded before the table pointer is stored back.
-fn lower_dynamic_prop_unset(
+fn lower_const_dynamic_prop_unset(
     ctx: &mut FunctionContext<'_>,
     object: ValueId,
     property: &str,
@@ -269,25 +275,6 @@ fn lower_dynamic_prop_unset(
         }
     }
     Ok(())
-}
-
-/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
-/// state, or `None` when the uninitialized marker is a faithful encoding for it.
-///
-/// Used only for the diagnostic text; the ordering matters because a slot can be both
-/// undeclared and by-reference, and the by-reference storage is the more specific
-/// obstacle to report.
-fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
-    if slot.is_packed {
-        return Some("packed class field");
-    }
-    if slot.is_reference {
-        return Some("by-reference property");
-    }
-    if !slot.is_declared {
-        return Some("untyped property slot");
-    }
-    None
 }
 
 /// Writes the tagged scalar currently held in the result registers into a property slot: the

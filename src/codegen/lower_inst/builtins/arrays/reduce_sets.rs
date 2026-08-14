@@ -163,16 +163,113 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_void_builtin_result(ctx, inst)
 }
 
-/// Lowers `array_merge()` for two compatible indexed arrays with 8-byte payload slots.
+/// Lowers variadic `array_merge()` for compatible indexed arrays with owned results.
 pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_merge", 2)?;
-    let first = expect_operand(inst, 0)?;
-    let second = expect_operand(inst, 1)?;
-    let elem_ty = compatible_eight_byte_indexed_array_element_type(
-        ctx.value_php_type(first)?,
-        ctx.value_php_type(second)?,
-        "array_merge",
-    )?;
+    if inst.operands.is_empty() {
+        let capacity = abi::int_arg_reg_name(ctx.emitter.target, 0);
+        let element_size = abi::int_arg_reg_name(ctx.emitter.target, 1);
+        abi::emit_load_int_immediate(ctx.emitter, capacity, 0);
+        abi::emit_load_int_immediate(ctx.emitter, element_size, 8);
+        abi::emit_call_label(ctx.emitter, "__rt_array_new");
+        return store_if_result(ctx, inst);
+    }
+    if inst.operands.len() == 1 {
+        let operand = expect_operand(inst, 0)?;
+        return match ctx.value_php_type(operand)?.codegen_repr() {
+            PhpType::Array(_) => {
+                ctx.load_value_to_result(operand)?;
+                if ctx.emitter.target.arch == Arch::X86_64 {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the sole packed input to the ownership-preserving clone helper
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_array_clone_shallow");
+                store_if_result(ctx, inst)
+            }
+            other => Err(CodegenIrError::unsupported(format!(
+                "array_merge single argument PHP type {:?}",
+                other
+            ))),
+        };
+    }
+
+    let operand_types = inst
+        .operands
+        .iter()
+        .map(|operand| ctx.value_php_type(*operand).map(|ty| ty.codegen_repr()))
+        .collect::<Result<Vec<_>>>()?;
+    let element_types = operand_types
+        .iter()
+        .map(|ty| {
+            indexed_array_element_repr(ty).ok_or_else(|| {
+                CodegenIrError::unsupported(format!("array_merge for PHP type {:?}", ty))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let uses_string_slots = element_types.iter().any(|ty| matches!(ty, PhpType::Str))
+        && element_types
+            .iter()
+            .all(|ty| matches!(ty, PhpType::Str | PhpType::Never | PhpType::Void));
+    let merged_element_type = if uses_string_slots {
+        PhpType::Str
+    } else {
+        let mut merged = element_types[0].clone();
+        for next in &element_types[1..] {
+            merged = compatible_eight_byte_indexed_array_element_type(
+                PhpType::Array(Box::new(merged)),
+                PhpType::Array(Box::new(next.clone())),
+                "array_merge",
+            )?;
+        }
+        merged
+    };
+    let helper = if uses_string_slots {
+        "__rt_array_merge_str"
+    } else {
+        array_merge_runtime_helper(&merged_element_type)
+    };
+    emit_array_merge_pair(ctx, inst.operands[0], inst.operands[1], helper)?;
+    stamp_array_merge_result(ctx, helper, &merged_element_type);
+
+    if inst.operands.len() > 2 {
+        abi::emit_reserve_temporary_stack(ctx.emitter, 16);                     // preserve the old and replacement owned merge results across each fold step
+        for operand in &inst.operands[2..] {
+            abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+                    ctx.load_value_to_reg(*operand, "x1")?;
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+                    ctx.load_value_to_reg(*operand, "rsi")?;
+                }
+            }
+            abi::emit_call_label(ctx.emitter, helper);
+            stamp_array_merge_result(ctx, helper, &merged_element_type);
+            abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 8);
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");             // release the previous owned fold result after the replacement retained its payloads
+            abi::emit_load_temporary_stack_slot(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                8,
+            );
+        }
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits one two-array merge call with target-aware argument registers.
+fn emit_array_merge_pair(
+    ctx: &mut FunctionContext<'_>,
+    first: ValueId,
+    second: ValueId,
+    helper: &str,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(first, "x0")?;
@@ -183,8 +280,24 @@ pub(crate) fn lower_array_merge(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_reg(second, "rsi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, array_merge_runtime_helper(&elem_ty));
-    store_if_result(ctx, inst)
+    abi::emit_call_label(ctx.emitter, helper);
+    Ok(())
+}
+
+/// Stamps refcounted merge results so later indexed reads decode their payloads correctly.
+fn stamp_array_merge_result(ctx: &mut FunctionContext<'_>, helper: &str, elem_ty: &PhpType) {
+    if helper == "__rt_array_merge_refcounted" {
+        let result = abi::int_result_reg(ctx.emitter);
+        crate::codegen::emit_array_value_type_stamp(ctx.emitter, result, elem_ty);
+    }
+}
+
+/// Returns the indexed-array element representation, or `None` for another container kind.
+fn indexed_array_element_repr(ty: &PhpType) -> Option<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(element) => Some(element.codegen_repr()),
+        _ => None,
+    }
 }
 
 /// Lowers `array_diff()` for two compatible indexed arrays with pointer-sized payload slots.

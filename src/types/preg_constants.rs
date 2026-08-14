@@ -18,6 +18,7 @@ pub(crate) const PREG_INT_CONSTANTS: &[(&str, i64)] = &[
     ("PREG_SPLIT_NO_EMPTY", 1),
     ("PREG_SPLIT_DELIM_CAPTURE", 2),
     ("PREG_SPLIT_OFFSET_CAPTURE", 4),
+    ("PREG_GREP_INVERT", 1),
 ];
 
 #[cfg(test)]

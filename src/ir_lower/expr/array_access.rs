@@ -357,17 +357,26 @@ pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) 
     normalized_array_key_type(index, ty)
 }
 
-/// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
-pub(super) fn lowered_index_expr_key_type(
+/// Refines a read key's syntactic type from its lowered SSA value when it is definite.
+pub(crate) fn lowered_index_expr_key_type(
     ctx: &LoweringContext<'_, '_>,
     index: &Expr,
     index_value: ValueId,
 ) -> PhpType {
     let syntactic = index_expr_key_type(ctx, index);
-    if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
-        return normalized_array_key_type(index, PhpType::Str);
+    match ctx.builder.value_php_type(index_value).codegen_repr() {
+        // Dynamic strings still undergo PHP's numeric-key normalization inside the mixed-key/hash
+        // runtime helpers. Keep their definite lowered type here so write-context lowering can
+        // select that runtime path instead of abandoning a property store-back. Literal numeric
+        // strings remain statically classifiable as integer keys.
+        PhpType::Str if matches!(index.kind, ExprKind::StringLiteral(_)) => {
+            normalized_array_key_type(index, PhpType::Str)
+        }
+        PhpType::Str => PhpType::Str,
+        PhpType::Int => PhpType::Int,
+        gradual @ (PhpType::Mixed | PhpType::Union(_)) => gradual,
+        _ => syntactic,
     }
-    syntactic
 }
 
 /// Refines an `isset` key from its lowered value, including boxed Mixed keys.

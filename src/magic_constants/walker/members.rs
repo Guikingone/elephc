@@ -1,6 +1,7 @@
 //! Purpose:
-//! Walks class properties and methods during magic-constant substitution.
-//! Applies expression and statement walkers to defaults, bodies, and promoted-property assignments.
+//! Walks class constants, properties, and methods during magic-constant substitution.
+//! Applies expression and statement walkers to constant values, defaults, bodies, and
+//! promoted-property assignments.
 //!
 //! Called from:
 //! - `crate::magic_constants::walker::stmts` and trait binding passes.
@@ -8,11 +9,22 @@
 //! Key details:
 //! - Member traversal preserves declaration metadata while updating only magic-constant-bearing children.
 
-use crate::parser::ast::{ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
 
 use super::exprs::walk_expr;
 use super::stmts::walk_program;
 use super::Pass;
+
+/// Walks a class-like constant declaration, applying `pass` to its value expression.
+pub(in crate::magic_constants) fn walk_class_const<P: Pass>(
+    constant: ClassConst,
+    pass: &mut P,
+) -> ClassConst {
+    ClassConst {
+        value: walk_expr(constant.value, pass),
+        ..constant
+    }
+}
 
 /// Walks a class property, applying `pass` to its default-value expression if present.
 ///

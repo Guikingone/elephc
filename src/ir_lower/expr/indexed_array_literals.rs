@@ -42,7 +42,7 @@ pub(super) fn lower_array_literal(ctx: &mut LoweringContext<'_, '_>, items: &[Ex
                 lowered.push(SpreadItem::Spread(source));
             }
             _ => {
-                let value = lower_expr(ctx, item);
+                let value = lower_array_reference_or_value(ctx, item);
                 lowered.push(SpreadItem::Element(value));
             }
         }
@@ -92,7 +92,7 @@ pub(super) fn lower_array_literal_without_spread(
         Some(expr.span),
     );
     for item in items {
-        let value = lower_expr(ctx, item);
+        let value = lower_array_reference_or_value(ctx, item);
         let value = coerce_array_literal_element_to_storage_type(ctx, value, elem_ty.as_ref(), item);
         ctx.emit_void(
             Op::ArrayPush,
@@ -400,6 +400,7 @@ pub(super) fn array_literal_element_type_for_ir(
 ) -> PhpType {
     match &item.kind {
         ExprKind::Null => PhpType::Mixed,
+        ExprKind::ArrayReference(_) => PhpType::Mixed,
         ExprKind::Spread(inner) => match array_literal_element_type_for_ir(ctx, inner).codegen_repr() {
             // A spread of an empty/unknown array (`array<never>`, e.g. a `$x = []` local or a
             // bare-`array`-returning method) contributes no element constraint, so widen its
@@ -490,4 +491,3 @@ pub(crate) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 pub(crate) fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
-

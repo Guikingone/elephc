@@ -15,6 +15,7 @@
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
+use std::num::IntErrorKind;
 
 /// Tokenizes a complete source fragment and appends an EOF sentinel.
 pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
@@ -262,7 +263,12 @@ impl<'a> Lexer<'a> {
                     Ok(TokenKind::QuestionArrow)
                 } else if self.peek_char() == Some('?') {
                     self.bump_char();
-                    Ok(TokenKind::QuestionQuestion)
+                    if self.peek_char() == Some('=') {
+                        self.bump_char();
+                        Ok(TokenKind::QuestionQuestionEqual)
+                    } else {
+                        Ok(TokenKind::QuestionQuestion)
+                    }
                 } else {
                     Ok(TokenKind::Question)
                 }
@@ -355,28 +361,87 @@ impl<'a> Lexer<'a> {
 
     /// Reads an integer or float literal.
     fn lex_number(&mut self) -> Result<TokenKind, EvalParseError> {
-        let start = self.pos;
-        while matches!(self.peek_char(), Some('0'..='9')) {
-            self.bump_char();
+        if self.peek_char() == Some('0') {
+            let radix = match self.peek_next_char() {
+                Some('x' | 'X') => Some(16),
+                Some('o' | 'O') => Some(8),
+                Some('b' | 'B') => Some(2),
+                _ => None,
+            };
+            if let Some(radix) = radix {
+                self.bump_char();
+                self.bump_char();
+                let digits = self.lex_number_digits(radix)?;
+                self.reject_number_suffix()?;
+                return integer_token(&digits, radix);
+            }
         }
+
+        let mut raw = self.lex_number_digits(10)?;
         let mut is_float = false;
         if self.peek_char() == Some('.') && matches!(self.peek_next_char(), Some('0'..='9')) {
             is_float = true;
+            raw.push('.');
             self.bump_char();
-            while matches!(self.peek_char(), Some('0'..='9')) {
+            raw.push_str(&self.lex_number_digits(10)?);
+        }
+        if matches!(self.peek_char(), Some('e' | 'E')) {
+            is_float = true;
+            raw.push('e');
+            self.bump_char();
+            if let Some(sign @ ('+' | '-')) = self.peek_char() {
+                raw.push(sign);
                 self.bump_char();
             }
+            raw.push_str(&self.lex_number_digits(10)?);
         }
-        let raw = &self.source[start..self.pos];
+        self.reject_number_suffix()?;
         if is_float {
             raw.parse::<f64>()
                 .map(TokenKind::Float)
                 .map_err(|_| EvalParseError::InvalidNumber)
+        } else if raw.len() > 1 && raw.starts_with('0') {
+            integer_token(&raw, 8)
         } else {
-            raw.parse::<i64>()
-                .map(TokenKind::Int)
-                .map_err(|_| EvalParseError::InvalidNumber)
+            integer_token(&raw, 10)
         }
+    }
+
+    /// Reads one non-empty digit sequence for `radix`, accepting PHP numeric separators.
+    fn lex_number_digits(&mut self, radix: u32) -> Result<String, EvalParseError> {
+        let mut digits = String::new();
+        while let Some(ch) = self.peek_char() {
+            if ch.to_digit(radix).is_some() {
+                digits.push(ch);
+                self.bump_char();
+                continue;
+            }
+            if ch == '_'
+                && !digits.is_empty()
+                && self
+                    .peek_next_char()
+                    .is_some_and(|next| next.to_digit(radix).is_some())
+            {
+                self.bump_char();
+                continue;
+            }
+            break;
+        }
+        if digits.is_empty() {
+            return Err(EvalParseError::InvalidNumber);
+        }
+        Ok(digits)
+    }
+
+    /// Rejects identifier characters left immediately after a numeric literal.
+    fn reject_number_suffix(&self) -> Result<(), EvalParseError> {
+        if self
+            .peek_char()
+            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return Err(EvalParseError::InvalidNumber);
+        }
+        Ok(())
     }
 
     /// Reads a single-quoted string literal, which never interpolates.
@@ -478,6 +543,30 @@ impl<'a> Lexer<'a> {
             }
         }
     }
+}
+
+/// Converts one radix digit sequence to the eval integer token or an overflow float.
+fn integer_token(digits: &str, radix: u32) -> Result<TokenKind, EvalParseError> {
+    match i64::from_str_radix(digits, radix) {
+        Ok(value) => Ok(TokenKind::Int(value)),
+        Err(error) if matches!(error.kind(), IntErrorKind::PosOverflow) => {
+            Ok(TokenKind::Float(radix_digits_to_float(digits, radix)))
+        }
+        Err(_) => Err(EvalParseError::InvalidNumber),
+    }
+}
+
+/// Accumulates an overflowing radix digit sequence into a PHP float literal value.
+fn radix_digits_to_float(digits: &str, radix: u32) -> f64 {
+    let radix_float = f64::from(radix);
+    digits.chars().fold(0.0, |value, digit| {
+        value * radix_float
+            + f64::from(
+                digit
+                    .to_digit(radix)
+                    .expect("numeric scanner only retains digits valid for the selected radix"),
+            )
+    })
 }
 
 /// Returns true for the first character of a PHP variable/function identifier.

@@ -48,6 +48,39 @@ pub(crate) fn lower_ref_assign_property(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
+/// Lowers a local reference alias to a runtime-named declared property cell.
+pub(crate) fn lower_ref_assign_dynamic_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let ExprKind::DynamicPropertyAccess { object, property } = &source.kind else {
+        return;
+    };
+    let object = lower_expr(ctx, object);
+    let property = lower_expr(ctx, property);
+    let property = coerce_to_string_at_span(ctx, property, Some(span));
+    let value_type = ctx
+        .dynamic_ref_local_types
+        .get(&(ctx.loop_storage_scope.clone(), target.to_string()))
+        .or_else(|| ctx.local_types.get(target))
+        .cloned()
+        .unwrap_or(PhpType::Mixed);
+    let cell_ptr = ctx.emit_value(
+        Op::DynamicPropRefCell,
+        vec![object.value, property.value],
+        None,
+        value_type.clone(),
+        Op::DynamicPropRefCell.default_effects(),
+        Some(span),
+    );
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
+    ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
+}
+
 /// Lowers `$target = &call()`: binds `$target` to the reference cell returned by a
 /// by-reference-returning callee. The call yields the cell pointer; the target shares it
 /// non-owning (the owner is the object property the callee returned a reference to).
@@ -78,21 +111,28 @@ pub(crate) fn lower_ref_assign_array_elem(
     };
     let array_value = lower_expr(ctx, array);
     let mut index_value = lower_expr(ctx, index);
-    index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
     // Use the array's declared element type (the inline storage shape), not the
     // null-capable `TaggedScalar` result type that `array_access_result_type` widens
     // Int elements to. The ref-cell aliases the raw element slot, so loads and stores
     // through the alias must match the element's storage width, not the read result.
-    let value_type = match ctx.builder.value_php_type(array_value.value).codegen_repr() {
-        PhpType::Array(elem_ty) => normalize_value_php_type(*elem_ty),
+    let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
+    let value_type = match &container_type {
+        PhpType::Array(elem_ty) => normalize_value_php_type((**elem_ty).clone()),
+        PhpType::AssocArray { value, .. } => normalize_value_php_type((**value).clone()),
         _ => array_access_result_type(ctx, array_value.value, Op::ArrayGet, source),
     };
+    let op = if matches!(container_type, PhpType::AssocArray { .. }) {
+        Op::HashRefElement
+    } else {
+        index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
+        Op::LoadArrayElemRefCell
+    };
     let cell_ptr = ctx.emit_value(
-        Op::LoadArrayElemRefCell,
+        op,
         vec![array_value.value, index_value.value],
         None,
         value_type.clone(),
-        Op::LoadArrayElemRefCell.default_effects(),
+        op.default_effects(),
         Some(span),
     );
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
@@ -145,8 +185,10 @@ pub(super) fn value_is_definitely_null(ctx: &LoweringContext<'_, '_>, value: cra
 /// Returns true when value metadata permits PHP null at runtime.
 pub(super) fn value_is_nullable(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
     match ctx.builder.value_php_type(value) {
-        PhpType::Void | PhpType::Never => true,
-        PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)),
+        PhpType::Void | PhpType::Never | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Mixed)),
         _ => false,
     }
 }
@@ -188,9 +230,27 @@ pub(super) fn property_get_result_type(
             PhpType::Mixed
         };
     }
+    if let Some(property_ty) =
+        crate::types::checker::reflection_virtual_property_type(normalized, property)
+    {
+        return if nullable {
+            nullable_result_type(property_ty)
+        } else {
+            property_ty
+        };
+    }
+    if let Some(property_ty) = interface_property_result_type(ctx, normalized, property) {
+        return if nullable {
+            nullable_result_type(property_ty)
+        } else {
+            property_ty
+        };
+    }
     let Some(class_info) = ctx.classes.get(normalized) else {
         return fallback_expr_type(expr);
     };
+    let property = crate::types::checker::reflection_virtual_property_backing(normalized, property)
+        .unwrap_or(property);
     if let Some(property_ty) = runtime_property_type_override(ctx, normalized, property) {
         let property_ty = normalize_value_php_type(property_ty);
         return if nullable {
@@ -222,6 +282,33 @@ pub(super) fn property_get_result_type(
     } else {
         property_ty
     }
+}
+
+/// Returns the readable property type guaranteed by an interface contract or enum interface.
+fn interface_property_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    interface_name: &str,
+    property: &str,
+) -> Option<PhpType> {
+    let interface = ctx.interfaces.get(interface_name)?;
+    if let Some(property_ty) = interface
+        .properties
+        .get(property)
+        .and_then(|contract| contract.get_type.clone())
+    {
+        return Some(property_ty);
+    }
+    if property == "name"
+        && interface_extends_interface_for_ir(ctx, interface_name, "UnitEnum")
+    {
+        return Some(PhpType::Str);
+    }
+    if property == "value"
+        && interface_extends_interface_for_ir(ctx, interface_name, "BackedEnum")
+    {
+        return Some(PhpType::Union(vec![PhpType::Int, PhpType::Str]));
+    }
+    None
 }
 
 /// Returns whether a container read can carry PHP null in a statically non-null pointer type.
@@ -357,6 +444,7 @@ pub(super) fn lower_dynamic_property_get_from_value(
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
     let property = lower_expr(ctx, property);
+    let property = coerce_to_string_at_span(ctx, property, Some(expr.span));
     let result = ctx.emit_value(
         Op::DynamicPropGet,
         vec![object.value, property.value],
@@ -365,6 +453,9 @@ pub(super) fn lower_dynamic_property_get_from_value(
         Op::DynamicPropGet.default_effects(),
         Some(expr.span),
     );
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
+    }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
@@ -462,6 +553,54 @@ pub(super) fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, recei
     )
 }
 
+/// Lowers a static-property read whose property name is computed at runtime.
+pub(super) fn lower_dynamic_static_property_get(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    property: &Expr,
+    expr: &Expr,
+) -> LoweredValue {
+    let name = lower_expr(ctx, property);
+    let name = coerce_to_string_at_span(ctx, name, Some(property.span));
+    let class_name =
+        static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
+    let data = ctx.intern_string(&class_name);
+    let result_type = dynamic_static_property_result_type(ctx, receiver);
+    ctx.emit_value(
+        Op::LoadDynamicStaticProperty,
+        vec![name.value],
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::LoadDynamicStaticProperty.default_effects(),
+        Some(expr.span),
+    )
+}
+
+/// Returns common static-property metadata for a runtime-name read.
+fn dynamic_static_property_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> PhpType {
+    let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
+        return PhpType::Mixed;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
+        return PhpType::Mixed;
+    };
+    let mut types = class_info
+        .static_properties
+        .iter()
+        .map(|(_, ty)| normalize_value_php_type(ty.codegen_repr()));
+    let Some(first) = types.next() else {
+        return PhpType::Mixed;
+    };
+    if types.all(|ty| ty == first) {
+        first
+    } else {
+        PhpType::Mixed
+    }
+}
+
 /// Returns precise PHP metadata for a static property read when class metadata is available.
 pub(super) fn static_property_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -484,4 +623,3 @@ pub(super) fn static_property_result_type(
     };
     normalize_value_php_type(property_ty.codegen_repr())
 }
-

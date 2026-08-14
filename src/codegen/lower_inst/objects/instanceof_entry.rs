@@ -13,6 +13,15 @@ use super::*;
 pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?;
+    let class_name = class_name_immediate(ctx, inst)?.to_string();
+    if class_name
+        .trim_start_matches('\\')
+        .eq_ignore_ascii_case("Closure")
+        && !builtins::has_eval_context(ctx)
+    {
+        emit_closure_instanceof(ctx, value, &value_ty)?;
+        return store_if_result(ctx, inst);
+    }
     if !matches!(
         value_ty,
         PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
@@ -20,7 +29,6 @@ pub(in crate::codegen::lower_inst) fn lower_instanceof(ctx: &mut FunctionContext
         emit_false(ctx);
         return store_if_result(ctx, inst);
     }
-    let class_name = class_name_immediate(ctx, inst)?.to_string();
     if builtins::has_eval_context(ctx) {
         return builtins::lower_eval_object_is_a(ctx, inst, value, &class_name, false);
     }

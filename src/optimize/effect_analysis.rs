@@ -62,8 +62,9 @@ pub(super) fn compute_program_callable_effects(
                             metadata_slot.replace(Some(instance_dispatch_metadata.clone()));
 
                         for (name, function) in &function_bodies {
-                            let effect = never_declared_effect(
+                            let effect = callable_boundary_effect(
                                 function.declared_never,
+                                function.has_typed_parameters,
                                 block_effect(&function.body),
                             );
                             if function_effects.get(name).copied() != Some(effect) {
@@ -77,7 +78,11 @@ pub(super) fn compute_program_callable_effects(
                                 with_class_effect_context(Some(method.context.clone()), || {
                                     block_effect(&method.body)
                                 });
-                            let effect = never_declared_effect(method.declared_never, effect);
+                            let effect = callable_boundary_effect(
+                                method.declared_never,
+                                method.has_typed_parameters,
+                                effect,
+                            );
                             if static_method_effects.get(name).copied() != Some(effect) {
                                 static_method_effects.insert(name.clone(), effect);
                                 changed = true;
@@ -89,7 +94,11 @@ pub(super) fn compute_program_callable_effects(
                                 with_class_effect_context(Some(method.context.clone()), || {
                                     block_effect(&method.body)
                                 });
-                            let effect = never_declared_effect(method.declared_never, effect);
+                            let effect = callable_boundary_effect(
+                                method.declared_never,
+                                method.has_typed_parameters,
+                                effect,
+                            );
                             if instance_method_effects.get(name).copied() != Some(effect) {
                                 instance_method_effects.insert(name.clone(), effect);
                                 changed = true;
@@ -121,6 +130,8 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Fun
         match &stmt.kind {
             StmtKind::FunctionDecl {
                 name,
+                params,
+                variadic_type,
                 body,
                 return_type,
                 ..
@@ -130,6 +141,10 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Fun
                     FunctionEffectBody {
                         body: body.clone(),
                         declared_never: is_never_return_type(return_type),
+                        has_typed_parameters: callable_has_typed_parameters(
+                            params,
+                            variadic_type.as_ref(),
+                        ),
                     },
                 );
             }
@@ -164,6 +179,10 @@ fn collect_program_static_method_bodies(
                                 context: context.clone(),
                                 body: method.body.clone(),
                                 declared_never: is_never_return_type(&method.return_type),
+                                has_typed_parameters: callable_has_typed_parameters(
+                                    &method.params,
+                                    method.variadic_type.as_ref(),
+                                ),
                             },
                         );
                     }
@@ -200,6 +219,10 @@ fn collect_program_instance_method_bodies(
                                 context: context.clone(),
                                 body: method.body.clone(),
                                 declared_never: is_never_return_type(&method.return_type),
+                                has_typed_parameters: callable_has_typed_parameters(
+                                    &method.params,
+                                    method.variadic_type.as_ref(),
+                                ),
                             },
                         );
                     }
@@ -312,13 +335,29 @@ fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
 }
 
-/// Adjusts an effect when the callable has a `never` return type. A `never` function is
-/// considered to have side effects because it exits abruptly (e.g., via exit/die or an
-/// infinite loop) and the PHP-visible control flow never continues past it.
-fn never_declared_effect(declared_never: bool, effect: Effect) -> Effect {
+/// Returns whether parameter binding can enforce a declared runtime type at the call boundary.
+fn callable_has_typed_parameters(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic_type: Option<&TypeExpr>,
+) -> bool {
+    variadic_type.is_some() || params.iter().any(|(_, ty, _, _)| ty.is_some())
+}
+
+/// Adds effects imposed by the callable declaration rather than by its body.
+///
+/// A `never` callable exits abruptly. A typed parameter may raise a catchable `TypeError` while
+/// binding a runtime value before the body begins, so pure bodies do not make such calls
+/// exception-free.
+fn callable_boundary_effect(
+    declared_never: bool,
+    has_typed_parameters: bool,
+    mut effect: Effect,
+) -> Effect {
     if declared_never {
-        effect.with_side_effects()
-    } else {
-        effect
+        effect = effect.with_side_effects();
     }
+    if has_typed_parameters {
+        effect = effect.with_may_throw();
+    }
+    effect
 }

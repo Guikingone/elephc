@@ -9,6 +9,39 @@
 
 use super::*;
 
+/// Verifies prefix increment on a property returns the updated value while mutating the slot.
+#[test]
+fn test_prefix_increment_property_expression_returns_updated_value() {
+    let out = compile_and_run(
+        r#"<?php
+class Counter { public int $value = 0; }
+$counter = new Counter();
+if (++$counter->value === 1) { echo 'yes'; }
+echo ':' . $counter->value;
+"#,
+    );
+    assert_eq!(out, "yes:1");
+}
+
+/// A prefix increment in an assignment RHS is not misclassified as a discarded postfix statement.
+#[test]
+fn test_prefix_increment_this_property_after_concat_returns_updated_value() {
+    let out = compile_and_run(
+        r#"<?php
+class InlineIdCounter {
+    public string $currentId = 'service';
+    public int $counter = 0;
+    public function nextId(): string {
+        $id = '.autowire_inline.'.$this->currentId.'.'.++$this->counter;
+        return $id;
+    }
+}
+echo (new InlineIdCounter())->nextId();
+"#,
+    );
+    assert_eq!(out, ".autowire_inline.service.1");
+}
+
 /// Compiles a loop over an array of class instances, reading the `price` field
 /// of each `Item` object via `$items[$i]->price` and accumulating the sum.
 #[test]
@@ -720,4 +753,194 @@ var_dump(isset($u->v), $u->v);
 "#,
     );
     assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
+}
+
+/// Verifies a bare `object` receiver selects the runtime class when property names collide.
+#[test]
+fn test_generic_object_property_write_dispatches_by_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class TextPropertyOwner {
+    public string $value = '';
+}
+class ObjectPropertyOwner {
+    public object $value;
+}
+function assignObjectProperty(object $owner, object $value): void {
+    $owner->value = $value;
+}
+$owner = new ObjectPropertyOwner();
+assignObjectProperty($owner, new stdClass());
+echo $owner->value instanceof stdClass ? 'ok' : 'bad';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies a nullable attribute instance keeps its runtime class when a same-named property on
+/// another class would otherwise make the static slot guess incompatible with the assigned value.
+#[test]
+fn test_nullable_attribute_property_write_falls_back_to_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class RequestContextCollision {
+    public string $method = '';
+}
+
+#[Attribute(Attribute::TARGET_METHOD)]
+class MethodMarker {
+    private ReflectionMethod $method;
+
+    public static function from(ReflectionMethod $method): ?self {
+        /** @var self|null $self */
+        if (!$self = ($method->getAttributes(self::class)[0] ?? null)?->newInstance()) {
+            return null;
+        }
+        $self->method = $method;
+        return $self;
+    }
+
+    public function name(): string {
+        return $this->method->getName();
+    }
+}
+
+class MarkedHandler {
+    #[MethodMarker]
+    public function run(): void {}
+}
+
+$marker = MethodMarker::from(new ReflectionMethod(MarkedHandler::class, 'run'));
+echo $marker?->name();
+"#,
+    );
+    assert_eq!(out, "run");
+}
+
+/// Verifies append on a nullable array property mutates its boxed property cell in place and
+/// autovivifies the initial null value before retaining subsequent elements.
+#[test]
+fn test_nullable_array_property_push_autovivifies_mixed_cell() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableRows {
+    private ?array $rows = null;
+
+    public function push(string $value): void {
+        $this->rows[] = $value;
+    }
+
+    public function joined(): string {
+        return implode(',', $this->rows);
+    }
+}
+
+$rows = new NullableRows();
+$rows->push('first');
+$rows->push('second');
+echo $rows->joined();
+"#,
+    );
+    assert_eq!(out, "first,second");
+}
+
+/// Verifies that assigning `[]` to an associative instance property preserves hash storage.
+#[test]
+fn test_empty_array_resets_associative_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public array $items = ['seed' => 1];
+
+    public function reset(): void {
+        $this->items = [];
+    }
+}
+$registry = new Registry();
+$registry->reset();
+$registry->items['next'] = 2;
+echo count($registry->items), ':', $registry->items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies that indexed values assigned to an associative property are promoted to hash storage.
+#[test]
+fn test_indexed_array_replaces_associative_instance_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public array $items = ['seed' => 1];
+
+    public function replace(): void {
+        $this->items = [2, 3];
+    }
+}
+$registry = new Registry();
+$registry->replace();
+echo count($registry->items), ':', $registry->items[0], ':', $registry->items[1];
+"#,
+    );
+    assert_eq!(out, "2:2:3");
+}
+
+/// Verifies runtime `mixed` property names use PHP string coercion for both declared-property
+/// writes and reads instead of reaching the backend as an unmaterializable boxed name.
+#[test]
+fn test_dynamic_property_access_coerces_mixed_string_name() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicNameRow {
+    public mixed $value = null;
+
+    public function write(mixed $name, mixed $value): void {
+        $this->{$name} = $value;
+    }
+
+    public function read(mixed $name): mixed {
+        return $this->{$name};
+    }
+}
+
+$row = new DynamicNameRow();
+$row->write('value', 'ok');
+echo $row->read('value');
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies runtime-named unset dispatch for generic objects, Mixed receivers, and stdClass.
+#[test]
+fn test_dynamic_property_unset_dispatches_and_marks_declared_slots_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicUnsetBox {
+    public string $value = 'live';
+}
+
+function clearObject(object $object, string $name): void {
+    unset($object->$name);
+}
+
+function clearMixed(mixed $object, string $name): void {
+    unset($object->$name);
+}
+
+$first = new DynamicUnsetBox();
+clearObject($first, 'value');
+echo isset($first->value) ? '1' : '0';
+
+$second = new DynamicUnsetBox();
+clearMixed($second, 'value');
+echo isset($second->value) ? '1' : '0';
+
+$dynamic = new stdClass();
+$dynamic->value = 'live';
+clearObject($dynamic, 'value');
+echo isset($dynamic->value) ? '1' : '0';
+"#,
+    );
+    assert_eq!(out, "000");
 }

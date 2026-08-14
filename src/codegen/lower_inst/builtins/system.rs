@@ -9,7 +9,9 @@
 //! - Time builtins are effectful and must reuse the target-aware runtime
 //!   helpers rather than duplicating libc/syscall behavior in the EIR backend.
 
-use crate::codegen::abi;
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+};
 use crate::codegen::platform::{Arch, Platform};
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
@@ -705,21 +707,89 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
+    let status_ty = ctx.load_value_to_result(status)?;
+    if matches!(status_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+    } else {
+        require_integer_like(status_ty, "exit status")?;
+    }
     emit_dynamic_exit(ctx);
     Ok(())
 }
 
-/// Lowers `getenv(name)` through the target-aware environment lookup helper.
+/// Lowers environment enumeration and named lookups through target-aware runtime helpers.
 pub(crate) fn lower_getenv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "getenv", 1)?;
-    let name = expect_operand(inst, 0)?;
-    require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
-    abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    ensure_arg_count_between(inst, "getenv", 0, 2)?;
+    let Some(name) = inst.operands.first().copied() else {
+        abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+        return store_if_result(ctx, inst);
+    };
+    match ctx.value_php_type(name)?.codegen_repr() {
+        PhpType::Void | PhpType::Never => {
+            abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_dynamic_getenv(ctx, name)?;
+        }
+        _ => {
+            lower_named_getenv(ctx, inst)?;
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        }
+    }
     store_if_result(ctx, inst)
+}
+
+/// Lowers a statically non-null environment name and leaves a borrowed string result.
+fn lower_named_getenv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_string_arg_to_regs(ctx, inst, 0, "getenv name", ptr_reg, len_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    Ok(())
+}
+
+/// Dispatches a dynamically nullable name to enumeration or scalar string lookup.
+fn lower_dynamic_getenv(ctx: &mut FunctionContext<'_>, name: ValueId) -> Result<()> {
+    let enumerate = ctx.next_label("getenv_all");
+    let done = ctx.next_label("getenv_done");
+    load_value_to_first_int_arg(ctx, name)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 denotes a null name and selects full enumeration
+            ctx.emitter.instruction(&format!("b.eq {}", enumerate));            // skip scalar coercion for the nullable unnamed form
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 denotes a null name and selects full enumeration
+            ctx.emitter.instruction(&format!("je {}", enumerate));              // skip scalar coercion for the nullable unnamed form
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_value_as_string_to_regs(
+        ctx,
+        name,
+        "getenv name",
+        ptr_reg,
+        len_reg,
+    )?;
+    abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&enumerate);
+    abi::emit_call_label(ctx.emitter, "__rt_getenv_all");
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &environment_hash_type());
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns the runtime hash type used when boxing dynamic unnamed results.
+fn environment_hash_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Str),
+        value: Box::new(PhpType::Str),
+    }
 }
 
 /// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
@@ -752,6 +822,26 @@ pub(crate) fn lower_php_uname(
         abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
     }
     abi::emit_call_label(ctx.emitter, "__rt_php_uname");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `error_log()` through the stderr-oriented runtime helper.
+pub(crate) fn lower_error_log(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "error_log", 1, 4)?;
+    let message = expect_operand(inst, 0)?;
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    super::strings::load_value_as_string_to_regs(
+        ctx,
+        message,
+        "error_log message",
+        ptr_reg,
+        len_reg,
+    )?;
+    abi::emit_call_label(ctx.emitter, "__rt_error_log");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     store_if_result(ctx, inst)
 }
 

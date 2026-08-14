@@ -191,21 +191,49 @@ impl Checker {
                 Ok(Self::callable_wrapper_sig(&effective_sig))
             }
             CallableTarget::Method { object, method } => {
+                if method == "__invoke" {
+                    if let ExprKind::Variable(_) = &object.kind {
+                        if let Some(signature) = self.resolve_expr_callable_sig(object, env)? {
+                            return Ok(signature);
+                        }
+                    }
+                }
                 let object_ty = self.infer_type(object, env)?;
                 match object_ty {
+                    PhpType::Callable if method == "__invoke" => {
+                        Ok(dynamic_first_class_callable_sig())
+                    }
                     PhpType::Object(class_name) => {
+                        if let Some(interface_info) = self.interfaces.get(&class_name) {
+                            let method_key = crate::names::php_symbol_key(method);
+                            let sig = interface_info.methods.get(&method_key).ok_or_else(|| {
+                                CompileError::new(
+                                    span,
+                                    &format!(
+                                        "Undefined method for first-class callable: {}::{}",
+                                        class_name, method
+                                    ),
+                                )
+                            })?;
+                            let effective_sig =
+                                Self::callable_sig_for_declared_params(sig, &sig.declared_params);
+                            return Ok(Self::callable_wrapper_sig(&effective_sig));
+                        }
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let sig = class_info.methods.get(method).ok_or_else(|| {
-                            CompileError::new(
+                        let Some(sig) = class_info.methods.get(method) else {
+                            if method == "__invoke" {
+                                return Ok(dynamic_first_class_callable_sig());
+                            }
+                            return Err(CompileError::new(
                                 span,
                                 &format!(
                                     "Undefined method for first-class callable: {}::{}",
                                     class_name, method
                                 ),
-                            )
-                        })?;
+                            ));
+                        };
                         if let Some(visibility) = class_info.method_visibilities.get(method) {
                             let declaring_class = class_info
                                 .method_declaring_classes
@@ -229,6 +257,9 @@ impl Checker {
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))
+                    }
+                    PhpType::Mixed | PhpType::Union(_) if method == "__invoke" => {
+                        Ok(dynamic_first_class_callable_sig())
                     }
                     _ => Err(CompileError::new(
                         span,
@@ -314,5 +345,28 @@ impl Checker {
         Ok(self
             .resolve_first_class_callable_sig(target, span, env)?
             .return_type)
+    }
+}
+
+/// Returns the conservative variadic contract for a runtime-selected callable value.
+fn dynamic_first_class_callable_sig() -> FunctionSig {
+    FunctionSig {
+        params: vec![(
+            "args".to_string(),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        )],
+        param_type_exprs: vec![None],
+        param_attributes: vec![Vec::new()],
+        defaults: vec![Some(Expr::new(
+            ExprKind::ArrayLiteral(Vec::new()),
+            crate::span::Span::dummy(),
+        ))],
+        return_type: PhpType::Mixed,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params: vec![false],
+        declared_params: vec![true],
+        variadic: Some("args".to_string()),
+        deprecation: None,
     }
 }

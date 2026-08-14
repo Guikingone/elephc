@@ -149,6 +149,32 @@ fn test_parse_new_dynamic_object() {
     }
 }
 
+/// Verifies that a dynamic class name read through an array offset is retained as the
+/// `NewDynamic` class-name expression.
+#[test]
+fn test_parse_new_dynamic_object_from_array_offset() {
+    let stmts = parse_source("<?php $o = new $_SERVER['APP_RUNTIME']([]);");
+    match &stmts[0].kind {
+        StmtKind::Assign { value, .. } => match &value.kind {
+            ExprKind::NewDynamic { name_expr, args } => {
+                match &name_expr.kind {
+                    ExprKind::ArrayAccess { array, index } => {
+                        assert_eq!(array.kind, ExprKind::Variable("_SERVER".to_string()));
+                        assert_eq!(
+                            index.kind,
+                            ExprKind::StringLiteral("APP_RUNTIME".to_string())
+                        );
+                    }
+                    other => panic!("Expected ArrayAccess class name, got {:?}", other),
+                }
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("Expected NewDynamic, got {:?}", other),
+        },
+        other => panic!("Expected Assign, got {:?}", other),
+    }
+}
+
 /// Verifies that `<?php new Point(1, 2);` parses as an expression statement.
 #[test]
 fn test_parse_new_object_expression_statement() {

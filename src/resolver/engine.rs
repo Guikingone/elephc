@@ -12,16 +12,36 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::errors::CompileError;
-use crate::names::canonical_name_for_decl;
-use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
+use crate::names::{canonical_name_for_decl, Name, NameKind, DYNAMIC_INCLUDE_FUNCTION};
+use crate::parser::ast::{CatchClause, ClassMethod, Expr, ExprKind, Stmt, StmtKind};
 
 use super::discovery::FunctionVariantRegistry;
 use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
-use super::include_path::fold_include_path;
+use super::include_path::{fold_include_path, is_runtime_dynamic_include_path};
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
     register_const_imports, ResolveState,
 };
+
+/// Builds the internal runtime include call used when an include must remain expression-valued.
+pub(super) fn dynamic_include_call_kind(
+    path: Expr,
+    once: bool,
+    required: bool,
+    span: crate::span::Span,
+) -> ExprKind {
+    ExprKind::FunctionCall {
+        name: Name::from_parts(
+            NameKind::FullyQualified,
+            vec![DYNAMIC_INCLUDE_FUNCTION.to_string()],
+        ),
+        args: vec![
+            path,
+            Expr::new(ExprKind::BoolLiteral(once), span),
+            Expr::new(ExprKind::BoolLiteral(required), span),
+        ],
+    }
+}
 use super::stmt_exprs::resolve_stmt_exprs;
 
 /// Resolves a list of statements, expanding include/require effects and tracking
@@ -60,6 +80,19 @@ fn try_expand_value_include(
         StmtKind::Assign { name, .. } => IncludeValueCapture::Assign(name.clone()),
         _ => IncludeValueCapture::Return,
     };
+    if is_runtime_dynamic_include_path(path) {
+        let value = Expr::new(
+            dynamic_include_call_kind((**path).clone(), *once, *required, stmt.span),
+            stmt.span,
+        );
+        let rewritten = match capture {
+            IncludeValueCapture::Assign(name) => {
+                Stmt::new(StmtKind::Assign { name, value }, stmt.span)
+            }
+            IncludeValueCapture::Return => Stmt::new(StmtKind::Return(Some(value)), stmt.span),
+        };
+        return Ok(Some(vec![rewritten]));
+    }
     let expanded = expand_value_include(
         stmt.span,
         path,
@@ -114,6 +147,10 @@ pub(super) fn resolve_stmts(
         )?;
         match &stmt.kind {
             StmtKind::Include { path, once, required } => {
+                if is_runtime_dynamic_include_path(path) {
+                    result.push(stmt);
+                    continue;
+                }
                 if let Some(resolved) = resolve_include_stmt(
                     &stmt,
                     path,

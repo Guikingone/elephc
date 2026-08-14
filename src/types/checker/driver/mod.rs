@@ -31,7 +31,7 @@ use super::builtin_spl_classes::{
     inject_builtin_spl_classes, patch_builtin_spl_storage_signatures,
 };
 use super::builtin_spl_exceptions::inject_builtin_spl_exceptions;
-use super::builtin_stdclass::inject_builtin_stdclass;
+use super::builtin_stdclass::inject_builtin_core_object_classes;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
@@ -180,7 +180,7 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_spl_classes(&mut interface_map, &mut class_map) {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_stdclass(&mut class_map) {
+    if let Err(error) = inject_builtin_core_object_classes(&mut class_map) {
         errors.extend(error.flatten());
     }
     if let Err(error) = inject_builtin_user_filter(&mut class_map) {
@@ -214,14 +214,16 @@ pub(super) fn check_types_impl(
     let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
     interface_names.sort();
     for interface_name in interface_names {
-        if let Err(error) = build_interface_info_recursive(
+        let result = build_interface_info_recursive(
             &interface_name,
             &interface_map,
             &class_map,
             &mut checker,
             &mut next_interface_id,
             &mut building_interfaces,
-        ) {
+        );
+        building_interfaces.clear();
+        if let Err(error) = result {
             errors.extend(error.flatten());
         }
     }
@@ -234,13 +236,15 @@ pub(super) fn check_types_impl(
     let mut class_names: Vec<String> = class_map.keys().cloned().collect();
     class_names.sort();
     for class_name in class_names {
-        if let Err(error) = build_class_info_recursive(
+        let result = build_class_info_recursive(
             &class_name,
             &class_map,
             &mut checker,
             &mut next_class_id,
             &mut building,
-        ) {
+        );
+        building.clear();
+        if let Err(error) = result {
             errors.extend(error.flatten());
         }
     }

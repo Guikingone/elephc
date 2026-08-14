@@ -113,6 +113,31 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     }
 }
 
+/// Returns whether an expression denotes writable storage accepted by a by-reference call.
+///
+/// Named arguments delegate to their value. Container elements remain writable when their
+/// base is itself a stable local, property, static property, or container place. Nullsafe and
+/// computed-property reads are excluded because they do not guarantee one stable write target.
+fn is_writable_call_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_stable_place_receiver(object),
+        ExprKind::ArrayAccess { array, .. } => is_stable_place_receiver(array),
+        ExprKind::NamedArg { value, .. } => is_writable_call_place(value),
+        _ => false,
+    }
+}
+
+/// Returns whether a receiver chain can be read and written without changing its root.
+fn is_stable_place_receiver(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::PropertyAccess { object, .. } => is_stable_place_receiver(object),
+        ExprKind::ArrayAccess { array, .. } => is_stable_place_receiver(array),
+        _ => false,
+    }
+}
+
 impl Checker {
     /// Enforces PHP's syntactic "no argument unpacking after named arguments"
     /// rule on a call surface whose callee is not resolvable at compile time
@@ -143,22 +168,13 @@ impl Checker {
         })
     }
 
-    /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    /// Returns true when an argument expression is a writable PHP l-value.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
-        env: &TypeEnv,
+        _env: &TypeEnv,
     ) -> Result<bool, CompileError> {
-        match &arg.kind {
-            ExprKind::Variable(_) => Ok(true),
-            ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
-                Ok(matches!(
-                    self.infer_type(array, env)?.codegen_repr(),
-                    PhpType::Array(_)
-                ))
-            }
-            _ => Ok(false),
-        }
+        Ok(is_writable_call_place(arg))
     }
 
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
@@ -237,10 +253,31 @@ impl Checker {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Bool, PhpType::False) => true,
-            // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
-            // Refcounted/object boundaries do not yet validate the runtime tag, so keep
-            // those statically rejected instead of treating Mixed as universally safe.
-            (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
+            // The backend has explicit boxed-gradual cast funnels for scalar boundaries. Most
+            // unions use the same boxed representation as `Mixed`; compact nullable integers use
+            // `TaggedScalar` instead and deliberately remain excluded until their ABI conversion
+            // is explicit.
+            (
+                PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str,
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            ) if actual.codegen_repr() == PhpType::Mixed => true,
+            // Boxed unions keep the same representation. Concrete heap boundaries below use
+            // shared EIR narrowing with runtime checks before their payload is exposed.
+            (PhpType::Union(_), PhpType::Mixed) => true,
+            (
+                PhpType::Object(_) | PhpType::Callable,
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            ) if actual.codegen_repr() == PhpType::Mixed => true,
+            (PhpType::Array(element), actual @ (PhpType::Mixed | PhpType::Union(_)))
+                if element.codegen_repr() == PhpType::Mixed
+                    && actual.codegen_repr() == PhpType::Mixed => true,
+            (
+                PhpType::AssocArray { key, value },
+                actual @ (PhpType::Mixed | PhpType::Union(_)),
+            )
+                if key.codegen_repr() == PhpType::Mixed
+                    && value.codegen_repr() == PhpType::Mixed
+                    && actual.codegen_repr() == PhpType::Mixed => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
             (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
                 .iter()
@@ -480,7 +517,7 @@ impl Checker {
 
         let mut param_idx = 0usize;
         for arg in args {
-            let actual_ty = self.infer_type(arg, caller_env)?;
+            let actual_ty = self.infer_call_argument_type(arg, caller_env)?;
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }

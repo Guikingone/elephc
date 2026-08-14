@@ -629,31 +629,31 @@ fn test_error_alternative_if_rejects_brace_else() {
     );
 }
 
-// --- goto (unsupported) ---
+// --- terminal goto ---
 
-/// Verifies `goto` is rejected with a diagnostic that names the construct, not a generic
-/// "unexpected token" error.
+/// Verifies a goto whose target can fall through remains outside the supported subset.
 #[test]
-fn test_error_goto_is_not_supported() {
+fn test_error_non_terminal_goto_is_not_supported() {
     expect_error("<?php goto done; done: echo 1;", "`goto` is not supported");
 }
 
-/// Verifies a `goto` target label on its own is rejected and names the label.
+/// Verifies a non-terminal label on its own reports why it cannot be structured safely.
 #[test]
-fn test_error_goto_label_is_not_supported() {
-    expect_error("<?php done: echo 1;", "`goto` labels are not supported");
-    expect_error("<?php done: echo 1;", "the label `done:`");
+fn test_error_non_terminal_goto_label_is_not_supported() {
+    expect_error(
+        "<?php done: echo 1;",
+        "target does not begin a self-contained terminal tail",
+    );
 }
 
 // --- References inside array literals ---
 
-/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
-/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+/// Verifies `[&$x]` still rejects an escaping ordinary local with a lifetime-specific diagnostic.
 #[test]
 fn test_error_reference_element_in_array_literal() {
     expect_error(
         "<?php $first = 1; $r = [&$first];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
 }
 
@@ -662,10 +662,10 @@ fn test_error_reference_element_in_array_literal() {
 fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
     expect_error(
         "<?php $a = 1; $r = [\"k\" => &$a];",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
     expect_error(
         "<?php $a = 1; $r = array(&$a);",
-        "Reference elements in array literals (`[&$x]`) are not supported",
+        "ordinary local reference cells cannot yet outlive their declaring scope",
     );
 }

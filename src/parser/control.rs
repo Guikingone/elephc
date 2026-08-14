@@ -19,8 +19,8 @@ use crate::parser::alt_syntax::{
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::parser::stmt::{
-    expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
-    parse_destructuring_pattern_unpack, parse_name, starts_destructuring_pattern,
+    assignment_target_store_stmt, expect_semicolon, expect_token, name_starts_at, parse_block,
+    parse_body, parse_destructuring_pattern_unpack, parse_name, starts_destructuring_pattern,
 };
 use crate::span::Span;
 
@@ -235,14 +235,10 @@ pub fn parse_foreach(
         ));
     }
 
-    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
-        Some(Token::Variable(n)) => n.clone(),
-        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
-    };
-    *pos += 1;
+    let (first_var, first_bind) = parse_foreach_assignment_target(tokens, pos, span, "key")?;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref, unpack) =
+    let (key_var, value_var, value_by_ref, unpack, key_bind, value_bind) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -269,25 +265,47 @@ pub fn parse_foreach(
                 ));
             }
             let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
-            (Some(first_var), val_var, false, Some(unpack))
+            (Some(first_var), val_var, false, Some(unpack), first_bind, None)
         } else {
-            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => n.clone(),
-                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
-            };
-            *pos += 1;
-            (Some(first_var), val_var, value_by_ref, None)
+            let (val_var, value_bind) =
+                parse_foreach_assignment_target(tokens, pos, span, "value")?;
+            if value_by_ref && value_bind.is_some() {
+                return Err(CompileError::new(
+                    span,
+                    "By-reference foreach values currently require a variable target",
+                ));
+            }
+            (
+                Some(first_var),
+                val_var,
+                value_by_ref,
+                None,
+                first_bind,
+                value_bind,
+            )
         }
     } else {
-        (None, first_var, first_by_ref, None)
+        if first_by_ref && first_bind.is_some() {
+            return Err(CompileError::new(
+                span,
+                "By-reference foreach values currently require a variable target",
+            ));
+        }
+        (None, first_var, first_by_ref, None, None, first_bind)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
     let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
-    let body = match unpack {
+    let mut body = match unpack {
         Some(unpack) => prepend_stmt(unpack, body),
         None => body,
     };
+    if let Some(value_bind) = value_bind {
+        body = prepend_stmt(value_bind, body);
+    }
+    if let Some(key_bind) = key_bind {
+        body = prepend_stmt(key_bind, body);
+    }
 
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -299,6 +317,35 @@ pub fn parse_foreach(
         },
         span,
     ))
+}
+
+/// Parses one non-destructuring `foreach` target, lowering a complex lvalue to a hidden
+/// loop variable plus a write at the start of every iteration.
+fn parse_foreach_assignment_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    role: &str,
+) -> Result<(String, Option<Stmt>), CompileError> {
+    let target_span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
+    let target = parse_expr(tokens, pos)?;
+    if let ExprKind::Variable(name) = &target.kind {
+        return Ok((name.clone(), None));
+    }
+
+    let value_var = format!(
+        "__elephc_foreach_{}_{}_{}",
+        role, target_span.line, target_span.col
+    );
+    let value = Expr::new(ExprKind::Variable(value_var.clone()), target_span);
+    let bind = Stmt::new(
+        assignment_target_store_stmt(target, value, target_span)?,
+        target_span,
+    );
+    Ok((value_var, Some(bind)))
 }
 
 /// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
@@ -358,13 +405,7 @@ pub fn parse_for(
     *pos += 1;
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'for'")?;
 
-    let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
-        let init_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, init_span)?;
-        Some(Box::new(s))
-    } else {
-        None
-    };
+    let init = parse_for_clause_statements(tokens, pos, &Token::Semicolon)?;
     expect_semicolon(tokens, pos)?;
 
     let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
@@ -374,13 +415,7 @@ pub fn parse_for(
     };
     expect_semicolon(tokens, pos)?;
 
-    let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
-        let update_span = tokens[*pos].1.span;
-        let s = parse_assign_inline(tokens, pos, update_span)?;
-        Some(Box::new(s))
-    } else {
-        None
-    };
+    let update = parse_for_clause_statements(tokens, pos, &Token::RParen)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
     let body = parse_control_body(tokens, pos, &Token::EndFor, "endfor")?;
@@ -394,6 +429,56 @@ pub fn parse_for(
         },
         span,
     ))
+}
+
+/// Parses the comma-separated statement expressions in a `for` initializer or update clause.
+/// The returned order is the PHP source evaluation order and is retained through lowering.
+fn parse_for_clause_statements(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    terminator: &Token,
+) -> Result<Option<Box<Stmt>>, CompileError> {
+    let mut statements = Vec::new();
+    while *pos < tokens.len() && tokens[*pos].0 != *terminator {
+        let statement_span = tokens[*pos].1.span;
+        statements.push(parse_for_clause_statement(tokens, pos, statement_span)?);
+        if *pos >= tokens.len() || tokens[*pos].0 != Token::Comma {
+            break;
+        }
+        *pos += 1;
+    }
+    Ok(match statements.len() {
+        0 => None,
+        1 => Some(Box::new(
+            statements.pop().expect("one for-clause statement was parsed"),
+        )),
+        _ => {
+            let span = statements[0].span;
+            Some(Box::new(Stmt::new(StmtKind::Synthetic(statements), span)))
+        }
+    })
+}
+
+/// Parses one `for` initializer/update item, accepting both assignments and call expressions.
+fn parse_for_clause_statement(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let start = *pos;
+    match parse_assign_inline(tokens, pos, span) {
+        Ok(stmt) => Ok(stmt),
+        Err(assign_error) => {
+            *pos = start;
+            match parse_expr(tokens, pos) {
+                Ok(expr) if *pos > start => Ok(Stmt::new(StmtKind::ExprStmt(expr), span)),
+                _ => {
+                    *pos = start;
+                    Err(assign_error)
+                }
+            }
+        }
+    }
 }
 
 /// Parse: try { stmts } (catch (TypeA|TypeB $e) { stmts })+ (finally { stmts })?

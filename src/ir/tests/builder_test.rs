@@ -215,6 +215,24 @@ fn deferred_local_load_release_is_pruned_for_concrete_storage() {
     assert!(function.instructions[1].operands.is_empty());
 }
 
+/// Keeps the concrete frame representation after `unset()` so earlier instructions retain
+/// the storage shape they were lowered against.
+#[test]
+fn local_storage_widening_ignores_later_void_state() {
+    let mut function = Function::new("unset_storage".to_string(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let slot = builder.add_local(
+        Some("value".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+
+    builder.widen_local_storage_type(slot, PhpType::Void);
+
+    assert_eq!(builder.local_php_type(slot), PhpType::Int);
+}
+
 /// Preserves an explicit owned-slot cleanup even when its storage remains concrete.
 #[test]
 fn owned_local_load_release_is_not_pruned_for_concrete_storage() {

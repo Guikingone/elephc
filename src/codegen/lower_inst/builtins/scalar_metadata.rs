@@ -417,10 +417,7 @@ pub(crate) fn lower_constant(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 /// Returns whether the emitted constant registry contains a canonicalized global name.
 fn const_registry_contains(ctx: &FunctionContext<'_>, name: &str) -> bool {
     let normalized = name.trim_start_matches('\\');
-    ctx.module
-        .const_registry
-        .iter()
-        .any(|(candidate, _)| candidate == normalized)
+    ctx.module.global_constants.contains_key(normalized)
 }
 
 /// Materializes a string constant name and invokes a runtime registry lookup helper.
@@ -582,4 +579,3 @@ pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates() -> V
     }
     candidates
 }
-

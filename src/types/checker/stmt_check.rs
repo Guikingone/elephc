@@ -94,9 +94,12 @@ impl Checker {
             | StmtKind::Global { .. }
             | StmtKind::StaticVar { .. }
             | StmtKind::PropertyAssign { .. }
+            | StmtKind::PropertyRefAssign { .. }
             | StmtKind::StaticPropertyAssign { .. }
             | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. }
+            | StmtKind::StaticPropertyElementRefAssign { .. }
+            | StmtKind::DynamicStaticPropertyWrite { .. }
             | StmtKind::PropertyArrayPush { .. }
             | StmtKind::PropertyArrayAssign { .. } => self.check_assignment_like_stmt(stmt, env),
             StmtKind::Foreach { .. }
@@ -107,8 +110,9 @@ impl Checker {
             | StmtKind::For { .. }
             | StmtKind::Throw(..)
             | StmtKind::Try { .. } => self.check_control_flow_stmt(stmt, env),
-            StmtKind::Include { .. } => {
-                Err(CompileError::new(stmt.span, "Unresolved include statement"))
+            StmtKind::Include { path, .. } => {
+                self.infer_type(path, env)?;
+                Ok(())
             }
             StmtKind::PackedClassDecl { .. } => Ok(()),
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),

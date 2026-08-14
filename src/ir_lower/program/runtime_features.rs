@@ -16,6 +16,12 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.mb_strlen |= features.mb_strlen;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
+    module.required_runtime_features.const_introspection |= features.const_introspection;
+    module.required_runtime_features.class_introspection |= features.class_introspection;
+    module.required_runtime_features.class_relation_introspection |=
+        features.class_relation_introspection;
+    module.required_runtime_features.class_methods_introspection |=
+        features.class_methods_introspection;
     module.required_runtime_features.pdo_udf |= features.pdo_udf;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
@@ -34,13 +40,51 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
         for (inst_index, inst) in function.instructions.iter().enumerate() {
             match inst.op {
                 Op::RuntimeCall => {
+                    features.eval_bridge |= matches!(
+                        inst.immediate,
+                        Some(Immediate::RuntimeCall(
+                            crate::ir::RuntimeCallTarget::DynamicInclude { .. }
+                        ))
+                    );
                     if let Some(target) = typed_builtin_target(inst) {
                         features.regex |= target.uses_regex_runtime();
                         features.mb_strlen |= target.uses_mb_strlen_runtime();
+                        features.eval_bridge |= target == crate::ir::RuntimeFnId::Extract;
                         features.phar_archive |= target.publishes_phar_symbols()
                             && function_belongs_to_phar_archive_helper_class(function);
                         features.descriptor_invoker |=
                             typed_builtin_requires_descriptor_invoker(function, inst, target);
+                        features.const_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::Constant
+                                | crate::ir::RuntimeFnId::Defined
+                                | crate::ir::RuntimeFnId::EnumExists
+                        );
+                        features.class_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::ClassExists
+                                | crate::ir::RuntimeFnId::InterfaceExists
+                                | crate::ir::RuntimeFnId::TraitExists
+                        ) && inst
+                            .operands
+                            .first()
+                            .copied()
+                            .is_some_and(|operand| !value_is_const_string(function, operand));
+                        features.class_relation_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::ClassImplements
+                                | crate::ir::RuntimeFnId::ClassParents
+                                | crate::ir::RuntimeFnId::ClassUses
+                        ) && inst
+                            .operands
+                            .first()
+                            .copied()
+                            .is_some_and(|operand| !value_is_const_string(function, operand));
+                        features.class_methods_introspection |= matches!(
+                            target,
+                            crate::ir::RuntimeFnId::MethodExists
+                                | crate::ir::RuntimeFnId::PropertyExists
+                        ) && member_exists_call_requires_runtime_registry(function, inst);
                     }
                 }
                 Op::LanguageConstructCall => {
@@ -71,11 +115,120 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 Op::PdoAdapterAddr => {
                     features.pdo_udf = true;
                 }
+                Op::ObjectNew => {
+                    if object_new_requires_class_introspection(module, function, inst) {
+                        features.class_introspection = true;
+                    }
+                    if object_new_requires_runtime_reflection(module, function, inst) {
+                        features.eval_bridge = true;
+                    }
+                }
                 _ => {}
             }
         }
     }
     features
+}
+
+/// Returns true when a Reflection owner constructor depends on runtime-only metadata.
+fn object_new_requires_runtime_reflection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(class_name) = module.data.class_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    if !matches!(
+        php_symbol_key(class_name.trim_start_matches('\\')).as_str(),
+        "reflectionclass"
+            | "reflectionobject"
+            | "reflectionfunction"
+            | "reflectionmethod"
+            | "reflectionproperty"
+            | "reflectionparameter"
+            | "reflectionclassconstant"
+            | "reflectionenum"
+            | "reflectionenumunitcase"
+            | "reflectionenumbackedcase"
+    ) {
+        return false;
+    }
+    inst.operands.iter().any(|operand| {
+        function.value(*operand).is_some_and(|value| {
+            let ty = value.php_type.codegen_repr();
+            matches!(
+                ty,
+                PhpType::Callable | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+            ) || (ty == PhpType::Str && !value_is_const_string(function, *operand))
+        })
+    })
+}
+
+/// Returns true when a dynamic Reflection member constructor needs class lookup tables.
+fn object_new_requires_class_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return false;
+    };
+    let Some(class_name) = module.data.class_names.get(data.as_raw() as usize) else {
+        return false;
+    };
+    if class_name != "ReflectionMethod" && class_name != "ReflectionProperty" {
+        return false;
+    }
+    inst.operands
+        .iter()
+        .take(2)
+        .any(|&operand| !value_is_const_string(function, operand))
+}
+
+/// Returns whether a lowered value is produced by a literal string instruction.
+fn value_is_const_string(function: &Function, value: crate::ir::ValueId) -> bool {
+    function
+        .instructions
+        .iter()
+        .find(|inst| inst.result == Some(value))
+        .is_some_and(|inst| matches!(inst.op, Op::ConstStr | Op::ConstClassName))
+}
+
+/// Returns whether member-existence lowering needs the closed-world runtime registry.
+fn member_exists_call_requires_runtime_registry(
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let dynamic_member = inst
+        .operands
+        .get(1)
+        .copied()
+        .is_some_and(|operand| !value_is_const_string(function, operand));
+    let gradual_target = inst
+        .operands
+        .first()
+        .and_then(|operand| function.value(*operand))
+        .is_some_and(|value| {
+            matches!(
+                value.php_type.codegen_repr(),
+                crate::types::PhpType::Mixed | crate::types::PhpType::Union(_)
+            )
+        });
+    let dynamic_string_target = inst
+        .operands
+        .first()
+        .copied()
+        .is_some_and(|operand| {
+            matches!(
+                function.value(operand).map(|value| value.php_type.codegen_repr()),
+                Some(crate::types::PhpType::Str)
+            ) && !value_is_const_string(function, operand)
+        });
+    dynamic_member || gradual_target || dynamic_string_target
 }
 
 /// Returns true when a lowered function owns hidden eval scope handle slots.

@@ -12,7 +12,7 @@ mod managed;
 mod platform;
 
 use super::{
-    callables, diagnostics, exceptions, generators, numeric, round_mode, strings,
+    callables, diagnostics, exceptions, filter, generators, numeric, round_mode, strings,
     system,
 };
 use crate::codegen_support::emit::Emitter;
@@ -73,6 +73,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
+    strings::emit_str_replace_array(emitter);
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
@@ -144,6 +145,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_microtime_mixed(emitter);
     system::emit_php_uname(emitter);
     system::emit_getenv(emitter);
+    system::emit_getenv_all(emitter);
+    system::emit_error_log(emitter);
     system::emit_shell_exec(emitter);
     system::emit_date(emitter);
     system::emit_date_default_timezone(emitter);
@@ -173,6 +176,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_last_error_msg(emitter);
     system::emit_json_validate(emitter);
     system::emit_serialize(emitter);
+    system::emit_unpack_integer_sequence(emitter);
     system::emit_unserialize(emitter);
     if features.regex {
         system::emit_preg_strip(emitter);
@@ -187,6 +191,27 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_match_unhandled(emitter);
     system::emit_stack_limit_init(emitter);
     system::emit_stack_overflow(emitter);
+    // Reflection shell methods always reference the shared sorted-name search.
+    system::emit_rt_sorted_name_search(emitter);
+    if features.const_introspection {
+        system::emit_rt_defined(emitter);
+        system::emit_rt_enum_exists(emitter);
+        system::emit_rt_constant(emitter);
+    }
+    if features.class_introspection {
+        system::emit_rt_class_exists(emitter);
+        system::emit_rt_interface_exists(emitter);
+        system::emit_rt_trait_exists(emitter);
+    }
+    if features.class_relation_introspection {
+        system::emit_rt_class_relation_probe(emitter);
+        system::emit_rt_class_relation_lookup(emitter);
+        system::emit_rt_hash_from_name_list(emitter);
+    }
+    if features.class_methods_introspection {
+        system::emit_rt_array_from_name_list(emitter);
+        system::emit_rt_member_exists(emitter);
+    }
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);
@@ -202,6 +227,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     managed::emit_managed_runtime(emitter, features);
     platform::emit_platform_runtime(emitter, features);
+    filter::emit_filter_trim_ws(emitter);
+    filter::emit_filter_int_range(emitter);
+    filter::emit_filter_validate_int(emitter);
+    filter::emit_filter_validate_float(emitter);
+    filter::emit_filter_validate_bool_str(emitter);
+    filter::emit_filter_validate_ip4(emitter);
+    filter::emit_filter_validate_ip6(emitter);
 }
 
 #[cfg(test)]

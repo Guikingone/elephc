@@ -175,3 +175,68 @@ foreach ($renumbered as $key => $value) { echo $key, '=', $value, ';'; }
     );
     assert_eq!(out, "5=20;b=30;|0=20;b=30;");
 }
+
+/// Verifies a nullable integer slice length is handled after a non-null branch narrows it.
+#[test]
+fn test_array_slice_nullable_integer_length() {
+    let output = compile_and_run(
+        r#"<?php
+function first_parts(string $value, ?int $limit): string {
+    $parts = explode(':', $value, -1);
+    return implode(':', $limit === null ? $parts : array_slice($parts, 0, $limit));
+}
+echo first_parts('a:b:c', 2);
+"#,
+    );
+    assert_eq!(output, "a:b");
+}
+
+/// `array_shift()` accepts associative storage, returns the insertion-order head, removes it from
+/// the caller-visible array, and retains surviving string keys while renumbering integer keys.
+#[test]
+fn test_array_shift_associative_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$data = ["prefix" => "root", 7 => 20, "tail" => 30];
+$first = array_shift($data);
+echo $first, "|", count($data), "|", $data[0], "|", $data["tail"];
+"#,
+    );
+    assert_eq!(out, "root|2|20|30");
+}
+
+/// Verifies a generic `array<mixed>` reference parameter accepts an associative-array value,
+/// boxes that hash into its Mixed slot, and preserves balanced ownership after the mutation.
+#[test]
+fn test_array_unshift_assoc_value_into_generic_array_parameter() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function trace_unshift(array &$trace): int {
+    return array_unshift($trace, [
+        "function" => "new Demo",
+        "file" => "demo.php",
+        "line" => 319,
+    ]);
+}
+$trace = [["function" => "old", "file" => "old.php", "line" => 1]];
+echo trace_unshift($trace), "|", $trace[0]["function"], "|", $trace[0]["line"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|new Demo|319");
+}
+
+/// A boxed gradual operand that contains an associative array routes through the
+/// representation-neutral helper and preserves string keys when requested.
+#[test]
+fn test_array_slice_gradual_associative_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function gradualSliceSource(mixed $value): mixed { return $value; }
+$source = gradualSliceSource(["a" => 10, "b" => 20, "c" => 30]);
+$slice = array_slice($source, 1, null, true);
+echo count($slice), "|", $slice["b"], "|", $slice["c"];
+"#,
+    );
+    assert_eq!(out, "2|20|30");
+}

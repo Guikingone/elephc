@@ -2,7 +2,7 @@
 title: "constant() — internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 305
+  order: 306
 ---
 
 ## `constant()` — internals
@@ -16,23 +16,25 @@ sidebar:
 
 ### Lowering notes
 
-- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
-- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
+- Uses the `runtime_call` strategy from the single-source builtin descriptor.
+- Emits the typed EIR target `runtime.constant` through `BuiltinLoweringContext`.
+- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
 
-- **Target strategy**: `eir_primitive`
+- **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `non_heap`
-- **Effects**: `static (1 declared effects)`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
+- **Typed EIR target**: `runtime.constant`
+- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 

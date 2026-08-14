@@ -203,6 +203,18 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies `implode()` normalizes a gradual indexed-array payload before reading its slots.
+#[test]
+fn test_implode_gradual_indexed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$values = $argc > 0 ? [1, 2, 3] : false;
+echo implode(",", $values);
+"#,
+    );
+    assert_eq!(out, "1,2,3");
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {
@@ -807,4 +819,30 @@ try { $randomizer->getBytesFromString('x', 0); } catch (ValueError $error) { ech
 "#,
     );
     assert_eq!(out, "xxxx:4:empty:length");
+}
+
+/// Verifies `str_getcsv()` preserves quoted separators and collapses doubled enclosures.
+#[test]
+fn test_str_getcsv_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$fields = str_getcsv('one,"two,three","say ""hi"""', ',', '"', '');
+echo count($fields), ':', $fields[0], ':', $fields[1], ':', $fields[2];
+"#,
+    );
+    assert_eq!(out, "3:one:two,three:say \"hi\"");
+}
+
+/// Verifies an indexed Mixed replacement array is converted element-by-element to PHP strings.
+#[test]
+fn test_str_replace_array_search_mixed_replace() {
+    let out = compile_and_run(
+        r#"<?php
+function replacements(mixed $first, mixed $second): array {
+    return [$first, $second];
+}
+echo str_replace(["a", "b"], replacements(1, null), "abc");
+"#,
+    );
+    assert_eq!(out, "1c");
 }

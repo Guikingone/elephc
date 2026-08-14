@@ -21,6 +21,7 @@ pub struct NativeFunction {
     pub(super) param_by_ref: Vec<bool>,
     pub(super) variadic_index: Option<usize>,
     pub(super) return_type: Option<EvalParameterType>,
+    pub(super) required_param_count: Option<usize>,
     pub(super) bridge_supported: bool,
 }
 
@@ -41,6 +42,7 @@ impl NativeFunction {
             param_by_ref: Vec::new(),
             variadic_index: None,
             return_type: None,
+            required_param_count: None,
             bridge_supported: true,
         }
     }
@@ -132,6 +134,15 @@ impl NativeFunction {
         self.return_type = Some(return_type);
     }
 
+    /// Records the exact required arity carried by a runtime callable descriptor.
+    pub fn set_required_param_count(&mut self, required_param_count: usize) -> bool {
+        if required_param_count > self.param_count {
+            return false;
+        }
+        self.required_param_count = Some(required_param_count);
+        true
+    }
+
     /// Records whether eval may dispatch this callback through the generated bridge.
     pub fn set_bridge_supported(&mut self, supported: bool) {
         self.bridge_supported = supported;
@@ -159,6 +170,9 @@ impl NativeFunction {
 
     /// Returns the minimum number of required parameters implied by defaults.
     pub fn required_param_count(&self) -> usize {
+        if let Some(required_param_count) = self.required_param_count {
+            return required_param_count;
+        }
         if let Some(index) = self.variadic_index {
             return (0..index)
                 .rfind(|position| self.param_default(*position).is_none())

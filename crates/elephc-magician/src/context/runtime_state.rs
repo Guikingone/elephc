@@ -127,14 +127,52 @@ impl ElephcEvalContext {
         self.array_cursors.insert(key, cursor);
     }
 
-    /// Returns true when an eval include key was already loaded by this context.
+    /// Returns true when an eval include key was loaded in this context or process request.
     pub fn has_included_file(&self, path: &str) -> bool {
-        self.included_files.contains(path)
+        if self.included_files.contains(path) {
+            return true;
+        }
+        #[cfg(not(test))]
+        {
+            return global_eval_included_files()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains(path);
+        }
+        #[cfg(test)]
+        false
     }
 
-    /// Records one successfully loaded eval include key for include_once/require_once.
+    /// Records one successfully loaded eval include key in local and process-request state.
     pub fn mark_included_file(&mut self, path: impl Into<String>) {
-        self.included_files.insert(path.into());
+        let path = path.into();
+        self.included_files.insert(path.clone());
+        #[cfg(not(test))]
+        global_eval_included_files()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(path);
+    }
+
+    /// Pushes whether the next interpreter program originates from an actual include file.
+    pub fn push_include_execution(&mut self, is_include: bool) {
+        self.include_execution_stack.push(is_include);
+    }
+
+    /// Restores the previous interpreter program origin after nested include or eval execution.
+    pub fn pop_include_execution(&mut self) {
+        self.include_execution_stack.pop();
+    }
+
+    /// Returns true only for statements parsed directly from the active include file.
+    pub fn executing_include(&self) -> bool {
+        self.include_execution_stack.last().copied().unwrap_or(false)
+    }
+
+    /// Claims one AOT-backed class-like declaration at its first runtime include point.
+    pub fn claim_aot_include_classlike(&mut self, name: &str) -> bool {
+        self.claimed_aot_include_classlikes
+            .insert(normalize_class_name(name))
     }
 
     /// Stores the non-owned global scope handle used by eval `global` aliases.

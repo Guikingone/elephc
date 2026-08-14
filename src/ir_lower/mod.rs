@@ -18,6 +18,7 @@ mod effects_lookup;
 mod expr;
 mod fibers;
 mod function;
+mod gradual_coercions;
 mod ownership;
 mod program;
 mod reflection;

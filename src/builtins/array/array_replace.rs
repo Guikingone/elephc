@@ -40,8 +40,11 @@ builtin! {
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
-    let accepted =
-        |t: &PhpType| matches!(t, PhpType::AssocArray { .. }) || t.is_scalar_indexed_array();
+    let accepted = |t: &PhpType| {
+        matches!(t, PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
+            || t.is_scalar_indexed_array()
+            || matches!(t, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
+    };
     if !accepted(&ty1) || !accepted(&ty2) {
         return Err(CompileError::new(
             cx.span,
@@ -50,6 +53,11 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 cx.name
             ),
         ));
+    }
+    if matches!(ty1, PhpType::Mixed | PhpType::Union(_))
+        || matches!(ty2, PhpType::Mixed | PhpType::Union(_))
+    {
+        return Ok(PhpType::Mixed);
     }
     Ok(PhpType::two_input_hash_result(&ty1, &ty2))
 }

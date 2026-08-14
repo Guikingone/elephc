@@ -19,6 +19,40 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     let canonical = name.as_str();
+    if canonical == crate::names::DYNAMIC_INCLUDE_FUNCTION {
+        let [path, once, required] = args else {
+            panic!("checked internal dynamic include must carry three operands");
+        };
+        let ExprKind::BoolLiteral(once) = &once.kind else {
+            panic!("checked internal dynamic include once flag must be a boolean literal");
+        };
+        let ExprKind::BoolLiteral(required) = &required.kind else {
+            panic!("checked internal dynamic include required flag must be a boolean literal");
+        };
+        let path = lower_expr(ctx, path);
+        let call = ctx.emit_value(
+            Op::RuntimeCall,
+            vec![path.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::DynamicInclude {
+                once: *once,
+                required: *required,
+                strict_php: crate::strict_php::is_enabled(),
+            })),
+            PhpType::Mixed,
+            effects_lookup::runtime_effects(),
+            Some(expr.span),
+        );
+        release_owned_call_arg_temporaries(
+            ctx,
+            &[path.value],
+            Some(call.value),
+            &ReturnArgAlias::None,
+            expr.span,
+        );
+        ctx.mark_eval_executed();
+        ctx.apply_eval_barrier();
+        return call;
+    }
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
     }
@@ -37,20 +71,28 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
         return value;
     }
-    // A mutating builtin whose by-reference array argument is a property, static property, or
-    // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
-    // any builtin fast path runs, so the rewritten call reaches the local-variable
-    // by-reference lowering that actually stores the copy-on-write result back.
-    if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
+    // A call whose by-reference array argument is a property, static property, or container
+    // element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before argument
+    // materialization, so copy-on-write separation is stored back into the caller's place.
+    if let Some(value) = ref_place_args::lower_ref_place_function_call(ctx, name, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }
-    if let Some(value) = lower_single_arg_assert(ctx, canonical, args, expr) {
+    if let Some(value) =
+        compat_preludes::lower_single_arg_assert(ctx, canonical, args, expr)
+    {
         return value;
     }
-    if let Some(value) = lower_default_initial_array_reduce(ctx, canonical, args, expr) {
+    if let Some(value) =
+        compat_preludes::lower_default_initial_array_reduce(ctx, canonical, args, expr)
+    {
+        return value;
+    }
+    if let Some(value) =
+        compat_preludes::lower_backend_gap_builtin_shape(ctx, canonical, args, expr)
+    {
         return value;
     }
     if let Some(value) = lower_static_array_reduce(ctx, canonical, args, expr) {
@@ -70,6 +112,11 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) =
+        compat_preludes::lower_gradual_array_merge(ctx, canonical, args, expr)
+    {
+        return value;
+    }
     if let Some(value) = lower_array_internal_pointer(ctx, canonical, args, expr) {
         return value;
     }
@@ -82,10 +129,22 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_eval_class_probe(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_static_filter_var(ctx, canonical, args, expr) {
+        return value;
+    }
     let extension_builtin = source_prefers_extension_builtin(canonical);
     let sig = call_signature(ctx, canonical, extension_builtin);
     let is_extern = ctx.extern_functions.contains_key(canonical);
     let is_user_function = ctx.functions.contains_key(canonical) && !extension_builtin;
+    let is_builtin =
+        crate::types::checker::builtins::is_supported_builtin_function(canonical);
+    if !is_extern && !is_user_function && !is_builtin {
+        if let Some(value) =
+            super::late_bound_call::lower_late_bound_undefined_call(ctx, canonical, expr)
+        {
+            return value;
+        }
+    }
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
@@ -221,6 +280,10 @@ pub(super) fn emit_builtin_call_value(
                 &return_alias,
                 span,
             );
+            if php_symbol_key(name.trim_start_matches('\\')) == "extract" {
+                ctx.mark_eval_executed();
+                ctx.apply_eval_barrier();
+            }
             return call;
         }
     }

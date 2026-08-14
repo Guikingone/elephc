@@ -385,6 +385,21 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             strict_types,
             attributes: Vec::new(),
         }],
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => vec![Stmt {
+            kind: StmtKind::PropertyRefAssign {
+                object: Box::new(prune_expr(*object)),
+                property,
+                source: prune_expr(source),
+            },
+            span,
+            source_mode,
+            strict_types,
+            attributes: Vec::new(),
+        }],
         StmtKind::StaticPropertyAssign {
             receiver,
             property,

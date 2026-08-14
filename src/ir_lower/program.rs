@@ -16,8 +16,8 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{
-    validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType, LocalKind, Module,
-    Op, TraitMethodInfo,
+    validate_function, validate_module, ExternDecl, ExternParamDecl, Function, Immediate, IrType,
+    LocalKind, Module, Op, TraitMethodInfo, ValidationError,
 };
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
@@ -114,6 +114,38 @@ pub(crate) fn lower(
     );
     include_lowered_runtime_features(&mut module);
     super::effect_refinement::refine_module(&mut module);
-    validate_module(&module)?;
+    validate_lowered_module(&module)?;
     Ok(module)
+}
+
+/// Validates the lowered module, reporting every malformed body when backend inventory is active.
+///
+/// Ordinary builds preserve fail-fast validation. The inventory mode names every failing body and
+/// its first validator error before returning the first error, extending the same scan-all contract
+/// used by backend lowering to the EIR boundary that precedes it.
+fn validate_lowered_module(module: &Module) -> Result<(), ValidationError> {
+    if std::env::var("ELEPHC_BACKEND_INVENTORY").as_deref() != Ok("1") {
+        return validate_module(module);
+    }
+
+    let mut first_error = None;
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        if let Err(error) = validate_function(function) {
+            eprintln!("EIR validation failure in {}: {:?}", function.name, error);
+            first_error.get_or_insert(error);
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }

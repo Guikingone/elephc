@@ -16,7 +16,15 @@ pub(super) fn builtin_reflection_function() -> FlattenedClass {
     let mut class = builtin_reflection_owner_class(
         "ReflectionFunction",
         true,
-        vec![("function", Some(TypeExpr::Str), None, false)],
+        vec![(
+            "function",
+            Some(TypeExpr::Union(vec![
+                TypeExpr::Named(Name::unqualified("Closure")),
+                TypeExpr::Str,
+            ])),
+            None,
+            false,
+        )],
     );
     if let Some(constructor) = class
         .methods
@@ -36,7 +44,7 @@ pub(super) fn builtin_reflection_parameter() -> FlattenedClass {
         name: "ReflectionParameter".to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,

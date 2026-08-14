@@ -18,6 +18,7 @@
 //!   `session_set_save_handler()`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::Path;
 
 use crate::parser::ast::{Program, StmtKind};
 
@@ -39,9 +40,8 @@ mod usage;
 ///   module) that does not exist here, and library code branches on those names to reach for
 ///   `fastcgi_finish_request()` / `apache_*` functions elephc does not provide.
 ///
-/// Why this matters more than cosmetics: framework code gates on `PHP_SAPI === 'cli'` (Symfony's
-/// `Debug`/`ErrorHandler` and Laravel's `runningInConsole()` both do) to decide whether it is in
-/// a console or a request. Reporting `cli` under `--web` would put every such library on the
+/// Why this matters more than cosmetics: application code can gate on `PHP_SAPI === 'cli'` to
+/// decide whether it is in a console or a request. Reporting `cli` under `--web` would put every library on the
 /// console path inside an HTTP request. `cli-server` is on the "web" side of every such test
 /// while still being a name libraries already know.
 ///
@@ -193,6 +193,10 @@ $_SESSION = [];
 $_SERVER['REQUEST_METHOD'] = elephc_web_method();
 $_SERVER['REQUEST_URI']    = elephc_web_uri();
 $_SERVER['QUERY_STRING']   = elephc_web_query_string();
+$_SERVER['SCRIPT_FILENAME'] = __FILE__;
+$_SERVER['DOCUMENT_ROOT']   = __DIR__;
+$_SERVER['SCRIPT_NAME']     = '/' . basename(__FILE__);
+$_SERVER['PHP_SELF']        = $_SERVER['SCRIPT_NAME'];
 $__elephc_hc = elephc_web_header_count();
 for ($__elephc_i = 0; $__elephc_i < $__elephc_hc; $__elephc_i++) {
     $__elephc_hn = elephc_web_header_name($__elephc_i);
@@ -1843,6 +1847,7 @@ pub fn inject_if_web(
     web: bool,
     php_version: PhpVersion,
     ini_overrides: &[(String, String)],
+    entry_path: &Path,
 ) -> Program {
     if !web {
         return program;
@@ -1881,7 +1886,8 @@ pub fn inject_if_web(
             &crate::opcache_prelude::render_ini_module_known(true),
         );
     let tokens = crate::lexer::tokenize(&prelude).expect("web prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("web prelude must parse");
+    let combined = crate::parser::parse_internal(&tokens).expect("web prelude must parse");
+    let mut combined = crate::magic_constants::substitute_file_constants(combined, entry_path);
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
     }
@@ -1892,7 +1898,7 @@ pub fn inject_if_web(
     // out, executables wrapped). That reordering is unsafe across namespace
     // boundaries: a `namespace X;` / `namespace X { … }` would be separated from
     // the declarations it scopes, leaving them in the wrong namespace. For
-    // namespaced programs (e.g. a framework with `App\…` classes) skip the wrap
+    // namespaced programs with application-defined classes skip the wrap
     // entirely — such programs do their own error handling — and keep B1's
     // uncaught-exception → 500 net only for flat, non-namespaced programs.
     if combined.iter().any(|s| {
@@ -2151,7 +2157,13 @@ mod tests {
     /// Plain web programs keep auto-start/finalization roots but shed optional APIs.
     #[test]
     fn plain_web_program_prunes_optional_session_declarations() {
-        let injected = inject_if_web(parse("<?php echo 'ok';"), true, PhpVersion::Php85, &[]);
+        let injected = inject_if_web(
+            parse("<?php echo 'ok';"),
+            true,
+            PhpVersion::Php85,
+            &[],
+            Path::new("index.php"),
+        );
         assert!(declares_function(
             &injected,
             "__elephc_session_start_core"
@@ -2174,6 +2186,7 @@ mod tests {
             true,
             PhpVersion::Php85,
             &[],
+            Path::new("index.php"),
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
     }
@@ -2186,6 +2199,7 @@ mod tests {
             true,
             PhpVersion::Php85,
             &[],
+            Path::new("index.php"),
         );
         assert!(declares_function(&injected, "session_set_save_handler"));
         assert!(declares_class(
@@ -2202,6 +2216,7 @@ mod tests {
             true,
             PhpVersion::Php85,
             &[],
+            Path::new("index.php"),
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
         assert!(declares_function(&injected, "session_set_save_handler"));
@@ -2215,6 +2230,7 @@ mod tests {
             true,
             PhpVersion::Php85,
             &[],
+            Path::new("index.php"),
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
         assert!(declares_function(&injected, "session_set_save_handler"));
@@ -2225,7 +2241,13 @@ mod tests {
     fn non_web_program_is_unchanged() {
         let program = parse("<?php echo 'ok';");
         assert_eq!(
-            inject_if_web(program.clone(), false, PhpVersion::Php85, &[]),
+            inject_if_web(
+                program.clone(),
+                false,
+                PhpVersion::Php85,
+                &[],
+                Path::new("index.php"),
+            ),
             program
         );
     }

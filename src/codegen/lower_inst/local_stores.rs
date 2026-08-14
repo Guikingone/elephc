@@ -292,7 +292,7 @@ pub(super) fn store_value_to_ref_cell_as(
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = target_ty.codegen_repr();
     reject_multiword_ref_param_local(&target_ty, "store")?;
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    coerce_ref_cell_store_value(ctx, value, &source_ty, &target_ty)?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
@@ -339,13 +339,18 @@ pub(super) fn store_value_to_ref_cell_as(
 /// Converts the current result registers to the target shape needed by a ref-cell store.
 pub(super) fn coerce_ref_cell_store_value(
     ctx: &mut FunctionContext<'_>,
+    value: ValueId,
     source_ty: &PhpType,
     target_ty: &PhpType,
 ) -> Result<()> {
     let source_ty = source_ty.codegen_repr();
     let target_ty = target_ty.codegen_repr();
     if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-        emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        if ctx.value_can_own_mixed_box_source(value)? {
+            emit_box_current_owned_value_as_mixed(ctx.emitter, &source_ty);
+        } else {
+            emit_box_current_value_as_mixed(ctx.emitter, &source_ty);
+        }
         return Ok(());
     }
     if target_ty == PhpType::TaggedScalar {

@@ -15,7 +15,7 @@
 use crate::codegen::abi;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::types::ClassInfo;
 
 
@@ -154,7 +154,7 @@ struct ReflectionOwnerLayouts {
 
 /// Emits eval Reflection owner helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_reflection_owner_helpers(module: &Module, emitter: &mut Emitter) {
-    if !module_uses_eval(module) {
+    if !module.required_runtime_features.eval_bridge {
         return;
     }
     emitter.blank();
@@ -168,34 +168,6 @@ pub(super) fn emit_eval_reflection_owner_helpers(module: &Module, emitter: &mut 
         Arch::AArch64 => emit_reflection_owner_new_aarch64(emitter, &layouts),
         Arch::X86_64 => emit_reflection_owner_new_x86_64(emitter, &layouts),
     }
-}
-
-/// Returns true when the EIR module contains a function that can call eval.
-fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
 }
 
 /// Returns the Reflection owner object layouts from class metadata.

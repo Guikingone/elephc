@@ -364,6 +364,7 @@ fn analyze_stmt(
             apply_expr_effects(value, state);
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             apply_expr_effects(object, state);
             apply_expr_effects(value, state);
@@ -385,6 +386,10 @@ fn analyze_stmt(
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             apply_expr_effects(index, state);
             apply_expr_effects(value, state);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            apply_expr_effects(index, state);
+            apply_expr_effects(source, state);
         }
         StmtKind::ListUnpack { vars, value } => {
             apply_expr_effects(value, state);
@@ -519,6 +524,7 @@ fn expr_alias(expr: &Expr, state: &HashMap<String, ReturnArgAlias>) -> ReturnArg
         ExprKind::Assignment { value, .. } => expr_alias(value, state),
         ExprKind::ArrayLiteral(_)
         | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayReference(_)
         | ExprKind::Closure { .. }
         | ExprKind::FirstClassCallable(_)
         | ExprKind::NewObject { .. }
@@ -573,6 +579,9 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
 /// Conservatively invalidates locals that an expression can rewrite by reference.
 fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) {
     match &expr.kind {
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            apply_expr_effects(property, state);
+        }
         ExprKind::Assignment {
             target,
             value,
@@ -661,6 +670,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -753,6 +763,9 @@ fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) 
         | ExprKind::ClassConstant { .. }
         | ExprKind::MagicConstant(_)
         | ExprKind::IncludeValue { .. } => {}
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            apply_expr_effects(receiver, state)
+        }
     }
 }
 

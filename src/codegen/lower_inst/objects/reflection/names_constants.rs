@@ -194,6 +194,83 @@ pub(super) fn reflection_constant_value(
         ExprKind::FloatLiteral(value) => Ok(ReflectionConstantValue::Float(*value)),
         ExprKind::StringLiteral(value) => Ok(ReflectionConstantValue::Str(value.clone())),
         ExprKind::Null => Ok(ReflectionConstantValue::Null),
+        ExprKind::ConstRef(name) => {
+            let constant_name = name.as_str();
+            let (constant_expr, _) = ctx
+                .module
+                .global_constants
+                .get(constant_name)
+                .or_else(|| {
+                    ctx.module
+                        .global_constants
+                        .get(constant_name.trim_start_matches('\\'))
+                })
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionClass constant metadata global constant {}",
+                        constant_name
+                    ))
+                })?;
+            let constant_expr = Expr::new(constant_expr.clone(), expr.span);
+            reflection_constant_value(
+                ctx,
+                current_class,
+                current_info,
+                &constant_expr,
+                depth + 1,
+            )
+        }
+        ExprKind::ArrayLiteral(items) => {
+            let elements = items
+                .iter()
+                .map(|item| {
+                    let value = reflection_constant_value(
+                        ctx,
+                        current_class,
+                        current_info,
+                        item,
+                        depth + 1,
+                    )?;
+                    reflection_parameter_default_from_constant_value(value).ok_or_else(|| {
+                        CodegenIrError::unsupported(
+                            "ReflectionClass constant metadata array element",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(ReflectionConstantValue::Array(
+                ReflectionParameterDefaultValue::Array(elements),
+            ))
+        }
+        ExprKind::ArrayLiteralAssoc(entries) => {
+            let entries = entries
+                .iter()
+                .map(|(key, value)| {
+                    let key = reflection_default_array_key(key).ok_or_else(|| {
+                        CodegenIrError::unsupported(
+                            "ReflectionClass constant metadata associative-array key",
+                        )
+                    })?;
+                    let value = reflection_constant_value(
+                        ctx,
+                        current_class,
+                        current_info,
+                        value,
+                        depth + 1,
+                    )?;
+                    let value = reflection_parameter_default_from_constant_value(value)
+                        .ok_or_else(|| {
+                            CodegenIrError::unsupported(
+                                "ReflectionClass constant metadata associative-array value",
+                            )
+                        })?;
+                    Ok(ReflectionDefaultAssocEntry { key, value })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(ReflectionConstantValue::Array(
+                ReflectionParameterDefaultValue::AssocArray(entries),
+            ))
+        }
         ExprKind::Negate(inner) => {
             match reflection_constant_value(ctx, current_class, current_info, inner, depth + 1)? {
                 ReflectionConstantValue::Int(value) => Ok(ReflectionConstantValue::Int(-value)),
@@ -437,6 +514,7 @@ pub(super) fn reflection_constant_value_kind(value: &ReflectionConstantValue) ->
         ReflectionConstantValue::Float(_) => "float",
         ReflectionConstantValue::Str(_) => "string",
         ReflectionConstantValue::Null => "null",
+        ReflectionConstantValue::Array(_) => "array",
         ReflectionConstantValue::EnumCase { .. } => "enum-case",
     }
 }
@@ -489,4 +567,3 @@ pub(super) fn reflection_enum_case_backing_value(case: &EnumCaseInfo) -> Option<
         EnumCaseValue::Str(value) => Some(ReflectionConstantValue::Str(value.clone())),
     }
 }
-

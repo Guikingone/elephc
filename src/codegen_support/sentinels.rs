@@ -81,6 +81,12 @@ pub(crate) const TAGGED_SCALAR_TAG_NULL: i64 = 8;
 /// This is an internal array-storage tag, not a boxed Mixed runtime value tag.
 pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 
+/// Heap kind stamped on a request-lifetime global reference cell.
+///
+/// The uniform dispatcher intentionally treats this private kind as opaque; the owning global
+/// slot and tag-12 array markers release it through `__rt_global_ref_cell_decref`.
+pub(crate) const GLOBAL_REF_CELL_HEAP_KIND: u8 = 8;
+
 /// Returns the register holding a tagged scalar's tag word; the payload word lives in the
 /// integer result register. AArch64: `x1`. x86_64: `rdx` (mirrors the `Str` second word).
 pub(crate) fn tagged_scalar_tag_reg(emitter: &Emitter) -> &'static str {

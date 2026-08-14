@@ -9,7 +9,13 @@
 
 use super::*;
 
-/// Lowers `str_replace()`/`str_ireplace()` with three string operands.
+
+/// Lowers `str_replace()`/`str_ireplace()` with three operands.
+///
+/// Handles the common all-string form directly, and the PHP array-`$search` form (with an array or
+/// single-string `$replace`) against a string `$subject` through the `__rt_*_array` runtime helpers.
+/// Array operands must currently be indexed `Array(Str)` (string slots); other array shapes return a
+/// clear unsupported error rather than miscompiling.
 pub(crate) fn lower_string_replace(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -23,12 +29,368 @@ pub(crate) fn lower_string_replace(
             inst.operands.len()
         )));
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_string_replace_aarch64(ctx, inst, name)?,
-        Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
+    let search = expect_operand(inst, 0)?;
+    let subject = expect_operand(inst, 2)?;
+    if matches!(
+        ctx.value_php_type(subject)?.codegen_repr(),
+        PhpType::Array(elem) if matches!(elem.codegen_repr(), PhpType::Str | PhpType::Mixed)
+    ) {
+        let search_is_string_array = matches!(
+            ctx.value_php_type(search)?.codegen_repr(),
+            PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str
+        );
+        let replace = expect_operand(inst, 1)?;
+        let replace_is_string_array = matches!(
+            ctx.value_php_type(replace)?.codegen_repr(),
+            PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str
+        );
+        if !search_is_string_array || !replace_is_string_array {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with an indexed-array subject currently requires indexed string-array search and replacement arguments",
+                name
+            )));
+        }
+        let converted_subject = string_replace_subject_needs_string_conversion(ctx, subject)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_string_replace_array_subject_aarch64(ctx, inst)?,
+            Arch::X86_64 => lower_string_replace_array_subject_x86_64(ctx, inst)?,
+        }
+        // A converted subject is a temporary this lowering allocated; the helper builds a fresh
+        // result array from it and nothing else can reach it afterwards, so it is released here
+        // rather than leaked once per call.
+        let subject_arg_reg = match ctx.emitter.target.arch {
+            Arch::AArch64 => "x3",
+            Arch::X86_64 => "rdx",
+        };
+        if converted_subject {
+            abi::emit_push_reg(ctx.emitter, subject_arg_reg);
+        }
+        let subject_label = format!("{}_array_subject_arrays", runtime_label);
+        abi::emit_call_label(ctx.emitter, &subject_label);
+        if converted_subject {
+            // The array-subject form answers an ARRAY — one pointer in the integer result
+            // register, not a string `{ptr,len}` pair — so that single register is what has to
+            // survive `__rt_decref_array`, which takes its argument in the very same register.
+            let result_reg = abi::int_result_reg(ctx.emitter);
+            abi::emit_push_reg(ctx.emitter, result_reg);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, result_reg);
+            abi::emit_pop_reg(ctx.emitter, subject_arg_reg);
+        }
+        return store_if_result(ctx, inst);
     }
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
+    match ctx.value_php_type(search)?.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
+            let replace_is_array = string_replace_array_replacement(ctx, inst, name)?;
+            let replace = expect_operand(inst, 1)?;
+            let converted_replacement =
+                string_replace_replacement_needs_string_conversion(ctx, replace)?;
+            let array_label = format!("{}_array", runtime_label);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    lower_string_replace_array_aarch64(ctx, inst, name, replace_is_array)?
+                }
+                Arch::X86_64 => {
+                    lower_string_replace_array_x86_64(ctx, inst, name, replace_is_array)?
+                }
+            }
+            if converted_replacement {
+                let replacement_reg = match ctx.emitter.target.arch {
+                    Arch::AArch64 => "x2",
+                    Arch::X86_64 => "rsi",
+                };
+                abi::emit_push_reg(ctx.emitter, replacement_reg);
+            }
+            abi::emit_call_label(ctx.emitter, &array_label);
+            if converted_replacement {
+                release_stacked_array_preserving_string_result(ctx);
+            }
+            store_if_result(ctx, inst)
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Err(CodegenIrError::unsupported(format!(
+            "{} with a non-string-element array search argument",
+            name
+        ))),
+        _ => {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_string_replace_aarch64(ctx, inst, name)?,
+                Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
+            }
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            store_if_result(ctx, inst)
+        }
+    }
+}
+
+/// Materializes array search, replacement, and subject pointers for the AArch64 array-subject helper.
+fn lower_string_replace_array_subject_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    let subject = expect_operand(inst, 2)?;
+    ctx.load_value_to_reg(search, "x1")?;
+    ctx.emitter.instruction("stp x1, xzr, [sp, #-16]!");                        // preserve the search array while loading the remaining operands
+    ctx.load_value_to_reg(replace, "x2")?;
+    ctx.emitter.instruction("stp x2, xzr, [sp, #-16]!");                        // preserve the replacement array while loading the subject array
+    if string_replace_subject_needs_string_conversion(ctx, subject)? {
+        ctx.load_value_to_result(subject)?;
+        emit_mixed_array_to_string_array(ctx)?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the converted string-slot subject array
+    } else {
+        ctx.load_value_to_reg(subject, "x3")?;
+    }
+    ctx.emitter.instruction("ldp x2, xzr, [sp], #16");                          // restore the replacement array pointer
+    ctx.emitter.instruction("ldp x1, xzr, [sp], #16");                          // restore the search array pointer
+    Ok(())
+}
+
+/// Materializes array search, replacement, and subject pointers for the x86_64 array-subject helper.
+fn lower_string_replace_array_subject_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    let subject = expect_operand(inst, 2)?;
+    ctx.load_value_to_reg(search, "rdi")?;
+    ctx.emitter.instruction("push rdi");                                        // preserve the search array while loading the remaining operands
+    ctx.load_value_to_reg(replace, "rsi")?;
+    ctx.emitter.instruction("push rsi");                                        // preserve the replacement array while loading the subject array
+    if string_replace_subject_needs_string_conversion(ctx, subject)? {
+        ctx.load_value_to_result(subject)?;
+        emit_mixed_array_to_string_array(ctx)?;
+        ctx.emitter.instruction("mov rdx, rax");                                // pass the converted string-slot subject array
+    } else {
+        ctx.load_value_to_reg(subject, "rdx")?;
+    }
+    ctx.emitter.instruction("pop rsi");                                         // restore the replacement array pointer
+    ctx.emitter.instruction("pop rdi");                                         // restore the search array pointer
+    Ok(())
+}
+
+/// Reports whether the `$replace` operand of an array-search `str_replace` is itself an array.
+///
+/// Returns `Ok(true)` for an indexed string or Mixed replacement array and `Ok(false)` for a scalar
+/// replacement. Mixed elements are converted to string slots before this runtime helper reads them.
+fn string_replace_array_replacement(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<bool> {
+    let replace = expect_operand(inst, 1)?;
+    match ctx.value_php_type(replace)?.codegen_repr() {
+        PhpType::Array(elem)
+            if matches!(elem.codegen_repr(), PhpType::Str | PhpType::Mixed) =>
+        {
+            Ok(true)
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } => Err(CodegenIrError::unsupported(format!(
+            "{} with a non-string-element array replacement argument",
+            name
+        ))),
+        _ => Ok(false),
+    }
+}
+
+/// Returns whether an indexed replacement array needs a temporary string-slot representation.
+fn string_replace_replacement_needs_string_conversion(
+    ctx: &FunctionContext<'_>,
+    replacement: ValueId,
+) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(replacement)?.codegen_repr(),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed
+    ))
+}
+
+/// Releases a stacked temporary array while preserving a string result pair from the last call.
+fn release_stacked_array_preserving_string_result(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::nested_call_reg(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_pop_reg(ctx.emitter, scratch_reg);
+}
+
+/// Reports whether an array subject needs element-wise conversion from Mixed to string slots.
+fn string_replace_subject_needs_string_conversion(
+    ctx: &FunctionContext<'_>,
+    subject: ValueId,
+) -> Result<bool> {
+    Ok(matches!(
+        ctx.value_php_type(subject)?.codegen_repr(),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed
+    ))
+}
+
+/// Materializes an `array<mixed>` as a fresh `array<string>` in the result register.
+///
+/// The string-array runtime helpers read 16-byte `{ptr,len}` slots; an `array<mixed>` holds 8-byte
+/// BOXED pointers, so handing one straight to them would misread every element as a pointer/length
+/// pair. PHP casts each element of a `str_replace()` array argument to string, so converting first
+/// is what the language already specifies.
+///
+/// Per element this is `__rt_mixed_cast_string` (input: the boxed cell; output: the string result
+/// registers), which persists string payloads and renders int/float/bool/null exactly as PHP's
+/// string cast does. The destination slot layout is the one
+/// `emit_append_string_value_aarch64`/`_x86_64` use — 24-byte header, 16-byte slots, logical length
+/// maintained in the header — reproduced here rather than guessed, because those helpers are
+/// private to the array module and carry their own stack contract.
+fn emit_mixed_array_to_string_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let loop_label = ctx.next_label("mixed_to_str_loop");
+    let end_label = ctx.next_label("mixed_to_str_end");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                               // preserve the source array pointer for the copy loop
+            ctx.emitter.instruction("ldr x0, [x0]");                            // size the destination from the source's logical length
+            ctx.emitter.instruction("mov x1, #16");                             // request 16-byte string slots for the destination
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "x0", &PhpType::Str);
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the destination array pointer across element casts
+            ctx.emitter.instruction("str xzr, [sp, #-16]!");                    // push the source element index
+
+            ctx.emitter.label(&loop_label);
+            ctx.emitter.instruction("ldr x10, [sp]");                           // load the current source element index
+            ctx.emitter.instruction("ldr x9, [sp, #32]");                       // reload the source array pointer from the fixed stack layout
+            ctx.emitter.instruction("ldr x11, [x9]");                           // load the source logical length
+            ctx.emitter.instruction("cmp x10, x11");                            // has every source element been converted?
+            ctx.emitter.instruction(&format!("b.ge {}", end_label));
+            ctx.emitter.instruction("add x12, x9, #24");                        // point at the source payload region after the fixed header
+            ctx.emitter.instruction("ldr x0, [x12, x10, lsl #3]");              // load the boxed Mixed element for this index
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the destination array pointer after the cast call
+            ctx.emitter.instruction("ldr x10, [x9]");                           // load the destination length before appending
+            ctx.emitter.instruction("lsl x11, x10, #4");                        // convert the destination length into a 16-byte slot offset
+            ctx.emitter.instruction("add x11, x9, x11");                        // advance from the destination base to the selected slot
+            ctx.emitter.instruction("add x11, x11, #24");                       // skip the fixed indexed-array header
+            ctx.emitter.instruction("str x1, [x11]");                           // store the converted string pointer
+            ctx.emitter.instruction("str x2, [x11, #8]");                       // store the converted string length
+            ctx.emitter.instruction("add x10, x10, #1");                        // account for the appended destination element
+            ctx.emitter.instruction("str x10, [x9]");                           // persist the destination logical length
+            ctx.emitter.instruction("ldr x10, [sp]");                           // reload the source index after the cast call
+            ctx.emitter.instruction("add x10, x10, #1");                        // advance to the next source element
+            ctx.emitter.instruction("str x10, [sp]");
+            ctx.emitter.instruction(&format!("b {}", loop_label));
+
+            ctx.emitter.label(&end_label);
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the source element index slot
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // pop the destination array pointer into the result register
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the preserved source array pointer
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the source array pointer for the copy loop
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax]");                // size the destination from the source's logical length
+            ctx.emitter.instruction("mov rsi, 16");                             // request 16-byte string slots for the destination
+            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            crate::codegen::emit_array_value_type_stamp(ctx.emitter, "rax", &PhpType::Str);
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the destination array pointer across element casts
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve the source element index slot
+            ctx.emitter.instruction("mov QWORD PTR [rsp], 0");                  // start the source element index at zero
+
+            ctx.emitter.label(&loop_label);
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // load the current source element index
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 32]");           // reload the source array pointer from the fixed stack layout
+            ctx.emitter.instruction("mov rcx, QWORD PTR [r11]");                // load the source logical length
+            ctx.emitter.instruction("cmp r10, rcx");                            // has every source element been converted?
+            ctx.emitter.instruction(&format!("jge {}", end_label));
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r11 + r10 * 8 + 24]"); // load the boxed Mixed element for this index
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the destination array pointer after the cast call
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the destination length before appending
+            ctx.emitter.instruction("mov rcx, r11");                            // copy the destination length before scaling it
+            ctx.emitter.instruction("shl rcx, 4");                              // convert the destination length into a 16-byte slot offset
+            ctx.emitter.instruction("add rcx, r10");                            // advance from the destination base to the selected slot
+            ctx.emitter.instruction("add rcx, 24");                             // skip the fixed indexed-array header
+            ctx.emitter.instruction("mov QWORD PTR [rcx], rax");                // store the converted string pointer
+            ctx.emitter.instruction("mov QWORD PTR [rcx + 8], rdx");            // store the converted string length
+            ctx.emitter.instruction("add r11, 1");                              // account for the appended destination element
+            ctx.emitter.instruction("mov QWORD PTR [r10], r11");                // persist the destination logical length
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the source index after the cast call
+            ctx.emitter.instruction("add r10, 1");                              // advance to the next source element
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r10");
+            ctx.emitter.instruction(&format!("jmp {}", loop_label));
+
+            ctx.emitter.label(&end_label);
+            ctx.emitter.instruction("add rsp, 16");                             // drop the source element index slot
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // move the destination array pointer into the result register
+            ctx.emitter.instruction("add rsp, 32");                             // drop the destination and source pointer slots
+        }
+    }
+    Ok(())
+}
+
+/// Materializes AArch64 `__rt_*_array` runtime arguments for an array `$search`.
+///
+/// Loads the search array base into x1, the replacement pointer into x2 with a length/sentinel in x3
+/// (`-1` for an array replacement, otherwise the single-string length), and the subject pointer/length
+/// into x4/x5. The subject and replacement are spilled while the search base is materialized.
+fn lower_string_replace_array_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    replace_is_array: bool,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "x4", "x5")?;
+    ctx.emitter.instruction("stp x4, x5, [sp, #-16]!");                         // preserve the subject pointer/length while materializing replacement and search
+    if replace_is_array {
+        if string_replace_replacement_needs_string_conversion(ctx, replace)? {
+            ctx.load_value_to_result(replace)?;
+            emit_mixed_array_to_string_array(ctx)?;
+            ctx.emitter.instruction("mov x2, x0");                              // pass the converted string-slot replacement array
+        } else {
+            ctx.load_value_to_reg(replace, "x2")?;
+        }
+        abi::emit_load_int_immediate(ctx.emitter, "x3", -1);
+    } else {
+        load_string_arg_to_regs(ctx, inst, 1, name, "x2", "x3")?;
+    }
+    ctx.emitter.instruction("stp x2, x3, [sp, #-16]!");                         // preserve the replacement pointer + length/sentinel while materializing search
+    ctx.load_value_to_reg(search, "x1")?;
+    ctx.emitter.instruction("ldp x2, x3, [sp], #16");                           // restore the replacement pointer + length/sentinel
+    ctx.emitter.instruction("ldp x4, x5, [sp], #16");                           // restore the subject pointer/length
+    Ok(())
+}
+
+/// Materializes x86_64 `__rt_*_array` runtime arguments for an array `$search`.
+///
+/// Loads the search array base into rdi, the replacement pointer into rsi with a length/sentinel in
+/// rdx (`-1` for an array replacement, otherwise the single-string length), and the subject
+/// pointer/length into rcx/r8. The subject and replacement are spilled while the search base loads.
+fn lower_string_replace_array_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    replace_is_array: bool,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    load_string_arg_to_regs(ctx, inst, 2, name, "rcx", "r8")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rcx", "r8");
+    if replace_is_array {
+        if string_replace_replacement_needs_string_conversion(ctx, replace)? {
+            ctx.load_value_to_result(replace)?;
+            emit_mixed_array_to_string_array(ctx)?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the converted string-slot replacement array
+        } else {
+            ctx.load_value_to_reg(replace, "rsi")?;
+        }
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
+    } else {
+        load_string_arg_to_regs(ctx, inst, 1, name, "rsi", "rdx")?;
+    }
+    abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    ctx.load_value_to_reg(search, "rdi")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rcx", "r8");
+    Ok(())
 }
 
 /// Lowers `wordwrap(string, width?, break?, cut?)` through the shared runtime helper.

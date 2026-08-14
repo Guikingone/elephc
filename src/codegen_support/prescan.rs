@@ -13,15 +13,18 @@ use std::collections::HashMap;
 use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::DATE_INT_CONSTANTS;
+use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::filter_constants::FILTER_INT_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::standard_constants::STANDARD_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
+use crate::types::token_constants::{token_int_constant_value, TOKEN_INT_CONSTANTS};
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -219,6 +222,12 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in FILTER_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in MATH_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -255,6 +264,40 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in STANDARD_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, _values) in TOKEN_INT_CONSTANTS {
+        let value = token_int_constant_value(name, php_version)
+            .expect("registered tokenizer constant must have a profile value");
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(value), PhpType::Int),
+        );
+    }
+    for (name, value) in DATE_STRING_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
+        );
+    }
+    constants.insert(
+        "PHP_MAXPATHLEN".to_string(),
+        (
+            ExprKind::IntLiteral(target_platform.php_max_path_len()),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "LC_NUMERIC".to_string(),
+        (
+            ExprKind::IntLiteral(target_platform.lc_numeric()),
+            PhpType::Int,
+        ),
+    );
     // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
     constants.insert(
         "PHP_INT_MAX".to_string(),

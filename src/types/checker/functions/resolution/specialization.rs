@@ -245,13 +245,8 @@ impl Checker {
                 .get(seen_idx)
                 .copied()
                 .unwrap_or(false);
-            let generic_array_param = param_types
-                .get(seen_idx)
-                .is_some_and(|(_, ty)| {
-                    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-                });
             if seen_idx < regular_param_count
-                && (!declared || generic_array_param)
+                && !declared
                 && !matches!(actual_ty, PhpType::Never | PhpType::Callable)
                 && (!matches!(actual_ty, PhpType::Void)
                     || crate::codegen::sentinels::null_repr_is_tagged())

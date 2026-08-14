@@ -23,6 +23,25 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let name = name.as_str().to_string();
                 let args = args.clone();
+                if name == crate::names::DYNAMIC_INCLUDE_FUNCTION {
+                    if args.len() != 3 {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "Internal dynamic include expects path, once, and required operands",
+                        ));
+                    }
+                    self.infer_type(&args[0], env)?;
+                    for flag in &args[1..] {
+                        let flag_ty = self.infer_type(flag, env)?;
+                        if !matches!(flag_ty, PhpType::Bool | PhpType::False) {
+                            return Err(CompileError::new(
+                                flag.span,
+                                "Internal dynamic include flags must be boolean literals",
+                            ));
+                        }
+                    }
+                    return Ok(PhpType::Mixed);
+                }
                 if self.extern_functions.contains_key(name.as_str()) {
                     return self.check_extern_function_call(name.as_str(), &args, expr.span, env);
                 }
@@ -142,6 +161,7 @@ impl Checker {
                 match ty {
                     PhpType::Array(elem_ty) => Ok(*elem_ty),
                     PhpType::AssocArray { value, .. } => Ok(*value),
+                    PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(
                         expr.span,
                         "Spread operator requires an array",
@@ -166,11 +186,24 @@ impl Checker {
             }
             ExprKind::Clone(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                match ty {
+                match &ty {
                     PhpType::Object(class_name) => {
-                        self.check_clone_visibility(&class_name, expr.span)?;
-                        Ok(PhpType::Object(class_name))
+                        self.check_clone_visibility(class_name, expr.span)?;
+                        Ok(ty)
                     }
+                    PhpType::Union(members)
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(
+                            &ty,
+                        ) =>
+                    {
+                        for member in members {
+                            if let PhpType::Object(class_name) = member {
+                                self.check_clone_visibility(class_name, expr.span)?;
+                            }
+                        }
+                        Ok(ty)
+                    }
+                    PhpType::Mixed => Ok(PhpType::Object("object".to_string())),
                     _ => Err(CompileError::new(expr.span, "clone requires an object value")),
                 }
             }
@@ -221,6 +254,9 @@ impl Checker {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 self.infer_static_property_access_type(receiver, property, expr, env)
             }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                self.infer_dynamic_static_property_access_type(receiver, property, expr, env)
+            }
             ExprKind::MethodCall {
                 object,
                 method,
@@ -253,10 +289,12 @@ impl Checker {
             ExprKind::ObjectClassName { object } => {
                 let object_type = self.infer_type(object, env)?;
                 let object_only = match &object_type {
-                    PhpType::Object(_) => true,
+                    PhpType::Object(_) | PhpType::Mixed => true,
                     PhpType::Union(members) => {
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members
+                                .iter()
+                                .any(|member| matches!(member, PhpType::Object(_) | PhpType::Mixed))
                     }
                     _ => false,
                 };
@@ -270,6 +308,9 @@ impl Checker {
             }
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, expr)
+            }
+            ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+                self.infer_dynamic_scoped_constant_access(receiver, name, expr, env)
             }
             ExprKind::NewScopedObject { receiver, args } => {
                 let class_name = match receiver {

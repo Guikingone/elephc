@@ -70,6 +70,7 @@ mod descriptor_entries;
 mod descriptor_metadata;
 mod direct_calls;
 mod exception_instructions;
+pub(super) use exception_instructions::lower_mixed_throw_value;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
@@ -218,6 +219,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::MixedClone => lower_mixed_clone(ctx, &inst),
         Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
+        Op::ArrayLocalRefCell => lower_array_local_ref_cell(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
         Op::StrConcat => strings::lower_str_concat(ctx, &inst),
@@ -236,11 +238,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
         Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
         Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),
+        Op::ArrayGetMixedKeyForWrite => arrays::lower_array_get_mixed_key_for_write(ctx, &inst),
         Op::ArrayPush => arrays::lower_array_push(ctx, &inst),
         Op::MixedArrayAppend => arrays::lower_mixed_array_append(ctx, &inst),
         Op::ArrayUnion => arrays::lower_array_union(ctx, &inst),
         Op::ArrayHashUnion => arrays::lower_array_hash_union(ctx, &inst),
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
+        Op::MixedToHash => arrays::lower_mixed_to_hash(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
@@ -248,6 +252,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::HashGetSilent => hashes::lower_hash_get(ctx, &inst, false),
         Op::HashIsset => builtins::lower_hash_isset(ctx, &inst),
         Op::HashSet => hashes::lower_hash_set(ctx, &inst),
+        Op::HashRefElement => hashes::lower_hash_ref_element(ctx, &inst),
+        Op::HashBindRefElement => hashes::lower_hash_bind_ref_element(ctx, &inst),
         Op::HashUnset => hashes::lower_hash_unset(ctx, &inst),
         Op::HashUnion => hashes::lower_hash_union(ctx, &inst),
         Op::HashArrayUnion => hashes::lower_hash_array_union(ctx, &inst),
@@ -292,8 +298,11 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
         Op::BindRefCellPtr => lower_bind_ref_cell_ptr(ctx, &inst),
+        Op::BindPropRefCell => objects::lower_bind_prop_ref_cell(ctx, &inst),
         Op::NullsafePropGet => objects::lower_nullsafe_prop_get(ctx, &inst),
         Op::DynamicPropGet => objects::lower_dynamic_prop_get(ctx, &inst),
+        Op::DynamicPropRefCell => objects::lower_dynamic_prop_ref_cell(ctx, &inst),
+        Op::DynamicPropUnset => objects::lower_dynamic_prop_unset(ctx, &inst),
         Op::PropSet => objects::lower_prop_set(ctx, &inst),
         Op::PropUnset => objects::lower_prop_unset(ctx, &inst),
         Op::DynamicPropSet => objects::lower_dynamic_prop_set(ctx, &inst),
@@ -304,7 +313,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StoreStaticLocal => static_locals::lower_store_static_local(ctx, &inst),
         Op::InitStaticLocal => static_locals::lower_init_static_local(ctx, &inst),
         Op::LoadStaticProperty => static_properties::lower_load_static_property(ctx, &inst),
+        Op::LoadDynamicStaticProperty => {
+            static_properties::lower_load_dynamic_static_property(ctx, &inst)
+        }
         Op::StoreStaticProperty => static_properties::lower_store_static_property(ctx, &inst),
+        Op::StoreDynamicStaticProperty => {
+            static_properties::lower_store_dynamic_static_property(ctx, &inst)
+        }
         Op::LoadReflectionStaticProperty => {
             static_properties::lower_load_reflection_static_property(ctx, &inst)
         }

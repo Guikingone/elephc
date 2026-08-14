@@ -33,6 +33,7 @@ const APPLY_DYNAMIC_CALLBACK_LEN_OFFSET: usize = 40;
 const APPLY_DESCRIPTOR_OFFSET: usize = 32;
 
 const SPL_CLASS_NAMES: &[&str] = &[
+    "__PHP_Incomplete_Class",
     "AppendIterator",
     "ArrayAccess",
     "ArrayIterator",
@@ -74,6 +75,7 @@ const SPL_CLASS_NAMES: &[&str] = &[
     "RecursiveFilterIterator",
     "RecursiveIterator",
     "RecursiveIteratorIterator",
+    "RecursiveTreeIterator",
     "RecursiveRegexIterator",
     "RegexIterator",
     "RuntimeException",

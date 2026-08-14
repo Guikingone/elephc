@@ -20,12 +20,35 @@ pub(in crate::interpreter) fn execute_statements(
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
     for stmt in statements {
-        match execute_stmt(stmt, context, scope, values)? {
-            EvalControl::None => {}
-            control => return Ok(control),
+        match execute_stmt(stmt, context, scope, values) {
+            Ok(EvalControl::None) => {}
+            Ok(control) => return Ok(control),
+            Err(status) => {
+                trace_failed_statement(stmt, status, context);
+                return Err(status);
+            }
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Emits the failing EvalIR statement only when opt-in runtime tracing is enabled.
+fn trace_failed_statement(
+    stmt: &EvalStmt,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_none() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=statement_error status={status:?} file={:?} line={} stmt={stmt:?}",
+            call_site.0,
+            call_site.2,
+        );
+    }));
 }
 
 /// Executes one statement and returns `Some` only for eval `return`.
@@ -42,6 +65,10 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::ArraySetVar { name, index, value } => {
             eval_array_set_var_stmt(name, index, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
+        EvalStmt::ArrayDestructure { targets, value } => {
+            eval_array_destructure_stmt(targets, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
         EvalStmt::Break => Ok(EvalControl::Break),

@@ -11,10 +11,13 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
-use super::calls::{parse_scoped_static_call, peek_cast};
+use super::assignment_targets::{
+    is_non_local_assignment_target, AssignmentExpressionLowerer,
+};
+use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
     parse_named_expr, parse_new_object,
@@ -39,6 +42,16 @@ pub(super) fn parse_prefix(
     }
 
     let span = tokens[*pos].1.span;
+
+    if tokens[*pos].0 == Token::Backslash {
+        if let Some(kind) = tokens
+            .get(*pos + 1)
+            .and_then(|(token, _)| predefined_constant_kind(token))
+        {
+            *pos += 2;
+            return Ok(Expr::new(kind, span));
+        }
+    }
 
     match &tokens[*pos].0 {
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
@@ -240,12 +253,48 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
-        Token::This => parse_simple(tokens, pos, span, ExprKind::This),
+        Token::This => parse_this(tokens, pos, span),
         Token::Yield => parse_yield(tokens, pos, span),
+        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+            Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
+                .expect("include keyword guarantees a value-include expression"))
+        }
+        Token::Dollar => Err(CompileError::new(
+            span,
+            "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
+        )),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
+    }
+}
+
+/// Returns the literal or constant-reference expression for a predefined PHP constant token.
+/// This lets an explicit global namespace prefix use the same semantics as the bare spelling.
+fn predefined_constant_kind(token: &Token) -> Option<ExprKind> {
+    match token {
+        Token::Inf => Some(ExprKind::FloatLiteral(f64::INFINITY)),
+        Token::Nan => Some(ExprKind::FloatLiteral(f64::NAN)),
+        Token::PhpIntMax => Some(ExprKind::IntLiteral(i64::MAX)),
+        Token::PhpIntMin => Some(ExprKind::IntLiteral(i64::MIN)),
+        Token::PhpFloatMax => Some(ExprKind::FloatLiteral(f64::MAX)),
+        Token::MPi => Some(ExprKind::FloatLiteral(std::f64::consts::PI)),
+        Token::ME => Some(ExprKind::FloatLiteral(std::f64::consts::E)),
+        Token::MSqrt2 => Some(ExprKind::FloatLiteral(std::f64::consts::SQRT_2)),
+        Token::MPi2 => Some(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2)),
+        Token::MPi4 => Some(ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4)),
+        Token::MLog2e => Some(ExprKind::FloatLiteral(std::f64::consts::LOG2_E)),
+        Token::MLog10e => Some(ExprKind::FloatLiteral(std::f64::consts::LOG10_E)),
+        Token::PhpFloatMin => Some(ExprKind::FloatLiteral(f64::MIN_POSITIVE)),
+        Token::PhpFloatEpsilon => Some(ExprKind::FloatLiteral(f64::EPSILON)),
+        Token::Stdin => Some(ExprKind::ConstRef(Name::unqualified("STDIN"))),
+        Token::Stdout => Some(ExprKind::ConstRef(Name::unqualified("STDOUT"))),
+        Token::Stderr => Some(ExprKind::ConstRef(Name::unqualified("STDERR"))),
+        Token::PhpEol => Some(ExprKind::StringLiteral("\n".to_string())),
+        Token::PhpOs => Some(ExprKind::ConstRef(Name::unqualified("PHP_OS"))),
+        Token::DirectorySeparator => Some(ExprKind::StringLiteral("/".to_string())),
+        _ => None,
     }
 }
 
@@ -344,8 +393,9 @@ fn parse_unary(
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
-/// variable name. Returns an error if a variable does not follow the operator.
+/// then accepts a local variable or a supported non-local l-value. Plain locals keep the compact
+/// `PreIncrement`/`PreDecrement` representation; property, static-property, and array targets are
+/// stabilized and lowered through the assignment-expression representation.
 fn parse_prefix_inc_dec(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -355,6 +405,13 @@ fn parse_prefix_inc_dec(
     *pos += 1;
     if *pos < tokens.len() {
         if let Token::Variable(name) = &tokens[*pos].0 {
+            let is_plain_local = !matches!(
+                tokens.get(*pos + 1).map(|(token, _)| token),
+                Some(Token::Arrow | Token::QuestionArrow | Token::LBracket)
+            );
+            if !is_plain_local {
+                return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
+            }
             let name = name.clone();
             *pos += 1;
             return Ok(Expr::new(
@@ -366,6 +423,17 @@ fn parse_prefix_inc_dec(
                 span,
             ));
         }
+        if matches!(tokens[*pos].0, Token::This) {
+            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
+        }
+        let is_scoped_property = matches!(
+            tokens.get(*pos).map(|(token, _)| token),
+            Some(Token::Identifier(_)) | Some(Token::Self_) | Some(Token::Parent) | Some(Token::Static)
+        ) && tokens.get(*pos + 1).map(|(token, _)| token) == Some(&Token::DoubleColon)
+            && matches!(tokens.get(*pos + 2).map(|(token, _)| token), Some(Token::Variable(_)));
+        if is_scoped_property {
+            return parse_complex_prefix_inc_dec(tokens, pos, span, increment);
+        }
     }
     Err(CompileError::new(
         span,
@@ -374,6 +442,46 @@ fn parse_prefix_inc_dec(
         } else {
             "Expected variable after '--'"
         },
+    ))
+}
+
+/// Lowers value-producing prefix increment/decrement on a property or array l-value into the
+/// existing stabilized non-local assignment-expression representation.
+fn parse_complex_prefix_inc_dec(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    increment: bool,
+) -> Result<Expr, CompileError> {
+    let target = parse_expr_bp(tokens, pos, 35)?;
+    if !is_non_local_assignment_target(&target) {
+        return Err(CompileError::new(span, "Invalid increment target"));
+    }
+    let one = Expr::new(ExprKind::IntLiteral(1), span);
+    let mut lowerer = AssignmentExpressionLowerer::new(span);
+    let target = lowerer.stabilize_non_local_target(target, &one);
+    let value = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(target.clone()),
+            op: if increment {
+                crate::parser::ast::BinOp::Add
+            } else {
+                crate::parser::ast::BinOp::Sub
+            },
+            right: Box::new(one),
+        },
+        span,
+    );
+    let result = lowerer.bind_result_value(value);
+    Ok(Expr::new(
+        ExprKind::Assignment {
+            target: Box::new(target),
+            value: Box::new(result.clone()),
+            result_target: Some(Box::new(result)),
+            prelude: lowerer.finish(),
+            conditional_value_temp: None,
+        },
+        span,
     ))
 }
 
@@ -388,6 +496,18 @@ fn parse_variable(
     name: String,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+    // `$GLOBALS` is supported only as a literal-key element access. The Pratt postfix `[` arm
+    // rewrites that shape to an internal alias before later passes see it; every whole-array use
+    // is refused loudly instead of reading an unrelated local named `GLOBALS`.
+    if name == "GLOBALS" {
+        let next = tokens.get(*pos).map(|(token, _)| token);
+        if let Some(message) = crate::globals_array::unsupported_use_message(
+            matches!(next, Some(Token::LBracket)),
+            matches!(next, Some(Token::Assign)),
+        ) {
+            return Err(CompileError::new(span, message));
+        }
+    }
     if *pos < tokens.len() {
         match &tokens[*pos].0 {
             Token::PlusPlus => {
@@ -400,6 +520,15 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
+                if parse_first_class_callable_parens(tokens, pos)? {
+                    return Ok(Expr::new(
+                        ExprKind::FirstClassCallable(CallableTarget::Method {
+                            object: Box::new(Expr::new(ExprKind::Variable(name), span)),
+                            method: "__invoke".to_string(),
+                        }),
+                        span,
+                    ));
+                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
@@ -410,13 +539,44 @@ fn parse_variable(
     Ok(Expr::new(ExprKind::Variable(name), span))
 }
 
+/// Parses `$this`, including direct invocation and first-class callable creation.
+fn parse_this(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+    if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
+        return Ok(Expr::new(ExprKind::This, span));
+    }
+    *pos += 1;
+    if parse_first_class_callable_parens(tokens, pos)? {
+        return Ok(Expr::new(
+            ExprKind::FirstClassCallable(CallableTarget::Method {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                method: "__invoke".to_string(),
+            }),
+            span,
+        ));
+    }
+    let args = parse_args(tokens, pos, span)?;
+    let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+    Ok(Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(Expr::new(ExprKind::This, span)),
+            args,
+        },
+        call_span,
+    ))
+}
+
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
 /// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
 /// expression parsed at binding power 35 (the unary-operator level). This makes a cast bind
 /// tighter than `* / % + - .` and the comparison/logical operators — so `(int)$x + 3` parses
 /// as `((int)$x) + 3`, matching PHP — while `**` (left bp 37) still binds tighter than the cast.
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
-/// call (`inner(args)`) to support expression-call syntax.
+/// invocation (`inner(args)`) or first-class callable capture (`inner(...)`).
 fn parse_group_or_cast(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -443,6 +603,17 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1.span;
         *pos += 1;
+        if parse_first_class_callable_parens(tokens, pos)? {
+            let call_span =
+                crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
+            return Ok(Expr::new(
+                ExprKind::FirstClassCallable(CallableTarget::Method {
+                    object: Box::new(inner),
+                    method: "__invoke".to_string(),
+                }),
+                call_span,
+            ));
+        }
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(
@@ -517,16 +688,21 @@ fn parse_array_literal_with_terminator(
             first = false;
             continue;
         }
-        reject_reference_array_element(tokens, pos, closing)?;
-        let expr = parse_expr(tokens, pos)?;
+        let expr = parse_array_literal_value(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+            if matches!(expr.kind, ExprKind::ArrayReference(_)) {
+                skip_to_array_literal_end(tokens, pos, closing);
+                return Err(CompileError::new(
+                    expr.span,
+                    "An array key cannot be passed by reference",
+                ));
+            }
             if !is_assoc {
                 promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems);
             }
             is_assoc = true;
             *pos += 1;
-            reject_reference_array_element(tokens, pos, closing)?;
-            let value = parse_expr(tokens, pos)?;
+            let value = parse_array_literal_value(tokens, pos)?;
             update_next_auto_key_from_explicit_key(
                 &expr,
                 &mut next_auto_key,
@@ -559,33 +735,35 @@ fn parse_array_literal_with_terminator(
     }
 }
 
-/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
-/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+/// Parses one array-literal value, preserving a supported leading reference marker.
 ///
-/// PHP stores such an element as a reference cell that aliases the source variable's storage,
-/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
-/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
-/// construct cannot be honoured without either silently copying or leaving the array holding a
-/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
-///
-/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
-/// after it and does not report cascading errors for the remaining elements.
-fn reject_reference_array_element(
+/// Array references may escape the declaring function. For now only web superglobals are
+/// accepted because their global ref-cell storage has request lifetime; ordinary locals keep
+/// the previous explicit diagnostic instead of producing a dangling pointer or a value copy.
+fn parse_array_literal_value(
     tokens: &[SpannedToken],
     pos: &mut usize,
-    closing: &Token,
-) -> Result<(), CompileError> {
+) -> Result<Expr, CompileError> {
     let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
-        return Ok(());
+        return parse_expr(tokens, pos);
     };
     let span = metadata.span;
-    skip_to_array_literal_end(tokens, pos, closing);
-    Err(CompileError::new(
-        span,
-        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
-         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
-         to alias an existing array element",
-    ))
+    *pos += 1;
+    let value = parse_expr(tokens, pos)?;
+    let ExprKind::Variable(name) = &value.kind else {
+        return Err(CompileError::new(
+            span,
+            "Reference elements in array literals currently require a web superglobal variable",
+        ));
+    };
+    if !crate::superglobals::is_superglobal(name) {
+        return Err(CompileError::new(
+            span,
+            "Reference elements in array literals currently support only web superglobals; \
+             ordinary local reference cells cannot yet outlive their declaring scope",
+        ));
+    }
+    Ok(Expr::new(ExprKind::ArrayReference(Box::new(value)), span))
 }
 
 /// Advances `pos` past the remainder of the current array literal, including its `closing`

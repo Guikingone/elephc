@@ -648,7 +648,9 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
-        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
             if self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {
@@ -685,6 +687,92 @@ impl<'a> FunctionContext<'a> {
         coerce_current_result_for_target_store(self.emitter, &source_ty, &target_ty)?;
         let offset = self.local_offset(slot)?;
         self.store_current_result_at_offset(&target_ty, offset);
+        Ok(())
+    }
+
+    /// Publishes a possibly relocated array/hash pointer after an in-place container mutation.
+    pub(super) fn store_mutated_container_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                self.store_mutated_container_to_raw_local(slot, value)
+            }
+            LocalSlotRepresentation::RefCell => {
+                self.store_mutated_container_to_ref_cell(slot, value)
+            }
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("dynamic_mutated_container_ref_cell");
+                let done = self.next_label("dynamic_mutated_container_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => self
+                        .emitter
+                        .instruction(&format!("cbnz {}, {}", state_reg, ref_cell)),
+                    Arch::X86_64 => {
+                        self.emitter
+                            .instruction(&format!("test {}, {}", state_reg, state_reg));
+                        self.emitter.instruction(&format!("jne {}", ref_cell));
+                    }
+                }
+                self.store_value_to_raw_local(slot, value)?;
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.store_mutated_container_to_ref_cell(slot, value)?;
+                self.emitter.label(&done);
+                Ok(())
+            }
+        }
+    }
+
+    /// Publishes a mutated container into raw local storage without consuming its SSA owner.
+    ///
+    /// A mutation result remains owned by the SSA value until its explicit EIR release. When a
+    /// gradual local needs a boxed cell, that cell must therefore RETAIN the container instead
+    /// of using the ordinary owned-value boxing path, which would transfer the same owner and
+    /// leave the later SSA release pointing at freed storage.
+    fn store_mutated_container_to_raw_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.value_php_type(value)?;
+        let target_ty = self.local_php_type(slot)?;
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
+            self.load_value_to_result(value)?;
+            emit_box_current_value_as_mixed(self.emitter, &source_ty);
+            coerce_current_result_for_target_store(self.emitter, &PhpType::Mixed, &target_ty)?;
+            let offset = self.local_offset(slot)?;
+            self.store_current_result_at_offset(&target_ty, offset);
+            return Ok(());
+        }
+        self.store_value_to_raw_local(slot, value)
+    }
+
+    /// Writes one relocated single-word container pointer through a local reference cell.
+    fn store_mutated_container_to_ref_cell(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        let source_ty = self.load_value_to_result(value)?.codegen_repr();
+        if !matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+            return Err(CodegenIrError::unsupported(format!(
+                "mutated reference-cell container store for PHP type {:?}",
+                source_ty
+            )));
+        }
+        let offset = self.local_offset(slot)?;
+        let pointer_reg = abi::symbol_scratch_reg(self.emitter);
+        let result_reg = abi::int_result_reg(self.emitter).to_string();
+        abi::load_at_offset(self.emitter, pointer_reg, offset);
+        abi::emit_store_to_address(self.emitter, &result_reg, pointer_reg, 0);
         Ok(())
     }
 
@@ -766,7 +854,9 @@ impl<'a> FunctionContext<'a> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         reject_multiword_ref_cell_local(&target_ty, "store")?;
-        if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
+        if target_ty.codegen_repr() == PhpType::Mixed
+            && source_ty.codegen_repr() != PhpType::Mixed
+        {
             if self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {
@@ -900,6 +990,11 @@ impl<'a> FunctionContext<'a> {
             .function
             .instruction(inst)
             .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+        if inst.op == Op::Acquire {
+            return Ok(!self.function.instructions.iter().any(|inst| {
+                inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+            }));
+        }
         if matches!(inst.op, Op::LoadLocal | Op::LoadStaticLocal) {
             let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
                 return Ok(false);
@@ -930,6 +1025,29 @@ impl<'a> FunctionContext<'a> {
     ) -> Result<bool> {
         if self.value_ownership(value)? != Ownership::Owned {
             return Ok(false);
+        }
+        let Some(value_ref) = self.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        if let ValueDef::Instruction { inst, .. } = value_ref.def {
+            let defining_inst = self
+                .function
+                .instruction(inst)
+                .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+            if defining_inst.op == Op::LoadLocal {
+                if let Some(Immediate::LocalSlot(slot)) = defining_inst.immediate {
+                    if self.local_kind(slot)? == LocalKind::OwnedTemp {
+                        let next_inst = self.function.instructions.get(inst.as_raw() as usize + 1);
+                        let moves_out_of_slot = next_inst.is_some_and(|next| {
+                            next.op == Op::UnsetLocal
+                                && next.immediate == Some(Immediate::LocalSlot(slot))
+                        });
+                        if !moves_out_of_slot {
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
         }
         Ok(!self.function.instructions.iter().any(|inst| {
             inst.op == Op::Release && inst.operands.first().copied() == Some(value)

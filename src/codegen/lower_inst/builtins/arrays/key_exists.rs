@@ -41,9 +41,9 @@ pub(super) fn lower_array_key_exists(ctx: &mut FunctionContext<'_>, inst: &Instr
             lower_mixed_container_key_exists(ctx, inst, key, array)
         }
         PhpType::Void | PhpType::Never => {
-            super::super::super::emit_unsupported_feature_fatal(
+            crate::codegen::lower_inst::exceptions::emit_type_error(
                 ctx,
-                "Fatal error: array_key_exists(): Argument #2 ($array) must be of type array, null given\n",
+                "array_key_exists(): Argument #2 ($array) must be of type array, null given",
             );
             let result_reg = abi::int_result_reg(ctx.emitter);
             abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);

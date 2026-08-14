@@ -22,6 +22,22 @@ pub(super) fn lower_assignment_expr(
     for stmt in prelude {
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
+    if let (
+        ExprKind::Variable(target_name),
+        ExprKind::Variable(value_name),
+        [Stmt {
+            kind: StmtKind::RefAssign {
+                target: ref_target,
+                ..
+            },
+            ..
+        }],
+    ) = (&target.kind, &value.kind, prelude)
+    {
+        if target_name == value_name && target_name == ref_target {
+            return ctx.load_local(target_name, Some(expr.span));
+        }
+    }
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
@@ -132,7 +148,7 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
     else {
         return None;
     };
-    let current = lower_expr(ctx, current);
+    let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![current.value],
@@ -142,7 +158,15 @@ pub(super) fn lower_conditional_non_local_null_coalesce_assignment(
         Some(expr.span),
     );
     let result_type = null_coalesce_result_type(ctx, current.value, default);
-    ctx.declare_owned_hidden_temp_with_name(temp_name, result_type.clone());
+    // The result must remain live independently of the target write. In particular, boxing a
+    // refcounted result for a gradual property consumes its source reference, so a one-shot owned
+    // temp would leave the later assignment-expression result dangling. An ordinary retaining
+    // local gives the target store and the expression result distinct references.
+    ctx.declare_local_with_kind(
+        temp_name,
+        result_type.clone(),
+        crate::ir::LocalKind::PhpLocal,
+    );
     let assign_block = ctx.builder.create_named_block("coalesce_assign.default", Vec::new());
     let keep_block = ctx.builder.create_named_block("coalesce_assign.value", Vec::new());
     let merge = ctx.builder.create_named_block("coalesce_assign.merge", Vec::new());
@@ -240,6 +264,7 @@ pub(super) fn lower_dynamic_property_assign(
 ) {
     let object = lower_expr(ctx, object);
     let property = lower_expr(ctx, property);
+    let property = coerce_to_string_at_span(ctx, property, Some(span));
     let value = lower_expr(ctx, value);
     ctx.emit_void(
         Op::DynamicPropSet,
@@ -248,6 +273,9 @@ pub(super) fn lower_dynamic_property_assign(
         Op::DynamicPropSet.default_effects(),
         Some(span),
     );
+    if ctx.value_is_owning_temporary(property) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
 }
 
 /// Lowers pre/post increment and decrement expressions.
@@ -324,4 +352,3 @@ pub(super) fn lower_inc_dec(
         ctx.load_local(name, Some(expr.span))
     }
 }
-

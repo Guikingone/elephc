@@ -19,6 +19,22 @@
 
 use super::*;
 
+/// Verifies a trailing comma after match conditions still reaches the assignment result arm.
+#[test]
+fn test_match_condition_list_with_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$value = 0;
+match ('b') {
+    'a', 'b', => $value = 7,
+    default => null,
+};
+echo $value;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
 /// Verifies the builtin `UnhandledMatchError` class can be constructed in a
 /// match default arm, thrown, caught by its fully-qualified name, and queried
 /// through the `getMessage()` method inherited from `Error`.
@@ -740,4 +756,20 @@ echo $count, "|", $a[0], "|", $a[1];
         "expected clean heap summary, got: {}",
         out.stderr
     );
+}
+
+/// Carries assignments from an earlier failed match condition into later conditions.
+#[test]
+fn test_match_fallthrough_preserves_condition_assignment() {
+    let out = compile_and_run(
+        r#"<?php
+$result = match (true) {
+    !($length = strlen('abc')) => 'empty',
+    $length < 4 => 'short',
+    default => 'long',
+};
+echo $result;
+"#,
+    );
+    assert_eq!(out, "short");
 }

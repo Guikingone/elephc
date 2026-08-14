@@ -41,11 +41,18 @@ pub(super) fn lower_numeric_binary(
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let rhs = lower_expr(ctx, right);
+    let mut lhs = lower_expr(ctx, left);
+    let mut rhs = lower_expr(ctx, right);
     if matches!(op, BinOp::Add) {
+        let lhs_ty = ctx.builder.value_php_type(lhs.value).codegen_repr();
+        let rhs_ty = ctx.builder.value_php_type(rhs.value).codegen_repr();
+        if is_gradual_array_union_operand(&lhs_ty) && is_array_union_operand(&rhs_ty) {
+            lhs = convert_gradual_array_union_operand(ctx, lhs, expr.span);
+        } else if is_array_union_operand(&lhs_ty) && is_gradual_array_union_operand(&rhs_ty) {
+            rhs = convert_gradual_array_union_operand(ctx, rhs, expr.span);
+        }
         if let Some((op, result_ty)) = array_union_plan(ctx, lhs.value, rhs.value) {
-            return ctx.emit_value(
+            let result = ctx.emit_value(
                 op,
                 vec![lhs.value, rhs.value],
                 None,
@@ -53,6 +60,11 @@ pub(super) fn lower_numeric_binary(
                 op.default_effects(),
                 Some(expr.span),
             );
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
         }
     }
     if matches!(op, BinOp::Pow) {
@@ -242,6 +254,37 @@ pub(super) fn lower_numeric_binary(
     )
 }
 
+/// Returns whether a lowered PHP type already has concrete array storage.
+fn is_array_union_operand(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Returns whether a lowered operand needs runtime array-tag validation for `+`.
+fn is_gradual_array_union_operand(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Validates and clones a boxed gradual array into independently owned hash storage.
+fn convert_gradual_array_union_operand(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let converted = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::MixedToHash.default_effects(),
+        Some(span),
+    );
+    release_binary_operand_temporary(ctx, source, span);
+    converted
+}
+
 /// Returns the EIR opcode and result type for PHP array union operands.
 pub(super) fn array_union_plan(
     ctx: &LoweringContext<'_, '_>,
@@ -372,4 +415,3 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         _ => None,
     }
 }
-

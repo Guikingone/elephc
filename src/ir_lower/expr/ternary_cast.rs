@@ -67,6 +67,9 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     if matches!(target, CastType::String) && value.ir_type == IrType::Str {
         return value;
     }
+    if matches!(target, CastType::Object) {
+        return lower_object_cast(ctx, value, expr);
+    }
     let php_type = cast_php_type(target);
     let result = ctx.emit_value(
         Op::Cast,
@@ -81,6 +84,30 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
     } else if matches!(target, CastType::Int | CastType::Float | CastType::Bool)
         && ctx.value_is_owning_temporary(value)
     {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
+    }
+    result
+}
+
+/// Lowers `(object)` for arrays by isolating associative storage before constructing stdClass.
+fn lower_object_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value).codegen_repr();
+    if matches!(&source_type, PhpType::Object(_)) {
+        return value;
+    }
+    let result = ctx.emit_value(
+        Op::Cast,
+        vec![value.value],
+        Some(Immediate::CastTarget(IrType::Heap(IrHeapKind::Object))),
+        PhpType::Object("stdClass".to_string()),
+        Op::Cast.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(value) {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
     }
     result
@@ -133,6 +160,6 @@ pub(super) fn cast_php_type(target: &CastType) -> PhpType {
         CastType::String => PhpType::Str,
         CastType::Bool => PhpType::Bool,
         CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+        CastType::Object => PhpType::Object("stdClass".to_string()),
     }
 }
-

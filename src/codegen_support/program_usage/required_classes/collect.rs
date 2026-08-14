@@ -202,6 +202,7 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
             | StmtKind::Return(Some(value))
             | StmtKind::ListUnpack { value, .. }
             | StmtKind::PropertyAssign { value, .. }
+            | StmtKind::PropertyRefAssign { source: value, .. }
             | StmtKind::PropertyArrayPush { value, .. } => {
                 collect_required_class_names_in_expr(value, names);
             }
@@ -230,6 +231,34 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                     names.insert(name.as_str().to_string());
                 }
                 collect_required_class_names_in_expr(index, names);
+                collect_required_class_names_in_expr(value, names);
+            }
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver,
+                index,
+                source,
+                ..
+            } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
+                collect_required_class_names_in_expr(index, names);
+                collect_required_class_names_in_expr(source, names);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index,
+                value,
+                ..
+            } => {
+                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                    names.insert(name.as_str().to_string());
+                }
+                collect_required_class_names_in_expr(property, names);
+                if let Some(index) = index {
+                    collect_required_class_names_in_expr(index, names);
+                }
                 collect_required_class_names_in_expr(value, names);
             }
             _ => {}
@@ -282,6 +311,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             }
         }
         ExprKind::Negate(expr)
+        | ExprKind::ArrayReference(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)
@@ -465,10 +495,19 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         ExprKind::ObjectClassName { object } => {
             collect_required_class_names_in_expr(object, names);
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
+                names.insert(name.as_str().to_string());
+            }
+            collect_required_class_names_in_expr(property, names);
+        }
         ExprKind::ScopedConstantAccess { receiver, .. } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());
             }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            collect_required_class_names_in_expr(receiver, names);
         }
         ExprKind::NewScopedObject { receiver, args } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {

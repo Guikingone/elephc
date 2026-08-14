@@ -1,7 +1,7 @@
 //! Purpose:
 //! Walks the whole AST in place, rewriting `func_num_args()`, `func_get_args()` and
 //! `func_get_arg()` inside every function scope that supports them and adding that scope's
-//! hidden `mixed ...$__elephc_func_args` parameter when at least one call was rewritten.
+//! hidden `mixed ...$__elephc_func_args` parameter when the source has no variadic tail.
 //!
 //! Called from:
 //! - `crate::func_args::desugar()`.
@@ -32,16 +32,16 @@ use super::{build, IntrospectionCall, HIDDEN_ARGS_PARAM};
 struct Scope {
     /// Declared regular parameters, in declaration order, without the leading `$`.
     param_names: Vec<String>,
-    /// The first declared parameter that carries a default value, if any. Such a scope
-    /// cannot tell "passed" from "defaulted" through a variadic tail, so it is rejected.
+    /// The first declared parameter that carries a default value, if any.
     optional_param: Option<String>,
-    /// The variadic parameter the source function declares itself, if any.
+    /// Whether an optional-parameter constructor may read a caller-provided argc marker.
+    optional_constructor_argc: bool,
+    /// The variadic parameter the source function declares itself, if any. Its original
+    /// tail can reconstruct surplus arguments without adding a second ABI parameter.
     source_variadic: Option<String>,
     /// Set once an introspection call was rewritten in this scope, which is what makes the
     /// hidden variadic parameter necessary.
     used: bool,
-    /// Diagnostic label for this scope, e.g. `function 'va'`.
-    label: String,
 }
 
 /// In-place AST rewriter for the three argument-introspection constructs.
@@ -114,6 +114,7 @@ impl Rewriter {
                 self.walk_expr(value);
             }
             StmtKind::PropertyAssign { object, value, .. }
+            | StmtKind::PropertyRefAssign { object, source: value, .. }
             | StmtKind::PropertyArrayPush { object, value, .. } => {
                 self.walk_expr(object);
                 self.walk_expr(value);
@@ -132,6 +133,22 @@ impl Rewriter {
             | StmtKind::StaticPropertyArrayPush { value, .. } => self.walk_expr(value),
             StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 self.walk_expr(index);
+                self.walk_expr(value);
+            }
+            StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+                self.walk_expr(index);
+                self.walk_expr(source);
+            }
+            StmtKind::DynamicStaticPropertyWrite {
+                property,
+                index,
+                value,
+                ..
+            } => {
+                self.walk_expr(property);
+                if let Some(index) = index {
+                    self.walk_expr(index);
+                }
                 self.walk_expr(value);
             }
             StmtKind::If {
@@ -232,6 +249,7 @@ impl Rewriter {
                     variadic,
                     variadic_type,
                     body,
+                    false,
                 );
             }
             StmtKind::ClassDecl {
@@ -267,6 +285,7 @@ impl Rewriter {
     fn walk_methods(&mut self, owner: &str, methods: &mut [ClassMethod]) {
         for method in methods.iter_mut() {
             let label = format!("method '{}::{}'", owner, method.name);
+            let optional_constructor_argc = method.name.eq_ignore_ascii_case("__construct");
             let ClassMethod {
                 params,
                 param_attributes,
@@ -282,6 +301,7 @@ impl Rewriter {
                 variadic,
                 variadic_type,
                 body,
+                optional_constructor_argc,
             );
         }
     }
@@ -295,12 +315,13 @@ impl Rewriter {
     /// trailing entry the variadic parameter owns.
     fn walk_function_scope(
         &mut self,
-        label: String,
+        _label: String,
         params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
         param_attributes: Option<&mut Vec<Vec<AttributeGroup>>>,
         variadic: &mut Option<String>,
         variadic_type: &mut Option<TypeExpr>,
         body: &mut Vec<Stmt>,
+        optional_constructor_argc: bool,
     ) {
         let scope = Scope {
             param_names: params.iter().map(|(name, ..)| name.clone()).collect(),
@@ -308,9 +329,9 @@ impl Rewriter {
                 .iter()
                 .find(|(_, _, default, _)| default.is_some())
                 .map(|(name, ..)| name.clone()),
+            optional_constructor_argc,
             source_variadic: variadic.clone(),
             used: false,
-            label,
         };
         let outer = self.scope.replace(scope);
         self.walk_stmts(body);
@@ -319,11 +340,13 @@ impl Rewriter {
         if !scope.used {
             return;
         }
-        *variadic = Some(HIDDEN_ARGS_PARAM.to_string());
-        *variadic_type = Some(TypeExpr::Named(Name::unqualified("mixed")));
-        if let Some(param_attributes) = param_attributes {
-            if param_attributes.len() == params.len() {
-                param_attributes.push(Vec::new());
+        if scope.source_variadic.is_none() {
+            *variadic = Some(HIDDEN_ARGS_PARAM.to_string());
+            *variadic_type = Some(TypeExpr::Named(Name::unqualified("mixed")));
+            if let Some(param_attributes) = param_attributes {
+                if param_attributes.len() == params.len() {
+                    param_attributes.push(Vec::new());
+                }
             }
         }
     }
@@ -357,7 +380,11 @@ impl Rewriter {
             | ExprKind::ClassConstant { .. }
             | ExprKind::ScopedConstantAccess { .. } => {}
 
+            ExprKind::DynamicStaticPropertyAccess { property, .. } => self.walk_expr(property),
+            ExprKind::DynamicScopedConstantAccess { receiver, .. } => self.walk_expr(receiver),
+
             ExprKind::Negate(inner)
+            | ExprKind::ArrayReference(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
@@ -518,6 +545,7 @@ impl Rewriter {
                     variadic,
                     variadic_type,
                     body,
+                    false,
                 );
                 return;
             }
@@ -547,11 +575,9 @@ impl Rewriter {
     /// Validates that `call` can be rewritten in the current scope and, if so, marks the
     /// scope as needing the hidden variadic parameter and builds the replacement.
     ///
-    /// Every rejected shape produces a diagnostic instead of a silently different answer:
-    /// PHP's own "must be called from a function context" fatal, and the two argument-frame
-    /// shapes elephc cannot reconstruct from a variadic tail (optional parameters, whose
-    /// "passed" vs "defaulted" status is not recoverable, and a source-declared variadic,
-    /// whose contents the body may have reassigned).
+    /// Invalid arity, dynamic argument forms, and top-level use produce diagnostics. Inside
+    /// a function, source variadics supply their own surplus tail while non-variadic scopes
+    /// receive the compiler-private tail.
     fn scope_replacement(
         &mut self,
         call: IntrospectionCall,
@@ -590,30 +616,28 @@ impl Rewriter {
                 ),
             ));
         };
-        if let Some(variadic) = &scope.source_variadic {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{}() is not supported in {}: it declares the variadic parameter ${} — read that parameter directly",
-                    call.php_name(),
-                    scope.label,
-                    variadic
-                ),
-            ));
-        }
-        if let Some(optional) = &scope.optional_param {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{}() is not supported in {}: parameter ${} has a default value, so elephc cannot tell a passed argument from a defaulted one",
-                    call.php_name(),
-                    scope.label,
-                    optional
-                ),
-            ));
+        if scope.optional_param.is_some() {
+            if scope.source_variadic.is_none()
+                && scope.optional_constructor_argc
+                && call == IntrospectionCall::NumArgs
+            {
+                scope.used = true;
+                return Ok(build::optional_constructor_argc(span));
+            }
         }
         scope.used = true;
         let param_names = scope.param_names.clone();
-        Ok(build::replacement(call, &param_names, args, span))
+        let variadic_name = scope
+            .source_variadic
+            .as_deref()
+            .unwrap_or(HIDDEN_ARGS_PARAM)
+            .to_string();
+        Ok(build::replacement(
+            call,
+            &param_names,
+            &variadic_name,
+            args,
+            span,
+        ))
     }
 }

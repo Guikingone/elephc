@@ -22,7 +22,7 @@ use crate::codegen::{
     abi, emit_box_current_value_as_mixed, emit_release_pushed_refcounted_temp_after_array_push,
     runtime_value_tag,
 };
-use crate::parser::ast::ExprKind;
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
 use super::context::FunctionContext;
@@ -65,6 +65,14 @@ pub(crate) enum LiteralArrayElement {
     Float(f64),
     Str(String),
     Null,
+    Array {
+        elem_type: PhpType,
+        elements: Vec<LiteralArrayElement>,
+    },
+    AssocArray {
+        value_type: PhpType,
+        entries: Vec<LiteralAssocEntry>,
+    },
 }
 
 /// Literal associative-array key that can be materialized without evaluating code. Positional
@@ -82,6 +90,83 @@ pub(crate) enum LiteralArrayKey {
 pub(crate) struct LiteralAssocEntry {
     key: LiteralArrayKey,
     value: LiteralArrayElement,
+}
+
+/// Replaces global-constant references throughout a literal default with registered values.
+///
+/// Class constants have already been resolved by the frontend. This pass handles module global
+/// constants, including nested array keys and values, and leaves cycles unresolved so the caller
+/// reports the normal unsupported-default diagnostic.
+pub(crate) fn resolve_literal_default_global_constants(
+    expr: &ExprKind,
+    global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+) -> ExprKind {
+    /// Recursively resolves constant references inside one literal expression.
+    fn resolve(
+        expr: &ExprKind,
+        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> ExprKind {
+        match expr {
+            ExprKind::ConstRef(name) => {
+                resolve_name(name.as_str(), expr, global_constants, visiting)
+            }
+            ExprKind::Variable(name) => resolve_name(name, expr, global_constants, visiting),
+            ExprKind::ArrayLiteral(items) => ExprKind::ArrayLiteral(
+                items
+                    .iter()
+                    .map(|item| {
+                        Expr::new(
+                            resolve(&item.kind, global_constants, visiting),
+                            item.span,
+                        )
+                    })
+                    .collect(),
+            ),
+            ExprKind::ArrayLiteralAssoc(items) => ExprKind::ArrayLiteralAssoc(
+                items
+                    .iter()
+                    .map(|(key, value)| {
+                        (
+                            Expr::new(
+                                resolve(&key.kind, global_constants, visiting),
+                                key.span,
+                            ),
+                            Expr::new(
+                                resolve(&value.kind, global_constants, visiting),
+                                value.span,
+                            ),
+                        )
+                    })
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    /// Resolves one named constant while guarding the recursive lookup against cycles.
+    fn resolve_name(
+        name: &str,
+        original: &ExprKind,
+        global_constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+        visiting: &mut std::collections::HashSet<String>,
+    ) -> ExprKind {
+        let key = name.trim_start_matches('\\');
+        let Some((resolved, _)) = global_constants
+            .get(name)
+            .or_else(|| global_constants.get(key))
+        else {
+            return original.clone();
+        };
+        if !visiting.insert(key.to_string()) {
+            return original.clone();
+        }
+        let result = resolve(resolved, global_constants, visiting);
+        visiting.remove(key);
+        result
+    }
+
+    resolve(expr, global_constants, &mut std::collections::HashSet::new())
 }
 
 /// Converts a supported default expression into a direct storage value.
@@ -154,6 +239,38 @@ pub(crate) fn literal_default_value(
             ExprKind::FloatLiteral(value) => Ok(LiteralDefaultValue::BoxedFloat(-value)),
             _ => Err(unsupported_literal_default(context, php_type, op_name)),
         },
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteral(items)) => {
+            let elem_type = PhpType::Mixed;
+            let elements = items
+                .iter()
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::Array {
+                elem_type,
+                elements,
+            })
+        }
+        (PhpType::Mixed | PhpType::Union(_), ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::AssocArray {
+                value_type,
+                entries,
+            })
+        }
         (PhpType::Mixed | PhpType::Union(_), ExprKind::Null) => Ok(LiteralDefaultValue::BoxedNull),
         (PhpType::Void | PhpType::Never, ExprKind::Null) => Ok(LiteralDefaultValue::NullSentinel),
         (PhpType::Void | PhpType::Never, _) => Ok(LiteralDefaultValue::NullSentinel),
@@ -184,6 +301,38 @@ pub(crate) fn literal_default_value(
         }
         (PhpType::AssocArray { value, .. }, ExprKind::ArrayLiteralAssoc(items)) => {
             let value_type = value.as_ref().codegen_repr();
+            let entries = items
+                .iter()
+                .map(|(key, value_expr)| {
+                    Ok(LiteralAssocEntry {
+                        key: literal_array_key(context, &key.kind, op_name)?,
+                        value: literal_array_element(
+                            context,
+                            &value_type,
+                            &value_expr.kind,
+                            op_name,
+                        )?,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::AssocArray {
+                value_type,
+                entries,
+            })
+        }
+        (PhpType::Iterable, ExprKind::ArrayLiteral(items)) => {
+            let elem_type = PhpType::Mixed;
+            let elements = items
+                .iter()
+                .map(|item| literal_array_element(context, &elem_type, &item.kind, op_name))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(LiteralDefaultValue::Array {
+                elem_type,
+                elements,
+            })
+        }
+        (PhpType::Iterable, ExprKind::ArrayLiteralAssoc(items)) => {
+            let value_type = PhpType::Mixed;
             let entries = items
                 .iter()
                 .map(|(key, value_expr)| {
@@ -322,7 +471,7 @@ pub(super) fn emit_array_literal_default_to_result(
     emit_array_literal_allocation(ctx, elem_type, elements.len())?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     for element in elements {
-        let value_type = emit_array_element_value(ctx, element);
+        let value_type = emit_array_element_value(ctx, element)?;
         append_array_literal_element(ctx, elem_type, &value_type)?;
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -346,7 +495,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::AArch64 => {
                 materialize_assoc_literal_key_aarch64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
                 abi::emit_pop_reg(ctx.emitter, "x0");
@@ -359,7 +508,7 @@ pub(crate) fn emit_assoc_array_literal_default_to_result(
             Arch::X86_64 => {
                 materialize_assoc_literal_key_x86_64(ctx, &entry.key);
                 abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
-                let actual_value_type = emit_array_element_value(ctx, &entry.value);
+                let actual_value_type = emit_array_element_value(ctx, &entry.value)?;
                 materialize_assoc_literal_value(ctx, value_type, &actual_value_type)?;
                 abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
                 abi::emit_pop_reg(ctx.emitter, "rdi");
@@ -422,7 +571,103 @@ fn literal_array_element(
     op_name: &str,
 ) -> Result<LiteralArrayElement> {
     match elem_type.codegen_repr() {
+        PhpType::Array(nested_elem_type) => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let nested_elem_type = nested_elem_type.codegen_repr();
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &nested_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: nested_elem_type,
+                    elements,
+                })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
+        PhpType::AssocArray { value, .. } => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let value_type = value.as_ref().codegen_repr();
+                let entries = items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        Ok(LiteralAssocEntry {
+                            key: LiteralArrayKey::Int(index as i64),
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &item.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                let value_type = value.as_ref().codegen_repr();
+                let entries = items
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(LiteralAssocEntry {
+                            key: literal_array_key(context, &key.kind, op_name)?,
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &value.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
+            _ => Err(unsupported_literal_default(context, elem_type, op_name)),
+        },
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => match expr {
+            ExprKind::ArrayLiteral(items) => {
+                let nested_elem_type = PhpType::Mixed;
+                let elements = items
+                    .iter()
+                    .map(|item| {
+                        literal_array_element(context, &nested_elem_type, &item.kind, op_name)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::Array {
+                    elem_type: nested_elem_type,
+                    elements,
+                })
+            }
+            ExprKind::ArrayLiteralAssoc(items) => {
+                let value_type = PhpType::Mixed;
+                let entries = items
+                    .iter()
+                    .map(|(key, value)| {
+                        Ok(LiteralAssocEntry {
+                            key: literal_array_key(context, &key.kind, op_name)?,
+                            value: literal_array_element(
+                                context,
+                                &value_type,
+                                &value.kind,
+                                op_name,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LiteralArrayElement::AssocArray {
+                    value_type,
+                    entries,
+                })
+            }
             ExprKind::IntLiteral(value) => Ok(LiteralArrayElement::Int(*value)),
             ExprKind::BoolLiteral(value) => Ok(LiteralArrayElement::Bool(*value)),
             ExprKind::FloatLiteral(value) => Ok(LiteralArrayElement::Float(*value)),
@@ -520,27 +765,27 @@ fn emit_array_literal_allocation(
 fn emit_array_element_value(
     ctx: &mut FunctionContext<'_>,
     element: &LiteralArrayElement,
-) -> PhpType {
+) -> Result<PhpType> {
     match element {
         LiteralArrayElement::Int(value) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), *value);
-            PhpType::Int
+            Ok(PhpType::Int)
         }
         LiteralArrayElement::Bool(value) => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), i64::from(*value));
-            PhpType::Bool
+            Ok(PhpType::Bool)
         }
         LiteralArrayElement::Float(value) => {
             let label = ctx.data.add_float(*value);
             abi::emit_load_symbol_to_reg(ctx.emitter, abi::float_result_reg(ctx.emitter), &label, 0);
-            PhpType::Float
+            Ok(PhpType::Float)
         }
         LiteralArrayElement::Str(value) => {
             let (label, len) = ctx.data.add_string(value.as_bytes());
             let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
             abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
             abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-            PhpType::Str
+            Ok(PhpType::Str)
         }
         LiteralArrayElement::Null => {
             abi::emit_load_int_immediate(
@@ -548,7 +793,24 @@ fn emit_array_element_value(
                 abi::int_result_reg(ctx.emitter),
                 0x7fff_ffff_ffff_fffe,
             );
-            PhpType::Void
+            Ok(PhpType::Void)
+        }
+        LiteralArrayElement::Array {
+            elem_type,
+            elements,
+        } => {
+            emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            Ok(PhpType::Array(Box::new(elem_type.clone())))
+        }
+        LiteralArrayElement::AssocArray {
+            value_type,
+            entries,
+        } => {
+            emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(value_type.clone()),
+            })
         }
     }
 }
@@ -567,6 +829,9 @@ fn append_array_literal_element(
         PhpType::Int | PhpType::Bool => append_scalar_array_literal_element(ctx),
         PhpType::Float => append_float_array_literal_element(ctx),
         PhpType::Str => append_string_array_literal_element(ctx),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            append_refcounted_array_literal_element(ctx, &value_type.codegen_repr())
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "array default element PHP type {:?}",
@@ -699,6 +964,11 @@ fn materialize_assoc_literal_value_aarch64(
             ctx.emitter.instruction("mov x4, x2");                              // pass the literal string length as the hash value high word
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov x3, x0");                              // transfer the owned nested refcounted payload into the hash bucket
+            ctx.emitter.instruction("mov x4, xzr");                             // refcounted hash values use only the low payload word
+            Ok(())
+        }
         PhpType::Void | PhpType::Never => {
             ctx.emitter.instruction("mov x3, xzr");                             // null hash values use a zero low payload word
             ctx.emitter.instruction("mov x4, xzr");                             // null hash values use a zero high payload word
@@ -735,6 +1005,11 @@ fn materialize_assoc_literal_value_x86_64(
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             ctx.emitter.instruction("mov rcx, rax");                            // pass the persistent literal string pointer as the hash value low word
             ctx.emitter.instruction("mov r8, rdx");                             // pass the literal string length as the hash value high word
+            Ok(())
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov rcx, rax");                            // transfer the owned nested refcounted payload into the hash bucket
+            ctx.emitter.instruction("xor r8, r8");                              // refcounted hash values use only the low payload word
             Ok(())
         }
         PhpType::Void | PhpType::Never => {
@@ -776,6 +1051,11 @@ fn materialize_assoc_literal_concrete_value_aarch64(
             ctx.emitter.instruction("mov x4, x2");                              // pass the string length as the Mixed hash value high word
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov x3, x0");                              // transfer the owned nested refcounted payload into Mixed-capable hash storage
+            ctx.emitter.instruction("mov x4, xzr");                             // refcounted Mixed hash values use only the low payload word
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "assoc array default Mixed element PHP type {:?}",
             other
@@ -810,6 +1090,11 @@ fn materialize_assoc_literal_concrete_value_x86_64(
             ctx.emitter.instruction("mov r8, rdx");                             // pass the string length as the Mixed hash value high word
             Ok(())
         }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+            ctx.emitter.instruction("mov rcx, rax");                            // transfer the owned nested refcounted payload into Mixed-capable hash storage
+            ctx.emitter.instruction("xor r8, r8");                              // refcounted Mixed hash values use only the low payload word
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "assoc array default Mixed element PHP type {:?}",
             other
@@ -835,6 +1120,8 @@ fn array_element_size(elem_type: &PhpType) -> Result<i64> {
         | PhpType::Float
         | PhpType::Mixed
         | PhpType::Object(_)
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
         | PhpType::Union(_)
         | PhpType::Iterable
         | PhpType::Void => Ok(8),

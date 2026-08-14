@@ -30,6 +30,11 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         )));
     };
     guard_static_method_receiver(ctx, object, &method_name)?;
+    if builtins::has_eval_context(ctx)
+        && reflection_function_callable_metadata_method(&class_name, &method_name)
+    {
+        return builtins::lower_eval_method_call(ctx, inst, object, &method_name);
+    }
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
         return lower_fiber_state_predicate(ctx, inst, object, state);
     }
@@ -64,6 +69,29 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     {
         return lower_interface_method_call(ctx, inst, &class_name, &method_name);
     }
+    let normalized_class = class_name.trim_start_matches('\\');
+    if normalized_class.is_empty() {
+        return lower_narrowed_interface_method_call(ctx, inst, "", &method_name);
+    }
+    if !ctx.module.class_infos.contains_key(normalized_class)
+        && !ctx.module.interface_infos.contains_key(normalized_class)
+        && !ctx.module.extern_class_infos.contains_key(normalized_class)
+        && !ctx.module.packed_class_infos.contains_key(normalized_class)
+    {
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", normalized_class));
+        return Ok(());
+    }
+    if !class_declares_method(ctx, &class_name, &method_name)
+        && !narrowed_interface_candidates(ctx, normalized_class, &method_name, inst.operands.len())?
+            .is_empty()
+    {
+        return lower_narrowed_interface_method_call(
+            ctx,
+            inst,
+            normalized_class,
+            &method_name,
+        );
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let mut param_types = Vec::with_capacity(target.params.len() + 1);
     param_types.push(PhpType::Object(class_name));
@@ -93,6 +121,21 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_method_call_result(ctx, inst, &target)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, inst.result)?;
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Returns whether a ReflectionFunction method depends on retained callable metadata.
+fn reflection_function_callable_metadata_method(class_name: &str, method_name: &str) -> bool {
+    class_name.trim_start_matches('\\') == "ReflectionFunction"
+        && matches!(
+            php_symbol_key(method_name).as_str(),
+            "isanonymous"
+                | "isstatic"
+                | "isclosure"
+                | "getclosurethis"
+                | "getclosurescopeclass"
+                | "getclosurecalledclass"
+                | "getclosureusedvariables"
+        )
 }
 
 /// Rejects the raw null-container representation before a static object method dispatch.
@@ -234,6 +277,157 @@ pub(super) fn lower_mixed_method_candidate_call(
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
 }
 
+/// Lowers an interface receiver call accepted through an `instanceof` capability narrowing.
+pub(super) fn lower_narrowed_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let candidates =
+        narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
+    if candidates.is_empty() {
+        emit_method_call_on_null_fatal(ctx, method_name);
+        return Ok(());
+    }
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let no_match_label = ctx.next_label("iface_narrowed_no_match");
+    let done_label = ctx.next_label("iface_narrowed_done");
+    ctx.load_value_to_result(inst.operands[0])?;
+    emit_bare_object_receiver_into_reg(ctx, receiver_reg);
+    emit_narrowed_interface_class_dispatch(
+        ctx,
+        inst,
+        receiver_reg,
+        &candidates,
+        method_name,
+        &no_match_label,
+        &done_label,
+    )?;
+
+    ctx.emitter.label(&no_match_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers the nullable form of an interface call accepted through capability narrowing.
+pub(super) fn lower_narrowed_nullable_interface_method_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    interface_name: &str,
+    method_name: &str,
+) -> Result<()> {
+    let candidates =
+        narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
+    if candidates.is_empty() {
+        emit_method_call_on_null_fatal(ctx, method_name);
+        return Ok(());
+    }
+    let receiver_reg = abi::nested_call_reg(ctx.emitter);
+    let null_label = ctx.next_label("iface_narrowed_null");
+    let no_match_label = ctx.next_label("iface_narrowed_no_match");
+    let done_label = ctx.next_label("iface_narrowed_done");
+    objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+    emit_narrowed_interface_class_dispatch(
+        ctx,
+        inst,
+        receiver_reg,
+        &candidates,
+        method_name,
+        &no_match_label,
+        &done_label,
+    )?;
+
+    ctx.emitter.label(&no_match_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&null_label);
+    emit_method_call_on_null_fatal(ctx, method_name);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Collects concrete runtime classes compatible with the receiver type and requested method.
+pub(super) fn narrowed_interface_candidates(
+    ctx: &FunctionContext<'_>,
+    receiver_type: &str,
+    method_name: &str,
+    operand_count: usize,
+) -> Result<Vec<MixedMethodCandidate>> {
+    mixed_method_candidates(ctx, method_name, operand_count).map(|candidates| {
+        candidates
+            .into_iter()
+            .filter(|candidate| {
+                receiver_type.is_empty()
+                    || class_is_same_or_descendant(ctx, &candidate.class_name, receiver_type)
+                    || class_implements_interface(ctx, &candidate.class_name, receiver_type)
+            })
+            .collect()
+    })
+}
+
+/// Returns whether a concrete runtime class is the named class or inherits from it.
+fn class_is_same_or_descendant(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    ancestor_name: &str,
+) -> bool {
+    let ancestor_key = php_symbol_key(ancestor_name.trim_start_matches('\\'));
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    while let Some(candidate) = current {
+        if php_symbol_key(candidate) == ancestor_key {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(candidate)
+            .and_then(|class_info| class_info.parent.as_deref());
+    }
+    false
+}
+
+/// Emits class-id branches and concrete calls for a narrowed interface receiver.
+fn emit_narrowed_interface_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    receiver_reg: &str,
+    candidates: &[MixedMethodCandidate],
+    method_name: &str,
+    no_match_label: &str,
+    done_label: &str,
+) -> Result<()> {
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "iface_narrowed_{}",
+                label_fragment(&candidate.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+    emit_mixed_method_class_dispatch(ctx, receiver_reg, candidates, &match_labels, no_match_label);
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        lower_mixed_method_candidate_call(ctx, inst, receiver_reg, candidate, method_name)?;
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+    Ok(())
+}
+
+/// Moves a bare object result into the register reserved for runtime class dispatch.
+fn emit_bare_object_receiver_into_reg(ctx: &mut FunctionContext<'_>, receiver_reg: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov {}, x0", receiver_reg));      // stage the bare interface object pointer for dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {}, rax", receiver_reg));     // stage the bare interface object pointer for dispatch
+        }
+    }
+}
+
 /// Collects concrete class-method candidates for a boxed `Mixed` receiver.
 pub(super) fn mixed_method_candidates(
     ctx: &FunctionContext<'_>,
@@ -319,4 +513,3 @@ pub(super) fn emit_mixed_method_class_dispatch(
 /// non-alphanumeric byte collapses to `_`, so `a_b` and `aéb` collide. A second copy here
 /// invited use where uniqueness matters; there is now one definition carrying that warning.
 pub(super) use crate::names::label_fragment;
-

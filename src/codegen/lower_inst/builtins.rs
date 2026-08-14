@@ -39,10 +39,12 @@ pub(crate) mod ctype;
 pub(crate) mod debug;
 mod eval;
 mod eval_facade;
+mod filter;
 pub(crate) mod io;
 mod isset;
 mod count_empty;
 mod function_queries;
+mod member_exists;
 mod member_queries;
 mod scalar_metadata;
 mod shared;
@@ -60,6 +62,7 @@ pub(crate) mod spl;
 pub(crate) mod system;
 pub(crate) mod strings;
 pub(crate) mod types;
+pub(crate) mod unpack;
 
 pub(crate) use count_empty::*;
 pub(in crate::codegen::lower_inst) use eval_facade::*;
@@ -82,6 +85,22 @@ pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst:
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
+        "filter_var$default" => filter::lower_filter_var_default(ctx, inst, false),
+        "filter_var$default_nof" => filter::lower_filter_var_default(ctx, inst, true),
+        "filter_var$int" => filter::lower_filter_var_int(ctx, inst, false),
+        "filter_var$int_nof" => filter::lower_filter_var_int(ctx, inst, true),
+        "filter_var$int_range" => filter::lower_filter_var_int_range(ctx, inst, false),
+        "filter_var$int_range_nof" => filter::lower_filter_var_int_range(ctx, inst, true),
+        "filter_var$float" => filter::lower_filter_var_float(ctx, inst, false),
+        "filter_var$float_nof" => filter::lower_filter_var_float(ctx, inst, true),
+        "filter_var$bool" => filter::lower_filter_var_bool(ctx, inst, false),
+        "filter_var$bool_nof" => filter::lower_filter_var_bool(ctx, inst, true),
+        "filter_var$ip" => filter::lower_filter_var_ip(ctx, inst, false),
+        "filter_var$ip_nof" => filter::lower_filter_var_ip(ctx, inst, true),
+        "filter_var$ip4" => filter::lower_filter_var_ip4(ctx, inst, false),
+        "filter_var$ip4_nof" => filter::lower_filter_var_ip4(ctx, inst, true),
+        "filter_var$ip6" => filter::lower_filter_var_ip6(ctx, inst, false),
+        "filter_var$ip6_nof" => filter::lower_filter_var_ip6(ctx, inst, true),
         _ => Err(CodegenIrError::unsupported(format!("language construct {}", name))),
     }
 }

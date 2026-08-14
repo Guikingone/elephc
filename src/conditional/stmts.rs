@@ -393,6 +393,15 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             property,
             value: rewrite_expr(value, defines),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(rewrite_expr(*object, defines)),
+            property,
+            source: rewrite_expr(source, defines),
+        },
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -420,6 +429,30 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             receiver,
             property,
             index: rewrite_expr(index, defines),
+            value: rewrite_expr(value, defines),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: rewrite_expr(index, defines),
+            source: rewrite_expr(source, defines),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(rewrite_expr(*property, defines)),
+            index: index.map(|index| rewrite_expr(index, defines)),
+            append,
             value: rewrite_expr(value, defines),
         },
         StmtKind::PropertyArrayPush {

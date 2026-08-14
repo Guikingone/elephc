@@ -46,6 +46,7 @@ pub(crate) fn compile(config: CliConfig) {
         heap_debug,
         strict_opcache,
         emit_ir,
+        output_dir,
         null_repr,
         emit_asm,
         emit,
@@ -79,7 +80,27 @@ pub(crate) fn compile(config: CliConfig) {
     crate::strict_php::set_enabled(strict_php);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
-    let output_paths = output_paths(filename, target, emit);
+    let output_dir = output_dir.map(|raw| {
+        if raw.is_absolute() {
+            raw
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&raw))
+                .unwrap_or(raw)
+        }
+    });
+    if let Some(directory) = &output_dir {
+        if let Err(error) = fs::create_dir_all(directory) {
+            crate::progress::clear();
+            eprintln!(
+                "error: cannot create output directory '{}': {}",
+                directory.display(),
+                error
+            );
+            process::exit(1);
+        }
+    }
+    let output_paths = output_paths(filename, target, emit, output_dir.as_deref());
     let mut timings = CompileTimings::new(emit_timings);
 
     let parsed = frontend::read_and_parse(filename, source_mode, &defines, &mut timings);
@@ -191,7 +212,7 @@ pub(crate) fn compile(config: CliConfig) {
     // reported directive set/version follows the compile target `php_version`; the
     // `opcache_reset()` result follows the SAPI (`web`): CLI disabled, web enabled.
     // Build the PLACEHOLDER OPcache script manifest: the canonicalized main entry file, every
-    // statically-resolved include/require target, and Composer `autoload.files`. The PSR-4 /
+    // statically-resolved include/require target, and eager autoload files. The PSR-4 /
     // SPL-rule class files are still unknown here — `autoload::run` produces them below, after
     // name resolution — so this manifest is completed and re-baked by
     // `opcache_prelude::bake_manifest` further down. The declarations themselves MUST be
@@ -272,7 +293,13 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
-    let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);
+    let ast = web_prelude::inject_if_web(
+        ast,
+        web,
+        php_version,
+        &ini_overrides,
+        Path::new(filename),
+    );
     timings.record_since("web-prelude", phase_started);
 
     // Inject the PHP version-surface functions (`zend_version`, `php_sapi_name`,
@@ -299,11 +326,11 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("autoload-run");
     let phase_started = Instant::now();
     // `run_collecting_included` also hands back the canonical path of every file the autoload
-    // pass loaded — Composer `autoload.files`, PSR-4 / SPL-rule class files, and their own
+    // pass loaded — eager files, PSR-4 / SPL-rule class files, and their own
     // include targets: group 3 of the OPcache script manifest, and the last one to become
     // knowable.
-    let (ast, opcache_autoloaded_files) =
-        match autoload::run_collecting_included_with_defines(
+    let (ast, opcache_autoloaded_files, declaration_source_files) =
+        match autoload::run_collecting_included_with_defines_and_sources(
             ast,
             parent,
             &autoload_registry,
@@ -317,6 +344,18 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+
+    // Inject compatibility functions only after autoload expansion has exposed the complete
+    // closed-world program. Their EIR routing is type-directed, so the declarations must be
+    // present before checking even when the triggering call came from an autoloaded class.
+    crate::progress::phase("compat-preludes");
+    let phase_started = Instant::now();
+    let ast = crate::assert_prelude::inject_if_used(ast);
+    let ast = crate::array_merge_prelude::inject_if_used(ast);
+    let ast = crate::array_reduce_prelude::inject_if_used(ast);
+    let ast = crate::filter_var_prelude::inject_if_used(ast);
+    let ast = crate::backend_gap_prelude::inject_if_used(ast);
+    timings.record_since("compat-preludes", phase_started);
 
     // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
     // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
@@ -485,6 +524,8 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    ir_module.declared_class_source_files = declaration_source_files.class_likes;
+    ir_module.declared_function_source_files = declaration_source_files.functions;
     timings.record_since("ir-lower", phase_started);
 
     crate::progress::phase("ir-opt");

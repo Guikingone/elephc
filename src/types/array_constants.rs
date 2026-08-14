@@ -7,7 +7,8 @@
 //! - `crate::codegen::prescan` when materializing constant literal values.
 //!
 //! Key details:
-//! - Values must match PHP's array extension constants exactly for callback-mode parity.
+//! - Values must match PHP's array extension constants exactly for callback, extraction, and
+//!   sorting parity.
 
 /// Tuple of `(name, value)` pairs for PHP array integer constants.
 ///
@@ -19,6 +20,20 @@ pub(crate) const ARRAY_INT_CONSTANTS: &[(&str, i64)] = &[
     ("ARRAY_FILTER_USE_KEY", 2),
     ("COUNT_NORMAL", 0),
     ("COUNT_RECURSIVE", 1),
+    ("EXTR_OVERWRITE", 0),
+    ("EXTR_SKIP", 1),
+    ("EXTR_PREFIX_SAME", 2),
+    ("EXTR_PREFIX_ALL", 3),
+    ("EXTR_PREFIX_INVALID", 4),
+    ("EXTR_PREFIX_IF_EXISTS", 5),
+    ("EXTR_IF_EXISTS", 6),
+    ("EXTR_REFS", 256),
+    ("SORT_REGULAR", 0),
+    ("SORT_NUMERIC", 1),
+    ("SORT_STRING", 2),
+    ("SORT_LOCALE_STRING", 5),
+    ("SORT_NATURAL", 6),
+    ("SORT_FLAG_CASE", 8),
 ];
 
 #[cfg(test)]

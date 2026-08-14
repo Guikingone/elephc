@@ -559,7 +559,7 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "copy": ["string", "string", ("mixed", "context")],
     "rename": ["string", "string", "mixed"],
     "unlink": ["string"],
-    "mkdir": ["string", "int", "bool", "bool"],
+    "mkdir": ["string", "int", "bool", "mixed"],
     "rmdir": ["string", "mixed"],
     "chdir": ["string"],
     "chmod": ["string", "int"],

@@ -15,6 +15,13 @@ pub(super) fn coerce_to_return_type(
     value: LoweredValue,
     span: Option<Span>,
 ) -> LoweredValue {
+    let return_php_type = ctx.return_php_type.clone();
+    let value = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+        ctx,
+        value,
+        &return_php_type,
+        span,
+    );
     if let Some(value) = coerce_container_to_return_type(ctx, value, span) {
         return value;
     }
@@ -239,4 +246,3 @@ pub(super) fn coerce_to_string(
         ),
     }
 }
-

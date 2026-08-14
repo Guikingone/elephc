@@ -37,6 +37,16 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Executes a runtime include/require through the Magician bridge while
+    /// sharing the caller's materialized PHP scope.
+    DynamicInclude {
+        /// Whether a previously included canonical path should be skipped.
+        once: bool,
+        /// Whether a missing path is a fatal require rather than a warning-only include.
+        required: bool,
+        /// Whether strict PHP is active at the physical include call site.
+        strict_php: bool,
+    },
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -58,6 +68,12 @@ impl RuntimeCallTarget {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
+            RuntimeCallTarget::DynamicInclude { .. } => {
+                Some(RuntimeCallSignature::Polymorphic {
+                    min_operands: 1,
+                    max_operands: Some(1),
+                })
+            }
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -75,6 +91,26 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::DynamicInclude {
+                once: false,
+                required: false,
+                ..
+            } => "include.dynamic",
+            RuntimeCallTarget::DynamicInclude {
+                once: true,
+                required: false,
+                ..
+            } => "include.dynamic_once",
+            RuntimeCallTarget::DynamicInclude {
+                once: false,
+                required: true,
+                ..
+            } => "require.dynamic",
+            RuntimeCallTarget::DynamicInclude {
+                once: true,
+                required: true,
+                ..
+            } => "require.dynamic_once",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),

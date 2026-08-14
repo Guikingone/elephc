@@ -9,6 +9,59 @@
 
 use super::*;
 
+/// Verifies an overriding interface method may add an optional parameter while
+/// preserving calls valid for the parent declaration.
+#[test]
+fn test_interface_override_may_add_optional_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+interface Lookup {
+    public function find(string $key);
+}
+
+interface ConfigurableLookup extends Lookup {
+    public function find(string $key, int $mode = 0);
+}
+
+class MemoryLookup implements ConfigurableLookup {
+    public function find(string $key, int $mode = 0) {
+        return $key . $mode;
+    }
+}
+
+$lookup = new MemoryLookup();
+echo $lookup->find("item");
+"#,
+    );
+    assert_eq!(out, "item0");
+}
+
+/// Verifies a virtual call through an interface preserves the surplus positional
+/// arguments consumed by the concrete implementation's argument introspection.
+#[test]
+fn test_interface_dispatch_propagates_argument_introspection_tail() {
+    let out = compile_and_run(
+        r#"<?php
+interface Invocation {
+    public function countPassed();
+}
+
+class CountingInvocation implements Invocation {
+    public function countPassed() {
+        return func_num_args();
+    }
+}
+
+function invoke(Invocation $target) {
+    return $target->countPassed(10, 20);
+}
+
+echo invoke(new CountingInvocation());
+"#,
+    );
+    assert_eq!(out, "2");
+}
+
 /// Verifies protected member `$value` and protected method `next()` are callable
 /// from public method `reveal()` inside the same class, returning 42.
 #[test]
@@ -709,4 +762,28 @@ echo $c->value;
 "#,
     );
     assert_eq!(out, "1:3:3");
+}
+
+/// Verifies a nullable base-class receiver dispatches a method declared only by its runtime child.
+#[test]
+fn test_nullable_base_receiver_dispatches_subclass_only_method() {
+    let out = compile_and_run(
+        r#"<?php
+class NullableDispatchBase {}
+
+class NullableDispatchChild extends NullableDispatchBase {
+    public function childOnly(): string {
+        return "child";
+    }
+}
+
+function nullableDispatchFactory(bool $present): ?NullableDispatchBase {
+    return $present ? new NullableDispatchChild() : null;
+}
+
+$value = nullableDispatchFactory(true);
+echo $value->childOnly();
+"#,
+    );
+    assert_eq!(out, "child");
 }

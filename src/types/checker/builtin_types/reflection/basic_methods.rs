@@ -149,7 +149,7 @@ pub(super) fn builtin_reflection_class_new_instance_method() -> ClassMethod {
         param_attributes: Vec::new(),
         variadic: Some("args".to_string()),
         variadic_by_ref: false,
-        variadic_type: None,
+        variadic_type: Some(mixed_type()),
         return_type: Some(object_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
@@ -191,7 +191,7 @@ pub(super) fn builtin_reflection_method_invoke_method() -> ClassMethod {
         param_attributes: Vec::new(),
         variadic: Some("args".to_string()),
         variadic_by_ref: false,
-        variadic_type: None,
+        variadic_type: Some(mixed_type()),
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
@@ -230,6 +230,66 @@ pub(super) fn builtin_reflection_method_invoke_args_method() -> ClassMethod {
             StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
             dummy_span,
         )],
+        span: dummy_span,
+        attributes: Vec::new(),
+    }
+}
+
+/// Returns the concrete `getClosure()` contract for a reflected function or method.
+///
+/// The synthetic body supplies a valid callable for ordinary class lowering; calls on reflection
+/// objects with a statically tracked target are replaced by the target-bound callable in EIR.
+pub(super) fn builtin_reflection_get_closure_method(for_method: bool) -> ClassMethod {
+    let dummy_span = crate::span::Span::dummy();
+    let params = if for_method {
+        vec![(
+            "object".to_string(),
+            Some(nullable_object_type("object")),
+            null_expr(),
+            false,
+        )]
+    } else {
+        Vec::new()
+    };
+    let fallback_result = if for_method {
+        Expr::new(ExprKind::Null, dummy_span)
+    } else {
+        reflection_function_dynamic_call(dummy_span)
+    };
+    let fallback = Expr::new(
+        ExprKind::Closure {
+            params: Vec::new(),
+            variadic: Some("args".to_string()),
+            variadic_by_ref: false,
+            variadic_type: Some(mixed_type()),
+            return_type: Some(mixed_type()),
+            body: vec![Stmt::new(
+                StmtKind::Return(Some(fallback_result)),
+                dummy_span,
+            )],
+            is_arrow: false,
+            is_static: for_method,
+            by_ref_return: false,
+            captures: Vec::new(),
+            capture_refs: Vec::new(),
+        },
+        dummy_span,
+    );
+    ClassMethod {
+        name: "getClosure".to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params,
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(TypeExpr::Named(Name::unqualified("Closure"))),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(Some(fallback)), dummy_span)],
         span: dummy_span,
         attributes: Vec::new(),
     }
@@ -310,11 +370,11 @@ pub(super) fn builtin_reflection_function_invoke_method() -> ClassMethod {
         param_attributes: Vec::new(),
         variadic: Some("args".to_string()),
         variadic_by_ref: false,
-        variadic_type: None,
+        variadic_type: Some(mixed_type()),
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            StmtKind::Return(Some(reflection_function_dynamic_call(dummy_span))),
             dummy_span,
         )],
         span: dummy_span,
@@ -343,12 +403,44 @@ pub(super) fn builtin_reflection_function_invoke_args_method() -> ClassMethod {
         return_type: Some(mixed_type()),
         by_ref_return: false,
         body: vec![Stmt::new(
-            StmtKind::Return(Some(Expr::new(ExprKind::Null, dummy_span))),
+            StmtKind::Return(Some(reflection_function_dynamic_call(dummy_span))),
             dummy_span,
         )],
         span: dummy_span,
         attributes: Vec::new(),
     }
+}
+
+/// Builds a dynamic invocation of the retained callable or reflected function name.
+fn reflection_function_dynamic_call(span: crate::span::Span) -> Expr {
+    let property = |name: &str| {
+        Expr::new(
+            ExprKind::PropertyAccess {
+                object: Box::new(Expr::new(ExprKind::This, span)),
+                property: name.to_string(),
+            },
+            span,
+        )
+    };
+    Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(Expr::new(
+                ExprKind::NullCoalesce {
+                    value: Box::new(property("__callable")),
+                    default: Box::new(property("__name")),
+                },
+                span,
+            )),
+            args: vec![Expr::new(
+                ExprKind::Spread(Box::new(Expr::new(
+                    ExprKind::Variable("args".to_string()),
+                    span,
+                ))),
+                span,
+            )],
+        },
+        span,
+    )
 }
 
 /// Returns a public `ReflectionClass::newInstanceArgs()` method.
@@ -427,9 +519,8 @@ pub(super) fn builtin_reflection_slot_getter(
     }
 }
 
-/// Returns the public `__construct(string $name)` for `ReflectionFunction`. The
-/// body is empty; codegen populates the metadata slots from the reflected
-/// function's signature.
+/// Returns the public callable-or-string constructor for `ReflectionFunction`.
+/// The body is empty; codegen populates metadata slots from the reflected target.
 pub(super) fn builtin_reflection_function_constructor_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -439,7 +530,15 @@ pub(super) fn builtin_reflection_function_constructor_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("function".to_string(), Some(TypeExpr::Str), None, false)],
+        params: vec![(
+            "function".to_string(),
+            Some(TypeExpr::Union(vec![
+                TypeExpr::Named(Name::unqualified("Closure")),
+                TypeExpr::Str,
+            ])),
+            None,
+            false,
+        )],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,

@@ -57,11 +57,13 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let pattern = super::expect_operand(inst, 0)?;
     let source = super::expect_operand(inst, 1)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
-    let runtime_label = match source_ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } => "__rt_array_filter_mixed_raw",
+    let (runtime_label, return_raw_hash) = match source_ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ("__rt_array_filter_mixed_raw", true)
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_preg_grep_mixed_source_guard(ctx, source)?;
-            "__rt_array_filter_mixed"
+            ("__rt_array_filter_mixed", false)
         }
         ref other => {
             return Err(CodegenIrError::invalid_module(format!(
@@ -77,13 +79,7 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => "x0",
         Arch::X86_64 => "rax",
     };
-    load_optional_int_option(
-        ctx,
-        inst.operands.get(2).copied(),
-        flags_reg,
-        0,
-        "preg_grep flags",
-    )?;
+    load_flags_arg(ctx, inst.operands.get(2).copied(), flags_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("and x0, x0, #1");                          // retain only PHP's PREG_GREP_INVERT bit
@@ -108,8 +104,37 @@ pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
+    if return_raw_hash {
+        emit_take_preg_grep_raw_hash_result(ctx);
+    }
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     super::store_if_result(ctx, inst)
+}
+
+/// Transfers the filtered hash out of the owned Mixed wrapper returned for a concrete source.
+fn emit_take_preg_grep_raw_hash_result(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp]");                            // preserve the owned result box in the retired predicate environment
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("str x1, [sp, #8]");                        // preserve the borrowed filtered-hash payload
+            ctx.emitter.instruction("mov x0, x1");                              // retain a raw owner before releasing the Mixed wrapper
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("ldr x0, [sp]");                            // release the result box and its child ownership
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // return the transferred raw hash owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // preserve the owned result box in the retired predicate environment
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdi");            // preserve the borrowed filtered-hash payload
+            ctx.emitter.instruction("mov rax, rdi");                            // retain a raw owner before releasing the Mixed wrapper
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // release the result box and its child ownership
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // return the transferred raw hash owner
+        }
+    }
 }
 
 /// Validates that a boxed gradual `preg_grep()` source currently holds an array.
@@ -244,37 +269,58 @@ pub(crate) fn lower_preg_match_all(
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
+/// Lowers `preg_replace(pattern, replacement, subject, limit, count)` through the regex helper.
 pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_replace", 3)?;
+    super::ensure_arg_count_between(inst, "preg_replace", 3, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let replacement = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
+    let limit = inst.operands.get(3).copied();
+    let count_slot = inst
+        .operands
+        .get(4)
+        .copied()
+        .map(|value| optional_local_slot_operand(ctx, value, "preg_replace count"))
+        .transpose()?
+        .flatten();
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace pattern")?;
             load_string_arg(ctx, replacement, "x3", "x4", "preg_replace replacement")?;
             load_string_arg(ctx, subject, "x5", "x6", "preg_replace subject")?;
+            load_optional_int_arg(ctx, limit, "x7", -1)?;
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace pattern")?;
             load_string_arg(ctx, replacement, "rdx", "rcx", "preg_replace replacement")?;
             load_string_arg(ctx, subject, "r8", "r9", "preg_replace subject")?;
+            load_optional_int_arg(ctx, limit, "r10", -1)?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace");
+    if let Some(slot) = count_slot {
+        store_preg_replace_count(ctx, slot)?;
+    }
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace_callback(pattern, callback, subject)` through supported direct callbacks.
+/// Lowers callback replacement with its optional limit and by-reference counter.
 pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "preg_replace_callback", 3)?;
+    super::ensure_arg_count_between(inst, "preg_replace_callback", 3, 5)?;
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
+    let limit = inst.operands.get(3).copied();
+    let count_slot = inst
+        .operands
+        .get(4)
+        .copied()
+        .map(|value| optional_local_slot_operand(ctx, value, "preg_replace_callback count"))
+        .transpose()?
+        .flatten();
     let callback_target = preg_replace_callback_target(ctx, callback)?;
     let env_bytes = callback_target.reserve_env(
         ctx,
@@ -286,15 +332,20 @@ pub(crate) fn lower_preg_replace_callback(
             abi::emit_symbol_address(ctx.emitter, "x3", &callback_target.entry_label);
             load_static_callback_env_arg(ctx, "x4", env_bytes);
             load_string_arg(ctx, subject, "x5", "x6", "preg_replace_callback subject")?;
+            load_optional_int_arg(ctx, limit, "x7", -1)?;
         }
         Arch::X86_64 => {
             load_string_arg(ctx, pattern, "rdi", "rsi", "preg_replace_callback pattern")?;
             abi::emit_symbol_address(ctx.emitter, "rdx", &callback_target.entry_label);
             load_static_callback_env_arg(ctx, "rcx", env_bytes);
             load_string_arg(ctx, subject, "r8", "r9", "preg_replace_callback subject")?;
+            load_optional_int_arg(ctx, limit, "r10", -1)?;
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace_callback");
+    if let Some(slot) = count_slot {
+        store_preg_replace_count(ctx, slot)?;
+    }
     callback_target.release_env(ctx, env_bytes);
     super::store_if_result(ctx, inst)
 }
@@ -677,6 +728,36 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
     Ok(slot)
 }
 
+/// Returns an optional local slot, treating an omitted nullable default as no destination.
+fn optional_local_slot_operand(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+    context: &str,
+) -> Result<Option<LocalSlotId>> {
+    if matches!(ctx.value_php_type(value)?, PhpType::Void | PhpType::Never) {
+        return Ok(None);
+    }
+    let Some(inst_ref) = value_source_instruction(ctx, value)? else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} argument that is not a local load",
+            context
+        )));
+    };
+    if inst_ref.op != Op::LoadLocal {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} argument that is not a local variable",
+            context
+        )));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} load missing local slot",
+            context
+        )));
+    };
+    Ok(Some(slot))
+}
+
 /// Stores the runtime-built matches array into a local slot without clobbering the match flag.
 fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
     let offset = ctx.local_offset(slot)?;
@@ -688,6 +769,17 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
             abi::store_at_offset(ctx.emitter, "rdx", offset);
         }
     }
+    Ok(())
+}
+
+/// Stores the replacement count returned beside a string result into its caller local.
+fn store_preg_replace_count(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+    let offset = ctx.local_offset(slot)?;
+    let count_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rcx",
+    };
+    abi::store_at_offset(ctx.emitter, count_reg, offset);
     Ok(())
 }
 
@@ -768,11 +860,21 @@ fn load_optional_string_arg(
 
 /// Loads the optional `preg_split()` limit, using PHP's default `-1`.
 fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &str) -> Result<()> {
-    let Some(limit) = limit else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, -1);
+    load_optional_int_arg(ctx, limit, reg, -1)
+}
+
+/// Loads an optional integer operand into a caller-selected register.
+fn load_optional_int_arg(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+    reg: &str,
+    default: i64,
+) -> Result<()> {
+    let Some(value) = value else {
+        abi::emit_load_int_immediate(ctx.emitter, reg, default);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_reg(limit, reg)?, "preg_split limit")
+    require_integer_like(ctx.load_value_to_reg(value, reg)?, "regex integer option")
 }
 
 /// Loads the optional `preg_split()` flags, using PHP's default `0`.

@@ -39,7 +39,7 @@ pub(super) fn parse_file(
     include_span: Span,
     defines: &std::collections::HashSet<String>,
 ) -> Result<Vec<Stmt>, CompileError> {
-    let source = std::fs::read_to_string(path).map_err(|e| {
+    let source = crate::source::read_physical_source(path).map_err(|e| {
         CompileError::new(
             include_span,
             &format!("Cannot read '{}': {}", path.display(), e),
@@ -54,4 +54,31 @@ pub(super) fn parse_file(
 
     let parsed = parser::parse_with_mode(&tokens, mode).map_err(|e| e.with_file(file))?;
     crate::source::finalize_physical_program(parsed, path, mode, defines)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies included PHP files may declare high-byte identifiers accepted by PHP.
+    #[test]
+    fn parses_non_utf8_php_identifier_byte() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "elephc_non_utf8_identifier_{}_{}.php",
+            std::process::id(),
+            unique
+        ));
+        let mut source = b"<?php class ".to_vec();
+        source.push(0xa9);
+        source.extend_from_slice(b" {}");
+        std::fs::write(&path, source).expect("write non-UTF-8 PHP fixture");
+
+        let parsed = parse_file(&path, Span::dummy(), &std::collections::HashSet::new());
+        let _ = std::fs::remove_file(&path);
+        assert!(parsed.is_ok(), "non-UTF-8 PHP identifier should parse: {parsed:?}");
+    }
 }

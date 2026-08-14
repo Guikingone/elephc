@@ -197,6 +197,38 @@ fn test_program_function_effects_recognize_pure_user_functions() {
     assert_eq!(function_effects.get("len3"), Some(&Effect::PURE));
 }
 
+/// Verifies a declared parameter type remains a throwing call-boundary effect even when the
+/// function body itself has no observable behavior.
+#[test]
+fn test_program_function_effects_preserve_typed_parameter_checks() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "accept_int".to_string(),
+            params: vec![(
+                "value".to_string(),
+                Some(TypeExpr::Int),
+                None,
+                false,
+            )],
+            param_attributes: Vec::new(),
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: Vec::new(),
+        },
+        Span::dummy(),
+    )];
+
+    let (function_effects, _, _) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        function_effects.get("accept_int"),
+        Some(&Effect::PURE.with_may_throw())
+    );
+}
+
 /// Verifies that a wrapper function calling a function that throws is classified
 /// as `PURE` with `side_effects` and `may_throw` — the throw does not make the
 /// wrapper non-pure, but it does propagate the exception potential.

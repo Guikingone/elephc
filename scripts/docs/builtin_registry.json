@@ -5148,7 +5148,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_diff_key"
       ],
@@ -6008,7 +6008,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "shared",
       "runtime_functions": [
         "array_intersect_key"
       ],
@@ -9383,6 +9383,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -9594,6 +9601,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -13530,8 +13544,9 @@
       "codegen_function": "lower_registry_call",
       "codegen_line": 540,
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
-        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.constant` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -13543,28 +13558,33 @@
       "argument_lowering": "standard",
       "callable": {
         "kind": "static_only",
-        "reason": "constant() needs a compile-time constant name"
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
         "kind": "static",
         "names": [
-          "reads_global"
+          "reads_global",
+          "alloc_heap",
+          "may_throw"
         ]
       },
       "lowering": {
-        "kind": "eir"
+        "kind": "runtime_call",
+        "target": "constant"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "non_heap"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
         "values": []
       },
       "result_type": "checked",
-      "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "runtime_functions": [
+        "constant"
+      ],
+      "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
         "linux-aarch64",
@@ -15498,7 +15518,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "checked",
+      "result_type": "declared",
       "runtime_functions": [
         "defined"
       ],
@@ -15509,8 +15529,7 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "checker_hook",
-        "lazy": false
+        "kind": "signature"
       }
     },
     "sig": {
@@ -16343,6 +16362,110 @@
     "sub_area": "Class"
   },
   {
+    "area": "Misc",
+    "canonical_name": "error_log",
+    "description": "Writes a message to the configured error log destination.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.error_log` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/error_log.rs",
+      "sig_line": null
+    },
+    "name": "error_log",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "writes_process"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "error_log"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "error_log"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "message",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "message_type",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "destination",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "additional_headers",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "error_log",
+    "sub_area": "System"
+  },
+  {
     "area": "Process",
     "canonical_name": "exec",
     "description": "Executes an external program and returns the last line of output.",
@@ -16851,6 +16974,119 @@
     },
     "slug": "extension_loaded",
     "sub_area": "System"
+  },
+  {
+    "area": "Array",
+    "canonical_name": "extract",
+    "description": "Imports array entries as variables in the current scope.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.extract` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/array/extract.rs",
+      "sig_line": null
+    },
+    "name": "extract",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "extract"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "extract"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "prefix",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "extract",
+    "sub_area": "Array"
   },
   {
     "area": "IO",
@@ -18320,6 +18556,20 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "int",
@@ -19360,6 +19610,97 @@
     },
     "slug": "filetype",
     "sub_area": "Filesystem"
+  },
+  {
+    "area": "Misc",
+    "canonical_name": "filter_var",
+    "description": "Filters a variable with a specified filter.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/filter_var.rs",
+      "sig_line": null
+    },
+    "name": "filter_var",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "filter_var() needs source-sensitive filter and option specialization"
+      },
+      "effects": {
+        "kind": "shared"
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [],
+      "target_strategy": "eir_graph",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": true
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "516",
+          "name": "filter",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "filter_var",
+    "sub_area": "System"
   },
   {
     "area": "Type",
@@ -22013,6 +22354,87 @@
     "sub_area": "Class"
   },
   {
+    "area": "Type",
+    "canonical_name": "get_debug_type",
+    "description": "Returns a debug-oriented PHP type or class name.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_debug_type` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/types/get_debug_type.rs",
+      "sig_line": null
+    },
+    "name": "get_debug_type",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_debug_type"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "get_debug_type"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "get_debug_type",
+    "sub_area": "Type"
+  },
+  {
     "area": "Class",
     "canonical_name": "get_declared_classes",
     "description": "Returns an array of the names of the defined classes.",
@@ -23006,12 +23428,18 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "name",
-          "optional": false
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "local_only",
+          "optional": true
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "supported": true,
       "variadic": null
     },
@@ -23046,6 +23474,7 @@
         "kind": "static",
         "names": [
           "reads_process",
+          "alloc_heap",
           "alloc_concat"
         ]
       },
@@ -23055,7 +23484,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -23080,10 +23509,17 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "name",
-          "optional": false,
+          "optional": true,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "local_only",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "mixed",
@@ -23369,6 +23805,7 @@
         "kind": "static",
         "names": [
           "reads_process",
+          "alloc_heap",
           "alloc_concat"
         ]
       },
@@ -24007,6 +24444,12 @@
           "default": null,
           "name": "pattern",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -24096,6 +24539,13 @@
           "name": "pattern",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "array",
@@ -26102,6 +26552,210 @@
       "variadic": null
     },
     "slug": "header",
+    "sub_area": "System"
+  },
+  {
+    "area": "Misc",
+    "canonical_name": "header_remove",
+    "description": "Removes one or all pending HTTP response headers.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.header_remove` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/header_remove.rs",
+      "sig_line": null
+    },
+    "name": "header_remove",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "header_remove"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "header_remove"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "name",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "slug": "header_remove",
+    "sub_area": "System"
+  },
+  {
+    "area": "Misc",
+    "canonical_name": "headers_sent",
+    "description": "Reports whether output has already committed response headers.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.headers_sent` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/headers_sent.rs",
+      "sig_line": null
+    },
+    "name": "headers_sent",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "headers_sent"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "headers_sent"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": true
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "filename",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "line",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "slug": "headers_sent",
     "sub_area": "System"
   },
   {
@@ -32074,6 +32728,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -32188,6 +32849,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -34380,6 +35048,24 @@
           "default": null,
           "name": "directory",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "511",
+          "name": "permissions",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "recursive",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -34468,6 +35154,27 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "511",
+          "name": "permissions",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "recursive",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -38147,6 +38854,119 @@
     "sub_area": "Math"
   },
   {
+    "area": "Misc",
+    "canonical_name": "preg_grep",
+    "description": "Returns entries whose values match a regular expression while preserving keys.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.preg_grep` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/preg_grep.rs",
+      "sig_line": null
+    },
+    "name": "preg_grep",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "preg_grep"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "preg_grep"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "pattern",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "array",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "slug": "preg_grep",
+    "sub_area": "System"
+  },
+  {
     "area": "Regex",
     "canonical_name": "preg_match",
     "description": "Performs a regular expression match.",
@@ -38173,7 +38993,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true
         },
@@ -38181,6 +39001,12 @@
           "by_ref": false,
           "default": "0",
           "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
           "optional": true
         }
       ],
@@ -38281,10 +39107,24 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "int",
@@ -38320,7 +39160,7 @@
         },
         {
           "by_ref": true,
-          "default": "[]",
+          "default": "null",
           "name": "matches",
           "optional": true
         },
@@ -38328,6 +39168,12 @@
           "by_ref": false,
           "default": "0",
           "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
           "optional": true
         }
       ],
@@ -38357,7 +39203,7 @@
     },
     "name": "preg_match_all",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "positional_regex",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -38395,7 +39241,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "preg_match_all"
       ],
@@ -38406,7 +39252,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": true
       }
     },
     "sig": {
@@ -38424,6 +39271,27 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "matches",
+          "optional": true,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "int",
@@ -38462,6 +39330,18 @@
           "default": null,
           "name": "subject",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "limit",
+          "optional": true
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "count",
+          "optional": true
         }
       ],
       "required_param_count": 3,
@@ -38490,7 +39370,7 @@
     },
     "name": "preg_replace",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "positional_regex",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -38528,7 +39408,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "preg_replace"
       ],
@@ -38539,7 +39419,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": true
       }
     },
     "sig": {
@@ -38564,6 +39445,20 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "count",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "string",
@@ -38602,6 +39497,18 @@
           "default": null,
           "name": "subject",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "limit",
+          "optional": true
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "count",
+          "optional": true
         }
       ],
       "required_param_count": 3,
@@ -38705,6 +39612,20 @@
           "name": "subject",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "limit",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "count",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "string",
@@ -43678,6 +44599,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -44007,6 +44935,112 @@
       "variadic": null
     },
     "slug": "serialize",
+    "sub_area": "System"
+  },
+  {
+    "area": "Misc",
+    "canonical_name": "setlocale",
+    "description": "Sets locale information for the process.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.setlocale` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/setlocale.rs",
+      "sig_line": null
+    },
+    "name": "setlocale",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "setlocale"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "setlocale"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "category",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "locales",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": "rest"
+    },
+    "slug": "setlocale",
     "sub_area": "System"
   },
   {
@@ -44878,6 +45912,13 @@
           "name": "array",
           "optional": false,
           "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "bool",
@@ -57169,6 +58210,119 @@
     },
     "slug": "unlink",
     "sub_area": "Filesystem"
+  },
+  {
+    "area": "String",
+    "canonical_name": "unpack",
+    "description": "Unpacks binary data according to a format string.",
+    "eval": {
+      "kind": "none",
+      "supported": false
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 540,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.unpack` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/unpack.rs",
+      "sig_line": null
+    },
+    "name": "unpack",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "unpack"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "unpack"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "unpack",
+    "sub_area": "String"
   },
   {
     "area": "Misc",

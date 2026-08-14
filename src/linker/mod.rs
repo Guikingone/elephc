@@ -144,7 +144,12 @@ pub(crate) fn link_with_plan(
     plan: &LinkPlan,
     forced_whole_archive: &[String],
 ) -> Result<(), LinkError> {
-    let resolved = bridges::resolve(plan, forced_whole_archive)?;
+    let mut resolved = bridges::resolve(plan, forced_whole_archive)?;
+    if target.platform == Platform::MacOS {
+        for library in std::mem::take(&mut resolved.macos_libraries) {
+            resolved.plan.push(LinkItem::named_runtime(library));
+        }
+    }
     let prepared = (target.platform == Platform::MacOS)
         .then(|| archive_dedup::prepare(&resolved.plan));
     let render_plan = prepared

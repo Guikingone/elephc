@@ -47,6 +47,18 @@ pub enum PhpType {
 }
 
 impl PhpType {
+    /// Returns true when this nominal object type denotes PHP's built-in `Closure` class.
+    ///
+    /// Closure values use Elephc's callable descriptor representation even when flow
+    /// narrowing reaches them through an `instanceof Closure` object guard.
+    pub fn is_closure_object(&self) -> bool {
+        matches!(
+            self,
+            PhpType::Object(name)
+                if name.trim_start_matches('\\').eq_ignore_ascii_case("Closure")
+        )
+    }
+
     /// Returns a `PhpType::Resource(Some("stream"))` representing a stream resource.
     pub fn stream_resource() -> PhpType {
         PhpType::Resource(Some("stream".to_string()))
@@ -159,7 +171,7 @@ impl PhpType {
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
                 | PhpType::Union(_)
-        )
+        ) && !self.is_closure_object()
     }
 
     /// Lower high-level checker-only types to the runtime representation used by codegen.
@@ -176,6 +188,7 @@ impl PhpType {
             PhpType::Union(_) => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
+            PhpType::Object(_) if self.is_closure_object() => PhpType::Callable,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
             _ => self.clone(),
         }

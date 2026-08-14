@@ -1,7 +1,7 @@
 //! Purpose:
-//! Defines the per-file source profile: the language mode selected from a physical input path
-//! plus the `declare(strict_types=1)` state that file opted into.
-//! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
+//! Defines physical-source loading and the per-file source profile: the language mode selected
+//! from a path plus the `declare(strict_types=1)` state that file opted into. Centralizes byte
+//! decoding and `.lfc` classification so every loader agrees on source semantics.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -94,11 +94,11 @@ impl SourceMode {
     }
 }
 
-/// Returns whether Composer discovery should inspect a path as PHP/LFC source.
+/// Returns whether static source discovery should inspect a path as PHP/LFC source.
 ///
-/// Physical includes remain PHP-compatible regardless of suffix, but Composer's
-/// directory walkers intentionally discover only files named `.php` or `.lfc`.
-pub fn is_composer_source_path(path: &Path) -> bool {
+/// Physical includes remain PHP-compatible regardless of suffix, while directory-based
+/// discovery intentionally indexes only files named `.php` or `.lfc`.
+pub fn is_discoverable_source_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| {
@@ -106,13 +106,60 @@ pub fn is_composer_source_path(path: &Path) -> bool {
         })
 }
 
-/// Removes the recognized source suffix from one Composer-relative path component.
-pub fn composer_source_stem(component: &str) -> String {
+/// Removes the recognized source suffix from one discovered path component.
+pub fn discoverable_source_stem(component: &str) -> String {
     Path::new(component)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or(component)
         .to_string()
+}
+
+/// Reads PHP source without requiring its byte stream to be valid UTF-8.
+///
+/// PHP identifiers accept bytes in the `0x80..=0xff` range, and third-party source
+/// packages may use that capability. Valid UTF-8 spans remain unchanged; each byte
+/// that cannot participate in UTF-8 maps injectively to the same Latin-1 code
+/// point so matching declarations and string keys stay coherent in Rust-owned ASTs.
+pub(crate) fn read_physical_source(path: impl AsRef<Path>) -> std::io::Result<String> {
+    std::fs::read(path).map(decode_physical_source)
+}
+
+/// Converts one physical PHP byte stream into the UTF-8 storage used by the parser.
+fn decode_physical_source(bytes: Vec<u8>) -> String {
+    match String::from_utf8(bytes) {
+        Ok(source) => source,
+        Err(error) => decode_mixed_utf8_and_latin1(error.into_bytes()),
+    }
+}
+
+/// Preserves valid UTF-8 spans while mapping each malformed byte through Latin-1.
+fn decode_mixed_utf8_and_latin1(bytes: Vec<u8>) -> String {
+    let mut source = String::with_capacity(bytes.len());
+    let mut offset = 0;
+    while offset < bytes.len() {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(valid) => {
+                source.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid_end = offset + error.valid_up_to();
+                if valid_end > offset {
+                    let valid = std::str::from_utf8(&bytes[offset..valid_end])
+                        .expect("UTF-8 validator reported a valid prefix");
+                    source.push_str(valid);
+                }
+                offset = valid_end;
+                let invalid_len = error.error_len().unwrap_or(bytes.len() - offset);
+                for byte in &bytes[offset..offset + invalid_len] {
+                    source.push(char::from(*byte));
+                }
+                offset += invalid_len;
+            }
+        }
+    }
+    source
 }
 
 /// RAII guard restoring the parser's previous source profile on drop.
@@ -193,13 +240,20 @@ mod tests {
         assert_eq!(SourceMode::from_path(Path::new("script")), SourceMode::Php);
     }
 
-    /// Verifies Composer discovery accepts only the two physical source suffixes.
+    /// Verifies directory-based discovery accepts only the two physical source suffixes.
     #[test]
-    fn classifies_composer_source_paths() {
-        assert!(is_composer_source_path(Path::new("src/App.php")));
-        assert!(is_composer_source_path(Path::new("src/App.LFC")));
-        assert!(!is_composer_source_path(Path::new("src/App.inc")));
-        assert_eq!(composer_source_stem("App.lfc"), "App");
+    fn classifies_discoverable_source_paths() {
+        assert!(is_discoverable_source_path(Path::new("src/App.php")));
+        assert!(is_discoverable_source_path(Path::new("src/App.LFC")));
+        assert!(!is_discoverable_source_path(Path::new("src/App.inc")));
+        assert_eq!(discoverable_source_stem("App.lfc"), "App");
+    }
+
+    /// Verifies physical source keeps valid Unicode while accepting isolated PHP identifier bytes.
+    #[test]
+    fn decodes_mixed_utf8_and_php_identifier_bytes() {
+        let source = decode_physical_source(vec![b'e', 0xc3, 0xa9, b' ', 0xa9, b'!']);
+        assert_eq!(source, "eé ©!");
     }
 
     /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state

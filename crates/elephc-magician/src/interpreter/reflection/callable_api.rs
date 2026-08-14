@@ -52,6 +52,21 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if method_name.eq_ignore_ascii_case("getClosure") {
+        eval_reflection_bind_no_args(evaluated_args)?;
+        let target = context
+            .eval_reflection_function_closure_target(identity)
+            .cloned()
+            .or_else(|| {
+                context
+                    .eval_reflection_function_name(identity)
+                    .map(|name| EvalClosureObjectTarget::Named(name.to_ascii_lowercase()))
+            });
+        let Some(target) = target else {
+            return Ok(None);
+        };
+        return eval_closure_object_expr(target, context, values).map(Some);
+    }
     let is_invoke = method_name.eq_ignore_ascii_case("invoke");
     let is_invoke_args = method_name.eq_ignore_ascii_case("invokeArgs");
     if !is_invoke && !is_invoke_args {
@@ -71,6 +86,13 @@ pub(in crate::interpreter) fn eval_reflection_function_invoke_result(
     } else {
         eval_reflection_function_invoke_args_array(evaluated_args, context, values)?
     };
+    if let Some(target) = context
+        .eval_reflection_function_closure_target(identity)
+        .cloned()
+    {
+        return eval_closure_object_invoke_result(target, function_args, context, values)
+            .map(Some);
+    }
     eval_reflection_function_invoke_dispatch(&function_name, function_args, context, values)
         .map(Some)
 }

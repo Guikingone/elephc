@@ -22,7 +22,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
-use crate::ir::{Function, LocalKind, Module};
+use crate::ir::Module;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -110,7 +110,7 @@ pub(super) fn emit_eval_method_helpers(
     data: &mut DataSection,
     callable_support: &EvalCallableDescriptorSupport,
 ) {
-    if !module_uses_eval(module) {
+    if !module.required_runtime_features.eval_bridge {
         return;
     }
     let slots = collect_eval_method_slots(module);
@@ -125,34 +125,6 @@ pub(super) fn emit_eval_method_helpers(
         callable_support,
     );
     emit_static_method_call_helper(module, emitter, data, &static_slots, callable_support);
-}
-
-/// Returns true when the EIR module contains a function that can call eval.
-fn module_uses_eval(module: &Module) -> bool {
-    all_module_functions(module).any(function_uses_eval)
-}
-
-/// Iterates every EIR function body emitted or inspected by the backend.
-fn all_module_functions(module: &Module) -> impl Iterator<Item = &Function> {
-    module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .chain(module.closures.iter())
-        .chain(module.fiber_wrappers.iter())
-        .chain(module.callback_wrappers.iter())
-        .chain(module.extern_callback_trampolines.iter())
-        .chain(module.runtime_callable_invokers.iter())
-}
-
-/// Returns true when a function has hidden eval state locals.
-fn function_uses_eval(function: &Function) -> bool {
-    function.locals.iter().any(|local| {
-        matches!(
-            local.kind,
-            LocalKind::EvalContext | LocalKind::EvalScope | LocalKind::EvalGlobalScope
-        )
-    })
 }
 
 /// Collects bridge-supported instance methods backed by emitted EIR symbols.

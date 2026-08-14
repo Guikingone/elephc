@@ -115,10 +115,13 @@ fn test_error_usleep_wrong_args() {
     expect_error("<?php usleep();", "usleep() takes exactly 1 argument");
 }
 
-/// Verifies that `getenv()` with no arguments yields a wrong-args diagnostic.
+/// Verifies that `getenv()` rejects calls beyond its two optional parameters.
 #[test]
 fn test_error_getenv_wrong_args() {
-    expect_error("<?php getenv();", "getenv() takes exactly 1 argument");
+    expect_error(
+        "<?php getenv('A', false, true);",
+        "getenv() takes 0 to 2 arguments",
+    );
 }
 
 /// Verifies that `putenv()` with no arguments yields a wrong-args diagnostic.
@@ -438,7 +441,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -447,7 +450,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 or 3 arguments",
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -460,12 +463,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
+/// Verifies that `preg_match()` rejects arguments beyond its public five-parameter signature.
 #[test]
-fn test_error_preg_match_four_args() {
+fn test_error_preg_match_six_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
-        "preg_match() takes 2 or 3 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
+        "preg_match() takes 2 to 5 arguments",
     );
 }
 
@@ -474,7 +477,7 @@ fn test_error_preg_match_four_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes exactly 2 arguments",
+        "preg_match_all() takes 2 to 5 arguments",
     );
 }
 
@@ -483,7 +486,16 @@ fn test_error_preg_match_all_no_args() {
 fn test_error_preg_replace_wrong_args() {
     expect_error(
         r#"<?php preg_replace("/a/", "b");"#,
-        "preg_replace() takes exactly 3 arguments",
+        "preg_replace() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that the optional replacement counter requires writable caller storage.
+#[test]
+fn test_error_preg_replace_count_requires_variable() {
+    expect_error(
+        r#"<?php preg_replace("/a/", "b", "a", -1, 0);"#,
+        "preg_replace() parameter $count must be passed a variable",
     );
 }
 
@@ -492,7 +504,16 @@ fn test_error_preg_replace_wrong_args() {
 fn test_error_preg_replace_callback_wrong_args() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
-        "preg_replace_callback() takes exactly 3 arguments",
+        "preg_replace_callback() takes 3 to 5 arguments",
+    );
+}
+
+/// Verifies that the callback replacement counter requires writable caller storage.
+#[test]
+fn test_error_preg_replace_callback_count_requires_variable() {
+    expect_error(
+        r#"<?php preg_replace_callback("/a/", function($matches) { return "b"; }, "a", -1, 0);"#,
+        "preg_replace_callback() parameter $count must be passed a variable",
     );
 }
 
@@ -547,15 +568,6 @@ fn test_error_unserialize_non_string_data() {
 #[test]
 fn test_error_constant_undefined_name() {
     expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
-}
-
-/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
-#[test]
-fn test_error_constant_dynamic_name() {
-    expect_error(
-        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
-        "constant() first argument must be a string literal in AOT mode",
-    );
 }
 
 /// Verifies `constant()` rejects a class-constant name.

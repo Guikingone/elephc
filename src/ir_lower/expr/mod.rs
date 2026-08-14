@@ -33,6 +33,8 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod filter;
+mod late_bound_call;
 mod nullsafe_chain;
 mod ref_place_args;
 mod scalar_literals;
@@ -43,6 +45,7 @@ mod unary_logic;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod compat_preludes;
 mod function_calls;
 use function_calls::resolve_registry_builtin_result_type;
 mod eval_barriers;
@@ -91,6 +94,7 @@ mod instanceof_coercions;
 mod merge_temps;
 
 use scalar_literals::*;
+use filter::*;
 use numeric_binary::*;
 use string_concat::*;
 use comparisons::*;
@@ -159,22 +163,25 @@ pub(crate) use indexed_array_literals::{
     array_literal_type_for_ir, lower_array_literal_with_expected_type,
 };
 pub(crate) use array_access::{
-    array_access_element_result_type, index_expr_key_type,
+    array_access_element_result_type, index_expr_key_type, lowered_index_expr_key_type,
     lower_array_access_from_lowered_receiver, lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
 pub(crate) use instanceof_coercions::coerce_to_int_at_span;
+pub(in crate::ir_lower) use instanceof_coercions::coerce_to_string_at_span;
 pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
-    lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_property,
+    lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_dynamic_property,
+    lower_ref_assign_property,
 };
 pub(crate) use string_concat::string_op_uses_scratch_storage;
-pub(super) use assoc_array_literals::{
-    array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,
+pub(in crate::ir_lower) use assoc_array_literals::{
+    array_access_expr_value_type_for_ir, lower_array_reference_or_value,
+    method_call_expr_type_for_ir,
     property_access_expr_type_for_ir,
 };
 pub(super) use call_return_types::call_return_type;
-pub(super) use merge_temps::coerce_container_to_mixed_payload;
+pub(in crate::ir_lower) use merge_temps::{coerce_container_to_mixed_payload, store_value_into_temp};
 pub(super) use nullable_method_calls::lower_dynamic_method_call_with_receiver;
 pub(super) use static_method_calls::static_method_call_expr_type_for_ir;
 
@@ -230,6 +237,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::FunctionCall { name, args } => lower_function_call(ctx, name, args, expr),
         ExprKind::ArrayLiteral(items) => lower_array_literal(ctx, items, expr),
         ExprKind::ArrayLiteralAssoc(pairs) => lower_assoc_array_literal(ctx, pairs, expr),
+        ExprKind::ArrayReference(_) => {
+            unreachable!("array-reference nodes are lowered by their containing literal")
+        }
         ExprKind::Match { subject, arms, default } => lower_match(ctx, subject, arms, default.as_deref(), expr),
         ExprKind::ArrayAccess { array, index } => lower_array_access(ctx, array, index, expr),
         ExprKind::Ternary { condition, then_expr, else_expr } => {
@@ -285,6 +295,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::StaticPropertyAccess { receiver, property } => {
             lower_static_property_get(ctx, receiver, property, expr)
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            lower_dynamic_static_property_get(ctx, receiver, property, expr)
+        }
         ExprKind::MethodCall {
             object,
             method,
@@ -311,6 +324,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
         ExprKind::ObjectClassName { object } => lower_object_class_name(ctx, object, expr),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             lower_scoped_constant(ctx, receiver, name, expr)
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            lower_dynamic_scoped_constant(ctx, receiver, name, expr)
         }
         ExprKind::NewScopedObject { receiver, args } => lower_new_scoped_object(ctx, receiver, args, expr),
         ExprKind::MagicConstant(kind) => lower_magic_constant(ctx, kind, expr),

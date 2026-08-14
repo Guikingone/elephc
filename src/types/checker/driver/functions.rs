@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, Program, StmtKind, TypeExpr};
+use crate::source::SourceMode;
 use crate::types::FunctionSig;
 
 use super::super::{Checker, FnDecl};
@@ -40,7 +41,7 @@ impl Checker {
                 let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                 });
-                if let Some(builtin) = builtin {
+                if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),
@@ -74,7 +75,7 @@ impl Checker {
                 let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                 });
-                if let Some(builtin) = builtin {
+                if let Some(builtin) = builtin.filter(|_| stmt.source_mode != SourceMode::Internal) {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),

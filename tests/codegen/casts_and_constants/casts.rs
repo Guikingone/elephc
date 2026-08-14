@@ -185,6 +185,43 @@ echo (string)$map["int"];
     assert_eq!(out, "3|27|10|1||42");
 }
 
+/// Verifies `(array)` casts from runtime `mixed` values link their fatal diagnostic data and
+/// preserve PHP's null, scalar, and indexed-array conversion shapes.
+#[test]
+fn test_array_cast_from_runtime_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+function dump_array_cast(mixed $value): void {
+    $array = (array) $value;
+    echo count($array), ":";
+    foreach ($array as $item) {
+        echo $item, ",";
+    }
+    echo "|";
+}
+dump_array_cast(null);
+dump_array_cast(42);
+dump_array_cast("value");
+dump_array_cast([1, 2]);
+"#,
+    );
+    assert_eq!(out, "0:|1:42,|1:value,|2:1,2,|");
+}
+
+/// Verifies that `(object)` creates an isolated stdClass view of associative-array entries.
+#[test]
+fn test_object_cast_from_assoc_array_isolated_from_source() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["name" => "array", "count" => 2];
+$object = (object) $source;
+$object->name = "object";
+echo get_class($object), "|", $source["name"], "|", $object->name, "|", $object->count;
+"#,
+    );
+    assert_eq!(out, "stdClass|array|object|2");
+}
+
 /// Compiles `<?php echo (integer)3.7;` and asserts stdout is `"3"` — (integer) is a PHP alias for (int).
 #[test]
 fn test_cast_integer_alias() {

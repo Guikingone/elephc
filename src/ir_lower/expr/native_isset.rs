@@ -229,10 +229,7 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        if class_info.visible_property_is_declared(property) {
-            return Some(IssetPropertyAction::Initialized);
-        }
-        return Some(IssetPropertyAction::Fallback);
+        return Some(IssetPropertyAction::Initialized);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {
         Some(IssetPropertyAction::Magic)

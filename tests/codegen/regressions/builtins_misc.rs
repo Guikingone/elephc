@@ -384,3 +384,20 @@ echo date_diff(1, 2), "|", timezone_name_get(5);
     );
     assert_eq!(out, "user:3|tz:5");
 }
+
+/// `is_countable()` accepts arrays and `Countable` implementations but rejects other values.
+#[test]
+fn test_is_countable_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+class CountedValue implements Countable {
+    public function count(): int { return 1; }
+}
+var_dump(is_countable([]), is_countable(new CountedValue()), is_countable(new stdClass()), is_countable(1));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
+    );
+}

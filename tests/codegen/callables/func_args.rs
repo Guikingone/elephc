@@ -65,6 +65,59 @@ withparams(1, "x", 3.5, null);
     );
 }
 
+/// Verifies optional parameters and a source-declared variadic can participate in argument
+/// introspection without producing compiler diagnostics.
+#[test]
+fn test_func_args_accept_optional_and_source_variadic_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+function optional($a, $b = 5) { return func_num_args(); }
+function variadic($a, ...$rest) { return func_num_args() . ':' . implode(',', func_get_args()); }
+echo optional(1, 2), '|', variadic(1, 2, 3);
+"#,
+    );
+    assert_eq!(out, "2|3:1,2,3");
+}
+
+/// Verifies unresolved global and namespaced classes are accepted as nominal type hints.
+#[test]
+fn test_unresolved_object_type_hints_compile() {
+    let out = compile_and_run(
+        r#"<?php
+function legacy(\ExtensionObject $value): void {}
+function modern(\Vendor\Package\ObjectType $value): void {}
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies unresolved dependency classes can remain nominal in unloaded signatures.
+#[test]
+fn test_unresolved_dependency_object_type_hints_compile() {
+    let out = compile_and_run(
+        r#"<?php
+function first(\Vendor\Logging\Logger $logger): void {}
+function second(\Vendor\Process\Process $process): void {}
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies unresolved member and construction syntax remains compilable in dormant code.
+#[test]
+fn test_unresolved_object_surface_compiles_when_dormant() {
+    let out = compile_and_run(
+        r#"<?php
+function inspect(\Vendor\Package\RemoteObject $value): int { return $value->read(); }
+function make(): \Vendor\Package\RemoteObject { return new \Vendor\Package\RemoteObject('value'); }
+echo 'ok';
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Verifies that `func_get_arg()` reads a surplus argument by zero-based position.
 #[test]
 fn test_func_get_arg_reads_surplus_argument() {
@@ -252,4 +305,68 @@ echo once_only("first", "second");
 "#,
     );
     assert_eq!(out, "first:1");
+}
+
+/// A constructor using argument introspection must not add its synthetic variadic ABI operand to
+/// unrelated constructors, especially builtin Throwable constructors lowered intrinsically.
+#[test]
+fn test_func_args_constructor_relaxation_is_scoped_to_its_implementation() {
+    let out = compile_and_run(
+        r#"<?php
+class ArityAwareConstructor {
+    public function __construct($value = "default") {
+        echo func_num_args(), ":";
+    }
+}
+class PlainConstructor {
+    public function __construct($value = "plain") {
+        echo $value, ":";
+    }
+}
+
+new ArityAwareConstructor();
+new PlainConstructor();
+try {
+    throw new ValueError("x");
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "0:plain:x");
+}
+
+/// Verifies `new self(...)` and `new parent(...)` pass the hidden argc operand required by a
+/// constructor that distinguishes omitted optional arguments with `func_num_args()`.
+#[test]
+fn test_func_num_args_in_scoped_object_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+class ScopedConstructorBase {
+    public string $value;
+
+    public function __construct(string $name, string|int|null $value = null) {
+        $this->value = 1 < func_num_args() ? (string) $value : $name;
+    }
+
+    public static function one(string $name): self {
+        return new self($name);
+    }
+
+    public static function two(string $name, int $value): self {
+        return new self($name, $value);
+    }
+}
+class ScopedConstructorChild extends ScopedConstructorBase {
+    public static function parentValue(string $name, int $value): ScopedConstructorBase {
+        return new parent($name, $value);
+    }
+}
+
+echo ScopedConstructorBase::one('name')->value, ':';
+echo ScopedConstructorBase::two('name', 7)->value, ':';
+echo ScopedConstructorChild::parentValue('name', 9)->value;
+"#,
+    );
+    assert_eq!(out, "name:7:9");
 }

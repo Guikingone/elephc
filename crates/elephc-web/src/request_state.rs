@@ -181,6 +181,24 @@ pub unsafe extern "C" fn elephc_web_header(
     headers.push((name, value));
 }
 
+/// Removes response headers by case-insensitive name, or clears all headers for a negative length.
+///
+/// # Safety
+/// `ptr` must point to `len` valid bytes when `len >= 0`; each worker is single-threaded.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_header_remove(ptr: *const u8, len: i64) {
+    let headers = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS);
+    if len < 0 {
+        headers.clear();
+        return;
+    }
+    if ptr.is_null() {
+        return;
+    }
+    let name = String::from_utf8_lossy(core::slice::from_raw_parts(ptr, len as usize)).into_owned();
+    headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(&name));
+}
+
 /// Resets the response status (200) and clears the response headers. Called by
 /// the worker before each request's handler runs.
 pub fn reset_response() {

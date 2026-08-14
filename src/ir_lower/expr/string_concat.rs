@@ -111,6 +111,9 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::Pipe { .. }
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_) => true,
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            expr_can_reset_concat_storage(property)
+        }
         ExprKind::BinaryOp { left, right, .. } => {
             expr_can_reset_concat_storage(left) || expr_can_reset_concat_storage(right)
         }
@@ -119,6 +122,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
                 || matches!(target, InstanceOfTarget::Expr(inner) if expr_can_reset_concat_storage(inner))
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -206,6 +210,9 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => false,
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            expr_can_reset_concat_storage(receiver)
+        }
     }
 }
 
@@ -216,4 +223,3 @@ pub(super) fn callable_target_can_reset_concat_storage(target: &CallableTarget) 
         CallableTarget::Method { object, .. } => expr_can_reset_concat_storage(object),
     }
 }
-

@@ -78,6 +78,28 @@ fn test_reference_to_array_property_appends_and_clears() {
     assert_eq!(out, "1,2\n0\n9\n");
 }
 
+/// Two declared properties bound by reference share one cell and observe writes both ways.
+#[test]
+fn test_property_to_property_reference_assignment_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class RefPropertyBox {
+            public array $refs = [];
+            public function bind(RefPropertyBox $source): void {
+                $this->refs = &$source->refs;
+            }
+        }
+        $source = new RefPropertyBox();
+        $target = new RefPropertyBox();
+        $target->bind($source);
+        $source->refs[] = 'source';
+        echo $target->refs[0], \"\\n\";
+        $target->refs[] = 'target';
+        echo $source->refs[1], \"\\n\";",
+    );
+    assert_eq!(out, "source\ntarget\n");
+}
+
 /// Reassigning the reference to a non-empty, differently-typed array literal boxes the
 /// literal's elements so the property's `Array(Mixed)` reads stay valid (regression: the
 /// raw `Array(Int)`/`Array(Str)` payload was stored unboxed and read back as garbage).
@@ -249,9 +271,8 @@ fn test_by_reference_closure_immediate_invoke() {
     assert_eq!(out, "x\n");
 }
 
-/// The Symfony KernelTrait::configureContainer shape: bind an arrow closure that returns a
-/// reference to `$this->prop` to a loader, capture the reference, mutate it through the
-/// reference, and clear it — all observed through the loader's property.
+/// Binds an arrow closure that returns a reference to `$this->prop`, captures the reference,
+/// mutates it through the alias, and clears it through the same shared property cell.
 #[test]
 fn test_closure_bind_by_reference_return_writes_through() {
     let out = compile_and_run(
@@ -351,8 +372,8 @@ fn test_by_reference_method_returns_string_property() {
     assert_eq!(out, "viamethod\n");
 }
 
-/// The Symfony-shaped immediate-invoke `Closure::bind` over a `string` property: the bound
-/// closure returns a reference to `$this->prop`, captured and mutated through the alias.
+/// An immediately invoked `Closure::bind` over a string property returns a reference to
+/// `$this->prop`, which remains shared when captured and mutated through the alias.
 #[test]
 fn test_closure_bind_by_reference_string_property() {
     let out = compile_and_run(
@@ -460,4 +481,299 @@ fn test_ref_alias_array_element_nonzero_index() {
         r#"<?php $a = [10, 20, 30]; $b =& $a[1]; $b = 99; echo $a[1];"#,
     );
     assert_eq!(out, "99");
+}
+
+/// A reference assignment expression vivifies a static hash entry and returns its aliased value.
+#[test]
+fn test_ref_assignment_expression_static_hash_element() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            private static array $cache = [];
+            public static function read(string $key) {
+                if (null !== $value = &self::$cache[$key]) {
+                    echo $value;
+                    return;
+                }
+                $value = 7;
+            }
+        }
+        C::read('key');
+        C::read('key');",
+    );
+    assert_eq!(out, "7");
+}
+
+/// A static-property post-increment expression returns the old value and stores the increment.
+#[test]
+fn test_static_property_post_increment_expression() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            private static int $level = 0;
+            public static function enter() {
+                if (!self::$level++) {
+                    echo 'first';
+                }
+            }
+        }
+        C::enter();
+        C::enter();",
+    );
+    assert_eq!(out, "first");
+}
+
+/// A runtime-named property reference aliases the suffix-constrained declared array slot.
+#[test]
+fn test_dynamic_property_reference_with_known_suffix() {
+    let out = compile_and_run(
+        "<?php
+        class C {
+            private array $beforePasses = [[1]];
+            private array $afterPasses = [[3]];
+            public function append(string $type, int $value) {
+                $property = $type.'Passes';
+                $passes = &$this->$property;
+                $passes[0][] = $value;
+            }
+            public function printBefore() {
+                echo $this->beforePasses[0][0], $this->beforePasses[0][1];
+            }
+        }
+        $passes = new C();
+        $passes->append('before', 2);
+        $passes->printBefore();",
+    );
+    assert_eq!(out, "12");
+}
+
+/// A nested array append by reference retains the promoted local cell after its frame returns.
+#[test]
+fn test_nested_array_reference_append_outlives_source_frame() {
+    let out = compile_and_run(
+        "<?php
+        function append_ref(array &$loops): void {
+            $path = [1];
+            $loops[0][] = &$path;
+            $path[] = 2;
+        }
+        function print_ref(mixed $loops): void {
+            echo $loops[0][0][0], $loops[0][0][1];
+        }
+        $loops = [[]];
+        append_ref($loops);
+        print_ref($loops);",
+    );
+    assert_eq!(out, "12");
+}
+
+/// A local array element bound to a local variable shares one promoted cell in both directions;
+/// unsetting the local alias leaves the array-owned marker alive and writable.
+#[test]
+fn test_local_array_element_reference_assignment_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        $values = [1];
+        $stub = 5;
+        $values[0] = &$stub;
+        $stub = 7;
+        echo $values[0];
+        $values[0] = 8;
+        echo $stub;
+        unset($stub);
+        $values[0] = 9;
+        echo $values[0];",
+    );
+    assert_eq!(out, "789");
+}
+
+/// A nested associative element retains a local reference cell in
+/// both directions, including dynamically concatenated keys and an autovivified parent hash.
+#[test]
+fn test_nested_assoc_array_element_reference_assignment_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        $data = [];
+        $prefix = 'p:';
+        $key = 'item';
+        $value = 5;
+        $data[$prefix.'use']['$'.$key] = &$value;
+        $value = 7;
+        echo $data['p:use']['$item'];
+        $data['p:use']['$item'] = 9;
+        echo $value;",
+    );
+    assert_eq!(out, "79");
+}
+
+/// A static-property hash element bound by reference observes a later scalar write through its alias.
+#[test]
+fn test_ref_static_property_array_element_scalar_write_through() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['source'] = 1;
+        C::$a['alias'] = &C::$a['source'];
+        C::$a['alias'] = 9;
+        echo C::$a['source'];",
+    );
+    assert_eq!(out, "9");
+}
+
+/// The DebugClassLoader-shaped heterogeneous array entry remains shared after reference binding.
+#[test]
+fn test_ref_static_property_array_element_nested_array_alias() {
+    let out = compile_and_run(
+        "<?php
+        class C { public static array $a = []; }
+        C::$a['source'] = ['X', []];
+        C::$a['alias'] = &C::$a['source'];
+        C::$a['source'][0] = 'MUT';
+        echo C::$a['source'][0], C::$a['alias'][0];",
+    );
+    assert_eq!(out, "MUTMUT");
+}
+
+/// An untyped by-reference parameter materializes an undefined caller variable as writable
+/// mixed storage before the call and exposes the assigned value afterwards.
+#[test]
+fn test_undefined_variable_can_be_initialized_through_by_ref_parameter() {
+    let out = compile_and_run(
+        "<?php
+        function initialize(&$destination): void {
+            $destination = ['ready'];
+        }
+        initialize($result);
+        echo $result[0];",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// By-reference output discovery follows callable signatures for named arguments as well as
+/// positional calls, without relying on a particular function name.
+#[test]
+fn test_named_by_ref_argument_can_initialize_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        function initialize_named($prefix, &$destination): void {
+            $destination = $prefix.'done';
+        }
+        initialize_named(destination: $result, prefix: 'all-');
+        echo $result;",
+    );
+    assert_eq!(out, "all-done");
+}
+
+/// A nullable declared by-reference parameter widens an existing compatible array local to the
+/// full writable parameter storage contract before a static method call.
+#[test]
+fn test_nullable_array_by_ref_parameter_accepts_existing_array_variable() {
+    let out = compile_and_run(
+        "<?php
+        final class OutputWriter {
+            public static function populate(?array &$destination = null): void {
+                $destination = ['ready'];
+            }
+        }
+        $result = [];
+        OutputWriter::populate($result);
+        echo $result[0];",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// A static call through `self` creates writable caller storage for an undefined variable passed
+/// to a declared nullable by-reference parameter.
+#[test]
+fn test_self_static_by_ref_call_initializes_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        final class OutputWriter {
+            public static function populate(?array &$destination = null): void {
+                $destination = ['ready'];
+            }
+            public static function render(): string {
+                self::populate($result);
+                return $result[0];
+            }
+        }
+        echo OutputWriter::render();",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// A by-reference output produced by the right side of `&&` is available in the true branch.
+#[test]
+fn test_short_circuit_by_ref_output_is_visible_in_true_branch() {
+    let out = compile_and_run(
+        "<?php
+        final class OutputWriter {
+            public static function populate(?array &$destination = null): int {
+                $destination = ['ready'];
+                return 1;
+            }
+            public static function render(): string {
+                if (true && self::populate($result)) {
+                    return $result[0];
+                }
+                return 'missing';
+            }
+        }
+        echo OutputWriter::render();",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// A successful null probe publishes a branch-local fact for an output that is created on only
+/// one side of an earlier short-circuit expression.
+#[test]
+fn test_isset_guards_conditionally_initialized_by_ref_output() {
+    let out = compile_and_run(
+        "<?php
+        final class OutputWriter {
+            public static function populate(?array &$destination = null): int {
+                $destination = ['value' => 'ready'];
+                return 1;
+            }
+            public static function render(bool $lead, bool $skip): void {
+                if ($lead && ($skip || self::populate($result))) {
+                    if (isset($result['value']) && $result['value'] === 'ready') {
+                        echo $result['value'];
+                    }
+                }
+            }
+        }
+        OutputWriter::render(true, false);",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// An unresolved direct call throws before evaluating its arguments, so an undefined variable
+/// argument does not cause a stale follow-on diagnostic in code after the non-returning call.
+#[test]
+fn test_late_bound_call_undefined_argument_does_not_cascade() {
+    let out = compile_and_run(
+        "<?php
+        try {
+            unavailable_runtime_function('key', $result);
+            echo $result;
+        } catch (Error $error) {
+            echo 'caught';
+        }",
+    );
+    assert_eq!(out, "caught");
+}
+
+/// Capturing an undefined local by reference creates a writable null cell in the outer scope.
+#[test]
+fn test_by_ref_closure_capture_initializes_undefined_variable() {
+    let out = compile_and_run(
+        "<?php
+        $writer = static function () use (&$result): void {
+            $result = 'ready';
+        };
+        $writer();
+        echo $result;",
+    );
+    assert_eq!(out, "ready");
 }

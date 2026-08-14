@@ -40,6 +40,7 @@ pub(super) fn check_array_assign(
     let arr_ty = env
         .get(array)
         .cloned()
+        .or_else(|| crate::globals_array::is_alias(array).then_some(PhpType::Mixed))
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
@@ -170,13 +171,13 @@ fn buffer_element_accepts_assignment(expected: &PhpType, actual: &PhpType) -> bo
 /// Validates a nested array assignment like `$arr[$i] = $value` where the target itself is an array access.
 ///
 /// Type-checks the array, index, and value expressions, then validates that the array type supports
-/// nested offset assignment. Allows `Mixed` and objects implementing `ArrayAccess`; rejects strings
-/// and plain arrays.
+/// nested offset assignment. Allows PHP arrays, `Mixed`, and objects implementing `ArrayAccess`;
+/// rejects strings and non-container scalars.
 ///
 /// Errors:
 /// - Target is not an array access expression
 /// - Target is a string (string offset assignment not supported)
-/// - Target type does not support nested assignment (not `Mixed` or `ArrayAccess`)
+/// - Target type does not support nested assignment
 pub(super) fn check_nested_array_assign(
     checker: &mut Checker,
     target: &Expr,
@@ -191,8 +192,9 @@ pub(super) fn check_nested_array_assign(
     let arr_ty = checker.infer_type_with_assignment_effects(array, env)?;
     checker.infer_type_with_assignment_effects(index, env)?;
     checker.infer_type_with_assignment_effects(value, env)?;
+    widen_nested_this_property_storage(checker, target);
     match arr_ty {
-        PhpType::Mixed => Ok(()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
@@ -206,6 +208,37 @@ pub(super) fn check_nested_array_assign(
             span,
             "Nested array assignment requires a Mixed or ArrayAccess target",
         )),
+    }
+}
+
+/// Widens the root `$this->property` of a nested offset write to generic PHP array storage.
+///
+/// A chain such as `$this->map[$first][$second] = $value` autovivifies an inner array and can
+/// switch the outer property between indexed and hash storage. The checker previously validated
+/// the leaf but left the untyped root at its first keyed-write shape, while EIR correctly emitted
+/// runtime-dispatched Mixed cells. Updating the root keeps those two contracts identical without
+/// weakening declared PHP property types.
+fn widen_nested_this_property_storage(checker: &mut Checker, target: &Expr) {
+    let mut current = target;
+    loop {
+        match &current.kind {
+            ExprKind::ArrayAccess { array, .. } => current = array,
+            ExprKind::PropertyAccess { object, property }
+                if matches!(&object.kind, ExprKind::This) =>
+            {
+                let Some(class_name) = checker.current_class.clone() else {
+                    return;
+                };
+                super::properties::refine_object_property_type(
+                    checker,
+                    &class_name,
+                    property,
+                    &PhpType::Array(Box::new(PhpType::Mixed)),
+                );
+                return;
+            }
+            _ => return,
+        }
     }
 }
 
@@ -231,6 +264,7 @@ pub(super) fn check_array_push(
     let arr_ty = env
         .get(array)
         .cloned()
+        .or_else(|| crate::globals_array::is_alias(array).then_some(PhpType::Mixed))
         .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", array)))?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;

@@ -182,8 +182,16 @@ pub(super) fn plan_ref_arg_writebacks(
         if matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
             continue;
         }
-        reject_unsupported_mixed_ref_writeback_source(&source_ty)?;
-        let source = local_ref_arg_source(ctx, *value)?;
+        // A non-local by-reference argument has no caller variable to update. It is materialized
+        // as a throwaway ref cell below; only local sources participate in writeback planning.
+        let Ok(source) = local_ref_arg_source(ctx, *value) else {
+            continue;
+        };
+        reject_unsupported_mixed_ref_writeback_source(
+            &source_ty,
+            &ctx.function.name,
+            source.slot,
+        )?;
         writebacks.push(RefArgWriteback {
             param_index,
             source_value: *value,
@@ -195,14 +203,27 @@ pub(super) fn plan_ref_arg_writebacks(
     Ok(writebacks)
 }
 
-/// Rejects scalar-to-Mixed temporary ref cells whose writeback shape is not supported yet.
-pub(super) fn reject_unsupported_mixed_ref_writeback_source(source_ty: &PhpType) -> Result<()> {
-    if matches!(source_ty.codegen_repr(), PhpType::Int | PhpType::Bool) {
+/// Rejects Mixed ref-cell writebacks whose concrete caller slot cannot consume one word safely.
+pub(super) fn reject_unsupported_mixed_ref_writeback_source(
+    source_ty: &PhpType,
+    function_name: &str,
+    source_slot: LocalSlotId,
+) -> Result<()> {
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never
+    ) {
+        return Ok(());
+    }
+    if matches!(
+        source_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    ) {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
-        "by-reference Mixed parameter writeback to PHP type {:?}",
-        source_ty
+        "by-reference Mixed parameter writeback to PHP type {:?} in {} for local slot {:?}",
+        source_ty, function_name, source_slot
     )))
 }
 
@@ -261,7 +282,7 @@ pub(super) fn materialize_temporary_ref_arg_cell(
 ) -> Result<()> {
     let source_ty = ctx.load_value_to_result(value)?;
     let target_ty = param_ty.codegen_repr();
-    coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
+    coerce_ref_cell_store_value(ctx, value, &source_ty, &target_ty)?;
     abi::emit_push_result_value(ctx.emitter, &target_ty);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
@@ -321,6 +342,10 @@ pub(super) fn emit_ref_arg_writebacks(
             abi::int_result_reg(ctx.emitter),
             writeback.cell_offset,
         );
+        if ctx.local_php_type(writeback.source_slot)?.codegen_repr() == PhpType::Mixed {
+            emit_mixed_ref_writeback_to_gradual_local(ctx, writeback)?;
+            continue;
+        }
         abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
         abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
@@ -329,6 +354,34 @@ pub(super) fn emit_ref_arg_writebacks(
         abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     }
     abi::emit_release_temporary_stack(ctx.emitter, writebacks.len() * 16);
+    Ok(())
+}
+
+/// Publishes a mutated by-reference Mixed cell back into gradual caller storage.
+///
+/// The callee may replace the cell's runtime value with a different array kind or scalar, so
+/// unboxing it according to the caller's pre-call narrowed type would discard that runtime tag.
+/// The local takes its own cell reference instead; the temporary argument owner is then released.
+fn emit_mixed_ref_writeback_to_gradual_local(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let target_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
+    let offset = ctx.local_offset(writeback.source_slot)?;
+    super::super::frame::emit_owned_local_cleanup(
+        ctx,
+        writeback.source_slot,
+        offset,
+        &target_ty,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.store_current_result_to_local(writeback.source_slot)?;
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     Ok(())
 }
 
@@ -356,8 +409,106 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let value = expect_operand(inst, 0)?;
     load_value_to_first_int_arg(ctx, value)?;
     let result_ty = inst.result_php_type.codegen_repr();
-    emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    match (&result_ty, &inst.immediate) {
+        (PhpType::Object(_), Some(Immediate::Bool(true))) => {
+            emit_mixed_tag_unbox_guard(ctx, 6, &|given| {
+                format!(
+                    "clone(): Argument #1 ($object) must be of type object, {} given",
+                    given
+                )
+            });
+        }
+        (PhpType::Object(_), Some(Immediate::Data(_))) => {
+            emit_mixed_nominal_object_unbox_guard(ctx, inst)?;
+        }
+        (PhpType::Callable, Some(Immediate::I64(10))) => {
+            emit_mixed_tag_unbox_guard(ctx, 10, &|given| {
+                format!("Value must be of type callable, {} given", given)
+            });
+        }
+        _ => abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"),
+    }
+    move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
+    abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
     store_if_result(ctx, inst)
+}
+
+/// Unboxes a dynamic value and raises a catchable type error unless its tag matches.
+fn emit_mixed_tag_unbox_guard(
+    ctx: &mut FunctionContext<'_>,
+    expected_tag: i64,
+    message_for: &impl Fn(&str) -> String,
+) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let accepted_label = ctx.next_label("mixed_unbox_tag_accepted");
+    let wrong_label = ctx.next_label("mixed_unbox_wrong_tag");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp x0, #{}", expected_tag));     // compare the boxed value's runtime tag with the boundary contract
+            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // continue only when the runtime representation matches
+            ctx.emitter.instruction(&format!("b {}", wrong_label));             // report the dynamic value's concrete runtime type
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", expected_tag));     // compare the boxed value's runtime tag with the boundary contract
+            ctx.emitter.instruction(&format!("je {}", accepted_label));         // continue only when the runtime representation matches
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));           // report the dynamic value's concrete runtime type
+        }
+    }
+    builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        message_for,
+    );
+    ctx.emitter.label(&accepted_label);
+}
+
+/// Validates a boxed object against a named class or interface before unboxing it.
+fn emit_mixed_nominal_object_unbox_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let expected = objects::class_name_immediate(ctx, inst)?.to_string();
+    if expected.is_empty() || php_symbol_key(&expected) == "object" {
+        emit_mixed_tag_unbox_guard(ctx, 6, &|given| {
+            format!("Value must be of type object, {} given", given)
+        });
+        return Ok(());
+    }
+    let Some((target_id, target_kind)) = objects::classify_named_target(ctx, &expected) else {
+        return Err(CodegenIrError::invalid_module(format!(
+            "missing runtime type metadata for gradual boundary {:?}",
+            expected
+        )));
+    };
+    let source_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    objects::emit_match_call(ctx, target_id, target_kind, "__rt_mixed_instanceof");
+    let accepted_label = ctx.next_label("mixed_unbox_nominal_accepted");
+    let wrong_label = ctx.next_label("mixed_unbox_nominal_wrong");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", accepted_label));   // a true matcher result satisfies the named boundary
+            ctx.emitter.instruction(&format!("b {}", wrong_label));             // reject a scalar or unrelated object payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the boxed object satisfy the named boundary?
+            ctx.emitter.instruction(&format!("jne {}", accepted_label));        // continue when class or interface matching succeeded
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));           // reject a scalar or unrelated object payload
+        }
+    }
+    ctx.emitter.label(&wrong_label);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let type_error_label = ctx.next_label("mixed_unbox_nominal_type_error");
+    builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &type_error_label,
+        &|given| format!("Value must be of type {}, {} given", expected, given),
+    );
+    ctx.emitter.label(&accepted_label);
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    Ok(())
 }
 
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.
@@ -365,6 +516,35 @@ pub(super) fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,
     writeback: &RefArgWriteback,
 ) -> Result<()> {
+    if matches!(
+        writeback.source_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+    ) {
+        return emit_heap_ref_writeback_store(ctx, writeback);
+    }
+    ctx.store_current_result_to_local(writeback.source_slot)
+}
+
+/// Retains a heap payload before releasing the previous caller-slot owner, then stores it.
+///
+/// Retaining first is required for alias-safe replacement: the old container graph may already
+/// reach the incoming payload, so releasing it first could destroy the value being assigned.
+fn emit_heap_ref_writeback_store(
+    ctx: &mut FunctionContext<'_>,
+    writeback: &RefArgWriteback,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let slot_ty = ctx.local_php_type(writeback.source_slot)?.codegen_repr();
+    let offset = ctx.local_offset(writeback.source_slot)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    super::super::frame::emit_owned_local_cleanup(
+        ctx,
+        writeback.source_slot,
+        offset,
+        &slot_ty,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     ctx.store_current_result_to_local(writeback.source_slot)
 }
 

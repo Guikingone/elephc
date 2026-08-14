@@ -9,6 +9,21 @@
 
 use crate::support::*;
 
+/// Verifies unresolved direct calls compile and fail only when reached, before argument effects.
+#[test]
+fn test_unresolved_direct_function_is_late_bound_generically() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    Vendor\Package\missing_function(print 'evaluated');
+} catch (Error $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Call to undefined function Vendor\\Package\\missing_function()");
+}
+
 // Compiles PHP `source` to a native binary, expects it to fail at runtime,
 // and returns the captured stderr. The temporary directory is cleaned up regardless
 // of success or failure.
@@ -176,6 +191,26 @@ fn test_define_in_function() {
 fn test_const_concat() {
     let out = compile_and_run("<?php\nconst PREFIX = \"hello\";\necho PREFIX . \" world\";\n");
     assert_eq!(out, "hello world");
+}
+
+/// Predefined core and extension constants resolve through the global fallback in a namespace.
+#[test]
+fn test_predefined_standard_constants_in_namespace() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Example;
+echo UPLOAD_ERR_NO_FILE, '|';
+echo PHP_QUERY_RFC3986, '|';
+echo PHP_OUTPUT_HANDLER_REMOVABLE, '|';
+echo LIBXML_COMPACT, '|';
+echo LIBXML_ERR_WARNING, '|';
+echo T_START_HEREDOC, '|';
+echo T_WHITESPACE, '|';
+echo T_COMMENT, '|';
+echo DATE_RFC2822;
+"#,
+    );
+    assert_eq!(out, "4|2|64|65536|1|398|397|392|D, d M Y H:i:s O");
 }
 
 // --- List unpacking ---
@@ -2217,6 +2252,13 @@ fn test_directory_separator() {
     assert_eq!(out, "/");
 }
 
+/// Verifies that predefined constants remain valid with an explicit global namespace prefix.
+#[test]
+fn test_fully_qualified_predefined_constants() {
+    let out = compile_and_run("<?php echo \\DIRECTORY_SEPARATOR;");
+    assert_eq!(out, "/");
+}
+
 // -- v0.8 time / microtime --
 
 // Tests `time()` returns a Unix timestamp greater than 1 billion (valid date after ~2001).
@@ -2309,6 +2351,26 @@ fn test_getenv_nonexistent() {
         "<?php $missing = getenv(\"ELEPHC_NONEXISTENT_VAR_XYZ\"); echo strlen($missing);",
     );
     assert_eq!(out, "0");
+}
+
+/// Verifies unnamed, explicitly null, local-only, and dynamically nullable environment lookups.
+#[test]
+fn test_getenv_all_and_optional_forms() {
+    let out = compile_and_run(
+        r#"<?php
+putenv("ELEPHC_GETENV_ALL_TEST=visible");
+$all = getenv();
+echo $all["ELEPHC_GETENV_ALL_TEST"], ":";
+$again = getenv(null, true);
+echo $again["ELEPHC_GETENV_ALL_TEST"], ":";
+echo getenv("ELEPHC_GETENV_ALL_TEST", true), ":";
+$names = [null, "ELEPHC_GETENV_ALL_TEST"];
+$dynamic = getenv($names[$argc]);
+echo is_array($dynamic) ? "array" : $dynamic;
+putenv("ELEPHC_GETENV_ALL_TEST");
+"#,
+    );
+    assert_eq!(out, "visible:visible:visible:visible");
 }
 
 // Tests `putenv("ELEPHC_TEST_VAR=hello")` followed by `getenv("ELEPHC_TEST_VAR")`
@@ -2460,4 +2522,33 @@ fn test_system() {
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
+}
+
+/// Verifies `error_log()` applies PHP string coercion to a gradual message operand.
+#[test]
+fn test_error_log_coerces_mixed_message() {
+    let out = compile_and_run(
+        r#"<?php
+function logMixed(mixed $message): bool {
+    return error_log($message);
+}
+echo logMixed("mixed-message") ? "ok" : "failed";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies `header_remove()` accepts a gradual name and applies weak string coercion.
+#[test]
+fn test_header_remove_coerces_mixed_name() {
+    let out = compile_and_run(
+        r#"<?php
+function removeHeader(mixed $name): void {
+    header_remove($name);
+}
+removeHeader("X-Elephc-Test");
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
 }

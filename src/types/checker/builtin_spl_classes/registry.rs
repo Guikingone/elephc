@@ -37,6 +37,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "RecursiveFilterIterator",
     "RecursiveCallbackFilterIterator",
     "RecursiveIteratorIterator",
+    "RecursiveTreeIterator",
     "ParentIterator",
     "RegexIterator",
     "RecursiveRegexIterator",
@@ -55,6 +56,7 @@ pub(super) const SPL_CLASS_NAMES: &[&str] = &[
     "SplMinHeap",
     "SplPriorityQueue",
     "SplObjectStorage",
+    "WeakMap",
 ];
 
 const PHAR_CLASS_NAMES: &[&str] = &["Phar", "PharData", "PharFileInfo"];

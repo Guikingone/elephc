@@ -2,7 +2,7 @@
 title: "is_dir() — internals"
 description: "Compiler internals for is_dir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 136
 ---
 
 ## `is_dir()` — internals

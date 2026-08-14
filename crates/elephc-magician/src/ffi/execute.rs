@@ -14,7 +14,7 @@ use super::util::clear_result;
 #[cfg(not(test))]
 use super::util::write_outcome;
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ElephcEvalScope, ABI_VERSION};
-use crate::errors::EvalStatus;
+use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir;
 #[cfg(not(test))]
 use crate::interpreter;
@@ -22,6 +22,8 @@ use crate::parse_cache;
 #[cfg(not(test))]
 use crate::runtime_hooks::ElephcRuntimeOps;
 use std::slice;
+
+const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
 /// Executes an eval fragment against a materialized caller scope.
 ///
@@ -72,12 +74,67 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
+    trace_eval_input(ctx, code);
     let program = match parse_cache::parse_fragment_cached(code) {
         Ok(program) => program,
-        Err(err) => return err.status().code(),
+        Err(err) => {
+            let status = err.clone().status().code();
+            trace_eval_parse_error(ctx, code, &err, status);
+            return status;
+        }
     };
     clear_result(out);
     execute_parsed_eval(ctx, scope, program.as_ref(), out)
+}
+
+/// Returns whether opt-in eval bridge tracing is enabled for this process.
+fn eval_trace_enabled() -> bool {
+    std::env::var_os(EVAL_TRACE_ENV).is_some()
+}
+
+/// Emits the exact eval input and propagated call-site metadata before cache lookup.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn trace_eval_input(ctx: *const ElephcEvalContext, code: &[u8]) {
+    if !eval_trace_enabled() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(|| {
+        let (file, dir, line, file_override) = unsafe { ctx.as_ref() }
+            .map(ElephcEvalContext::call_site)
+            .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+        eprintln!(
+            "[elephc-eval-trace] phase=input ctx={ctx:p} code_ptr={:p} len={} file={file:?} dir={dir:?} line={line} file_override={file_override:?}",
+            code.as_ptr(),
+            code.len(),
+        );
+    });
+}
+
+/// Emits the precise parser failure while preserving the original ABI status.
+///
+/// # Safety
+/// `ctx` must be null or a valid eval context handle supplied to the FFI entry point.
+unsafe fn trace_eval_parse_error(
+    ctx: *const ElephcEvalContext,
+    code: &[u8],
+    error: &EvalParseError,
+    status: i32,
+) {
+    if !eval_trace_enabled() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(|| {
+        let (file, dir, line, file_override) = unsafe { ctx.as_ref() }
+            .map(ElephcEvalContext::call_site)
+            .unwrap_or_else(|| (String::new(), String::new(), 0, None));
+        eprintln!(
+            "[elephc-eval-trace] phase=parse_error ctx={ctx:p} code_ptr={:p} len={} status={status} error={error:?} file={file:?} dir={dir:?} line={line} file_override={file_override:?}",
+            code.as_ptr(),
+            code.len(),
+        );
+    });
 }
 
 /// Executes a parsed eval program in production builds using elephc runtime hooks.
@@ -109,7 +166,17 @@ unsafe fn execute_parsed_eval(
     let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
     match interpreter::execute_program_outcome_with_context(context, program, scope, &mut values) {
         Ok(outcome) => write_outcome(outcome, out).code(),
-        Err(status) => status.code(),
+        Err(status) => {
+            if eval_trace_enabled() {
+                let call_site = context.call_site();
+                eprintln!(
+                    "[elephc-eval-trace] phase=runtime_error status={status:?} file={:?} line={}",
+                    call_site.0,
+                    call_site.2,
+                );
+            }
+            status.code()
+        }
     }
 }
 

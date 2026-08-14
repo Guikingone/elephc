@@ -41,7 +41,9 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
         StmtKind::Global { .. } | StmtKind::StaticVar { .. } => {
             Some(EvalAotFallbackReason::GlobalOrStatic)
         }
-        StmtKind::RefAssign { .. } => Some(EvalAotFallbackReason::ReferenceOrByRef),
+        StmtKind::RefAssign { .. } | StmtKind::StaticPropertyElementRefAssign { .. } => {
+            Some(EvalAotFallbackReason::ReferenceOrByRef)
+        }
         StmtKind::Foreach {
             array,
             value_by_ref,
@@ -61,9 +63,11 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
         | StmtKind::ArrayPush { .. }
         | StmtKind::ListUnpack { .. } => Some(EvalAotFallbackReason::ArrayOrIterable),
         StmtKind::PropertyAssign { .. }
+        | StmtKind::PropertyRefAssign { .. }
         | StmtKind::StaticPropertyAssign { .. }
         | StmtKind::StaticPropertyArrayPush { .. }
         | StmtKind::StaticPropertyArrayAssign { .. }
+        | StmtKind::DynamicStaticPropertyWrite { .. }
         | StmtKind::PropertyArrayPush { .. }
         | StmtKind::PropertyArrayAssign { .. } => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
         StmtKind::Echo(expr) | StmtKind::ExprStmt(expr) | StmtKind::Return(Some(expr)) => {
@@ -195,7 +199,7 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
             .or_else(|| expr_fallback_reason(then_expr))
             .or_else(|| expr_fallback_reason(else_expr)),
         ExprKind::Cast { target, expr } => {
-            if matches!(target, CastType::Array) {
+            if matches!(target, CastType::Array | CastType::Object) {
                 return Some(EvalAotFallbackReason::ArrayOrIterable);
             }
             expr_fallback_reason(expr)
@@ -237,14 +241,19 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         | ExprKind::PropertyAccess { .. }
         | ExprKind::NullsafePropertyAccess { .. }
         | ExprKind::StaticPropertyAccess { .. }
+        | ExprKind::DynamicStaticPropertyAccess { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. }
+        | ExprKind::DynamicScopedConstantAccess { .. }
         | ExprKind::This => Some(EvalAotFallbackReason::ObjectOrMemberAccess),
-        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::Spread(_) => {
+        ExprKind::ArrayLiteral(_)
+        | ExprKind::ArrayLiteralAssoc(_)
+        | ExprKind::ArrayReference(_)
+        | ExprKind::Spread(_) => {
             Some(EvalAotFallbackReason::ArrayOrIterable)
         }
         ExprKind::Assignment { .. }

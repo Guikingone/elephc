@@ -21,10 +21,12 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
-    index_expr_key_type, lower_array_access_from_lowered_receiver,
+    coerce_to_string_at_span, emit_bool_literal,
+    index_expr_key_type, lowered_index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_callable_array_for_assignment,
-    lower_array_literal_with_expected_type,
+    lower_array_literal_with_expected_type, lower_array_reference_or_value,
     lower_closure_for_assignment, lower_expr,
+    property_access_expr_type_for_ir, store_value_into_temp,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,
     reflection_property_binding_for_expr, static_callable_binding_for_expr,
@@ -43,6 +45,7 @@ mod conditionals;
 mod loops;
 mod array_write_core;
 mod nested_array_writes;
+mod nested_unset;
 mod array_write_storage;
 mod typed_foreach;
 mod switches;
@@ -83,6 +86,14 @@ pub(crate) use control_exit::{lower_throw_access_error, lower_throw_access_error
 pub(super) use array_write_core::{
     indexed_array_write_element_type, release_indexed_array_write_operand,
 };
+pub(in crate::ir_lower) use array_write_core::release_persisted_string_operand;
+pub(in crate::ir_lower) use nested_unset::{
+    lower_nested_local_hash_unset, lower_nested_property_hash_unset,
+    lower_nested_static_property_hash_unset, nested_local_hash_unset_supported,
+    nested_property_hash_unset_supported, nested_static_property_hash_unset_supported,
+};
+pub(in crate::ir_lower) use property_array_writes::release_rewritten_property_value_after_retaining_store;
+pub(in crate::ir_lower) use static_property_helpers::object_property_type;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, prepare_indexed_array_local_write,
     ref_bound_mixed_indexed_array_write,
@@ -254,6 +265,11 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             property,
             value,
         } => lower_property_assign(ctx, object, property, value, stmt.span),
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => lower_property_ref_assign(ctx, object, property, source, stmt.span),
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -270,6 +286,34 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_static_property_array_assign(ctx, receiver, property, index, value, stmt.span),
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => lower_static_property_element_ref_assign(
+            ctx,
+            receiver,
+            property,
+            index,
+            source,
+            stmt.span,
+        ),
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => lower_dynamic_static_property_write(
+            ctx,
+            receiver,
+            property,
+            index.as_ref(),
+            *append,
+            value,
+            stmt.span,
+        ),
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -281,6 +325,19 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
+    }
+    // The shared termination analysis already proves statically infinite loops without a matching
+    // `break` cannot reach their synthetic exit. Preserve that loop-specific fact in EIR itself.
+    // Relying on branch simplification is insufficient because it deliberately skips any function
+    // with exception handlers; a loop containing `try` would otherwise leave its exit block open
+    // and `terminate_open_block` would fabricate a zero-operand heap return placeholder.
+    if matches!(
+        stmt.kind,
+        StmtKind::While { .. } | StmtKind::DoWhile { .. } | StmtKind::For { .. }
+    ) && crate::termination::stmt_guarantees_termination(stmt)
+        && !ctx.builder.insertion_block_is_terminated()
+    {
+        ctx.builder.terminate(Terminator::Unreachable);
     }
 }
 

@@ -78,6 +78,20 @@ pub(crate) fn collect_attribute_factories_with_extra(
                 collect_from_attribute_lists(classes, names, args, &mut unique);
             }
         }
+        for signature in class_info
+            .methods
+            .values()
+            .chain(class_info.static_methods.values())
+        {
+            for groups in &signature.param_attributes {
+                let names = crate::types::collect_attribute_names(groups);
+                if names.is_empty() {
+                    continue;
+                }
+                let args = crate::types::collect_attribute_args(groups);
+                collect_from_attribute_lists(classes, &names, &args, &mut unique);
+            }
+        }
         for (member, names) in &class_info.property_attribute_names {
             if let Some(args) = class_info.property_attribute_args.get(member) {
                 collect_from_attribute_lists(classes, names, args, &mut unique);

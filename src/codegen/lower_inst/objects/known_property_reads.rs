@@ -77,6 +77,12 @@ pub(super) fn lower_prop_get_nonnull(
     if object_is_builtin_stdclass(ctx, object)? {
         return lower_stdclass_prop_get(ctx, inst, object, property);
     }
+    if let Some(interface_name) = property_interface_receiver(ctx, object)? {
+        return lower_polymorphic_object_prop_get(ctx, inst, object, &interface_name, property);
+    }
+    if let Some(class_name) = property_abstract_receiver(ctx, object, property)? {
+        return lower_polymorphic_object_prop_get(ctx, inst, object, &class_name, property);
+    }
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
     }
@@ -199,10 +205,6 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    if !slot.is_declared {
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        return store_if_result(ctx, inst);
-    }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_typed_property_initialized_bool(ctx, &slot, base_reg);

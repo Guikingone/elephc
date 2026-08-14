@@ -9,6 +9,20 @@
 
 use super::*;
 
+/// Returns whether a class's flattened method table declares the requested instance method.
+pub(super) fn class_declares_method(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    method_name: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method_name);
+    ctx.module
+        .class_infos
+        .get(normalized)
+        .is_some_and(|class_info| class_info.methods.contains_key(&method_key))
+}
+
 /// Resolves method implementation class, canonical key, return type, and ABI arity.
 pub(super) fn resolve_method_call_target(
     ctx: &FunctionContext<'_>,

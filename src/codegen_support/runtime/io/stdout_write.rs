@@ -74,6 +74,12 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     emitter.instruction("b __rt_stdout_write_done");                            // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_ob_inactive");
 
+    // Real output has escaped every active PHP output buffer. From this point onward PHP cannot
+    // mutate response headers, including when the final sink is the `--web` capture bridge.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_headers_sent");
+    emitter.instruction("mov x10, #1");
+    emitter.instruction("str x10, [x9]");
+
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
@@ -137,6 +143,10 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("call __rt_ob_append");                                 // append the bytes (ptr=rdi, len=rsi) to the top output buffer
     emitter.instruction("jmp __rt_stdout_write_done");                          // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_ob_inactive");
+
+    // Real output has escaped every active PHP output buffer.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_headers_sent");
+    emitter.instruction("mov QWORD PTR [r11], 1");
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --

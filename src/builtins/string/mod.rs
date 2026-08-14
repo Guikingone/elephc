@@ -101,6 +101,7 @@ pub mod substr_replace;
 pub mod trim;
 pub mod ucfirst;
 pub mod ucwords;
+pub mod unpack;
 pub mod urldecode;
 pub mod urlencode;
 pub mod vprintf;

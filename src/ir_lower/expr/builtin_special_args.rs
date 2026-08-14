@@ -124,25 +124,37 @@ pub(super) fn lower_preg_replace_callback_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
-    if args.len() != 3 {
+    if !(3..=5).contains(&args.len()) {
         return lower_args_with_signature(ctx, sig, args);
     }
-    if matches!(&args[1].kind, ExprKind::Closure { .. }) {
+    let mut operands = if matches!(&args[1].kind, ExprKind::Closure { .. }) {
         let pattern = lower_expr(ctx, &args[0]);
         let callback = lower_preg_replace_callback_closure(ctx, &args[1])
             .expect("preg_replace_callback closure check must match lowering");
         let subject = lower_expr(ctx, &args[2]);
         let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
-        return vec![pattern.value, callback.value, subject.value];
-    }
-    let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
-        return lower_args_with_signature(ctx, sig, args);
+        vec![pattern.value, callback.value, subject.value]
+    } else {
+        let Some(callback) = preg_replace_static_callback(ctx, &args[1]) else {
+            return lower_args_with_signature(ctx, sig, args);
+        };
+        let pattern = lower_expr(ctx, &args[0]);
+        let callback = lower_string_literal(ctx, &callback, &args[1]);
+        let subject = lower_expr(ctx, &args[2]);
+        let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
+        vec![pattern.value, callback.value, subject.value]
     };
-    let pattern = lower_expr(ctx, &args[0]);
-    let callback = lower_string_literal(ctx, &callback, &args[1]);
-    let subject = lower_expr(ctx, &args[2]);
-    let subject = persist_call_arg_if_string(ctx, subject, args[2].span);
-    vec![pattern.value, callback.value, subject.value]
+    if let Some(sig) = sig {
+        operands.extend(
+            args.iter()
+                .enumerate()
+                .skip(3)
+                .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg)),
+        );
+    } else {
+        operands.extend(args.iter().skip(3).map(|arg| lower_expr(ctx, arg).value));
+    }
+    operands
 }
 
 /// Lowers a `preg_replace_callback()` closure with match-array parameter context.

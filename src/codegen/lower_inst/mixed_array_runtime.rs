@@ -95,24 +95,32 @@ pub(super) fn lower_array_fetch_for_write_runtime_call(
             store_if_result(ctx, inst)
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
-            let tag: i64 = if matches!(receiver_ty, PhpType::Array(_)) {
-                4
-            } else {
-                5
-            };
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     hashes::materialize_hash_key_aarch64(ctx, key)?;
                     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
                     ctx.load_value_to_reg(receiver, "x0")?;
-                    abi::emit_load_int_immediate(ctx.emitter, "x1", tag);
+                    abi::emit_push_reg(ctx.emitter, "x0");
+                    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                    ctx.emitter.instruction("cmp x0, #3");                      // detect hash storage even when the static PHP type remains generic array
+                    abi::emit_load_int_immediate(ctx.emitter, "x1", 4);
+                    abi::emit_load_int_immediate(ctx.emitter, "x9", 5);
+                    ctx.emitter.instruction("csel x1, x9, x1, eq");             // pass runtime payload tag 5 for hashes and 4 for indexed arrays
+                    abi::emit_pop_reg(ctx.emitter, "x0");
                     abi::emit_pop_reg_pair(ctx.emitter, "x2", "x3");
                 }
                 Arch::X86_64 => {
                     hashes::materialize_hash_key_x86_64(ctx, key)?;
                     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
                     ctx.load_value_to_reg(receiver, "rdi")?;
-                    abi::emit_load_int_immediate(ctx.emitter, "rsi", tag);
+                    abi::emit_push_reg(ctx.emitter, "rdi");
+                    ctx.emitter.instruction("mov rax, rdi");                    // classify the receiver through the runtime helper's result-register ABI
+                    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+                    ctx.emitter.instruction("cmp rax, 3");                     // detect hash storage even when the static PHP type remains generic array
+                    abi::emit_load_int_immediate(ctx.emitter, "rsi", 4);
+                    abi::emit_load_int_immediate(ctx.emitter, "r8", 5);
+                    ctx.emitter.instruction("cmove rsi, r8");                  // pass runtime payload tag 5 for hashes and 4 for indexed arrays
+                    abi::emit_pop_reg(ctx.emitter, "rdi");
                     abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
                 }
             }
@@ -156,7 +164,9 @@ pub(super) fn lower_mixed_array_runtime_set_aarch64(
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        if !ctx.value_can_transfer_ownership_to_consumer(value)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        }
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }
@@ -179,7 +189,9 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
 ) -> Result<()> {
     let value_ty = ctx.load_value_to_result(value)?.codegen_repr();
     if matches!(value_ty, PhpType::Mixed | PhpType::Union(_)) {
-        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        if !ctx.value_can_transfer_ownership_to_consumer(value)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        }
     } else {
         emit_box_current_value_as_mixed(ctx.emitter, &value_ty);
     }

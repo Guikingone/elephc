@@ -2,7 +2,7 @@
 title: "ptr_is_null()"
 description: "Returns true if the pointer is null."
 sidebar:
-  order: 323
+  order: 330
 ---
 
 ## ptr_is_null()

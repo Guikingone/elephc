@@ -28,6 +28,7 @@
 //!   see `walk::Rewriter::scope_replacement` for the exact diagnostics.
 
 mod build;
+mod method_families;
 mod walk;
 
 use crate::errors::CompileError;
@@ -114,6 +115,7 @@ pub fn desugar(program: Program) -> Result<Program, CompileError> {
     let mut program = program;
     let mut rewriter = walk::Rewriter::new();
     rewriter.walk_stmts(&mut program);
+    method_families::propagate(&mut program);
     match rewriter.into_errors() {
         errors if errors.is_empty() => Ok(program),
         errors => Err(CompileError::from_many(errors)),

@@ -29,6 +29,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_interface_names(program, &check_result.interfaces);
     module.declared_trait_names = collect_declared_trait_names(program);
     module.declared_trait_source_lines = collect_declared_trait_source_lines(program);
+    module.declared_function_source_lines = collect_declared_function_source_lines(program);
     module.declared_trait_uses = collect_declared_trait_uses(program);
     module.declared_trait_method_names = collect_declared_trait_method_names(program);
     module.declared_trait_methods = collect_declared_trait_methods(program);
@@ -40,6 +41,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         collect_declared_trait_constant_visibilities(program);
     module.declared_trait_final_constants = collect_declared_trait_final_constants(program);
     module.class_infos = check_result.classes.clone();
+    normalize_untyped_instance_array_storage_for_eir(&mut module.class_infos);
     normalize_class_method_signatures_for_eir(module, &check_result.callable_param_sigs);
     module.interface_infos = check_result.interfaces.clone();
     module.enum_infos = check_result.enums.clone();
@@ -71,12 +73,39 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
         crate::codegen::runtime_features_for_program_and_classes(program, &check_result.classes);
 }
 
+/// Normalizes untyped instance-array slots to EIR's runtime-dispatched PHP array representation.
+///
+/// Closed-world checking can infer a precise indexed or associative shape from the first writes
+/// to an untyped property. PHP does not make that shape a contract: later assignments, casts,
+/// merges, or nested keyed writes can change both storage kind and element representation. EIR
+/// therefore uses `array<mixed>` so all loads, stores, and cleanup agree. Declared PHP properties
+/// and static properties retain their explicit or specialized contracts.
+fn normalize_untyped_instance_array_storage_for_eir(
+    classes: &mut HashMap<String, ClassInfo>,
+) {
+    for class_info in classes.values_mut() {
+        for index in 0..class_info.properties.len() {
+            let property = class_info.properties[index].0.clone();
+            if class_info.property_slot_is_declared(index, &property) {
+                continue;
+            }
+            if matches!(
+                class_info.properties[index].1.codegen_repr(),
+                PhpType::Array(_) | PhpType::AssocArray { .. }
+            ) {
+                class_info.properties[index].1 = PhpType::Array(Box::new(PhpType::Mixed));
+            }
+        }
+    }
+}
+
 /// Normalizes class method metadata to the ABI contracts emitted in EIR.
 pub(super) fn normalize_class_method_signatures_for_eir(
     module: &mut Module,
     callable_param_sigs: &HashMap<(String, String), FunctionSig>,
 ) {
     for (class_name, class_info) in module.class_infos.iter_mut() {
+        let direct_property_returns = direct_this_property_return_types(class_info);
         normalize_method_map_for_eir(
             class_name,
             &mut class_info.methods,
@@ -91,7 +120,45 @@ pub(super) fn normalize_class_method_signatures_for_eir(
             true,
             callable_param_sigs,
         );
+        for (method, return_type) in direct_property_returns {
+            if let Some(signature) = class_info.methods.get_mut(&method) {
+                if !signature.declared_return {
+                    signature.return_type = return_type;
+                }
+            }
+        }
     }
+}
+
+/// Collects untyped instance methods that directly return one `$this->property` slot.
+///
+/// Property ABI normalization happens after semantic checking. A getter inferred from the old
+/// precise property shape must expose the normalized EIR storage type as well, otherwise return
+/// lowering invents a conversion from `array<mixed>` back to stale phpdoc-like metadata.
+fn direct_this_property_return_types(class_info: &ClassInfo) -> Vec<(String, PhpType)> {
+    let mut returns = Vec::new();
+    for method in &class_info.method_decls {
+        if method.is_static || method.return_type.is_some() {
+            continue;
+        }
+        let [stmt] = method.body.as_slice() else {
+            continue;
+        };
+        let StmtKind::Return(Some(expr)) = &stmt.kind else {
+            continue;
+        };
+        let ExprKind::PropertyAccess { object, property } = &expr.kind else {
+            continue;
+        };
+        if !matches!(&object.kind, ExprKind::This) {
+            continue;
+        }
+        let Some((_, (_, property_type))) = class_info.visible_property(property) else {
+            continue;
+        };
+        returns.push((php_symbol_key(&method.name), property_type.clone()));
+    }
+    returns
 }
 
 /// Normalizes one instance/static method table for EIR call and bridge metadata.
@@ -285,4 +352,3 @@ pub(super) fn expr_exposes_dynamic_param(expr: &Expr, dynamic_params: &HashSet<S
         _ => false,
     }
 }
-

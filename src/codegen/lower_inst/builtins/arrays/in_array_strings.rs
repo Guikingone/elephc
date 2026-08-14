@@ -9,6 +9,132 @@
 
 use super::*;
 
+/// Lowers membership for an indexed or associative array held in a boxed gradual value.
+///
+/// The container is validated and unboxed before allocating any temporary state, so a
+/// catchable wrong-type error never leaves an artificial codegen spill frame behind. The
+/// needle is normalized to a boxed cell, then the shared runtime helper reads and compares
+/// each source value through the same dynamic array access contract used by other gradual
+/// array operations.
+pub(super) fn lower_in_array_mixed_container(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    needle_ty: &PhpType,
+    mode: InArrayMode,
+) -> Result<()> {
+    let indexed_label = ctx.next_label("in_array_dynamic_indexed");
+    let hash_label = ctx.next_label("in_array_dynamic_hash");
+    let setup_label = ctx.next_label("in_array_dynamic_setup");
+    let wrong_tag_label = ctx.next_label("in_array_dynamic_wrong_tag");
+
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // tag 4 selects an indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));        // preserve the unboxed indexed pointer for setup
+            ctx.emitter.instruction("cmp x0, #5");                              // tag 5 selects an associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", hash_label));           // preserve the unboxed hash pointer for setup
+            ctx.emitter.instruction(&format!("b {}", wrong_tag_label));         // every other runtime value violates the array parameter
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // tag 4 selects an indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", indexed_label));          // preserve the unboxed indexed pointer for setup
+            ctx.emitter.instruction("cmp rax, 5");                              // tag 5 selects an associative-array payload
+            ctx.emitter.instruction(&format!("je {}", hash_label));             // preserve the unboxed hash pointer for setup
+            ctx.emitter.instruction(&format!("jmp {}", wrong_tag_label));       // every other runtime value violates the array parameter
+        }
+    }
+    super::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_tag_label,
+        &|given| {
+            format!(
+                "in_array(): Argument #2 ($haystack) must be of type array, {} given",
+                given
+            )
+        },
+    );
+
+    ctx.emitter.label(&indexed_label);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x1", 0);                     // preserve the unboxed indexed-array pointer
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 4);
+            abi::emit_store_to_sp(ctx.emitter, "x9", 8);                     // record indexed runtime kind for the iterator helper
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rdi", 0);                    // preserve the unboxed indexed-array pointer
+            abi::emit_load_int_immediate(ctx.emitter, "r9", 4);
+            abi::emit_store_to_sp(ctx.emitter, "r9", 8);                     // record indexed runtime kind for the iterator helper
+        }
+    }
+    abi::emit_jump(ctx.emitter, &setup_label);
+
+    ctx.emitter.label(&hash_label);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x1", 0);                     // preserve the unboxed associative-array pointer
+            abi::emit_load_int_immediate(ctx.emitter, "x9", 5);
+            abi::emit_store_to_sp(ctx.emitter, "x9", 8);                     // record associative runtime kind for the iterator helper
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rdi", 0);                    // preserve the unboxed associative-array pointer
+            abi::emit_load_int_immediate(ctx.emitter, "r9", 5);
+            abi::emit_store_to_sp(ctx.emitter, "r9", 8);                     // record associative runtime kind for the iterator helper
+        }
+    }
+
+    ctx.emitter.label(&setup_label);
+    let needle_repr = needle_ty.codegen_repr();
+    let borrowed_needle = matches!(&needle_repr, PhpType::Mixed | PhpType::Union(_));
+    ctx.load_value_to_result(needle)?;
+    emit_box_current_value_as_mixed(ctx.emitter, &needle_repr);
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x2", 8);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x3",
+                i64::from(matches!(mode, InArrayMode::Strict)),
+            );
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdx", 8);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rcx",
+                i64::from(matches!(mode, InArrayMode::Strict)),
+            );
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_in_array_mixed_container");
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 24);
+    if !borrowed_needle {
+        abi::emit_load_temporary_stack_slot(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            16,
+        );
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
+    abi::emit_load_temporary_stack_slot(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        24,
+    );
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
 /// Scans a bool array against a precomputed AArch64 boolean needle register.
 pub(super) fn lower_in_array_bool_array_with_preloaded_needle_aarch64(
     ctx: &mut FunctionContext<'_>,
@@ -116,7 +242,7 @@ pub(super) fn lower_in_array_string_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
     ctx.emitter
-        .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as the searched string matches an element
+        .instruction(&format!("cbnz x0, {}", found_label));                     // stop as soon as the searched string matches an element
     ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
     ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning remaining string payload slots
     ctx.emitter.label(&found_label);
@@ -198,7 +324,7 @@ pub(super) fn lower_in_array_mixed_string_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → x0=tag, x1=string ptr, x2=string len
     ctx.emitter.instruction("cmp x0, #1");                                      // is this cell a string value (runtime tag 1)?
     ctx.emitter
-        .instruction(&format!("b.ne {}", not_string_label)); // non-string cells can never equal a string needle
+        .instruction(&format!("b.ne {}", not_string_label));                    // non-string cells can never equal a string needle
     ctx.load_string_value_to_regs(needle, "x3", "x4")?;
     abi::emit_call_label(ctx.emitter, eq_helper); // compare the unboxed string element (x1/x2) against the needle (x3/x4)
     ctx.emitter.instruction(&format!("b {}", have_flag_label));                 // carry the str-eq result into the shared match-flag join
@@ -208,7 +334,7 @@ pub(super) fn lower_in_array_mixed_string_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x12");
     abi::emit_pop_reg_pair(ctx.emitter, "x9", "x10");
     ctx.emitter
-        .instruction(&format!("cbnz x0, {}", found_label)); // stop as soon as a cell matches the needle
+        .instruction(&format!("cbnz x0, {}", found_label));                     // stop as soon as a cell matches the needle
     ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
     ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
     ctx.emitter.label(&found_label);
@@ -247,7 +373,7 @@ pub(super) fn lower_in_array_mixed_string_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // unbox the cell → rax=tag, rdi=string ptr, rdx=string len
     ctx.emitter.instruction("cmp rax, 1");                                      // is this cell a string value (runtime tag 1)?
     ctx.emitter
-        .instruction(&format!("jne {}", not_string_label)); // non-string cells can never equal a string needle
+        .instruction(&format!("jne {}", not_string_label));                     // non-string cells can never equal a string needle
     ctx.emitter.instruction("mov rsi, rdx");                                    // move the unboxed string length into the comparison argument
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
     abi::emit_call_label(ctx.emitter, eq_helper); // compare the unboxed string element (rdi/rsi) against the needle (rdx/rcx)
@@ -293,7 +419,7 @@ pub(super) fn lower_in_array_string_x86_64(
     ctx.emitter.instruction("shl rcx, 4");                                      // scale the element index by the 16-byte string slot width
     ctx.emitter.instruction("mov rdi, QWORD PTR [r12 + rcx]");                  // load the current string element pointer for comparison
     ctx.emitter
-        .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]"); // load the current string element length for comparison
+        .instruction("mov rsi, QWORD PTR [r12 + rcx + 8]");                     // load the current string element length for comparison
     abi::emit_push_reg_pair(ctx.emitter, "r11", "r12");
     abi::emit_push_reg(ctx.emitter, "r13");
     ctx.load_string_value_to_regs(needle, "rdx", "rcx")?;
@@ -318,9 +444,9 @@ pub(super) fn lower_in_array_string_x86_64(
 /// The needle is an already-boxed Mixed cell (e.g. an untyped `mixed` parameter). Each concrete
 /// element is boxed into a temporary Mixed cell via `__rt_mixed_from_value` (which
 /// heap-persists its own copy), compared against the needle with the selected runtime helper, then
-/// released with `__rt_decref_mixed`. `__rt_php_compare` yields the PHP 8 three-way sign so a loose
-/// match is `sign == 0`; `__rt_mixed_strict_eq` yields a boolean so a strict match is a non-zero
-/// result. Integer and boolean arrays use 8-byte payload slots; string arrays use 16-byte pairs.
+/// released with `__rt_decref_mixed`. Both `__rt_mixed_loose_eq` and
+/// `__rt_mixed_strict_eq` yield a boolean, so a match is a non-zero result. Integer and boolean
+/// arrays use 8-byte payload slots; string arrays use 16-byte pairs.
 pub(super) fn lower_in_array_concrete_mixed_needle(
     ctx: &mut FunctionContext<'_>,
     needle: crate::ir::ValueId,
@@ -356,10 +482,8 @@ pub(super) fn lower_in_array_concrete_mixed_needle(
 /// Emits the boxed-Mixed-array membership loop for a boxed Mixed needle.
 ///
 /// `eq_helper` takes two boxed Mixed cells in the first two argument registers and returns in the
-/// integer result register: `__rt_mixed_strict_eq` yields a boolean (match on non-zero), and
-/// `__rt_php_compare` yields the `-1`/`0`/`+1` sign (match on zero) — the same two helpers
-/// `lower_inst::comparisons` uses for `===` and `==` on two Mixed operands, so membership agrees
-/// with the operators by construction. `match_on_zero` selects which convention applies.
+/// integer result register. The canonical strict and loose helpers both yield a boolean, while
+/// `match_on_zero` remains available for callers of a three-way comparator.
 ///
 /// Unlike the concrete-string-array variant below, the elements are ALREADY boxed cells, so no
 /// per-element boxing (and therefore no matching decref) is needed.

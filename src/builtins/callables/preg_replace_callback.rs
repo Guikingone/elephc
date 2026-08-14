@@ -11,15 +11,23 @@
 //! - The actual check logic lives in the checker submodule
 //!   `crate::types::checker::builtins::callables::preg_replace_callback::check`, which also
 //!   enforces the arity guard independently (needed for the first-class-callable path).
+//! - The optional limit and by-reference replacement counter share the public
+//!   five-parameter replacement signature.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     name: "preg_replace_callback",
     area: Callables,
-    params: [pattern: Str, callback: Mixed, subject: Str],
+    params: [
+        pattern: Str,
+        callback: Mixed,
+        subject: Str,
+        limit: Int = DefaultSpec::Int(-1),
+        ref count: Int = DefaultSpec::Null,
+    ],
     returns: Str,
     check: check,
     lazy_check: true,

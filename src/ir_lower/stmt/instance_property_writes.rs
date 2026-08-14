@@ -80,6 +80,44 @@ pub(super) fn lower_property_assign(
     }
 }
 
+/// Lowers a declared-property reference bind while preserving the source cell identity.
+pub(super) fn lower_property_ref_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    source: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let ExprKind::PropertyAccess {
+        object: source_object,
+        property: source_property,
+    } = &source.kind
+    else {
+        return;
+    };
+    let value_type = property_access_expr_type_for_ir(ctx, source_object, source_property)
+        .unwrap_or(PhpType::Mixed);
+    let source_object = lower_expr(ctx, source_object);
+    let source_data = ctx.intern_string(source_property);
+    let cell_ptr = ctx.emit_value(
+        Op::LoadPropRefCell,
+        vec![source_object.value],
+        Some(Immediate::Data(source_data)),
+        value_type.clone(),
+        Op::LoadPropRefCell.default_effects(),
+        Some(span),
+    );
+    let target_data = ctx.intern_string(property);
+    ctx.emit_void(
+        Op::BindPropRefCell,
+        vec![object.value, cell_ptr.value],
+        Some(Immediate::Data(target_data)),
+        Op::BindPropRefCell.default_effects(),
+        Some(span),
+    );
+}
+
 /// Returns true when a property write should dispatch to `__set`.
 pub(super) fn magic_set_receiver_has_method(
     ctx: &LoweringContext<'_, '_>,

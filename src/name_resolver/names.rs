@@ -404,16 +404,31 @@ fn is_builtin_global_constant(name: &str) -> bool {
                 | "M_LOG10E"
                 | "PHP_EOL"
                 | "DIRECTORY_SEPARATOR"
+                | "PHP_MAXPATHLEN"
+                | "LC_NUMERIC"
         ) {
             return true;
         }
-    // Shared source-of-truth slices for JSON, stream/socket, session, array, and math constants.
-    crate::types::json_constants::JSON_INT_CONSTANTS
+    // Shared source-of-truth slices for predefined integer constants.
+    let predefined_integer = crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
+        .chain(crate::types::filter_constants::FILTER_INT_CONSTANTS.iter())
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
         .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
         .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
-        .any(|(constant_name, _)| *constant_name == name)
+        .chain(crate::types::preg_constants::PREG_INT_CONSTANTS.iter())
+        .chain(crate::types::date_constants::DATE_INT_CONSTANTS.iter())
+        .chain(crate::types::ent_constants::ENT_INT_CONSTANTS.iter())
+        .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())
+        .chain(crate::types::standard_constants::STANDARD_INT_CONSTANTS.iter())
+        .any(|(constant_name, _)| *constant_name == name);
+    predefined_integer
+        || crate::types::token_constants::TOKEN_INT_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
+        || crate::types::date_constants::DATE_STRING_CONSTANTS
+            .iter()
+            .any(|(constant_name, _)| *constant_name == name)
 }

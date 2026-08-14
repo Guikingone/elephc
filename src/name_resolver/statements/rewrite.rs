@@ -179,6 +179,15 @@ pub(super) fn resolve_regular_stmt(
             property: property.clone(),
             value: ctx.expr(value),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(ctx.expr(object)),
+            property: property.clone(),
+            source: ctx.expr(source),
+        },
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -207,6 +216,17 @@ pub(super) fn resolve_regular_stmt(
             property: property.clone(),
             index: ctx.expr(index),
             value: ctx.expr(value),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver: ctx.static_receiver(receiver),
+            property: property.clone(),
+            index: ctx.expr(index),
+            source: ctx.expr(source),
         },
         StmtKind::PropertyArrayPush {
             object,

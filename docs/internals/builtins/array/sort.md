@@ -2,7 +2,7 @@
 title: "sort() — internals"
 description: "Compiler internals for sort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 67
+  order: 68
 ---
 
 ## `sort()` — internals
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function sort(array $array): bool
+function sort(array $array, int $flags = 0): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

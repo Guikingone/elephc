@@ -48,6 +48,24 @@ pub(crate) const DATE_INT_CONSTANTS: &[(&str, i64)] = &[
     ("CAL_JEWISH_ADD_GERESHAYIM", 8),
 ];
 
+/// Tuple of `(name, value)` pairs for predefined date-format string constants.
+pub(crate) const DATE_STRING_CONSTANTS: &[(&str, &str)] = &[
+    ("DATE_ATOM", "Y-m-d\\TH:i:sP"),
+    ("DATE_COOKIE", "l, d-M-Y H:i:s T"),
+    ("DATE_ISO8601", "Y-m-d\\TH:i:sO"),
+    ("DATE_ISO8601_EXPANDED", "X-m-d\\TH:i:sP"),
+    ("DATE_RFC822", "D, d M y H:i:s O"),
+    ("DATE_RFC850", "l, d-M-y H:i:s T"),
+    ("DATE_RFC1036", "D, d M y H:i:s O"),
+    ("DATE_RFC1123", "D, d M Y H:i:s O"),
+    ("DATE_RFC7231", "D, d M Y H:i:s \\G\\M\\T"),
+    ("DATE_RFC2822", "D, d M Y H:i:s O"),
+    ("DATE_RFC3339", "Y-m-d\\TH:i:sP"),
+    ("DATE_RFC3339_EXTENDED", "Y-m-d\\TH:i:s.vP"),
+    ("DATE_RSS", "D, d M Y H:i:s O"),
+    ("DATE_W3C", "Y-m-d\\TH:i:sP"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,5 +93,16 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate date constant name");
+    }
+
+    /// Verifies the RFC 2822 format string matches PHP's predefined value.
+    #[test]
+    fn rfc2822_format_matches_php() {
+        let value = DATE_STRING_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == "DATE_RFC2822")
+            .map(|(_, value)| *value)
+            .expect("DATE_RFC2822 defined");
+        assert_eq!(value, "D, d M Y H:i:s O");
     }
 }

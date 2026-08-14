@@ -76,6 +76,41 @@ fn test_clone_keeps_nested_objects_shared() {
 class Child {
     public int $x = 1;
 }
+
+/// Verifies cloning preserves a declared object union for a following fluent method call.
+#[test]
+fn test_clone_preserves_object_union_for_fluent_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+final class CloneRoute {
+    public string $path = '';
+
+    public function setPath(string $path): self {
+        $this->path = $path;
+        return $this;
+    }
+}
+
+final class CloneCollection {}
+
+final class CloneHolder {
+    private CloneRoute|CloneCollection $route;
+
+    public function __construct() {
+        $this->route = new CloneRoute();
+    }
+
+    public function route(string $path): CloneRoute {
+        return (clone $this->route)->setPath($path);
+    }
+}
+
+$route = (new CloneHolder())->route('/ready');
+echo $route->path;
+"#,
+    );
+    assert_eq!(out, "/ready");
+}
 class Boxed {
     public Child $child;
     public function __construct() {
@@ -105,4 +140,63 @@ echo $a->name . "|" . $b->name . "|" . (isset($a->extra) ? "Y" : "N");
 "#,
     );
     assert_eq!(out, "source|copy|N");
+}
+
+/// Verifies cloning through an interface uses runtime class metadata rather than treating the
+/// interface name as a concrete object layout.
+#[test]
+fn test_clone_interface_typed_receiver_dispatches_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface CloneView {
+    public function value(): string;
+}
+
+class CloneViewImpl implements CloneView {
+    public string $name = 'source';
+
+    public function value(): string {
+        return $this->name;
+    }
+
+    public function __clone(): void {
+        $this->name = 'clone';
+    }
+}
+
+function duplicate(CloneView $value): CloneView {
+    return clone $value;
+}
+
+$source = new CloneViewImpl();
+$clone = duplicate($source);
+echo $source->value() . '|' . $clone->value();
+"#,
+    );
+    assert_eq!(out, "source|clone");
+}
+
+/// Verifies cloning an untyped parameter checks and dispatches on its runtime object class.
+#[test]
+fn test_clone_mixed_receiver_dispatches_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicCloneValue {
+    public string $name = 'source';
+
+    public function __clone(): void {
+        $this->name = 'clone';
+    }
+}
+
+function duplicate_dynamic($value) {
+    return clone $value;
+}
+
+$source = new DynamicCloneValue();
+$clone = duplicate_dynamic($source);
+echo $source->name . '|' . $clone->name;
+"#,
+    );
+    assert_eq!(out, "source|clone");
 }

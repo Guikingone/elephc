@@ -8,6 +8,15 @@
 //! - Closure targets and native parameter/default metadata are attached once here.
 
 use super::*;
+use crate::context::DecodedCallableCapture;
+use std::ffi::c_void;
+
+/// Normalized callable target used while constructing a reflected function.
+struct EvalReflectionFunctionCallableArg {
+    target: EvalClosureObjectTarget,
+    lookup_name: String,
+    display_name: String,
+}
 
 /// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.
 pub(super) fn eval_reflection_function_new(
@@ -16,13 +25,18 @@ pub(super) fn eval_reflection_function_new(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
-    let closure_target = eval_reflection_function_closure_target_arg(args[0], context, values)?;
-    let requested_name = match closure_target.as_ref() {
-        Some(target) => eval_reflection_function_closure_target_name(target),
+    let callable_target =
+        eval_reflection_function_callable_target_arg(args[0], context, values)?;
+    let closure_target = callable_target.as_ref().map(|target| target.target.clone());
+    let requested_name = match callable_target.as_ref() {
+        Some(target) => target.display_name.clone(),
         None => eval_reflection_function_name_arg(args[0], context, values)?,
     };
-    let lookup_name = requested_name.trim_start_matches('\\').to_ascii_lowercase();
-    if let Some(closure) = context.closure(&requested_name).cloned() {
+    let lookup_name = callable_target
+        .as_ref()
+        .map(|target| target.lookup_name.clone())
+        .unwrap_or_else(|| requested_name.trim_start_matches('\\').to_ascii_lowercase());
+    if let Some(closure) = context.closure(&lookup_name).cloned() {
         let function = closure.function();
         let required_parameter_count = eval_reflection_required_parameter_count(
             function.parameter_defaults(),
@@ -38,18 +52,23 @@ pub(super) fn eval_reflection_function_new(
             function.parameter_is_by_ref(),
             function.parameter_is_variadic(),
         );
+        let return_type_metadata = function
+            .return_type()
+            .and_then(eval_reflection_parameter_type_metadata);
         return eval_reflection_function_object_result(
             &requested_name,
             function.attributes(),
             &parameters,
+            return_type_metadata.as_ref(),
             required_parameter_count,
             context,
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_closure_target(
+            eval_reflection_attach_function_callable_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -71,18 +90,23 @@ pub(super) fn eval_reflection_function_new(
             function.parameter_is_by_ref(),
             function.parameter_is_variadic(),
         );
+        let return_type_metadata = function
+            .return_type()
+            .and_then(eval_reflection_parameter_type_metadata);
         return eval_reflection_function_object_result(
             function.name(),
             function.attributes(),
             &parameters,
+            return_type_metadata.as_ref(),
             required_parameter_count,
             context,
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_closure_target(
+            eval_reflection_attach_function_callable_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -93,18 +117,23 @@ pub(super) fn eval_reflection_function_new(
         let reflected_name = requested_name.trim_start_matches('\\');
         let required_parameter_count = function.required_param_count();
         let parameters = eval_reflection_native_function_parameters(reflected_name, &function);
+        let return_type_metadata = function
+            .return_type()
+            .and_then(eval_reflection_parameter_type_metadata);
         return eval_reflection_function_object_result(
             reflected_name,
             &[],
             &parameters,
+            return_type_metadata.as_ref(),
             required_parameter_count,
             context,
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_closure_target(
+            eval_reflection_attach_function_callable_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -116,14 +145,16 @@ pub(super) fn eval_reflection_function_new(
             &requested_name,
             &[],
             &[],
+            None,
             0,
             context,
             values,
         )
         .and_then(|object| {
-            eval_reflection_attach_function_closure_target(
+            eval_reflection_attach_function_callable_target(
                 object,
                 closure_target,
+                args[0],
                 context,
                 values,
             )
@@ -133,17 +164,75 @@ pub(super) fn eval_reflection_function_new(
     Ok(None)
 }
 
-/// Returns the retained callable target when a ReflectionFunction argument is a Closure object.
-pub(super) fn eval_reflection_function_closure_target_arg(
+/// Returns the retained callable target for a Closure object or descriptor value.
+fn eval_reflection_function_callable_target_arg(
     value: RuntimeCellHandle,
-    context: &ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<EvalClosureObjectTarget>, EvalStatus> {
-    if values.type_tag(value)? != EVAL_TAG_OBJECT {
-        return Ok(None);
+) -> Result<Option<EvalReflectionFunctionCallableArg>, EvalStatus> {
+    match values.type_tag(value)? {
+        EVAL_TAG_OBJECT => {
+            let identity = values.object_identity(value)?;
+            let Some(target) = context.closure_object_target(identity).cloned() else {
+                return Ok(None);
+            };
+            let lookup_name = eval_reflection_function_closure_target_name(&target);
+            Ok(Some(EvalReflectionFunctionCallableArg {
+                display_name: lookup_name.clone(),
+                lookup_name,
+                target,
+            }))
+        }
+        EVAL_TAG_CALLABLE => {
+            let descriptor = values.raw_value_word(value)? as usize as *mut c_void;
+            let Some(decoded) = (unsafe { decode_callable_descriptor(descriptor) }) else {
+                return Err(EvalStatus::RuntimeFatal);
+            };
+            let bound_this = eval_reflection_descriptor_bound_this(decoded.bound_this, values)?;
+            let lookup_name = format!("{{closure:native:{:x}}}", descriptor as usize);
+            if context.native_function(&lookup_name).is_none()
+                && context
+                    .define_native_function(lookup_name.clone(), decoded.function)
+                    .is_err()
+            {
+                return Err(EvalStatus::RuntimeFatal);
+            }
+            let target = match bound_this {
+                Some(bound_this) => EvalClosureObjectTarget::BoundNamed {
+                    name: lookup_name.clone(),
+                    bound_scope: Some(eval_closure_bound_object_class_name(
+                        bound_this,
+                        context,
+                        values,
+                    )?),
+                    bound_this: Some(bound_this),
+                },
+                None => EvalClosureObjectTarget::Named(lookup_name.clone()),
+            };
+            Ok(Some(EvalReflectionFunctionCallableArg {
+                target,
+                lookup_name,
+                display_name: decoded.display_name,
+            }))
+        }
+        _ => Ok(None),
     }
-    let identity = values.object_identity(value)?;
-    Ok(context.closure_object_target(identity).cloned())
+}
+
+/// Materializes a descriptor's `$this` capture only when it contains an object receiver.
+fn eval_reflection_descriptor_bound_this(
+    capture: Option<DecodedCallableCapture>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let Some(capture) = capture else {
+        return Ok(None);
+    };
+    let value = values.raw_word_value(capture.type_tag, capture.value_word)?;
+    if values.type_tag(value)? == EVAL_TAG_OBJECT {
+        return Ok(Some(value));
+    }
+    values.release(value)?;
+    Ok(None)
 }
 
 /// Returns the function-like name exposed for a Closure-backed ReflectionFunction.
@@ -157,10 +246,11 @@ pub(super) fn eval_reflection_function_closure_target_name(target: &EvalClosureO
     }
 }
 
-/// Attaches original Closure target metadata to a synthetic ReflectionFunction object.
-pub(super) fn eval_reflection_attach_function_closure_target(
+/// Attaches original callable metadata and storage to a synthetic reflected function.
+pub(super) fn eval_reflection_attach_function_callable_target(
     object: RuntimeCellHandle,
     closure_target: Option<EvalClosureObjectTarget>,
+    source: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -169,6 +259,11 @@ pub(super) fn eval_reflection_attach_function_closure_target(
     };
     let identity = values.object_identity(object)?;
     context.register_eval_reflection_function_closure_target(identity, closure_target);
+    if values.type_tag(source)? == EVAL_TAG_CALLABLE {
+        eval_reflection_with_declaring_class_scope("ReflectionFunction", context, |_| {
+            values.property_set(object, "__callable", source)
+        })?;
+    }
     Ok(object)
 }
 
@@ -241,6 +336,7 @@ pub(super) fn eval_reflection_function_object_result(
     function_name: &str,
     attributes: &[EvalAttribute],
     parameters: &[EvalReflectionParameterMetadata],
+    return_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
     required_parameter_count: usize,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -255,7 +351,7 @@ pub(super) fn eval_reflection_function_object_result(
         &[],
         None,
         parameters,
-        None,
+        return_type_metadata,
         None,
         None,
         None,

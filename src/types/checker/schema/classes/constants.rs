@@ -56,6 +56,11 @@ fn rewrite_expr(
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
+        ExprKind::ArrayReference(inner) => ExprKind::ArrayReference(Box::new(rewrite_expr(
+            inner,
+            class_name,
+            parent_name,
+        )?)),
         ExprKind::Not(inner) => {
             ExprKind::Not(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
@@ -310,6 +315,18 @@ fn rewrite_expr(
             ExprKind::ScopedConstantAccess {
                 receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
                 name: name.clone(),
+            }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(rewrite_expr(receiver, class_name, parent_name)?),
+                name: name.clone(),
+            }
+        }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
+                property: Box::new(rewrite_expr(property, class_name, parent_name)?),
             }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {

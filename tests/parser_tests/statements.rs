@@ -96,6 +96,15 @@ fn test_parenthesized_expression_statement() {
     );
 }
 
+/// Verifies a ternary beginning with a variable remains an expression statement instead of
+/// being misclassified as a direct variable assignment.
+#[test]
+fn test_variable_led_ternary_expression_statement() {
+    let stmts = parse_source("<?php $flag ? left() : right();");
+    assert_eq!(stmts.len(), 1);
+    assert!(matches!(stmts[0].kind, StmtKind::ExprStmt(_)));
+}
+
 /// Verifies `$this->n++;` parses to the same read-modify-write statement as `$this->n += 1;`.
 /// Regression: the `$this` statement parser used to reject the trailing `++`.
 #[test]

@@ -2,19 +2,20 @@
 title: "rsort()"
 description: "Sorts an array in descending order."
 sidebar:
-  order: 65
+  order: 66
 ---
 
 ## rsort()
 
 ```php
-function rsort(array $array): bool
+function rsort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

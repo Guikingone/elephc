@@ -41,7 +41,7 @@ pub use instr::{
     RuntimeId, PassOrigin,
 };
 pub use module::{
-    ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
+    ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
     Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};

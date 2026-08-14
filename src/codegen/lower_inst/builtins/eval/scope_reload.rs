@@ -97,6 +97,13 @@ pub(super) fn store_mixed_scope_cell_to_global(
             ctx.emitter
                 .instruction(&format!("mov {}, {}", result_reg, payload_reg)); // move the unboxed array payload into the ABI result register
             abi::emit_incref_if_refcounted(ctx.emitter, &ty);
+            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+                return super::super::super::globals_constants::lower_store_web_superglobal(
+                    ctx,
+                    &symbol,
+                    &ty,
+                );
+            }
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
         }
         other => {
@@ -207,6 +214,13 @@ pub(super) fn store_missing_scope_entry_to_global(
         }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+            if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+                return super::super::super::globals_constants::lower_store_web_superglobal(
+                    ctx,
+                    &symbol,
+                    &ty,
+                );
+            }
             abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &ty, false);
         }
         other => {

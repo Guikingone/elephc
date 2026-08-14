@@ -1,16 +1,15 @@
 //! Purpose:
 //! Builds the plain-PHP expressions that replace `func_num_args()`, `func_get_args()` and
 //! `func_get_arg($position)` inside a function scope that received the hidden variadic
-//! parameter `mixed ...$__elephc_func_args`.
+//! parameter `mixed ...$__elephc_func_args` or the source-declared variadic.
 //!
 //! Called from:
 //! - `crate::func_args::walk::Rewriter`.
 //!
 //! Key details:
-//! - The scopes this pass accepts have only mandatory declared parameters, so every one of
-//!   them was necessarily passed: `func_num_args()` is exactly
-//!   `<declared count> + count($__elephc_func_args)`, and the argument list is exactly
-//!   `[$p0, …, $pN-1, ...$__elephc_func_args]`.
+//! - The reconstruction reads regular parameter variables at the call point and appends
+//!   the variadic tail. For defaulted parameters this is conservative when callers omit a
+//!   trailing optional argument; constructor argc uses a precise caller marker.
 //! - `func_get_args()` reports the *current* values of the parameter variables, not the
 //!   values originally passed (verified against PHP 8.4: reassigning a parameter, or
 //!   writing through a by-reference parameter, changes what `func_get_args()` returns).
@@ -43,20 +42,43 @@ const OUT_OF_RANGE_POSITION_MESSAGE: &str =
 pub(super) fn replacement(
     call: IntrospectionCall,
     param_names: &[String],
+    variadic_name: &str,
     args: &[Expr],
     span: Span,
 ) -> ExprKind {
     match call {
-        IntrospectionCall::NumArgs => argc_expr(param_names, span).kind,
-        IntrospectionCall::GetArgs => args_array_expr(param_names, span).kind,
-        IntrospectionCall::GetArg => get_arg_expr(param_names, &args[0], span),
+        IntrospectionCall::NumArgs => argc_expr(param_names, variadic_name, span).kind,
+        IntrospectionCall::GetArgs => args_array_expr(param_names, variadic_name, span).kind,
+        IntrospectionCall::GetArg => {
+            get_arg_expr(param_names, variadic_name, &args[0], span)
+        }
+    }
+}
+
+/// Builds the actual caller argument count stored as the last hidden variadic entry.
+///
+/// Constructors with optional parameters cannot reconstruct this count from defaulted
+/// regular slots, so object-call lowering appends the source arity after the real surplus tail.
+pub(super) fn optional_constructor_argc(span: Span) -> ExprKind {
+    let hidden = hidden_args_var(span);
+    let last_index = Expr::new(
+        ExprKind::BinaryOp {
+            left: Box::new(count_call(hidden.clone(), span)),
+            op: BinOp::Sub,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(1), span)),
+        },
+        span,
+    );
+    ExprKind::ArrayAccess {
+        array: Box::new(hidden),
+        index: Box::new(last_index),
     }
 }
 
 /// Builds `<declared count> + count($__elephc_func_args)`, or just the `count()` call when
 /// the scope declares no regular parameters.
-fn argc_expr(param_names: &[String], span: Span) -> Expr {
-    let surplus = count_call(hidden_args_var(span), span);
+fn argc_expr(param_names: &[String], variadic_name: &str, span: Span) -> Expr {
+    let surplus = count_call(args_var(variadic_name, span), span);
     if param_names.is_empty() {
         return surplus;
     }
@@ -77,13 +99,13 @@ fn argc_expr(param_names: &[String], span: Span) -> Expr {
 ///
 /// The array literal is fresh at every use, matching PHP's copy semantics, and the spread
 /// of the hidden variadic keeps the surplus arguments renumbered from `N`.
-fn args_array_expr(param_names: &[String], span: Span) -> Expr {
+fn args_array_expr(param_names: &[String], variadic_name: &str, span: Span) -> Expr {
     let mut elements: Vec<Expr> = param_names
         .iter()
         .map(|name| Expr::new(ExprKind::Variable(name.clone()), span))
         .collect();
     elements.push(Expr::new(
-        ExprKind::Spread(Box::new(hidden_args_var(span))),
+        ExprKind::Spread(Box::new(args_var(variadic_name, span))),
         span,
     ));
     Expr::new(ExprKind::ArrayLiteral(elements), span)
@@ -99,7 +121,12 @@ fn args_array_expr(param_names: &[String], span: Span) -> Expr {
 ///
 /// The position expression is bound to a hidden local first unless it is already
 /// side-effect free, so a call such as `func_get_arg($i++)` evaluates its operand once.
-fn get_arg_expr(param_names: &[String], position: &Expr, span: Span) -> ExprKind {
+fn get_arg_expr(
+    param_names: &[String],
+    variadic_name: &str,
+    position: &Expr,
+    span: Span,
+) -> ExprKind {
     let (first_read, later_read) = position_reads(position, span);
     ExprKind::Ternary {
         condition: Box::new(less_than(
@@ -112,12 +139,12 @@ fn get_arg_expr(param_names: &[String], position: &Expr, span: Span) -> ExprKind
             ExprKind::Ternary {
                 condition: Box::new(less_than(
                     later_read.clone(),
-                    argc_expr(param_names, span),
+                    argc_expr(param_names, variadic_name, span),
                     span,
                 )),
                 then_expr: Box::new(Expr::new(
                     ExprKind::ArrayAccess {
-                        array: Box::new(args_array_expr(param_names, span)),
+                        array: Box::new(args_array_expr(param_names, variadic_name, span)),
                         index: Box::new(later_read),
                     },
                     span,
@@ -160,14 +187,21 @@ fn position_reads(position: &Expr, span: Span) -> (Expr, Expr) {
 /// Builds `$__elephc_func_args`, the hidden variadic parameter holding the surplus
 /// positional arguments.
 fn hidden_args_var(span: Span) -> Expr {
-    Expr::new(ExprKind::Variable(HIDDEN_ARGS_PARAM.to_string()), span)
+    args_var(HIDDEN_ARGS_PARAM, span)
+}
+
+/// Builds a read of the variadic array that backs argument introspection in this scope.
+fn args_var(name: &str, span: Span) -> Expr {
+    Expr::new(ExprKind::Variable(name.to_string()), span)
 }
 
 /// Builds `count(<value>)`.
 fn count_call(value: Expr, span: Span) -> Expr {
     Expr::new(
         ExprKind::FunctionCall {
-            name: Name::unqualified("count"),
+            // This AST is synthesized after name resolution, so identify the global builtin
+            // explicitly instead of leaving a fresh unqualified call unresolved.
+            name: Name::from_parts(NameKind::FullyQualified, vec!["count".to_string()]),
             args: vec![value],
         },
         span,

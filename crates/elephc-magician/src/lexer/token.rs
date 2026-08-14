@@ -97,6 +97,7 @@ pub(crate) enum TokenKind {
     Question,
     QuestionArrow,
     QuestionQuestion,
+    QuestionQuestionEqual,
     Semicolon,
     LParen,
     RParen,

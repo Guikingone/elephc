@@ -9,6 +9,21 @@
 
 use super::*;
 
+/// Verifies a variable-led ternary is accepted as a standalone expression statement and only
+/// evaluates the selected side-effecting branch.
+#[test]
+fn test_variable_led_ternary_expression_statement() {
+    let out = compile_and_run(
+        r#"<?php
+function left(): int { echo 'L'; return 1; }
+function right(): int { echo 'R'; return 2; }
+$flag = false;
+$flag ? left() : right();
+"#,
+    );
+    assert_eq!(out, "R");
+}
+
 /// Tests ternary true branch using equality comparison that evaluates to true.
 #[test]
 fn test_ternary_true() {

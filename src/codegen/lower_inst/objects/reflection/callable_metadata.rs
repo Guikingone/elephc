@@ -133,16 +133,25 @@ pub(super) fn reflection_method_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_class = const_string_or_class_operand(ctx, class_operand, "ReflectionMethod")?;
+    reflection_method_metadata_for_name(ctx, &reflected_class, method_operand)
+}
+
+/// Resolves ReflectionMethod metadata for a runtime-selected declaring class.
+pub(super) fn reflection_method_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    method_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let method_name = const_required_string_operand(ctx, method_operand, "ReflectionMethod")?;
     let method_key = php_symbol_key(&method_name);
-    if let Some((_, info)) = resolve_reflection_class(ctx, &reflected_class) {
+    if let Some((_, info)) = resolve_reflection_class(ctx, reflected_class) {
         if let Some(member) =
-            reflection_class_method_member(ctx, &reflected_class, info, &method_key)?
+            reflection_class_method_member(ctx, reflected_class, info, &method_key)?
         {
             return Ok(reflection_method_owner_metadata(&method_name, member));
         }
     }
-    if let Some(interface_name) = resolve_reflection_interface(ctx, &reflected_class) {
+    if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
         if let Some(info) = ctx.module.interface_infos.get(interface_name) {
             if let Some(member) =
                 reflection_interface_method_member(ctx, info, interface_name, &method_key)?
@@ -151,7 +160,7 @@ pub(super) fn reflection_method_metadata(
             }
         }
     }
-    if let Some(trait_name) = resolve_reflection_trait(ctx, &reflected_class) {
+    if let Some(trait_name) = resolve_reflection_trait(ctx, reflected_class) {
         if let Some(methods) = ctx.module.declared_trait_methods.get(trait_name) {
             if let Some(member) =
                 reflection_trait_method_member(ctx, methods, trait_name, &method_key)?
@@ -213,4 +222,3 @@ pub(super) fn reflection_method_owner_metadata(
         member_flags: member.flags,
     }
 }
-

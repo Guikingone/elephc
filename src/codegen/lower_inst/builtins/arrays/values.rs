@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Associative arrays are copied in insertion order using `__rt_hash_iter_next`.
-//! - Refcounted payloads are retained before storing them in the result array.
+//! - Refcounted payloads are retained, while boxed Mixed values are cloned as PHP zvals.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -182,8 +182,8 @@ fn emit_assoc_array_value_append_aarch64(ctx: &mut FunctionContext<'_>, value_ty
             crate::codegen::emit_box_runtime_payload_as_mixed(ctx.emitter, "x5", "x3", "x4");
             ctx.emitter.instruction(&format!("b {}", store_box));               // skip the mixed-box reuse path once boxing is done
             ctx.emitter.label(&reuse_box);
-            ctx.emitter.instruction("mov x0, x3");                              // move the existing mixed box pointer into the incref helper input register
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov x0, x3");                              // move the existing mixed box pointer into the zval-clone helper input register
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");              // detach ordinary values while preserving shared resource identity
             ctx.emitter.label(&store_box);
             emit_append_word_value_aarch64(ctx, "x0");
         }
@@ -222,8 +222,8 @@ fn emit_assoc_array_value_append_x86_64(ctx: &mut FunctionContext<'_>, value_ty:
             crate::codegen::emit_box_runtime_payload_as_mixed(ctx.emitter, "r9", "rcx", "r8");
             ctx.emitter.instruction(&format!("jmp {}", store_box));             // skip the mixed-box reuse path once boxing is done
             ctx.emitter.label(&reuse_box);
-            ctx.emitter.instruction("mov rax, rcx");                            // move the existing mixed box pointer into the incref helper input register
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
+            ctx.emitter.instruction("mov rax, rcx");                            // move the existing mixed box pointer into the zval-clone helper input register
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");              // detach ordinary values while preserving shared resource identity
             ctx.emitter.label(&store_box);
             emit_append_word_value_x86_64(ctx, "rax");
         }

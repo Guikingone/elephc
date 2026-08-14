@@ -84,6 +84,10 @@ fn compile_lfc_eval_project_and_run(
         mb_strlen: false,
         phar_archive: false,
         descriptor_invoker: true,
+        const_introspection: false,
+        class_introspection: false,
+        class_relation_introspection: false,
+        class_methods_introspection: false,
         eval_bridge: true,
         eval_scope: true,
         web: false,
@@ -209,9 +213,9 @@ require "part.lfc";
     assert_eq!(output, "7:p:i:7:7:7:L:I:1:1:1");
 }
 
-/// Verifies Composer files and PSR-4 discovery both load tagless LFC source in strict builds.
+/// Verifies manifest entries and PSR-4 discovery both load tagless LFC source in strict builds.
 #[test]
-fn lfc_composer_autoload_files_and_psr4_use_physical_source_modes() {
+fn lfc_manifest_autoload_files_and_psr4_use_physical_source_modes() {
     let output = compile_lfc_project_and_run(
         &[
             (

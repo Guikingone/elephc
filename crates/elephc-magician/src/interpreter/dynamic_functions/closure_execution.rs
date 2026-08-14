@@ -602,6 +602,7 @@ fn visit_static_var_declarations(
                 visit_static_var_declarations(finally_body, seen, visitor);
             }
             EvalStmt::ArrayAppendVar { .. }
+            | EvalStmt::ArrayDestructure { .. }
             | EvalStmt::ArraySetVar { .. }
             | EvalStmt::Break
             | EvalStmt::ClassDecl(_)

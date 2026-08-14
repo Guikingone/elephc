@@ -30,13 +30,26 @@ pub(in crate::interpreter) fn eval_user_wrapper_single_path_op_result(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     match name {
         "mkdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
-            Ok(vec![values.int(0)?, values.int(0)?])
+            Ok(vec![values.int(0o777)?, values.int(0)?])
         }),
         "rmdir" => eval_user_wrapper_path_method_result(path, name, context, values, |values| {
             Ok(vec![values.int(0)?])
         }),
         _ => Ok(None),
     }
+}
+
+/// Dispatches `mkdir($path, $mode, $options)` to a registered wrapper.
+pub(in crate::interpreter) fn eval_user_wrapper_mkdir_result(
+    path: &str,
+    mode: i64,
+    options: i64,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    eval_user_wrapper_path_method_result(path, "mkdir", context, values, |values| {
+        Ok(vec![values.int(mode)?, values.int(options)?])
+    })
 }
 
 /// Dispatches `rename($from, $to)` using the source path's wrapper scheme.

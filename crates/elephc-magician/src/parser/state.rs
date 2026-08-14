@@ -16,7 +16,10 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
 use crate::lexer::{Token, TokenKind};
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
 
 static ANONYMOUS_CLASS_COUNTER: AtomicUsize = AtomicUsize::new(0);
 static CLOSURE_FUNCTION_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -125,8 +128,31 @@ impl Parser {
     pub(super) fn parse_program(mut self) -> Result<EvalProgram, EvalParseError> {
         let mut statements = Vec::new();
         while !matches!(self.current(), TokenKind::Eof) {
-            statements.extend(self.parse_stmt()?);
+            match self.parse_stmt() {
+                Ok(parsed) => statements.extend(parsed),
+                Err(error) => {
+                    self.trace_parse_error(&error);
+                    return Err(error);
+                }
+            }
         }
         Ok(EvalProgram::new(self.source_len, statements))
+    }
+
+    /// Emits the failing token position when opt-in eval tracing is enabled.
+    fn trace_parse_error(&self, error: &EvalParseError) {
+        if std::env::var_os(EVAL_TRACE_ENV).is_none() {
+            return;
+        }
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            eprintln!(
+                "[elephc-eval-trace] kind=parser phase=parse_error error={error:?} pos={} line={:?} previous={:?} current={:?} next={:?}",
+                self.pos,
+                self.token_lines.get(self.pos),
+                self.pos.checked_sub(1).and_then(|pos| self.tokens.get(pos)),
+                self.tokens.get(self.pos),
+                self.tokens.get(self.pos + 1),
+            );
+        }));
     }
 }

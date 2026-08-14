@@ -16,11 +16,12 @@ use crate::parser::ast::{
     CallableTarget, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
 use crate::parser::stmt::{
-    looks_like_typed_param, parse_anonymous_class, parse_block, parse_name, parse_type_expr,
+    looks_like_typed_param, parse_anonymous_class, parse_name, parse_type_expr,
 };
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
+use super::pratt::{parse_object_member, ObjectMember};
 use super::{parse_args, parse_expr};
 
 /// Consumes a single leading `&` token if present, returning whether one was seen.
@@ -76,10 +77,8 @@ pub(super) fn parse_match_expr(
             loop {
                 patterns.push(parse_expr(tokens, pos)?);
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
-                    let saved = *pos;
                     *pos += 1;
                     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
-                        *pos = saved;
                         break;
                     }
                 } else {
@@ -217,7 +216,7 @@ pub(super) fn parse_closure(
         *pos += 1;
     }
     let return_type = parse_optional_closure_return_type(tokens, pos, span)?;
-    let body = parse_block(tokens, pos)?;
+    let body = crate::parser::stmt::parse_executable_block(tokens, pos)?;
     Ok(Expr::new(
         ExprKind::Closure {
             params,
@@ -300,6 +299,7 @@ fn infer_arrow_captures(
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
     collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
+    captures.retain(|name| !crate::globals_array::is_alias(name));
     captures
 }
 
@@ -345,6 +345,7 @@ fn collect_arrow_expr_captures(
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -505,6 +506,12 @@ fn collect_arrow_expr_captures(
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+            collect_arrow_expr_captures(property, bound, seen, captures);
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => {
+            collect_arrow_expr_captures(receiver, bound, seen, captures);
+        }
     }
 }
 
@@ -731,6 +738,16 @@ pub(super) fn parse_named_expr(
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
+        if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
+            let property = super::calls::parse_dynamic_static_property_name(tokens, pos, span)?;
+            return Ok(Expr::new(
+                ExprKind::DynamicStaticPropertyAccess {
+                    receiver: StaticReceiver::Named(name),
+                    property: Box::new(property),
+                },
+                span,
+            ));
+        }
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
@@ -882,16 +899,16 @@ pub(super) fn parse_new_object(
         ));
     }
 
-    // `new $variable(args)` — the class name is held in a variable; we'll
-    // resolve it through the runtime class table at codegen time.
-    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
-        let var_name = name.clone();
+    // A dynamic class name may dereference a variable through array offsets or properties.
+    if let Some((Token::Variable(name), metadata)) = tokens.get(*pos) {
+        let variable = Expr::new(ExprKind::Variable(name.clone()), metadata.span);
         *pos += 1;
+        let name_expr = parse_new_variable_chain(tokens, pos, variable)?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_dynamic_new_class_reference(tokens, *pos)?;
             return Ok(Expr::new(
                 ExprKind::NewDynamic {
-                    name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                    name_expr: Box::new(name_expr),
                     args: Vec::new(),
                 },
                 span,
@@ -902,7 +919,7 @@ pub(super) fn parse_new_object(
         let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
-                name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
+                name_expr: Box::new(name_expr),
                 args,
             },
             span,
@@ -918,6 +935,57 @@ pub(super) fn parse_new_object(
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
+}
+
+/// Parses array-offset and property dereferences used as a dynamic `new` class name.
+fn parse_new_variable_chain(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    base: Expr,
+) -> Result<Expr, CompileError> {
+    let mut expression = base;
+    loop {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::LBracket) => {
+                let bracket_span = tokens[*pos].1.span;
+                *pos += 1;
+                let index = parse_expr(tokens, pos)?;
+                if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
+                    return Err(CompileError::new(bracket_span, "Expected ']'"));
+                }
+                *pos += 1;
+                expression = Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(expression),
+                        index: Box::new(index),
+                    },
+                    bracket_span,
+                );
+            }
+            Some(Token::Arrow) => {
+                let arrow_span = tokens[*pos].1.span;
+                *pos += 1;
+                expression = match parse_object_member(tokens, pos, arrow_span, false)? {
+                    ObjectMember::Named(property) => Expr::new(
+                        ExprKind::PropertyAccess {
+                            object: Box::new(expression),
+                            property,
+                        },
+                        arrow_span,
+                    ),
+                    ObjectMember::Dynamic(property) => Expr::new(
+                        ExprKind::DynamicPropertyAccess {
+                            object: Box::new(expression),
+                            property: Box::new(property),
+                        },
+                        arrow_span,
+                    ),
+                };
+            }
+            _ => break,
+        }
+    }
+    Ok(expression)
 }
 
 /// Rejects postfix access that would otherwise bind to `new Foo` without constructor parentheses.

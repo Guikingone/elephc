@@ -10,6 +10,36 @@
 use super::*;
 
 impl Parser {
+    /// Parses short array destructuring assignment into ordered optional variable targets.
+    pub(in crate::parser) fn parse_array_destructure_stmt(
+        &mut self,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        self.expect(TokenKind::LBracket)?;
+        let mut targets = Vec::new();
+        while !self.consume(TokenKind::RBracket) {
+            if self.consume(TokenKind::Comma) {
+                targets.push(None);
+                continue;
+            }
+            let TokenKind::DollarIdent(name) = self.current() else {
+                return Err(EvalParseError::ExpectedVariable);
+            };
+            targets.push(Some(name.clone()));
+            self.advance();
+            if self.consume(TokenKind::RBracket) {
+                break;
+            }
+            self.expect(TokenKind::Comma)?;
+        }
+        if targets.is_empty() {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        self.expect_semicolon()?;
+        Ok(vec![EvalStmt::ArrayDestructure { targets, value }])
+    }
+
     /// Parses the optional first clause of a `for` loop.
     pub(in crate::parser) fn parse_for_init_clause(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         if matches!(self.current(), TokenKind::Semicolon) {
@@ -81,7 +111,7 @@ impl Parser {
         }
     }
 
-    /// Parses `$name[index] = expr` and `$name[] = expr` in a `for` clause.
+    /// Parses `$name[index] = expr`, `$name[] = expr`, and nested `??=` in a `for` clause.
     pub(in crate::parser) fn parse_array_set_clause(
         &mut self,
         name: String,
@@ -95,6 +125,46 @@ impl Parser {
         }
         let index = self.parse_expr()?;
         self.expect(TokenKind::RBracket)?;
+        let mut target = EvalExpr::ArrayGet {
+            array: Box::new(EvalExpr::LoadVar(name.clone())),
+            index: Box::new(index.clone()),
+        };
+        let mut nested = false;
+        while self.consume(TokenKind::LBracket) {
+            nested = true;
+            let nested_index = self.parse_expr()?;
+            self.expect(TokenKind::RBracket)?;
+            target = EvalExpr::ArrayGet {
+                array: Box::new(target),
+                index: Box::new(nested_index),
+            };
+        }
+        if self.consume(TokenKind::QuestionQuestionEqual) {
+            let default = self.parse_expr()?;
+            return Ok(vec![EvalStmt::Expr(EvalExpr::NullCoalesceAssign {
+                target: Box::new(target),
+                default: Box::new(default),
+            })]);
+        }
+        if nested {
+            let Some(op) = assignment_op(self.current()) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            self.advance();
+            let value = self.parse_expr()?;
+            let expression = match op {
+                Some(op) => EvalExpr::CompoundAssign {
+                    target: Box::new(target),
+                    op,
+                    value: Box::new(value),
+                },
+                None => EvalExpr::Assign {
+                    target: Box::new(target),
+                    value: Box::new(value),
+                },
+            };
+            return Ok(vec![EvalStmt::Expr(expression)]);
+        }
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         Ok(vec![EvalStmt::ArraySetVar { name, index, value }])

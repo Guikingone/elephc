@@ -15,6 +15,9 @@
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::emit_branch_if_null_container;
@@ -120,10 +123,40 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("cbz x0, __rt_mixed_array_get_indexed_missing");        // zero-filled gaps are undefined keys, not present null values
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the stored Mixed tag before returning the cell
+    emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // is this a borrowed invoker reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // expose the referenced PHP value instead of the internal marker
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an owning global-reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // all marker kinds share the referenced-cell payload layout
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an owning local-reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // expose the retained local cell's current PHP value
     emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    emitter.label("__rt_mixed_array_get_ref_marker");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // load the referenced cell pointer carried by the marker
+    emitter.instruction("ldr x9, [x0, #16]");                                   // load the referenced value's runtime tag
+    emitter.instruction("ldr x1, [x10]");                                       // load the referenced low payload word
+    emitter.instruction("mov x2, #0");                                          // non-string referenced values have no high payload word
+    emitter.instruction("cmp x9, #7");                                          // does the reference cell store a boxed Mixed handle?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker_mixed");          // clone the nested Mixed cell instead of boxing its pointer
+    emitter.instruction("cmp x9, #1");                                          // does the reference cell store a string pair?
+    emitter.instruction("b.ne __rt_mixed_array_get_ref_marker_box");            // scalar and heap values can be boxed immediately
+    emitter.instruction("ldr x2, [x10, #8]");                                   // load the referenced string length
+    emitter.label("__rt_mixed_array_get_ref_marker_box");
+    emitter.instruction("mov x0, x9");                                          // pass the referenced runtime tag to the boxing helper
+    emitter.instruction("bl __rt_mixed_from_value");                            // return an ordinary owned PHP-visible Mixed cell
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return the dereferenced Mixed value in x0
+    emitter.label("__rt_mixed_array_get_ref_marker_mixed");
+    emitter.instruction("mov x0, x1");                                          // pass the referenced boxed Mixed handle to the clone helper
+    emitter.instruction("bl __rt_mixed_clone");                                 // detach the referenced value for the caller
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return the cloned referenced Mixed cell in x0
     emitter.label("__rt_mixed_array_get_indexed_string");
     emitter.instruction("lsl x12, x12, #4");                                    // convert the element index to a 16-byte string slot offset
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the selected string slot
@@ -179,6 +212,13 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, #7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("b.ne __rt_mixed_array_get_assoc_box");                 // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov x0, x1");                                          // yes → move the stored Mixed cell into the return register
+    emitter.instruction("ldr x9, [x0]");                                        // inspect the stored Mixed tag before returning the cell
+    emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // is this a borrowed invoker reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // expose the referenced PHP value instead of the internal marker
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an owning global-reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // all marker kinds share the referenced-cell payload layout
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an owning local-reference marker?
+    emitter.instruction("b.eq __rt_mixed_array_get_ref_marker");                // expose the retained local cell's current PHP value
     emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
@@ -383,12 +423,42 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null
     emitter.instruction("je __rt_mixed_array_get_indexed_missing");             // zero-filled gaps are undefined keys, not present null values
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the stored Mixed tag before returning the cell
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is this a borrowed invoker reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // expose the referenced PHP value instead of the internal marker
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an owning global-reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // all marker kinds share the referenced-cell payload layout
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an owning local-reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // expose the retained local cell's current PHP value
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
     abi::emit_pop_reg(emitter, "rax");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_mixed_array_get_ref_marker");
+    emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the referenced cell pointer carried by the marker
+    emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // load the referenced value's runtime tag
+    emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the referenced low payload word
+    emitter.instruction("xor esi, esi");                                        // non-string referenced values have no high payload word
+    emitter.instruction("cmp r11, 7");                                          // does the reference cell store a boxed Mixed handle?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker_mixed");            // clone the nested Mixed cell instead of boxing its pointer
+    emitter.instruction("cmp r11, 1");                                          // does the reference cell store a string pair?
+    emitter.instruction("jne __rt_mixed_array_get_ref_marker_box");             // scalar and heap values can be boxed immediately
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the referenced string length
+    emitter.label("__rt_mixed_array_get_ref_marker_box");
+    emitter.instruction("mov rax, r11");                                        // pass the referenced runtime tag to the boxing helper
+    emitter.instruction("call __rt_mixed_from_value");                          // return an ordinary owned PHP-visible Mixed cell
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the dereferenced Mixed value in rax
+    emitter.label("__rt_mixed_array_get_ref_marker_mixed");
+    emitter.instruction("mov rax, rdi");                                        // pass the referenced boxed Mixed handle to the clone helper
+    emitter.instruction("call __rt_mixed_clone");                               // detach the referenced value for the caller
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return the cloned referenced Mixed cell in rax
     emitter.label("__rt_mixed_array_get_indexed_string");
     emitter.instruction("shl r8, 4");                                           // convert the element index to a 16-byte string slot offset
     emitter.instruction("add r10, r8");                                         // r10 = address of the selected string slot
@@ -442,6 +512,13 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_mixed_array_get_assoc_box");                  // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov rax, rdi");                                        // yes → move the stored Mixed cell into the return register
+    emitter.instruction("mov r11, QWORD PTR [rax]");                            // inspect the stored Mixed tag before returning the cell
+    emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));     // is this a borrowed invoker reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // expose the referenced PHP value instead of the internal marker
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));    // is this an owning global-reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // all marker kinds share the referenced-cell payload layout
+    emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));     // is this an owning local-reference marker?
+    emitter.instruction("je __rt_mixed_array_get_ref_marker");                  // expose the retained local cell's current PHP value
     abi::emit_push_reg(emitter, "rax");
     emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
     abi::emit_pop_reg(emitter, "rax");

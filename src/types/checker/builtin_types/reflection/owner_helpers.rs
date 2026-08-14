@@ -38,8 +38,10 @@ pub(super) fn builtin_reflection_owner_constructor_method(
     }
 }
 
-/// Returns a public `getAttributes()` method that returns the private `__attrs`
-/// property as an `array` of `ReflectionAttribute` objects.
+/// Returns PHP's public `getAttributes(?string $name = null, int $flags = 0)` method.
+///
+/// Filtering is a runtime concern; this synthetic body returns all collected attributes, while
+/// the optional parameters keep direct calls aligned with PHP's Reflection API signature.
 pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     ClassMethod {
@@ -49,7 +51,15 @@ pub(super) fn builtin_reflection_owner_get_attributes_method() -> ClassMethod {
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: Vec::new(),
+        params: vec![
+            (
+                "name".to_string(),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                null_lit(),
+                false,
+            ),
+            ("flags".to_string(), Some(TypeExpr::Int), int_lit(0), false),
+        ],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,

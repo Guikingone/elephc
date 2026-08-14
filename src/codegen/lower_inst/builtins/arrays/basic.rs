@@ -209,6 +209,9 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
     let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(&source_ty, PhpType::Mixed | PhpType::Union(_)) {
+        return lower_gradual_array_flip(ctx, inst, array);
+    }
     if matches!(&source_ty, PhpType::AssocArray { .. }) {
         return lower_hash_flip(ctx, inst, array);
     }
@@ -222,6 +225,62 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the flip helper argument
     }
     abi::emit_call_label(ctx.emitter, array_flip_runtime_helper(&value_elem_ty));
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_flip()` across a gradual array boundary.
+///
+/// The boxed source is normalized into an independently owned Mixed-valued hash so the runtime
+/// helper can inspect every value tag. The fresh flipped hash must survive releasing that
+/// conversion temporary, then ownership transfers into the boxed gradual result.
+fn lower_gradual_array_flip(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    if !matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_flip gradual result PHP type {:?}",
+            inst.result_php_type
+        )));
+    }
+    super::misc_dispatch::materialize_owned_mixed_hash_operand(ctx, array, "array_flip")?;
+    let dest_value_tag = runtime_value_tag("array_flip", &PhpType::Mixed)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the owned normalized source hash across the flip
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", dest_value_tag));          // destination values are boxed source keys of either supported key kind
+            abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // recover the normalized source hash after the flip
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the fresh flipped result across source release
+            ctx.emitter.instruction("mov x0, x1");                              // release the independently owned normalized source hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the fresh flipped hash for result boxing
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass and preserve the normalized source hash as argument zero
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", dest_value_tag));          // destination values are boxed source keys of either supported key kind
+            abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the normalized source hash after the flip
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the fresh flipped result across source release
+            ctx.emitter.instruction("mov rdi, rcx");                            // release the independently owned normalized source hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the fresh flipped hash for result boxing
+        }
+    }
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+    );
     store_if_result(ctx, inst)
 }
 
@@ -442,4 +501,3 @@ fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Optio
         _ => Ok(None),
     }
 }
-

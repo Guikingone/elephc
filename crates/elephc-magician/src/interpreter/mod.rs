@@ -33,9 +33,9 @@ mod output_handlers;
 mod throwables;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayCursor, EvalArrayReferenceKey,
-    EvalReferenceTarget, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
-    NativeCallableDefault, NativeCallableSignature, NativeFunction,
+    decode_callable_descriptor, ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayCursor,
+    EvalArrayReferenceKey, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
+    EvalReferenceTarget, NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{
@@ -122,6 +122,25 @@ pub fn execute_program_outcome_with_context(
         Ok(EvalControl::Return(result)) => Ok(EvalOutcome::Value(result)),
         Ok(EvalControl::Throw(result)) => Ok(EvalOutcome::Throwable(result)),
         Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Executes an already materialized runtime include and preserves escaping Throwable cells.
+pub fn execute_include_outcome_with_context(
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    path: RuntimeCellHandle,
+    required: bool,
+    once: bool,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalOutcome, EvalStatus> {
+    match include_exec::eval_include_value(path, required, once, context, scope, values) {
+        Ok(result) => Ok(EvalOutcome::Value(result)),
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)
@@ -251,16 +270,13 @@ pub fn execute_context_new_object_outcome(
         .ok_or(EvalStatus::UnsupportedConstruct)
 }
 
-/// Attempts to construct an eval-declared class, returning `None` when it is absent.
-pub fn execute_context_try_new_object_outcome(
+/// Constructs a runtime Reflection owner from prepared positional arguments.
+pub fn execute_reflection_new_object_outcome(
     context: &mut ElephcEvalContext,
     name: &str,
     args: Vec<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
-) -> Result<Option<EvalOutcome>, EvalStatus> {
-    let Some(class) = context.class(name).cloned() else {
-        return Ok(None);
-    };
+) -> Result<EvalOutcome, EvalStatus> {
     let evaluated_args = args
         .into_iter()
         .map(|value| EvaluatedCallArg {
@@ -269,6 +285,48 @@ pub fn execute_context_try_new_object_outcome(
             ref_target: None,
         })
         .collect();
+    match eval_reflection_owner_new_object(name, evaluated_args, context, values) {
+        Ok(Some(result)) => Ok(EvalOutcome::Value(result)),
+        Ok(None) => Err(EvalStatus::UnsupportedConstruct),
+        Err(EvalStatus::UncaughtThrowable) => context
+            .take_pending_throw()
+            .map(EvalOutcome::Throwable)
+            .ok_or(EvalStatus::UncaughtThrowable),
+        Err(status) => Err(status),
+    }
+}
+
+/// Attempts to construct a runtime-owned built-in or eval-declared class.
+/// Returns `None` when neither runtime surface recognizes the class name.
+pub fn execute_context_try_new_object_outcome(
+    context: &mut ElephcEvalContext,
+    name: &str,
+    args: Vec<RuntimeCellHandle>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<EvalOutcome>, EvalStatus> {
+    let evaluated_args = args
+        .into_iter()
+        .map(|value| EvaluatedCallArg {
+            name: None,
+            value,
+            ref_target: None,
+        })
+        .collect::<Vec<_>>();
+    match eval_reflection_owner_new_object(name, evaluated_args.clone(), context, values) {
+        Ok(Some(result)) => return Ok(Some(EvalOutcome::Value(result))),
+        Ok(None) => {}
+        Err(EvalStatus::UncaughtThrowable) => {
+            return context
+                .take_pending_throw()
+                .map(EvalOutcome::Throwable)
+                .map(Some)
+                .ok_or(EvalStatus::UncaughtThrowable);
+        }
+        Err(status) => return Err(status),
+    }
+    let Some(class) = context.class(name).cloned() else {
+        return Ok(None);
+    };
     let mut scope = ElephcEvalScope::new();
     match eval_dynamic_class_new_object(&class, evaluated_args, context, &mut scope, values) {
         Ok(result) => Ok(Some(EvalOutcome::Value(result))),

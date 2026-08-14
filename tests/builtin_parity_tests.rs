@@ -85,12 +85,11 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
 const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
     "array_reverse",
     "nl2br",
-    "preg_match",
     "print_r",
 ];
 
 /// Eval supports extra optional by-reference parameters before the static backend does.
-const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["is_callable", "preg_match_all"];
+const EVAL_BY_REF_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &["is_callable"];
 
 /// Eval supports variadic behavior before the static backend does. Empty: the
 /// static `var_dump` signature is variadic, so its former entry became an exact

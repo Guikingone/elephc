@@ -90,6 +90,10 @@ pub struct CheckResult {
     /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
     /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
     pub string_incdec_locals: HashSet<(String, String)>,
+    /// Boxed caller-local storage contracts selected for source-declared by-reference calls.
+    pub by_ref_local_storage_types: HashMap<(String, String), PhpType>,
+    /// Checker-proven types for dynamic property reference locals, keyed by scope and local.
+    pub dynamic_ref_local_types: HashMap<(String, String), PhpType>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

@@ -724,3 +724,106 @@ echo S::get()->v;
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies an assignment in a truthy branch cannot change the type seen by its else sibling.
+#[test]
+fn test_if_else_sibling_type_environments_are_isolated() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class Replacement {}
+
+function mapUnlessReplaced(array $values, bool $replace): array {
+    if ($replace) {
+        $values = new Replacement();
+        return [];
+    } else {
+        return array_map(static fn (mixed $value): mixed => $value, $values);
+    }
+}
+
+echo count(mapUnlessReplaced([1, 2], false));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "2");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a local assigned on only one path stays gradual after the branch join.
+#[test]
+fn test_conditionally_initialized_local_is_gradual_after_if() {
+    let out = compile_and_run(
+        r#"<?php
+function conditionalCount(bool $enabled): int {
+    if ($enabled) {
+        $values = [1, 2];
+    }
+
+    if ($enabled) {
+        return count($values);
+    }
+
+    return 0;
+}
+
+echo conditionalCount(true), conditionalCount(false);
+"#,
+    );
+    assert_eq!(out, "20");
+}
+
+/// Verifies a by-reference output created on a short-circuit arm remains gradual afterwards.
+#[test]
+fn test_short_circuit_by_ref_output_is_gradual_after_expression() {
+    let out = compile_and_run(
+        r#"<?php
+function fillOutput(?array &$output = null): bool {
+    $output = [1, 2, 3];
+    return true;
+}
+
+function conditionalOutput(bool $enabled): int {
+    $filled = $enabled && fillOutput($values);
+    if ($filled) {
+        return count($values);
+    }
+    return 0;
+}
+
+echo conditionalOutput(true), conditionalOutput(false);
+"#,
+    );
+    assert_eq!(out, "30");
+}
+
+/// Verifies nullsafe method dispatch short-circuits a boxed gradual null receiver.
+#[test]
+fn test_nullsafe_method_call_on_mixed_receiver() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+final class GradualReceiver {
+    public function value(): string {
+        return 'yes';
+    }
+}
+
+function receiver(bool $present): mixed {
+    return $present ? new GradualReceiver() : null;
+}
+
+echo receiver(true)?->value() ?? 'no';
+echo receiver(false)?->value() ?? 'no';
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "yesno");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

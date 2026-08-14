@@ -282,6 +282,15 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             property,
             value: fold_expr(value),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(fold_expr(*object)),
+            property,
+            source: fold_expr(source),
+        },
         StmtKind::StaticPropertyAssign {
             receiver,
             property,
@@ -309,6 +318,30 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             receiver,
             property,
             index: fold_expr(index),
+            value: fold_expr(value),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: fold_expr(index),
+            source: fold_expr(source),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(fold_expr(*property)),
+            index: index.map(fold_expr),
+            append,
             value: fold_expr(value),
         },
         StmtKind::PropertyArrayPush {

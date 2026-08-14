@@ -133,13 +133,13 @@ pub(super) fn emit_value_error_unless(
         }
         (Arch::AArch64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "x9", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, x9", reg));                // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("b.le {}", ok_label));              // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, x9", reg));               // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an argument at or below the maximum is in range
         }
         (Arch::X86_64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "r10", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, r10", reg));               // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("jle {}", ok_label));               // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, r10", reg));              // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an argument at or below the maximum is in range
         }
         (Arch::AArch64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
             let fail_label = ctx.next_label("value_guard_fail");

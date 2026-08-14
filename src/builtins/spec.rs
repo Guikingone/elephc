@@ -58,6 +58,8 @@ pub enum TypeSpec {
     Bool,
     /// PHP `mixed`.
     Mixed,
+    /// PHP `array` with values represented conservatively as `mixed`.
+    ArrayMixed,
     /// PHP `void` (return position only).
     Void,
 }

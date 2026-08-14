@@ -49,6 +49,25 @@ impl Checker {
             self.check_assignment_like_stmt(stmt, env)?;
         }
 
+        if let (
+            ExprKind::Variable(target_name),
+            ExprKind::Variable(value_name),
+            [Stmt {
+                kind: StmtKind::RefAssign {
+                    target: ref_target,
+                    ..
+                },
+                ..
+            }],
+        ) = (&target.kind, &value.kind, prelude)
+        {
+            if target_name == value_name && target_name == ref_target {
+                return env.get(target_name).cloned().ok_or_else(|| {
+                    CompileError::new(span, &format!("Undefined variable: ${}", target_name))
+                });
+            }
+        }
+
         if let ExprKind::Variable(name) = &target.kind {
             return self.check_local_assignment_expression(name, value, span, env);
         }
@@ -62,11 +81,9 @@ impl Checker {
                 span,
                 env,
             )?;
-            let result_expr = match result_target {
-                Some(result_target) if result_target != target => result_target,
-                _ => value,
-            };
-            return self.infer_type(result_expr, env);
+            let result_expr = result_target.unwrap_or(value);
+            let mut result_env = env.clone();
+            return self.infer_type_with_assignment_effects(result_expr, &mut result_env);
         }
 
         let stmt_kind = match &target.kind {
@@ -112,11 +129,9 @@ impl Checker {
 
         let stmt = Stmt::new(stmt_kind, span);
         self.check_assignment_like_stmt(&stmt, env)?;
-        let result_expr = match result_target {
-            Some(result_target) if result_target != target => result_target,
-            _ => value,
-        };
-        self.infer_type(result_expr, env)
+        let result_expr = result_target.unwrap_or(value);
+        let mut result_env = env.clone();
+        self.infer_type_with_assignment_effects(result_expr, &mut result_env)
     }
 
     /// Type-checks `$object->{$property} = $value` assignment expressions.
@@ -152,9 +167,10 @@ impl Checker {
             ));
         }
 
-        self.infer_type(value, env)?;
+        self.infer_type_with_assignment_effects(value, env)?;
         if let Some(result_target) = result_target {
-            self.infer_type(result_target, env)?;
+            let mut result_env = env.clone();
+            self.infer_type_with_assignment_effects(result_target, &mut result_env)?;
         }
         Ok(())
     }

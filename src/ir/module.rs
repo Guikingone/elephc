@@ -36,6 +36,21 @@ impl DataId {
     }
 }
 
+/// Scalar value materialized into the closed-world constant registry.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstScalar {
+    /// Integer constant.
+    Int(i64),
+    /// Floating-point constant.
+    Float(f64),
+    /// Boolean constant.
+    Bool(bool),
+    /// String constant.
+    Str(String),
+    /// Null constant.
+    Null,
+}
+
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
@@ -69,6 +84,9 @@ pub struct Module {
     pub declared_interface_names: Vec<String>,
     pub declared_trait_names: Vec<String>,
     pub declared_trait_source_lines: HashMap<String, u32>,
+    pub declared_function_source_lines: HashMap<String, (u32, u32)>,
+    pub declared_class_source_files: HashMap<String, String>,
+    pub declared_function_source_files: HashMap<String, String>,
     pub declared_trait_uses: HashMap<String, Vec<String>>,
     pub declared_trait_method_names: HashMap<String, Vec<String>>,
     pub declared_trait_methods: HashMap<String, HashMap<String, TraitMethodInfo>>,
@@ -123,6 +141,9 @@ impl Module {
             declared_interface_names: Vec::new(),
             declared_trait_names: Vec::new(),
             declared_trait_source_lines: HashMap::new(),
+            declared_function_source_lines: HashMap::new(),
+            declared_class_source_files: HashMap::new(),
+            declared_function_source_files: HashMap::new(),
             declared_trait_uses: HashMap::new(),
             declared_trait_method_names: HashMap::new(),
             declared_trait_methods: HashMap::new(),

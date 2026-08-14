@@ -303,6 +303,17 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             target: CastType::Bool,
             ..
         } => PhpType::Bool,
+        ExprKind::Cast {
+            target: CastType::Array,
+            ..
+        } => PhpType::Array(Box::new(PhpType::Mixed)),
+        ExprKind::Cast {
+            target: CastType::Object,
+            expr,
+        } => match infer_expr_type_syntactic(expr) {
+            object @ PhpType::Object(_) => object,
+            _ => PhpType::Object("stdClass".to_string()),
+        },
         ExprKind::FunctionCall { name, args } => match name.as_str() {
             "eval" => PhpType::Mixed,
             "substr" | "strtolower" | "strtoupper" | "trim" | "ltrim" | "rtrim" | "str_repeat"
@@ -434,6 +445,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
         | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
+        ExprKind::DynamicScopedConstantAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

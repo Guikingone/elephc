@@ -85,7 +85,11 @@ fn test_error_file_exists_wrong_args() {
 /// Verifies `mkdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
+    expect_error(
+        "<?php mkdir('a', 0777, false, null, true);",
+        "mkdir() takes 1 to 4 arguments",
+    );
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
@@ -242,7 +246,11 @@ fn test_error_chdir_wrong_args() {
 /// Verifies `glob()` rejects zero arguments with arity error.
 #[test]
 fn test_error_glob_wrong_args() {
-    expect_error("<?php glob();", "glob() takes exactly 1 argument");
+    expect_error("<?php glob();", "glob() takes 1 or 2 arguments");
+    expect_error(
+        "<?php glob('*', 0, true);",
+        "glob() takes 1 or 2 arguments",
+    );
 }
 
 /// Verifies `sys_get_temp_dir()` rejects arguments with arity error.

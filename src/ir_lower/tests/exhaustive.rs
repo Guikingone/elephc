@@ -141,6 +141,8 @@ fn dummy_check_result() -> CheckResult {
         builtin_call_types: HashMap::new(),
         loop_storage_types: HashMap::new(),
         string_incdec_locals: Default::default(),
+        by_ref_local_storage_types: HashMap::new(),
+        dynamic_ref_local_types: HashMap::new(),
     }
 }
 
@@ -351,6 +353,7 @@ fn lowers_every_expr_variant_smoke() {
         expr(ExprKind::ClassConstant { receiver: StaticReceiver::Parent }),
         expr(ExprKind::ObjectClassName { object: Box::new(object.clone()) }),
         expr(ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Named(name("C")), name: "K".to_string() }),
+        expr(ExprKind::DynamicScopedConstantAccess { receiver: Box::new(object.clone()), name: "K".to_string() }),
         expr(ExprKind::NewScopedObject { receiver: StaticReceiver::Named(name("C")), args: Vec::new() }),
         expr(ExprKind::MagicConstant(MagicConstant::File)),
         expr(ExprKind::Yield { key: Some(Box::new(int(1))), value: Some(Box::new(str_lit("v"))) }),
@@ -485,9 +488,11 @@ fn lowers_every_stmt_variant_smoke() {
         stmt(StmtKind::InterfaceDecl { name: "I".to_string(), extends: Vec::new(), properties: Vec::new(), methods: Vec::new(), constants: Vec::new() }),
         stmt(StmtKind::TraitDecl { name: "T".to_string(), trait_uses: Vec::new(), properties: Vec::new(), methods: vec![method], constants: vec![class_const] }),
         stmt(StmtKind::PropertyAssign { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
+        stmt(StmtKind::PropertyRefAssign { object: Box::new(object.clone()), property: "p".to_string(), source: Expr::new(ExprKind::PropertyAccess { object: Box::new(object.clone()), property: "p".to_string() }, sp()) }),
         stmt(StmtKind::StaticPropertyAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayPush { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), value: int(1) }),
         stmt(StmtKind::StaticPropertyArrayAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), value: int(1) }),
+        stmt(StmtKind::StaticPropertyElementRefAssign { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string(), index: int(0), source: Expr::new(ExprKind::ArrayAccess { array: Box::new(Expr::new(ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Named(name("C")), property: "sp".to_string() }, sp())), index: Box::new(int(1)) }, sp()) }),
         stmt(StmtKind::PropertyArrayPush { object: Box::new(object.clone()), property: "p".to_string(), value: int(1) }),
         stmt(StmtKind::PropertyArrayAssign { object: Box::new(object), property: "p".to_string(), index: int(0), value: int(1) }),
         stmt(StmtKind::ExternFunctionDecl { name: "ef".to_string(), params: vec![ExternParam { name: "x".to_string(), c_type: CType::Int }], return_type: CType::Int, library: Some("c".to_string()) }),

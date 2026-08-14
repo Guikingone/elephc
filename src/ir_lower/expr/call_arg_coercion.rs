@@ -31,7 +31,7 @@ pub(super) fn lower_arg_with_signature(
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
 
-/// Coerces a positional argument to storage owned explicitly by EIR when required.
+/// Coerces a positional argument to the parameter storage owned explicitly by EIR.
 ///
 /// Integer-to-float conversion selects the callee's floating-point ABI class. Mixed-to-string
 /// conversion is also explicit here because it allocates caller-owned storage whose lifetime
@@ -65,7 +65,23 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
             return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
         }
     }
-    value
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        return value;
+    }
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    let value = crate::ir_lower::expr::coerce_container_to_mixed_payload(
+        ctx,
+        value,
+        &source_ty,
+        &param_ty,
+        Some(arg.span),
+    );
+    crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+        ctx,
+        value,
+        &param_ty,
+        Some(arg.span),
+    )
 }
 
 /// Applies a declared-parameter scalar binding to an already-lowered argument value.
@@ -83,16 +99,16 @@ fn apply_scalar_param_cast(
         CastType::String => coerce_to_string_at_span(ctx, value, span),
         CastType::Bool => lower_truthy_bool(ctx, value, span),
         // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
-        CastType::Int | CastType::Float | CastType::Array => value,
+        CastType::Int | CastType::Float | CastType::Array | CastType::Object => value,
     }
 }
 
-/// Normalizes reordered call operands to their declared scalar parameter storage.
+/// Normalizes reordered call operands to their declared parameter storage.
 ///
 /// Named and spread arguments are evaluated in source order and then reordered, so their
-/// int-to-float and Mixed-to-string conversions happen here in parameter order. By-reference
-/// parameters and the variadic tail remain untouched. String conversions become owned EIR
-/// values so normal alias-aware call cleanup can transfer or release them safely.
+/// int-to-float, boxed-scalar, and checked heap narrowing happen here in parameter order.
+/// By-reference parameters and the variadic tail remain untouched. Allocating conversions become
+/// owned EIR values so normal alias-aware call cleanup can transfer or release them safely.
 pub(super) fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -138,6 +154,25 @@ pub(super) fn coerce_operands_to_params(
                 operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
             }
         }
+        let lowered = LoweredValue {
+            value: operands[index],
+            ir_type: ctx.builder.value_type(operands[index]),
+        };
+        let source_ty = ctx.builder.value_php_type(lowered.value).codegen_repr();
+        let lowered = crate::ir_lower::expr::coerce_container_to_mixed_payload(
+            ctx,
+            lowered,
+            &source_ty,
+            &param_ty,
+            None,
+        );
+        operands[index] = crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+            ctx,
+            lowered,
+            &param_ty,
+            None,
+        )
+        .value;
     }
     operands
 }
@@ -156,7 +191,9 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
-    if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
+    if !sig.declared_params.get(index).copied().unwrap_or(false)
+        || !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty)
+    {
         return None;
     }
     let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
@@ -216,7 +253,11 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     Some(value)
 }
 
-/// Returns true when a local array must be converted before a by-reference call.
+/// Returns true when a local array's concrete slots differ from a generic array parameter.
+///
+/// Callers must additionally establish that the parameter is source-declared. Internal
+/// operations have typed mutation strategies and must retain the concrete representation their
+/// backend selected rather than inheriting this declared-parameter normalization.
 pub(super) fn by_ref_array_arg_needs_mixed_storage(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
@@ -234,7 +275,6 @@ pub(super) fn by_ref_array_arg_needs_mixed_storage(
     local_elem.codegen_repr() != PhpType::Mixed
 }
 
-/// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
 pub(super) fn lower_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,

@@ -235,6 +235,7 @@ fn collect_dynamic_object_factory_classes_in_stmt(
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::PropertyAssign { value: expr, .. }
+        | StmtKind::PropertyRefAssign { source: expr, .. }
         | StmtKind::PropertyArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. } => {
@@ -245,6 +246,10 @@ fn collect_dynamic_object_factory_classes_in_stmt(
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             collect_dynamic_object_factory_classes_in_expr(index, classes, names);
             collect_dynamic_object_factory_classes_in_expr(value, classes, names);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_dynamic_object_factory_classes_in_expr(index, classes, names);
+            collect_dynamic_object_factory_classes_in_expr(source, classes, names);
         }
         StmtKind::NestedArrayAssign { target, value } => {
             collect_dynamic_object_factory_classes_in_expr(target, classes, names);

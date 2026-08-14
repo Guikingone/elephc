@@ -56,6 +56,12 @@ pub fn propagate_constants(program: Program) -> Program {
     for name in crate::superglobals::SUPERGLOBALS {
         mark_reference_volatile(name);
     }
+    // `$GLOBALS['x']` and `$x` can name one slot, so neither spelling may retain a propagated
+    // scalar fact across a write through the other spelling.
+    for key in crate::ast_usage::collect(&program).globals_keys {
+        mark_reference_volatile(&crate::globals_array::alias_name(&key));
+        mark_reference_volatile(&key);
+    }
     // Install the callable effect summaries and by-ref signatures so calls to
     // known-pure user callables stop clearing the environment. Substitution
     // into by-ref argument positions is masked by `propagate_args`, which
@@ -315,19 +321,21 @@ struct InstanceDispatchMetadata {
     has_dynamic_class_barrier: bool,
 }
 
-/// Holds the body and never-return metadata for a function during effect analysis.
+/// Holds the body and call-boundary metadata for a function during effect analysis.
 #[derive(Clone, Debug)]
 struct FunctionEffectBody {
     body: Vec<Stmt>,
     declared_never: bool,
+    has_typed_parameters: bool,
 }
 
-/// Holds the body, class context, and never-return metadata for a static method during effect analysis.
+/// Holds the body, class context, and call-boundary metadata for a method during effect analysis.
 #[derive(Clone, Debug)]
 struct StaticMethodBody {
     context: ClassEffectContext,
     body: Vec<Stmt>,
     declared_never: bool,
+    has_typed_parameters: bool,
 }
 
 /// Maps names to scalar constants during constant propagation.

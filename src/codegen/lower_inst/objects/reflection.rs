@@ -83,7 +83,9 @@ use parameter_property_emit::*;
 use type_object_emit::*;
 use flags_offsets::*;
 
-pub(super) use owner_dispatch::{is_reflection_owner_class, lower_reflection_owner_new};
+pub(super) use owner_dispatch::{
+    is_reflection_owner_class, lower_reflection_owner_new, reflection_class_matches_object_type,
+};
 
 /// Compile-time metadata used to populate one Reflection owner object.
 struct ReflectionOwnerMetadata {
@@ -300,6 +302,7 @@ enum ReflectionConstantValue {
     Float(f64),
     Str(String),
     Null,
+    Array(ReflectionParameterDefaultValue),
     EnumCase {
         enum_name: String,
         case_name: String,
@@ -324,10 +327,4 @@ struct ReflectionMemberFlags {
     is_readonly: bool,
     is_promoted: bool,
     is_virtual: bool,
-}
-
-/// Runtime class candidate used when object reflection must dispatch by object class id.
-struct ReflectionRuntimeClassCandidate {
-    class_name: String,
-    class_id: u64,
 }

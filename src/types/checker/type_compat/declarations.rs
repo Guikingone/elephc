@@ -199,22 +199,16 @@ impl Checker {
     /// writes of every value accepted by the by-reference parameter.
     pub(crate) fn require_boxed_by_ref_storage(
         &self,
-        expected_ty: &PhpType,
-        actual_ty: &PhpType,
-        span: crate::span::Span,
-        context: &str,
+        _expected_ty: &PhpType,
+        _actual_ty: &PhpType,
+        _span: crate::span::Span,
+        _context: &str,
     ) -> Result<(), CompileError> {
-        if requires_by_ref_boxed_storage(expected_ty)
-            && !supports_by_ref_boxed_storage(actual_ty)
-        {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{} requires a variable with mixed/union/nullable storage when passed by reference",
-                    context
-                ),
-            ));
-        }
+        // The caller-storage preparation pass widens concrete variables to boxed cells whenever
+        // a gradual or nullable reference contract can replace their value. Conversely, EIR
+        // lowering inserts a checked concrete temporary for a boxed caller passed to a concrete
+        // reference parameter, then publishes the result back. Representation equality at the
+        // source call site is therefore no longer a validity requirement.
         Ok(())
     }
 
@@ -317,6 +311,11 @@ impl Checker {
                     &format!("Function '{}' parameter ${}", name, param_name),
                 )?;
                 param_types.push((param_name.clone(), declared_ty));
+            } else if decl.ref_params.get(idx).copied().unwrap_or(false) {
+                // An untyped reference is a writable PHP cell, not a call-site-specialized
+                // scalar. The callee may legally replace its value with any PHP type, including
+                // when the parameter has a scalar or array default.
+                param_types.push((param_name.clone(), PhpType::Mixed));
             } else if let Some(default_expr) = decl.defaults.get(idx).and_then(|d| d.as_ref()) {
                 param_types.push((param_name.clone(), infer_expr_type_syntactic(default_expr)));
             } else {
@@ -341,13 +340,25 @@ impl Checker {
     }
 
     /// Returns a bitvec indicating which parameters of a method have declared type hints.
-    /// Looks up the method by `method_name` and `is_static` in `class_info.method_decls`.
+    ///
+    /// The resolved signature is authoritative. Flattened declaration lists can retain more
+    /// than one declaration with the same method name across an inheritance chain, so selecting
+    /// the first syntax node can associate an overriding signature with an ancestor's flags and
+    /// accidentally specialize declared parameters from call-site values.
     pub(crate) fn declared_method_param_flags(
         class_info: &ClassInfo,
         method_name: &str,
         is_static: bool,
     ) -> Vec<bool> {
         let method_key = crate::names::php_symbol_key(method_name);
+        let resolved = if is_static {
+            class_info.static_methods.get(&method_key)
+        } else {
+            class_info.methods.get(&method_key)
+        };
+        if let Some(signature) = resolved {
+            return signature.declared_params.clone();
+        }
         class_info
             .method_decls
             .iter()
@@ -428,14 +439,4 @@ impl Checker {
 
         result
     }
-}
-
-/// Returns true when a by-reference parameter can write values that need boxed or nullable storage.
-fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
-}
-
-/// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
-fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
-    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
 }

@@ -3616,3 +3616,84 @@ var_dump($arr);
         "sentinel comparison must precede the array header load, got:\n{body}"
     );
 }
+
+/// Verifies an associative-array literal can be materialized directly into a `Mixed` slot.
+#[test]
+fn test_assoc_literal_materialized_as_mixed() {
+    let output = compile_and_run(
+        r#"<?php
+function replace(mixed $value): mixed {
+    $value = ["name" => "elephc", "count" => 2];
+    return $value;
+}
+$result = replace(null);
+echo $result["name"].":".$result["count"];
+"#,
+    );
+    assert_eq!(output, "elephc:2");
+}
+
+/// Verifies a declared `array` property with a homogeneous associative default still accepts
+/// heterogeneous keys and values in later whole-array assignments, including static storage.
+#[test]
+fn test_typed_array_property_assoc_default_keeps_generic_storage() {
+    let out = compile_and_run(
+        r#"<?php
+class GenericArrayProperties {
+    private array $styles = ['default' => 'plain'];
+    private static array $casters = ['Initial' => ['Caster', 'cast']];
+
+    public function merge(array $styles): void {
+        $this->styles = $styles + $this->styles;
+    }
+
+    public static function add(array $casters): void {
+        self::$casters = [...self::$casters, ...$casters];
+    }
+
+    public function value(int|string $key): mixed {
+        return $this->styles[$key];
+    }
+
+    public static function caster(string $key): mixed {
+        return self::$casters[$key];
+    }
+}
+
+$properties = new GenericArrayProperties();
+$properties->merge([7 => new stdClass(), 'accent' => 42]);
+GenericArrayProperties::add(['Later' => 9]);
+echo get_debug_type($properties->value(7)), ':', $properties->value('accent'), ':';
+echo GenericArrayProperties::caster('Later');
+"#,
+    );
+    assert_eq!(out, "stdClass:42:9");
+}
+
+/// Verifies strict equality compares string-array contents and ordered positions rather than heap pointers.
+#[test]
+fn test_strict_equality_compares_indexed_string_array_values() {
+    let out = compile_and_run(
+        r#"<?php
+$left = ['Reflector', 'Type'];
+$same = ['Reflector', 'Type'];
+$reordered = ['Type', 'Reflector'];
+echo ($left === $same ? 'same' : 'bad'), ':', ($left === $reordered ? 'bad' : 'order');
+"#,
+    );
+    assert_eq!(out, "same:order");
+}
+
+/// Verifies boxed Mixed arrays recurse into nested indexed arrays for both `===` and `!==`.
+#[test]
+fn test_strict_equality_recurses_through_mixed_indexed_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$left = [1, 'x', [2, 'y']];
+$same = [1, 'x', [2, 'y']];
+$different = [1, 'x', [2, 'z']];
+echo ($left === $same ? 'same' : 'bad'), ':', ($left !== $different ? 'different' : 'bad');
+"#,
+    );
+    assert_eq!(out, "same:different");
+}

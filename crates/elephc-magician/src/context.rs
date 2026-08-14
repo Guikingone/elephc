@@ -11,6 +11,7 @@
 //! - No Rust-owned layout is promised across the C ABI.
 
 mod alias_metadata;
+mod callable_descriptor;
 mod class_metadata;
 mod classes_aliases;
 mod classlike_objects;
@@ -37,13 +38,14 @@ use crate::abi::ABI_VERSION;
 use crate::eval_ir::{
     EvalAttribute, EvalClass, EvalClassConstant, EvalClassMethod, EvalClassProperty, EvalEnum,
     EvalFunction, EvalInterface, EvalInterfaceMethod, EvalInterfaceProperty, EvalParameterType,
-    EvalTrait, EvalTraitAdaptation, EvalVisibility,
+    EvalParameterTypeVariant, EvalTrait, EvalTraitAdaptation, EvalVisibility,
 };
 use crate::scope::ElephcEvalScope;
 use crate::stream_resources::EvalStreamResources;
 use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 pub use alias_metadata::*;
+pub(crate) use callable_descriptor::*;
 pub use closure_metadata::*;
 pub use core::*;
 pub(crate) use global_registry::*;
@@ -54,6 +56,8 @@ pub use reference_metadata::*;
 
 #[cfg(not(test))]
 static GLOBAL_EVAL_CLASSES: OnceLock<Mutex<GlobalEvalClassRegistry>> = OnceLock::new();
+#[cfg(not(test))]
+static GLOBAL_EVAL_INCLUDED_FILES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 thread_local! {
     static NATIVE_FRAME_CALLED_CLASS_OVERRIDES: RefCell<Vec<NativeFrameCalledClassOverride>> =

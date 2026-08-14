@@ -155,8 +155,8 @@ __PRELOAD_STATISTICS__
 /// `opcache_is_script_cached(__FILE__)` hit the canonical manifest entry.
 ///
 /// The manifest is every PHP/LFC source file compiled into this binary: the entry file, every
-/// statically-resolved `include`/`require` target, and every autoloaded file (Composer
-/// `autoload.files` + PSR-4 / SPL-rule class files + their own includes) — see `ScriptEntry`.
+/// statically-resolved `include`/`require` target, and every autoloaded file (eager entries,
+/// PSR-4 / SPL-rule class files, and their own includes) — see `ScriptEntry`.
 /// The parameter is kept named `$filename` to match reference PHP for named-argument callers.
 /// A FORCE-INVALIDATED entry reports `false` here even though it is still in the manifest: that is
 /// php-src's `filename_is_in_cache`, which requires `!persistent_script->corrupted`, and

@@ -12,15 +12,17 @@
 use super::*;
 
 mod calls;
+mod null_coalesce_assign;
 
 pub(in crate::interpreter) use calls::*;
 mod evaluation;
 
 pub(in crate::interpreter) use evaluation::{
     eval_array_access_object_matches, eval_array_get_result, eval_binary_result,
-    eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
+    eval_closure_object_expr, eval_dynamic_class_name, eval_dynamic_member_name, eval_match_expr,
 };
 use evaluation::*;
+use null_coalesce_assign::{eval_assign, eval_compound_assign, eval_null_coalesce_assign};
 
 /// Evaluates one expression to an opaque runtime-cell handle.
 pub(in crate::interpreter) fn eval_expr(
@@ -96,10 +98,18 @@ pub(in crate::interpreter) fn eval_expr(
             )
         }
         EvalExpr::DynamicNewObject { class_name, args } => {
-            let class_name = eval_expr(class_name, context, scope, values)?;
-            let class_name = eval_dynamic_class_name(class_name, context, values)?;
-            let args = eval_method_call_arg_values(args, context, scope, values)?;
-            eval_new_object_result(&class_name, args, context, scope, values)
+            let class_name = eval_expr(class_name, context, scope, values).map_err(|status| {
+                trace_dynamic_new_error("class_expression", None, status, context)
+            })?;
+            let class_name = eval_dynamic_class_name(class_name, context, values).map_err(|status| {
+                trace_dynamic_new_error("class_name", None, status, context)
+            })?;
+            let args = eval_method_call_arg_values(args, context, scope, values).map_err(|status| {
+                trace_dynamic_new_error("arguments", Some(&class_name), status, context)
+            })?;
+            eval_new_object_result(&class_name, args, context, scope, values).map_err(|status| {
+                trace_dynamic_new_error("construction", Some(&class_name), status, context)
+            })
         }
         EvalExpr::DynamicPropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
@@ -292,6 +302,15 @@ pub(in crate::interpreter) fn eval_expr(
                 Ok(value)
             }
         }
+        EvalExpr::NullCoalesceAssign { target, default } => {
+            eval_null_coalesce_assign(target, default, context, scope, values)
+        }
+        EvalExpr::CompoundAssign { target, op, value } => {
+            eval_compound_assign(target, *op, value, context, scope, values)
+        }
+        EvalExpr::Assign { target, value } => {
+            eval_assign(target, value, context, scope, values)
+        }
         EvalExpr::NullsafePropertyGet { object, property } => {
             let object = eval_expr(object, context, scope, values)?;
             if values.is_null(object)? {
@@ -375,4 +394,22 @@ pub(in crate::interpreter) fn eval_expr(
             eval_binary_result(*op, left, right, context, values)
         }
     }
+}
+
+/// Emits the failing dynamic-construction stage when opt-in eval tracing is enabled.
+fn trace_dynamic_new_error(
+    stage: &str,
+    class_name: Option<&str>,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=dynamic_new_error stage={stage} class={class_name:?} status={status:?} file={:?} line={}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }

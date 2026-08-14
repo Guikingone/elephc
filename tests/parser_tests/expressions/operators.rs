@@ -9,6 +9,19 @@
 
 use super::*;
 
+/// Verifies that a literal-led short-circuit expression is accepted as a statement.
+#[test]
+fn test_literal_led_short_circuit_assignment_statement() {
+    let stmts = parse_source("<?php 0 > $value && $value += 0x40;");
+    assert!(matches!(
+        &stmts[0].kind,
+        StmtKind::ExprStmt(Expr {
+            kind: ExprKind::BinaryOp { op: BinOp::And, .. },
+            ..
+        })
+    ));
+}
+
 /// Verifies that `<?php echo 2 + 3 * 4;` parses as `2 + (3 * 4)` — multiplication has higher
 /// precedence than addition, matching PHP's arithmetic precedence.
 #[test]
@@ -33,6 +46,13 @@ fn test_concat_operator() {
         Expr::string_lit("b"),
     ));
     assert_eq!(stmts, vec![expected]);
+}
+
+/// Verifies that an explicit global namespace prefix is accepted on predefined constants.
+#[test]
+fn test_fully_qualified_predefined_constant() {
+    let stmts = parse_source("<?php echo \\DIRECTORY_SEPARATOR;");
+    assert_eq!(stmts, vec![Stmt::echo(Expr::string_lit("/"))]);
 }
 
 /// Verifies that `<?php echo 1 + 2 == 3;` parses as `(1 + 2) == 3` — addition has higher
@@ -269,6 +289,29 @@ fn test_increment_decrement_parses() {
     assert_eq!(echoed_expr(&pre_dec), &ExprKind::PreDecrement("i".into()));
     let post_dec = parse_source("<?php echo $i--;");
     assert_eq!(echoed_expr(&post_dec), &ExprKind::PostDecrement("i".into()));
+}
+
+/// Verifies value-producing prefix increment accepts a property l-value inside a comparison.
+#[test]
+fn test_prefix_increment_property_expression() {
+    let stmts = parse_source("<?php if (++$counter->value === 1) { echo 'ok'; }");
+    assert_eq!(stmts.len(), 1);
+}
+
+/// Verifies a `$this` property prefix increment remains the right operand of concatenation.
+#[test]
+fn test_prefix_increment_this_property_after_concat() {
+    let stmts = parse_source(
+        "<?php $id = '.autowire_inline.'.$this->currentId.'.'.++$this->counter;",
+    );
+    assert_eq!(stmts.len(), 1);
+}
+
+/// Verifies value-producing prefix increment accepts a static-property l-value in a comparison.
+#[test]
+fn test_prefix_increment_static_property_expression() {
+    let stmts = parse_source("<?php if (100 < ++ErrorHandler::$count) { echo 'ok'; }");
+    assert_eq!(stmts.len(), 1);
 }
 
 /// Verifies that `<?php echo ~$x;` parses as a bitwise NOT unary operation.

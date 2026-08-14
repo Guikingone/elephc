@@ -231,6 +231,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    out.push_str(".globl _error_log_nl\n_error_log_nl:\n    .ascii \"\\n\"\n");
+    out.push_str(".globl _array_arg_type_error_msg\n_array_arg_type_error_msg:\n    .ascii \"Fatal error: Uncaught TypeError: array builtin argument must be of type array\\n\"\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -286,6 +288,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_json_error_location_active", 8, target));
     out.push_str(&comm_directive("_json_error_line", 8, target));
     out.push_str(&comm_directive("_json_error_column", 8, target));
+    // Set only when bytes leave the output-buffering stack for the real response sink.
+    out.push_str(&comm_directive("_headers_sent", 8, target));
     // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
@@ -323,6 +327,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
+    out.push_str(".globl _array_cast_unsupported_msg\n_array_cast_unsupported_msg:\n    .ascii \"Fatal error: (array) cast of associative array or object is unsupported\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
     out.push_str(".globl _match_unhandled_msg\n_match_unhandled_msg:\n    .ascii \"Fatal error: unhandled match case\\n\"\n");
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
@@ -1199,6 +1204,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _tmpfile_template\n_tmpfile_template:\n    .ascii \"/tmp/elephc-XXXXXX\\0\"\n    .byte 0,0,0,0,0\n");
     out.push_str(".globl _locale_utf8_name\n_locale_utf8_name:\n    .asciz \"C.UTF-8\"\n");
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
+    out.push_str(".globl _filter_bool_true\n_filter_bool_true:\n    .ascii \"true\"\n");
+    out.push_str(".globl _filter_bool_false\n_filter_bool_false:\n    .ascii \"false\"\n");
+    out.push_str(".globl _filter_bool_on\n_filter_bool_on:\n    .ascii \"on\"\n");
+    out.push_str(".globl _filter_bool_off\n_filter_bool_off:\n    .ascii \"off\"\n");
+    out.push_str(".globl _filter_bool_yes\n_filter_bool_yes:\n    .ascii \"yes\"\n");
+    out.push_str(".globl _filter_bool_no\n_filter_bool_no:\n    .ascii \"no\"\n");
     out.push_str(&system::emit_json_data());
     out.push_str(&system::emit_date_data());
     out.push_str(&system::emit_strtotime_data());

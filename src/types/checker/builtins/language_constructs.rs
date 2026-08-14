@@ -46,7 +46,7 @@ pub(super) fn check(
             }
             if let Some(arg) = args.first() {
                 let ty = checker.infer_type(arg, env)?;
-                if ty != PhpType::Int {
+                if !matches!(ty, PhpType::Int | PhpType::Mixed) {
                     return Err(CompileError::new(span, "exit() argument must be integer"));
                 }
             }

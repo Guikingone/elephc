@@ -112,6 +112,46 @@ fn test_function_no_args() {
     assert_eq!(out, "42");
 }
 
+/// Verifies the true outcome of an `&&` chain retains a right-hand assignment and narrows away
+/// the false alternative before the guarded body uses the value.
+#[test]
+fn test_truthy_and_chain_retains_assignment_and_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProducedValue {
+    public function text(): string { return 'ok'; }
+}
+function produceValue(): ProducedValue|false { return new ProducedValue(); }
+if (true && ($value = produceValue())) {
+    echo $value->text();
+}
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies falling through a terminal `if` whose `||` condition is false retains every
+/// right-hand assignment and its false-outcome narrowing.
+#[test]
+fn test_falsy_or_chain_after_terminal_branch_retains_assignment_and_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+final class ProducedValue {
+    public function text(): string { return 'ok'; }
+}
+function produceValue(): ProducedValue|false { return new ProducedValue(); }
+function render(): string {
+    if (false || !($value = produceValue())) {
+        return 'bad';
+    }
+    return $value->text();
+}
+echo render();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// A bare PHP `array` parameter keeps object elements dynamically typed across sibling
 /// call sites, allowing the query-builder use case without pinning the callee to one class.
 #[test]

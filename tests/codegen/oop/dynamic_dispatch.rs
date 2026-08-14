@@ -185,6 +185,21 @@ fn test_dynamic_static_call_on_literal_class_with_args() {
     assert_eq!(out, "9");
 }
 
+/// Verifies `self::$method(...)` dispatches dynamically from the current class scope.
+#[test]
+fn test_dynamic_static_call_on_self_receiver() {
+    let out = compile_and_run(
+        "<?php
+        class Router {
+            public static function target(string $value): string { return 'self:' . $value; }
+            public static function dispatch(string $method): string { return self::$method('ok'); }
+        }
+        echo Router::dispatch('target');
+        ",
+    );
+    assert_eq!(out, "self:ok");
+}
+
 /// Regression: a function with *no* return type annotation whose body returns a
 /// method call on a `mixed` receiver must infer a `mixed` return type, not `int`.
 /// Previously the method-call-on-`mixed` inference fell back to `int`, so the

@@ -576,14 +576,12 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
         return current;
     }
     match (&current, &incoming) {
-        (current, PhpType::Void | PhpType::Never) if local_storage_can_hold_null(current) => {
-            current.clone()
-        }
+        (current, PhpType::Void | PhpType::Never) => current.clone(),
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
         (
             PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
-            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::Int | PhpType::Bool,
         ) => incoming,
         _ => PhpType::Mixed,
     }
@@ -611,22 +609,6 @@ fn local_load_requires_owned_mixed_unbox(storage_type: &PhpType, result_type: &P
                 | PhpType::Object(_)
                 | PhpType::Iterable
         )
-}
-
-/// Returns true when a local storage shape can represent PHP null as a zero pointer.
-fn local_storage_can_hold_null(php_type: &PhpType) -> bool {
-    matches!(
-        php_type,
-        PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-            | PhpType::Packed(_)
-            | PhpType::Mixed
-            | PhpType::Union(_)
-            | PhpType::Iterable
-            | PhpType::Buffer(_)
-            | PhpType::Callable
-    )
 }
 
 /// Returns the IR storage class used for a local slot's PHP representation.

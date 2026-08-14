@@ -118,12 +118,13 @@ fn parse_ref_assign(
 ///
 /// PHP allows aliasing variables, array elements, object properties, and the
 /// results of calls that return by reference. Other expressions are rejected.
-fn is_valid_reference_source(kind: &ExprKind) -> bool {
+pub(crate) fn is_valid_reference_source(kind: &ExprKind) -> bool {
     matches!(
         kind,
         ExprKind::Variable(_)
             | ExprKind::ArrayAccess { .. }
             | ExprKind::PropertyAccess { .. }
+            | ExprKind::DynamicPropertyAccess { .. }
             | ExprKind::FunctionCall { .. }
             | ExprKind::MethodCall { .. }
             | ExprKind::StaticMethodCall { .. }

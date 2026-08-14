@@ -94,6 +94,22 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
         StmtKind::Echo(expr) => audit_expr(expr, errors),
         StmtKind::Assign { name: _, value } => audit_expr(value, errors),
         StmtKind::RefAssign { target: _, source } => audit_expr(source, errors),
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            audit_expr(index, errors);
+            audit_expr(source, errors);
+        }
+        StmtKind::DynamicStaticPropertyWrite {
+            property,
+            index,
+            value,
+            ..
+        } => {
+            audit_expr(property, errors);
+            if let Some(index) = index {
+                audit_expr(index, errors);
+            }
+            audit_expr(value, errors);
+        }
         StmtKind::If {
             condition,
             then_body,
@@ -349,6 +365,14 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
             audit_expr(object, errors);
             audit_expr(value, errors);
         }
+        StmtKind::PropertyRefAssign {
+            object,
+            property: _,
+            source,
+        } => {
+            audit_expr(object, errors);
+            audit_expr(source, errors);
+        }
         StmtKind::StaticPropertyAssign {
             receiver: _,
             property: _,
@@ -490,6 +514,8 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             name: _,
         }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::DynamicStaticPropertyAccess { property, .. } => audit_expr(property, errors),
+        ExprKind::DynamicScopedConstantAccess { receiver, .. } => audit_expr(receiver, errors),
         ExprKind::BinaryOp { left, op: _, right } => {
             audit_expr(left, errors);
             audit_expr(right, errors);
@@ -502,6 +528,7 @@ fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
             }
         }
         ExprKind::Negate(inner)
+        | ExprKind::ArrayReference(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

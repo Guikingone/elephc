@@ -28,7 +28,8 @@ use super::state::ClassBuildState;
 /// Collects all interfaces (including transitive parents) that `class` implements.
 ///
 /// Validates that each interface exists, that `Throwable` is only implementable by
-/// `Error`/`Exception`, and that non-interfaces are not being implemented as interfaces.
+/// `Error`/`Exception`, that enum contracts stay enum-only, and that classes do not implement
+/// non-interface declarations.
 /// Pushes collected interface names onto `state.interfaces` in breadth-first order.
 pub(super) fn collect_interfaces(
     state: &mut ClassBuildState,
@@ -39,6 +40,15 @@ pub(super) fn collect_interfaces(
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
     for interface_name in class.implements.iter().rev() {
+        if interface_is_enum_contract(checker, interface_name) {
+            return Err(CompileError::new(
+                crate::span::Span::dummy(),
+                &format!(
+                    "Non-enum class {} cannot implement interface UnitEnum",
+                    class.name
+                ),
+            ));
+        }
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -83,6 +93,13 @@ pub(super) fn collect_interfaces(
         state.interfaces.push(interface_name);
     }
     Ok(())
+}
+
+/// Returns `true` when an interface is or extends PHP's enum-only contracts.
+fn interface_is_enum_contract(checker: &Checker, interface_name: &str) -> bool {
+    let key = php_symbol_key(interface_name);
+    key == php_symbol_key("UnitEnum")
+        || checker.interface_extends_interface(interface_name, "UnitEnum")
 }
 
 /// Returns `true` if `interface_name` is or extends `Throwable` (case-insensitive).

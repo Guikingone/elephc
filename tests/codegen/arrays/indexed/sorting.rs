@@ -120,3 +120,52 @@ echo $a[0] . "," . $a[1] . "," . $a[2] . "," . $a[3];
     );
     assert_eq!(out, "date,cherry,banana,apple");
 }
+
+/// Verifies gradual callback sorts preserve or reset keys according to the PHP builtin used.
+#[test]
+fn test_gradual_sort_compatibility_helpers() {
+    let output = compile_and_run(
+        r#"<?php
+function compare_values(mixed $left, mixed $right): int { return $left <=> $right; }
+function compare_keys(mixed $left, mixed $right): int { return $right <=> $left; }
+function sort_all(mixed $input): array {
+    $preserved = $input;
+    uasort($preserved, 'compare_values');
+    $reindexed = $input;
+    usort($reindexed, 'compare_values');
+    $keys = $input;
+    uksort($keys, 'compare_keys');
+    return [$preserved, $reindexed, $keys];
+}
+$result = sort_all(["b" => 2, "a" => 1]);
+echo implode(',', array_keys($result[0])).'|';
+echo implode(',', array_keys($result[1])).'|';
+echo implode(',', array_keys($result[2]));
+"#,
+    );
+    assert_eq!(output, "a,b|0,1|b,a");
+}
+
+/// Verifies key sorting a boxed gradual array reaches typed hash codegen without a backend refusal.
+#[test]
+fn test_ksort_gradual_local_reaches_typed_codegen_with_flags() {
+    let source = r#"<?php
+function sorted(mixed $values): mixed {
+    ksort($values, SORT_STRING);
+    return $values;
+}
+$source = ["b" => 2, "a" => 1];
+$result = sorted($source);
+foreach ($result as $key => $value) { echo $key . $value; }
+echo ":";
+foreach ($source as $key => $value) { echo $key . $value; }
+"#;
+    let dir = make_cli_test_dir("elephc_ksort_gradual_local");
+    let (user_asm, _runtime_asm, _required_libraries) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    assert!(
+        user_asm.contains("__rt_ksort"),
+        "gradual ksort must reach the typed key-sort runtime call"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -19,7 +19,17 @@ pub(in crate::interpreter) fn eval_binary_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match op {
-        EvalBinOp::Add => values.add(left, right),
+        EvalBinOp::Add => {
+            let left_tag = values.type_tag(left)?;
+            let right_tag = values.type_tag(right)?;
+            if matches!(left_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+                && matches!(right_tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
+            {
+                eval_array_union_result(left, right, values)
+            } else {
+                values.add(left, right)
+            }
+        }
         EvalBinOp::Sub => values.sub(left, right),
         EvalBinOp::Mul => values.mul(left, right),
         EvalBinOp::Div => values.div(left, right),
@@ -51,6 +61,26 @@ pub(in crate::interpreter) fn eval_binary_result(
         EvalBinOp::Spaceship => values.spaceship(left, right),
         EvalBinOp::LogicalAnd | EvalBinOp::LogicalOr => Err(EvalStatus::UnsupportedConstruct),
     }
+}
+
+/// Builds PHP's left-biased array union while preserving insertion order.
+fn eval_array_union_result(
+    left: RuntimeCellHandle,
+    right: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut result = values.array_clone_shallow(left)?;
+    let right_len = values.array_len(right)?;
+    for position in 0..right_len {
+        let key = values.array_iter_key(right, position)?;
+        let exists = values.array_key_exists(key, result)?;
+        if values.truthy(exists)? {
+            continue;
+        }
+        let value = values.array_get(right, key)?;
+        result = values.array_set(result, key, value)?;
+    }
+    Ok(result)
 }
 
 /// Evaluates a runtime property or method name expression and returns its PHP string bytes as UTF-8.
@@ -125,22 +155,44 @@ pub(super) fn eval_new_object_result(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if let Some(object) =
-        eval_reflection_owner_new_object(class_name, args.clone(), context, values)?
-    {
+    let reflection = eval_reflection_owner_new_object(class_name, args.clone(), context, values)
+        .map_err(|status| trace_new_object_error("reflection", class_name, status, context))?;
+    if let Some(object) = reflection {
         return Ok(object);
     }
     if let Some(class) = context.class(class_name).cloned() {
-        return eval_dynamic_class_new_object(&class, args, context, scope, values);
+        return eval_dynamic_class_new_object(&class, args, context, scope, values)
+            .map_err(|status| trace_new_object_error("eval_class", class_name, status, context));
     }
-    let object = values.new_object(class_name)?;
+    let object = values
+        .new_object(class_name)
+        .map_err(|status| trace_new_object_error("allocation", class_name, status, context))?;
     if let Err(err) =
         eval_native_constructor_with_evaluated_args(class_name, object, args, context, values)
     {
+        trace_new_object_error("native_constructor", class_name, err, context);
         let _ = values.release(object);
         return Err(err);
     }
     Ok(object)
+}
+
+/// Emits the failing AOT/eval construction substage under opt-in runtime tracing.
+fn trace_new_object_error(
+    stage: &str,
+    class_name: &str,
+    status: EvalStatus,
+    context: &ElephcEvalContext,
+) -> EvalStatus {
+    if std::env::var_os("ELEPHC_EVAL_TRACE").is_some() {
+        let call_site = context.call_site();
+        eprintln!(
+            "[elephc-eval-trace] phase=new_object_error stage={stage} class={class_name:?} status={status:?} file={:?} line={}",
+            call_site.0,
+            call_site.2,
+        );
+    }
+    status
 }
 
 /// Resolves special class names used by `new` while preserving AOT fallback names.
@@ -331,7 +383,7 @@ pub(super) fn eval_closure_expr(
 }
 
 /// Materializes one PHP-visible `Closure` object for an eval callable target.
-pub(super) fn eval_closure_object_expr(
+pub(in crate::interpreter) fn eval_closure_object_expr(
     target: EvalClosureObjectTarget,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,

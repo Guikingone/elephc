@@ -19,3 +19,17 @@ pub(crate) fn union_member_is_countable_array(ty: &PhpType) -> bool {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
     )
 }
+
+/// Returns whether an array-taking builtin may accept this type at a gradual boundary.
+///
+/// Concrete arrays and `Mixed` are accepted directly. A union is accepted when at least one
+/// member can be an array; lowering retains the runtime tag guard for the non-array branches.
+pub(crate) fn array_arg_is_gradually_acceptable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })),
+        _ => false,
+    }
+}

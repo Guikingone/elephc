@@ -9,6 +9,51 @@
 
 use super::*;
 
+/// Rebinds a declared reference property to an existing managed reference cell.
+pub(in crate::codegen::lower_inst) fn lower_bind_prop_ref_cell(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let source_cell = expect_operand(inst, 1)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_reference {
+        return Err(CodegenIrError::unsupported(format!(
+            "bind_prop_ref_cell on non-reference property {}::${}",
+            slot.class_name, slot.property
+        )));
+    }
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let source_reg = abi::secondary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    ctx.load_value_to_reg(source_cell, abi::int_result_reg(ctx.emitter))?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_call_label(ctx.emitter, "__rt_ref_cell_incref");
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    abi::emit_push_reg(ctx.emitter, source_reg);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        slot.offset,
+    );
+    abi::emit_release_local_ref_cell(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &slot.php_type,
+    );
+    abi::emit_pop_reg(ctx.emitter, source_reg);
+    abi::emit_pop_reg(ctx.emitter, object_reg);
+    abi::emit_store_to_address(ctx.emitter, source_reg, object_reg, slot.offset);
+    abi::emit_store_zero_to_address(ctx.emitter, object_reg, slot.offset + 8);
+    Ok(())
+}
+
 /// Emits a declared-property store from an SSA value into the object slot.
 pub(super) fn emit_property_store(
     ctx: &mut FunctionContext<'_>,
@@ -203,6 +248,7 @@ pub(super) fn emit_reference_property_write(
     abi::emit_pop_reg(ctx.emitter, base_reg);
     let pointer_reg = reference_pointer_reg(ctx, base_reg);
     abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset + 8);
     release_previous_referenced_value(ctx, pointer_reg, &slot.php_type, Some(&slot.php_type));
     store_current_result_to_reference_cell(ctx, pointer_reg, &slot.php_type)
 }

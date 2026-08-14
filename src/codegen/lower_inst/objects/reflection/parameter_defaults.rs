@@ -249,6 +249,7 @@ pub(super) fn reflection_parameter_default_from_constant_value(
         }
         ReflectionConstantValue::Str(value) => Some(ReflectionParameterDefaultValue::Str(value)),
         ReflectionConstantValue::Null => Some(ReflectionParameterDefaultValue::Null),
+        ReflectionConstantValue::Array(value) => Some(value),
         ReflectionConstantValue::EnumCase { .. } => None,
     }
 }

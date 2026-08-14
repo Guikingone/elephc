@@ -92,3 +92,61 @@ use signature_patch_types::*;
 
 pub(crate) use injection::inject_builtin_reflection;
 pub(crate) use signature_patches::patch_builtin_reflection_signatures;
+
+/// Returns the private metadata slot backing a public built-in Reflection property.
+///
+/// These properties are exposed by PHP itself but share storage with the synthetic accessors,
+/// so the compiler must not allocate or initialize a second object slot for them.
+pub(crate) fn reflection_virtual_property_backing(
+    class_name: &str,
+    property: &str,
+) -> Option<&'static str> {
+    let class_name = class_name.trim_start_matches('\\');
+    match property {
+        "name"
+            if matches!(
+                class_name,
+                "ReflectionClass"
+                    | "ReflectionObject"
+                    | "ReflectionEnum"
+                    | "ReflectionFunctionAbstract"
+                    | "ReflectionFunction"
+                    | "ReflectionMethod"
+                    | "ReflectionProperty"
+                    | "ReflectionParameter"
+                    | "ReflectionClassConstant"
+                    | "ReflectionEnumUnitCase"
+                    | "ReflectionEnumBackedCase"
+            ) =>
+        {
+            Some("__name")
+        }
+        "class"
+            if matches!(
+                class_name,
+                "ReflectionFunctionAbstract" | "ReflectionMethod"
+            ) =>
+        {
+            Some("__class")
+        }
+        _ => None,
+    }
+}
+
+/// Returns the PHP-visible type of a virtual built-in Reflection property.
+pub(crate) fn reflection_virtual_property_type(
+    class_name: &str,
+    property: &str,
+) -> Option<PhpType> {
+    let class_name = class_name.trim_start_matches('\\');
+    match property {
+        "name" if reflection_virtual_property_backing(class_name, property).is_some() => {
+            Some(PhpType::Str)
+        }
+        "class" if class_name == "ReflectionMethod" => Some(PhpType::Str),
+        "class" if class_name == "ReflectionFunctionAbstract" => {
+            Some(PhpType::Union(vec![PhpType::Str, PhpType::Void]))
+        }
+        _ => None,
+    }
+}

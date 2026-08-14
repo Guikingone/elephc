@@ -26,7 +26,9 @@ pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module
             if !matches!(
                 inst.op,
                 Op::LoadStaticProperty
+                    | Op::LoadDynamicStaticProperty
                     | Op::StoreStaticProperty
+                    | Op::StoreDynamicStaticProperty
                     | Op::LoadReflectionStaticProperty
                     | Op::ReflectionStaticPropertyInitialized
                     | Op::StoreReflectionStaticProperty
@@ -39,6 +41,17 @@ pub(in crate::codegen) fn referenced_static_property_class_names(module: &Module
             let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
                 continue;
             };
+            if matches!(
+                inst.op,
+                Op::LoadDynamicStaticProperty | Op::StoreDynamicStaticProperty
+            ) {
+                if let Some(class_name) =
+                    resolve_static_property_metadata_class(module, function, label)
+                {
+                    names.insert(class_name);
+                }
+                continue;
+            }
             let Some((class_name, _)) = label.rsplit_once("::") else {
                 continue;
             };

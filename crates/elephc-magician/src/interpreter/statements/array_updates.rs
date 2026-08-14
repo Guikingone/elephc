@@ -50,7 +50,7 @@ pub(super) fn eval_static_property_inc_dec_result(
 }
 
 /// Releases one eval-owned value after running an eval-declared dynamic destructor if needed.
-pub(super) fn eval_release_value(
+pub(in crate::interpreter) fn eval_release_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     value: RuntimeCellHandle,
@@ -388,6 +388,38 @@ pub(super) fn eval_non_object_array_set_var_stmt(
     let array = values.array_set(array, index, value)?;
     for replaced in set_scope_cell(context, scope, name.to_string(), array, ownership)? {
         values.release(replaced)?;
+    }
+    Ok(())
+}
+
+/// Executes short array destructuring and stores each selected positional element.
+pub(in crate::interpreter) fn eval_array_destructure_stmt(
+    targets: &[Option<String>],
+    value: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let array = eval_expr(value, context, scope, values)?;
+    if !values.is_array_like(array)? {
+        return Err(EvalStatus::RuntimeFatal);
+    }
+    for (position, target) in targets.iter().enumerate() {
+        let Some(target) = target else {
+            continue;
+        };
+        let index = values.int(position as i64)?;
+        let element = eval_array_get_result(array, index, context, values)?;
+        eval_release_value(context, values, index)?;
+        for replaced in set_scope_cell(
+            context,
+            scope,
+            target.clone(),
+            element,
+            ScopeCellOwnership::Owned,
+        )? {
+            eval_release_value(context, values, replaced)?;
+        }
     }
     Ok(())
 }

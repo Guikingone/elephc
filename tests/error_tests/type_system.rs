@@ -116,21 +116,13 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
-/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
+/// Verifies gradual storage is not reinterpreted as a concrete container through a by-reference
+/// boundary before a representation-preserving write-back path exists.
 #[test]
-fn test_error_mixed_rejected_at_object_parameter_boundary() {
+fn test_error_mixed_rejected_at_concrete_by_ref_boundary() {
     expect_error(
-        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
-    );
-}
-
-/// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
-#[test]
-fn test_error_mixed_rejected_at_array_return_boundary() {
-    expect_error(
-        "<?php function relay(mixed $value): array { return $value; }",
-        "Function 'relay' return type expects Array(Mixed), got Mixed",
+        "<?php function mutate(array &$value): void {} function relay(mixed &$value): void { mutate($value); }",
+        "runtime storage already matches the declared by-reference type",
     );
 }
 
@@ -144,13 +136,6 @@ fn test_error_undefined_variable() {
 #[test]
 fn test_error_plain_self_read_assignment_remains_undefined() {
     expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
-}
-
-/// Verifies that reassigning a typed variable to a different type is rejected.
-/// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
-#[test]
-fn test_error_type_mismatch_reassign() {
-    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
 /// Verifies that arithmetic on a string operand produces an error.
@@ -355,12 +340,6 @@ fn test_error_multilevel_break_cannot_jump_out_of_finally() {
         "<?php while (1) { try { echo 1; } finally { while (1) { break 2; } } }",
         "Cannot jump out of a finally block",
     );
-}
-
-/// Verifies that calling an undefined function produces an error.
-#[test]
-fn test_error_undefined_function() {
-    expect_error("<?php nope();", "Undefined function: nope");
 }
 
 /// Verifies that passing too many arguments to a user-defined function is rejected.
@@ -592,6 +571,28 @@ class Box {
 $box = new Box("bad");
 "#,
         "Constructor 'Box::__construct' parameter $value expects Int, got Str",
+    );
+}
+
+/// Verifies an overriding constructor keeps its resolved declared-parameter flags even when an
+/// inherited declaration with the same name has an untyped parameter at that position.
+#[test]
+fn test_error_overriding_constructor_uses_its_own_declared_parameter_contract() {
+    expect_error(
+        r#"<?php
+class ParentFailure {
+    public function __construct($message, $line, $detail) {}
+}
+class DetailedFailure extends ParentFailure {
+    public function __construct(
+        private string $message,
+        private int $line,
+        private ?string $detail = null,
+    ) {}
+}
+new DetailedFailure('message', 4, new RuntimeException('wrong'));
+"#,
+        "Constructor 'DetailedFailure::__construct' parameter $detail expects Union([Str, Void]), got Object(\"RuntimeException\")",
     );
 }
 
@@ -1251,4 +1252,12 @@ fn test_error_strict_types_reaches_call_user_func() {
 #[test]
 fn test_strict_types_absent_keeps_coercive_binding() {
     expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
+}
+/// Rejects reference aliases whose source is not an element of the same static-property array.
+#[test]
+fn test_error_ref_assign_static_property_element_cross_array() {
+    expect_error(
+        "<?php class C { public static array $a = []; public static array $b = []; static function t() { self::$a['x'] = &self::$b['y']; } }",
+        "Reference between two different static-property arrays is not yet supported",
+    );
 }

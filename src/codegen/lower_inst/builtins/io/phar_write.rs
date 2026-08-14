@@ -9,12 +9,12 @@
 
 use super::*;
 
-/// Lowers `file_put_contents(path, data)` through the target-aware runtime writer.
+/// Lowers `file_put_contents(path, data, flags?, context?)` through the target-aware runtime writer.
 pub(crate) fn lower_file_put_contents(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "file_put_contents", 2)?;
+    super::super::ensure_arg_count_between(inst, "file_put_contents", 2, 4)?;
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
@@ -355,4 +355,3 @@ pub(super) fn emit_phar_get_string_bridge(
     }
     store_if_result(ctx, inst)
 }
-

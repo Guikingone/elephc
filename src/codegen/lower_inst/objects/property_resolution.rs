@@ -86,6 +86,47 @@ pub(super) fn object_is_builtin_stdclass(ctx: &FunctionContext<'_>, object: Valu
     ))
 }
 
+/// Returns the canonical interface name carried by a statically narrowed object value.
+pub(super) fn property_interface_receiver(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+) -> Result<Option<String>> {
+    let PhpType::Object(interface_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let key = php_symbol_key(interface_name.trim_start_matches('\\'));
+    Ok(ctx
+        .module
+        .interface_infos
+        .keys()
+        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
+        .cloned())
+}
+
+/// Returns an abstract class whose virtual property must dispatch through a concrete subtype.
+pub(super) fn property_abstract_receiver(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    let normalized = class_name.trim_start_matches('\\');
+    let Some(class_info) = ctx.module.class_infos.get(normalized) else {
+        return Ok(None);
+    };
+    if !class_info.is_abstract {
+        return Ok(None);
+    }
+    let backing = crate::types::checker::reflection_virtual_property_backing(normalized, property)
+        .unwrap_or(property);
+    if class_info.visible_property(backing).is_some() {
+        return Ok(None);
+    }
+    Ok(Some(normalized.to_string()))
+}
+
 /// Resolves a property slot for a known class name.
 pub(super) fn resolve_property_slot_for_class(
     ctx: &FunctionContext<'_>,
@@ -94,6 +135,8 @@ pub(super) fn resolve_property_slot_for_class(
     inst: &Instruction,
 ) -> Result<PropertySlot> {
     let normalized = class_name.trim_start_matches('\\');
+    let property = crate::types::checker::reflection_virtual_property_backing(normalized, property)
+        .unwrap_or(property);
     let class_info = ctx
         .module
         .class_infos

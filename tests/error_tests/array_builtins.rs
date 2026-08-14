@@ -487,8 +487,8 @@ fn test_error_array_map_wrong_args() {
 #[test]
 fn test_error_array_filter_wrong_args() {
     expect_error(
-        r#"<?php array_filter([]);"#,
-        "array_filter() takes 2 or 3 arguments",
+        r#"<?php array_filter();"#,
+        "array_filter() takes 1 to 3 arguments",
     );
 }
 

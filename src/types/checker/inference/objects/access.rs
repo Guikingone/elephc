@@ -9,6 +9,7 @@
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
 
 use crate::errors::CompileError;
+use crate::names::php_symbol_key;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::types::{PhpType, TypeEnv};
 
@@ -209,6 +210,27 @@ impl Checker {
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
         }
+        if let Some(property_ty) =
+            crate::types::checker::reflection_virtual_property_type(class_name, property)
+        {
+            return Ok(property_ty);
+        }
+        if let Some(property_ty) = self.enum_interface_property_type(class_name, property) {
+            return Ok(property_ty);
+        }
+        if let Some(interface_info) = self.interfaces.get(class_name) {
+            if let Some(property_ty) = interface_info
+                .properties
+                .get(property)
+                .and_then(|contract| contract.get_type.clone())
+            {
+                return Ok(property_ty);
+            }
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Undefined property: {}::{}", class_name, property),
+            ));
+        }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
                 let declaring_class = class_info
@@ -254,6 +276,30 @@ impl Checker {
             expr.span,
             &format!("Undefined class: {}", class_name),
         ))
+    }
+
+    /// Returns the readonly property type guaranteed by PHP's enum interfaces.
+    ///
+    /// Enum case objects carry these properties even though reflection does not expose them as
+    /// declarations on the interfaces. Descendant interfaces retain the same guarantee because
+    /// only enum declarations may implement this hierarchy.
+    fn enum_interface_property_type(
+        &self,
+        interface_name: &str,
+        property: &str,
+    ) -> Option<PhpType> {
+        let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
+        let is_unit_enum = interface_key == php_symbol_key("UnitEnum")
+            || self.interface_extends_interface(interface_name, "UnitEnum");
+        if is_unit_enum && property == "name" {
+            return Some(PhpType::Str);
+        }
+        let is_backed_enum = interface_key == php_symbol_key("BackedEnum")
+            || self.interface_extends_interface(interface_name, "BackedEnum");
+        if is_backed_enum && property == "value" {
+            return Some(PhpType::Union(vec![PhpType::Int, PhpType::Str]));
+        }
+        None
     }
 
     /// Returns precise SPL runtime storage metadata for callback-filter internals.
@@ -435,6 +481,42 @@ impl Checker {
                     &format!("Undefined static property: {}::{}", class_name, property),
                 )
             })
+    }
+
+    /// Infers a static-property read whose property name is computed at runtime.
+    pub(crate) fn infer_dynamic_static_property_access_type(
+        &mut self,
+        receiver: &StaticReceiver,
+        property: &Expr,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let name_ty = self.infer_type(property, env)?;
+        if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
+            return Err(CompileError::new(
+                property.span,
+                &format!("Dynamic static property name must be a string, got `{name_ty}`"),
+            ));
+        }
+        let class_name = self.resolve_static_property_receiver(receiver, expr)?;
+        let Some(class_info) = self.classes.get(&class_name) else {
+            return Err(CompileError::new(
+                expr.span,
+                "Dynamic static property access requires a statically-known class",
+            ));
+        };
+        let mut types = class_info.static_properties.iter().map(|(_, ty)| ty.clone());
+        let Some(first) = types.next() else {
+            return Err(CompileError::new(
+                expr.span,
+                &format!("Class {class_name} has no static properties"),
+            ));
+        };
+        if types.all(|ty| ty == first) {
+            Ok(first)
+        } else {
+            Ok(PhpType::Mixed)
+        }
     }
 
     /// Resolves a static property receiver to its class name.

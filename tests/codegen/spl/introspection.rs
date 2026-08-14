@@ -30,6 +30,21 @@ foreach (class_implements("ImplMarker") as $name => $value) {
     assert_eq!(out, "ChildMarker=ChildMarker;BaseMarker=BaseMarker;");
 }
 
+/// Verifies that a boxed class-relation result can be consumed by an array builtin.
+#[test]
+fn test_class_implements_result_can_be_imploded() {
+    let out = compile_and_run(
+        r#"<?php
+interface FirstMarker {}
+interface SecondMarker {}
+class ImplodedMarkers implements FirstMarker, SecondMarker {}
+
+echo implode(",", class_implements("ImplodedMarkers"));
+"#,
+    );
+    assert_eq!(out, "FirstMarker,SecondMarker");
+}
+
 /// Verifies that class implements accepts object static type.
 #[test]
 fn test_class_implements_accepts_object_static_type() {

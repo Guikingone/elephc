@@ -43,6 +43,7 @@ mod strncasecmp;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
+mod str_replace_array;
 mod explode;
 mod implode;
 mod implode_bool;
@@ -170,6 +171,8 @@ pub use str_ends_with::emit_str_ends_with;
 /// Emit check for string suffix match.
 pub use str_replace::emit_str_replace;
 /// Emit string replace helper.
+pub use str_replace_array::emit_str_replace_array;
+/// Emit array-search and array-subject string replace helpers.
 pub use explode::emit_explode;
 /// Emit explode (split by delimiter) helper.
 pub use implode::emit_implode;

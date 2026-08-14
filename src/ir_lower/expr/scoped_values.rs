@@ -11,10 +11,18 @@ use super::*;
 
 /// Lowers first-class callable creation.
 pub(super) fn lower_first_class_callable(ctx: &mut LoweringContext<'_, '_>, target: &CallableTarget, expr: &Expr) -> LoweredValue {
-    let operands = if let CallableTarget::Method { object, .. } = target {
-        vec![lower_expr(ctx, object).value]
-    } else {
-        Vec::new()
+    let operands = match target {
+        CallableTarget::Method { object, method } => {
+            let receiver = lower_expr(ctx, object);
+            if method == "__invoke"
+                && ctx.builder.value_php_type(receiver.value).codegen_repr()
+                    == PhpType::Callable
+            {
+                return receiver;
+            }
+            vec![receiver.value]
+        }
+        _ => Vec::new(),
     };
     let data = ctx.intern_string(&callable_target_name(target));
     ctx.emit_value(
@@ -137,6 +145,25 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
         PhpType::Mixed,
         Op::ScopedConstantGet.default_effects(),
         Some(expr.span),
+    )
+}
+
+/// Lowers a class constant read through a statically typed object expression.
+pub(super) fn lower_dynamic_scoped_constant(
+    ctx: &mut LoweringContext<'_, '_>,
+    receiver: &Expr,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let class_name = super::callable_resolution::instance_callable_object_class(ctx, receiver)
+        .unwrap_or_else(|| panic!("dynamic class constant receiver lost its checked object type"));
+    let receiver_value = lower_expr(ctx, receiver);
+    crate::ir_lower::ownership::release_if_owned(ctx, receiver_value, Some(receiver.span));
+    lower_scoped_constant(
+        ctx,
+        &StaticReceiver::Named(crate::names::Name::from(class_name)),
+        name,
+        expr,
     )
 }
 
@@ -318,6 +345,7 @@ pub(super) fn lower_new_scoped_object(ctx: &mut LoweringContext<'_, '_>, receive
     let name = static_receiver_class_name(ctx, receiver).unwrap_or_else(|| receiver_name(receiver));
     let sig = constructor_signature(ctx, &Name::from(name.clone())).cloned();
     let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    append_optional_constructor_argc_marker(ctx, sig.as_ref(), args, &operands, expr);
     emit_fixed_object_new(
         ctx,
         &name,
@@ -332,4 +360,3 @@ pub(super) fn lower_magic_constant(ctx: &mut LoweringContext<'_, '_>, kind: &Mag
     let value = format!("__{:?}__", kind);
     lower_string_literal(ctx, &value, expr)
 }
-

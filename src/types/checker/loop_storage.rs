@@ -438,7 +438,7 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
             CastType::Float => Some(PhpType::Float),
             CastType::String => Some(PhpType::Str),
             CastType::Bool => Some(PhpType::Bool),
-            CastType::Array => None,
+            CastType::Array | CastType::Object => None,
         },
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
         _ => None,
@@ -488,6 +488,7 @@ fn collect_value_assignment_stmt<'a>(
             collect_value_assignments_from_expr(value, out);
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             collect_value_assignments_from_expr(object, out);
             collect_value_assignments_from_expr(value, out);
@@ -509,6 +510,10 @@ fn collect_value_assignment_stmt<'a>(
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             collect_value_assignments_from_expr(index, out);
             collect_value_assignments_from_expr(value, out);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_value_assignments_from_expr(index, out);
+            collect_value_assignments_from_expr(source, out);
         }
         StmtKind::Foreach {
             array,
@@ -698,6 +703,7 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
             collect_growth_calls_from_expr(value, out);
         }
         StmtKind::PropertyAssign { object, value, .. }
+        | StmtKind::PropertyRefAssign { object, source: value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             collect_growth_calls_from_expr(object, out);
             collect_growth_calls_from_expr(value, out);
@@ -719,6 +725,10 @@ fn collect_array_write_stmt<'a>(statement: &'a Stmt, out: &mut Vec<ArrayWrite<'a
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             collect_growth_calls_from_expr(index, out);
             collect_growth_calls_from_expr(value, out);
+        }
+        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+            collect_growth_calls_from_expr(index, out);
+            collect_growth_calls_from_expr(source, out);
         }
         StmtKind::If {
             condition,

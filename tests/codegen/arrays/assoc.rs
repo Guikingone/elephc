@@ -113,11 +113,11 @@ fn test_assoc_array_literal_property_receiver_method_element_typed_by_return() {
 declare(strict_types=1);
 final class Link { public function __construct(public string $label) {} }
 final class Factory { public function link(string $label): Link { return new Link($label); } }
-final class Composer {
+final class LinkCollection {
     public function __construct(private Factory $factory) {}
     public function links(): array { return ['view' => $this->factory->link('View')]; }
 }
-$links = (new Composer(new Factory()))->links();
+$links = (new LinkCollection(new Factory()))->links();
 echo $links['view']->label;
 "#,
     );
@@ -393,6 +393,22 @@ echo "|" . $result[0] . "|" . $result[1] . "|" . $result["01"] . "|" . $result[2
         out,
         "5:0=zero-left;01=leading-left;name=left;1=one-right;2=two-right;|zero-left|one-right|leading-left|two-right"
     );
+}
+
+/// Verifies compound array union accepts an array stored in a boxed Mixed associative slot.
+#[test]
+fn test_mixed_slot_compound_array_union() {
+    let out = compile_and_run(
+        r#"<?php
+$state = [
+    "options" => ["left" => "keep"],
+    "marker" => 1,
+];
+$result = $state["options"] += ["right" => "add", "left" => "replace"];
+echo $state["options"]["left"] . ":" . $state["options"]["right"] . ":" . $result["right"];
+"#,
+    );
+    assert_eq!(out, "keep:add:add");
 }
 
 /// Compiles a PHP script that performs array union with mixed indexed and assoc arrays containing nested arrays, then unsets the operands and verifies the result retains nested values.

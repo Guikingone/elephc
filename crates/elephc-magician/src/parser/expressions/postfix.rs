@@ -36,7 +36,7 @@ impl Parser {
             return Ok(EvalInstanceOfTarget::Expr(Box::new(expr)));
         }
         if matches!(self.current(), TokenKind::DollarIdent(_)) {
-            let target = self.parse_instanceof_variable_target()?;
+            let target = self.parse_variable_class_name_target()?;
             return Ok(EvalInstanceOfTarget::Expr(Box::new(target)));
         }
         let name = self.parse_class_reference_name(true)?;
@@ -57,8 +57,8 @@ impl Parser {
         Ok(EvalInstanceOfTarget::ClassName(class_name))
     }
 
-    /// Parses PHP's unparenthesized dynamic `instanceof` variable/property/array target.
-    pub(in crate::parser) fn parse_instanceof_variable_target(&mut self) -> Result<EvalExpr, EvalParseError> {
+    /// Parses an unparenthesized dynamic class-name variable/property/array target.
+    pub(in crate::parser) fn parse_variable_class_name_target(&mut self) -> Result<EvalExpr, EvalParseError> {
         let TokenKind::DollarIdent(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };

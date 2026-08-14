@@ -1,11 +1,11 @@
 //! Purpose:
-//! Lowers a mutating builtin call whose by-reference array argument is a *place* other than
-//! a plain local — an object property, a static property, or a container element — as an
-//! explicit read/mutate/write-back sequence through a hidden temporary.
+//! Lowers by-reference arguments that need an explicit caller-visible read/mutate/write-back
+//! sequence through a hidden temporary. This covers non-local container places and gradual
+//! local storage whose runtime representation differs from a declared parameter.
 //!
 //! Called from:
-//! - `crate::ir_lower::expr::lower_function_call()`, before the builtin fast paths, so the
-//!   rewritten call re-enters the ordinary local-variable by-reference lowering.
+//! - Direct function, instance-method, nullsafe-method, and static-method call lowering before
+//!   their ordinary argument materialization.
 //!
 //! Key details:
 //! - Only a receiver the backend can resolve to a slot reaches its COW write-back
@@ -24,10 +24,10 @@
 //!   before mutating — which is exactly PHP's copy-on-write behavior: an earlier
 //!   `$c = $obj->items;` alias stays unsorted, and a `usort` comparator that reads the
 //!   property while sorting still sees the pre-sort array.
-//! - Only array/hash-typed places are rewritten. Scalar by-reference parameters (`settype`,
-//!   `preg_match` `$matches`, `str_replace` `$count`) keep their existing lowering and their
-//!   existing diagnostics, because a hidden temp declared with the place's scalar type cannot
-//!   represent a builtin that re-types its argument.
+//! - Declared scalar parameters may use a concrete temporary when their caller local has boxed
+//!   gradual storage. The shared gradual-boundary conversion validates or converts the current
+//!   payload before the call, and the post-call store publishes the result back into the boxed
+//!   caller slot.
 //! - Place types are resolved statically (no IR is emitted before the decision), so a shape
 //!   this module cannot resolve falls through to the pre-existing lowering unchanged.
 
@@ -45,21 +45,21 @@ use super::{
 /// One by-reference argument rewritten into a hidden temporary.
 ///
 /// `place` is the stabilized target expression written back after the call; `temp` is the
-/// hidden local holding the mutated array while the builtin runs.
-struct RefPlacePlan {
+/// hidden local holding the adapted or mutated value while the callee runs.
+pub(super) struct RefPlacePlan {
     index: usize,
     place: Expr,
     temp: String,
 }
 
-/// Lowers a builtin call whose by-reference array argument is a non-local place.
+/// Lowers a direct call whose by-reference argument needs a temporary place adapter.
 ///
-/// Returns `None` — leaving the call to the ordinary lowering — unless the callee is a
-/// registry builtin with a by-reference regular parameter and at least one such argument is a
-/// statically array-typed property, static property, or container element. On a rewrite the
+/// Returns `None` — leaving the call to the ordinary lowering — unless its signature has a
+/// by-reference regular parameter bound either to a statically array-typed non-local place or
+/// to gradual local storage that needs a declared concrete representation. On a rewrite the
 /// place is read into a hidden temporary, the call is re-lowered against that temporary, and
-/// the temporary is written back to the place so the caller's storage observes the mutation.
-pub(super) fn lower_builtin_ref_place_call(
+/// the temporary is written back so the caller's storage observes the mutation.
+pub(super) fn lower_ref_place_function_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
     args: &[Expr],
@@ -67,14 +67,23 @@ pub(super) fn lower_builtin_ref_place_call(
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
     let prefer_extension = source_prefers_extension_builtin(canonical);
-    if !prefer_extension
-        && (ctx.functions.contains_key(canonical) || ctx.extern_functions.contains_key(canonical))
-    {
-        // User-defined and extern callees own a separate by-reference machine that already
-        // rejects non-local arguments with a named diagnostic.
-        return None;
-    }
     let sig = call_signature(ctx, canonical, prefer_extension)?;
+    let (call_args, plans) = prepare_ref_place_args(ctx, &sig, args)?;
+    let result = lower_function_call(ctx, name, &call_args, expr);
+    write_back_ref_place_args(ctx, plans);
+    Some(result)
+}
+
+/// Replaces supported by-reference places and storage adapters with ordinary hidden locals.
+///
+/// The returned arguments can use the regular call lowering. Each plan retains the stabilized
+/// place and hidden local needed by `write_back_ref_place_args()` after the call completes.
+/// Returns `None` when no supported place requires rewriting.
+pub(super) fn prepare_ref_place_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<(Vec<Expr>, Vec<RefPlacePlan>)> {
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
     }
@@ -87,7 +96,10 @@ pub(super) fn lower_builtin_ref_place_call(
         .iter()
         .enumerate()
         .filter(|(index, arg)| {
-            ref_param_place(&sig, *index, arg).is_some_and(|place| is_array_place(ctx, place))
+            ref_param_binding(sig, *index, arg).is_some_and(|(param_index, place)| {
+                is_array_place(ctx, place)
+                    || declared_local_ref_needs_adapter(ctx, sig, param_index, place)
+            })
         })
         .map(|(index, _)| index)
         .collect();
@@ -98,10 +110,25 @@ pub(super) fn lower_builtin_ref_place_call(
     let mut plans: Vec<RefPlacePlan> = Vec::with_capacity(rewrite_indices.len());
     for index in rewrite_indices {
         let arg = &args[index];
-        let place_arg = ref_param_place(&sig, index, arg)?;
+        let (param_index, place_arg) = ref_param_binding(sig, index, arg)?;
         let place = stabilize_place(ctx, place_arg);
         let read = lower_expr(ctx, &place);
-        let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));
+        let needs_adapter = declared_local_ref_needs_adapter(ctx, sig, param_index, place_arg);
+        let value_type = if needs_adapter {
+            normalize_value_php_type(sig.params.get(param_index)?.1.codegen_repr())
+        } else {
+            normalize_value_php_type(ctx.builder.value_php_type(read.value))
+        };
+        let read = if needs_adapter {
+            crate::ir_lower::gradual_coercions::coerce_gradual_value_to_boundary(
+                ctx,
+                read,
+                &value_type,
+                Some(place_arg.span),
+            )
+        } else {
+            read
+        };
         let temp = ctx.declare_synthetic_php_local(value_type.clone());
         ctx.store_local(&temp, read, value_type, Some(place_arg.span));
         let variable = Expr::new(ExprKind::Variable(temp.clone()), place_arg.span);
@@ -117,9 +144,8 @@ pub(super) fn lower_builtin_ref_place_call(
         };
         plans.push(RefPlacePlan { index, place, temp });
     }
-    // Every rewritten argument now names a plain local (directly, or as the value of the named
-    // argument it replaced), so the recursive call takes the ordinary by-reference path and
-    // this rewrite cannot re-fire.
+    // Every rewritten argument now names a plain local, directly or as a named argument's
+    // value, so recursive direct-call lowering cannot trigger this rewrite again.
     debug_assert!(plans.iter().all(|plan| {
         let rewritten = &call_args[plan.index];
         let place = match &rewritten.kind {
@@ -128,12 +154,69 @@ pub(super) fn lower_builtin_ref_place_call(
         };
         matches!(place.kind, ExprKind::Variable(_))
     }));
-    let result = lower_function_call(ctx, name, &call_args, expr);
+    Some((call_args, plans))
+}
+
+/// Writes every mutated hidden local back to its stabilized caller-visible place.
+pub(super) fn write_back_ref_place_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    plans: Vec<RefPlacePlan>,
+) {
     for plan in plans {
+        let value_type = ctx.local_type(&plan.temp);
+        widen_local_container_place(ctx, &plan.place, value_type.clone());
         let value = Expr::new(ExprKind::Variable(plan.temp), plan.place.span);
-        lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+        if let ExprKind::Variable(name) = &plan.place.kind {
+            let lowered = lower_expr(ctx, &value);
+            ctx.store_local(name, lowered, value_type, Some(plan.place.span));
+        } else {
+            lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
+        }
     }
-    Some(result)
+}
+
+/// Publishes a rewritten element's post-call representation in its local root type.
+///
+/// A declared bare `array` by-reference parameter widens a concrete `Array(T)` argument to
+/// `Array(Mixed)` before the call. When that argument came from `$map[$key]`, future reads of
+/// the child must use the widened element layout too; otherwise they interpret boxed Mixed
+/// cells as raw scalar slots. Property-rooted chains keep their declared class metadata and are
+/// left unchanged here.
+fn widen_local_container_place(
+    ctx: &mut LoweringContext<'_, '_>,
+    place: &Expr,
+    value_type: PhpType,
+) {
+    let ExprKind::ArrayAccess { array, .. } = &place.kind else {
+        return;
+    };
+    if let Some((name, root_type)) = widened_local_container_type(ctx, array, value_type) {
+        ctx.set_local_type(&name, root_type);
+    }
+}
+
+/// Rebuilds the type of a local-rooted container chain after one element changes layout.
+fn widened_local_container_type(
+    ctx: &LoweringContext<'_, '_>,
+    container: &Expr,
+    child_type: PhpType,
+) -> Option<(String, PhpType)> {
+    let container_type = static_place_type(ctx, container)?.codegen_repr();
+    let widened = match container_type {
+        PhpType::Array(_) => PhpType::Array(Box::new(child_type)),
+        PhpType::AssocArray { key, .. } => PhpType::AssocArray {
+            key,
+            value: Box::new(child_type),
+        },
+        _ => return None,
+    };
+    match &container.kind {
+        ExprKind::Variable(name) => Some((name.clone(), widened)),
+        ExprKind::ArrayAccess { array, .. } => {
+            widened_local_container_type(ctx, array, widened)
+        }
+        _ => None,
+    }
 }
 
 /// Returns the argument expression bound to a by-reference parameter, or `None`.
@@ -142,7 +225,11 @@ pub(super) fn lower_builtin_ref_place_call(
 /// (`sort(array: $obj->items)`) binds to the parameter its name selects, so both call forms
 /// reach the same rewrite. Variadic tail positions are excluded because only the visible
 /// regular parameters carry the registry's by-reference markers.
-fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option<&'a Expr> {
+fn ref_param_binding<'a>(
+    sig: &FunctionSig,
+    index: usize,
+    arg: &'a Expr,
+) -> Option<(usize, &'a Expr)> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let (param_index, place) = match &arg.kind {
         ExprKind::NamedArg { name, value } => (
@@ -157,7 +244,34 @@ fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option
     if !sig.ref_params.get(param_index).copied().unwrap_or(false) {
         return None;
     }
-    Some(place)
+    Some((param_index, place))
+}
+
+/// Returns whether a boxed caller local needs a concrete temporary for this declared ref param.
+fn declared_local_ref_needs_adapter(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    param_index: usize,
+    place: &Expr,
+) -> bool {
+    if !sig
+        .declared_params
+        .get(param_index)
+        .copied()
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let ExprKind::Variable(name) = &place.kind else {
+        return false;
+    };
+    let Some((_, expected)) = sig.params.get(param_index) else {
+        return false;
+    };
+    let storage = ctx.local_storage_type(name).codegen_repr();
+    let expected = expected.codegen_repr();
+    matches!(storage, PhpType::Mixed | PhpType::Union(_))
+        && !matches!(expected, PhpType::Mixed | PhpType::Union(_))
 }
 
 /// Returns whether a by-reference argument is a non-local place holding array storage.

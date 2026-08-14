@@ -33,6 +33,8 @@ pub(super) struct BridgeStaticlib {
     pub(super) whole_archive: bool,
     /// macOS frameworks required by this bridge's transitive dependencies.
     pub(super) macos_frameworks: &'static [&'static str],
+    /// macOS libraries required by this bridge's transitive native dependencies.
+    pub(super) macos_libraries: &'static [&'static str],
     /// Whether the Linux link needs the dynamic loader library.
     pub(super) needs_libdl: bool,
     /// Canonical PHP extension reported when this bridge is linked, if distinct.
@@ -48,6 +50,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tls",
         whole_archive: true,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The TLS bridge implements PHP's OpenSSL-backed stream crypto surface.
         php_extension: Some("openssl"),
@@ -59,6 +62,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "pdo",
         whole_archive: false,
         macos_frameworks: &["CoreFoundation", "SystemConfiguration"],
+        macos_libraries: &[],
         needs_libdl: true,
         // The bridge exposes the core PDO database-access surface.
         php_extension: Some("PDO"),
@@ -70,6 +74,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "crypto",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The crypto bridge implements PHP's digest/HMAC `hash` extension.
         php_extension: Some("hash"),
@@ -81,6 +86,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "phar",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The archive reader/writer is exposed by PHP as `Phar`.
         php_extension: Some("Phar"),
@@ -92,6 +98,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "tz",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // Timezone support folds into the always-present `date` extension.
         php_extension: None,
@@ -103,6 +110,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "image",
         whole_archive: false,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The image codec/drawing surface maps to PHP's `gd` extension.
         php_extension: Some("gd"),
@@ -114,6 +122,7 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "web",
         whole_archive: true,
         macos_frameworks: &[],
+        macos_libraries: &[],
         needs_libdl: true,
         // The web bridge owns the PHP `session` extension surface.
         php_extension: Some("session"),
@@ -125,6 +134,8 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         flag_name: "eval",
         whole_archive: false,
         macos_frameworks: &[],
+        // The interpreter's encoding-aware `mb_strlen()` fallback calls libiconv.
+        macos_libraries: &["iconv"],
         needs_libdl: true,
         // The eval interpreter is an internal compiler facility, not an extension.
         php_extension: None,
@@ -138,6 +149,8 @@ pub(super) struct BridgeResolution {
     pub(super) plan: LinkPlan,
     /// Whether any requested bridge needs `libdl` on Linux.
     pub(super) needs_libdl: bool,
+    /// Native libraries required only when rendering a macOS link command.
+    pub(super) macos_libraries: Vec<String>,
 }
 
 /// Resolves a `--with-<flag>` name to its bridge linker library name.
@@ -195,6 +208,8 @@ where
     let mut seen_paths = HashSet::new();
     let mut frameworks = Vec::new();
     let mut seen_frameworks = HashSet::new();
+    let mut macos_libraries = Vec::new();
+    let mut seen_macos_libraries = HashSet::new();
     let mut needs_libdl = false;
     let mut ordered = Vec::with_capacity(plan.items().len());
 
@@ -212,6 +227,8 @@ where
                     &mut needs_libdl,
                     &mut frameworks,
                     &mut seen_frameworks,
+                    &mut macos_libraries,
+                    &mut seen_macos_libraries,
                 );
             } else {
                 validate_archive_path(name, path.clone())?;
@@ -233,6 +250,8 @@ where
             &mut needs_libdl,
             &mut frameworks,
             &mut seen_frameworks,
+            &mut macos_libraries,
+            &mut seen_macos_libraries,
         );
 
         let archive = match located.get(bridge.lib_name) {
@@ -262,20 +281,31 @@ where
     ordered.extend(frameworks);
     let mut plan = LinkPlan::from_items(ordered);
     plan.prepend(bridge_paths);
-    Ok(BridgeResolution { plan, needs_libdl })
+    Ok(BridgeResolution {
+        plan,
+        needs_libdl,
+        macos_libraries,
+    })
 }
 
-/// Accumulates table-driven runtime and framework metadata for one requested bridge.
+/// Accumulates table-driven runtime and macOS metadata for one requested bridge.
 fn record_bridge_metadata(
     bridge: &BridgeStaticlib,
     needs_libdl: &mut bool,
     frameworks: &mut Vec<LinkItem>,
     seen_frameworks: &mut HashSet<&'static str>,
+    macos_libraries: &mut Vec<String>,
+    seen_macos_libraries: &mut HashSet<&'static str>,
 ) {
     *needs_libdl |= bridge.needs_libdl;
     for framework in bridge.macos_frameworks {
         if seen_frameworks.insert(*framework) {
             frameworks.push(LinkItem::Framework((*framework).to_string()));
+        }
+    }
+    for library in bridge.macos_libraries {
+        if seen_macos_libraries.insert(*library) {
+            macos_libraries.push((*library).to_string());
         }
     }
 }
@@ -607,6 +637,7 @@ mod tests {
         assert_eq!(magician.env_var, "ELEPHC_MAGICIAN_LIB_DIR");
         assert_eq!(magician.archive_filename(), "libelephc_magician.a");
         assert!(!magician.whole_archive);
+        assert_eq!(magician.macos_libraries, &["iconv"]);
     }
 
     /// Verifies bridge progress selection and PHP extension reporting share the bridge table.
@@ -654,6 +685,22 @@ mod tests {
             .plan
             .items()
             .contains(&LinkItem::Framework("SystemConfiguration".to_string())));
+        assert!(resolution.macos_libraries.is_empty());
+    }
+
+    /// Verifies the Magician archive retains its macOS-only libiconv dependency.
+    #[test]
+    fn magician_archive_retains_macos_library_metadata() {
+        let executable = std::env::current_exe().expect("test executable path");
+        let archive = LinkItem::bridge_archive(executable, "elephc_magician", false);
+        let resolution = resolve_with(
+            &LinkPlan::from_items(vec![archive]),
+            &[],
+            |_| panic!("an exact bridge archive must not trigger discovery"),
+        )
+        .expect("exact Magician metadata must resolve");
+
+        assert_eq!(resolution.macos_libraries, vec!["iconv".to_string()]);
     }
 
     /// Verifies a missing named bridge returns a structured error instead of a `-l` fallback.

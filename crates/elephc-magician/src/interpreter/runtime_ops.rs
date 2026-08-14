@@ -238,6 +238,14 @@ pub trait RuntimeValueOps {
     /// Returns generated AOT ReflectionClass modifier flags for one class.
     fn reflection_class_flags(&mut self, class_name: &str) -> Result<Option<u64>, EvalStatus>;
 
+    /// Returns the canonical generated AOT class-like name for a case-insensitive lookup.
+    fn reflection_canonical_class_name(
+        &mut self,
+        _class_name: &str,
+    ) -> Result<Option<String>, EvalStatus> {
+        Ok(None)
+    }
+
     /// Returns generated AOT ReflectionProperty flags for a class/property pair.
     fn reflection_property_flags(
         &mut self,

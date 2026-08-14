@@ -27,7 +27,7 @@ impl Parser {
         Ok(vec![EvalStmt::DoWhile { body, condition }])
     }
 
-    /// Parses `$name[index] = expr;` and `$name[] = expr;` eval writes.
+    /// Parses `$name[index] = expr;`, `$name[] = expr;`, and nested `??=` writes.
     pub(in crate::parser) fn parse_array_set_stmt(
         &mut self,
         name: String,
@@ -42,6 +42,48 @@ impl Parser {
         }
         let index = self.parse_expr()?;
         self.expect(TokenKind::RBracket)?;
+        let mut target = EvalExpr::ArrayGet {
+            array: Box::new(EvalExpr::LoadVar(name.clone())),
+            index: Box::new(index.clone()),
+        };
+        let mut nested = false;
+        while self.consume(TokenKind::LBracket) {
+            nested = true;
+            let nested_index = self.parse_expr()?;
+            self.expect(TokenKind::RBracket)?;
+            target = EvalExpr::ArrayGet {
+                array: Box::new(target),
+                index: Box::new(nested_index),
+            };
+        }
+        if self.consume(TokenKind::QuestionQuestionEqual) {
+            let default = self.parse_expr()?;
+            self.expect_semicolon()?;
+            return Ok(vec![EvalStmt::Expr(EvalExpr::NullCoalesceAssign {
+                target: Box::new(target),
+                default: Box::new(default),
+            })]);
+        }
+        if nested {
+            let Some(op) = assignment_op(self.current()) else {
+                return Err(EvalParseError::UnexpectedToken);
+            };
+            self.advance();
+            let value = self.parse_expr()?;
+            self.expect_semicolon()?;
+            let expression = match op {
+                Some(op) => EvalExpr::CompoundAssign {
+                    target: Box::new(target),
+                    op,
+                    value: Box::new(value),
+                },
+                None => EvalExpr::Assign {
+                    target: Box::new(target),
+                    value: Box::new(value),
+                },
+            };
+            return Ok(vec![EvalStmt::Expr(expression)]);
+        }
         self.expect(TokenKind::Equal)?;
         let value = self.parse_expr()?;
         self.expect_semicolon()?;

@@ -92,6 +92,16 @@ pub(super) fn lower_assoc_array_key_set_op(
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
+    if [first, second].into_iter().any(|operand| {
+        ctx.value_php_type(operand).is_ok_and(|ty| {
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+    }) || matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_gradual_two_hash_arg_builtin(ctx, inst, name, helper, None);
+    }
     let first_ty = assoc_array_key_set_operand_type(ctx.value_php_type(first)?, name, "first")?;
     let _second_ty = assoc_array_key_set_operand_type(ctx.value_php_type(second)?, name, "second")?;
     require_assoc_array_key_set_result_type(name, &first_ty, &inst.result_php_type.codegen_repr())?;
@@ -117,7 +127,12 @@ pub(super) fn lower_indexed_array_sort(
     int_helper: &str,
     str_helper: Option<&str>,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
+    let max_args = if matches!(name, "natsort" | "natcasesort") {
+        1
+    } else {
+        2
+    };
+    ensure_arg_count_between(inst, name, 1, max_args)?;
     let array = expect_operand(inst, 0)?;
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
@@ -405,7 +420,7 @@ pub(super) fn lower_array_key_sort(
     name: &str,
     order: KeySortOrder,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
+    ensure_arg_count_between(inst, name, 1, 2)?;
     let array = expect_operand(inst, 0)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::AssocArray { .. } => {
@@ -433,6 +448,21 @@ pub(super) fn lower_array_key_sort(
              before sorting it by key",
             name, elem
         ))),
+        PhpType::Mixed | PhpType::Union(_) => {
+            let helper = match order {
+                KeySortOrder::Ascending => "__rt_ksort",
+                KeySortOrder::Descending => "__rt_krsort",
+            };
+            let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+            ctx.load_value_to_reg(array, array_arg_reg)?;
+            abi::emit_call_label(ctx.emitter, helper);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            store_if_result(ctx, inst)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name, other

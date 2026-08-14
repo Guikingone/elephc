@@ -25,6 +25,21 @@ echo accepts_object(new GenericObjectParam());
     assert_eq!(out, "object");
 }
 
+/// Verifies PHP's incomplete-object placeholder resolves as an internal nominal class.
+#[test]
+fn test_php_incomplete_class_type_and_instanceof_compile() {
+    let out = compile_and_run(
+        r#"<?php
+function is_incomplete(object $value): bool {
+    return $value instanceof __PHP_Incomplete_Class;
+}
+var_dump(class_exists("__PHP_Incomplete_Class"));
+var_dump(is_incomplete(new stdClass()));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\n");
+}
+
 /// Verifies lowercase and mixed-case `object` hints remain generic object types inside a
 /// namespace instead of being rewritten to namespace-local class names.
 #[test]
@@ -133,6 +148,46 @@ echo $child->greet();
 "#,
     );
     assert_eq!(out, "Ada");
+}
+
+/// Verifies constructor inference only specializes parameters that map to the same inherited
+/// property, even when a sibling declares an unrelated constructor parameter at the same index.
+#[test]
+fn test_inherited_property_inference_does_not_retype_unrelated_constructor_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseValue {
+    protected $shared;
+
+    public function __construct($value) {
+        $this->shared = $value;
+    }
+
+    public function shared() {
+        return $this->shared;
+    }
+}
+
+class InheritedValue extends BaseValue {}
+
+class IndependentValue extends BaseValue {
+    private $other;
+
+    public function __construct($other) {
+        $this->other = $other;
+    }
+
+    public function other() {
+        return $this->other;
+    }
+}
+
+$inherited = new InheritedValue(42);
+$independent = new IndependentValue('ok');
+echo $inherited->shared(), '|', $independent->other();
+"#,
+    );
+    assert_eq!(out, "42|ok");
 }
 
 /// Tests that array literals can contain sibling objects that share a common parent

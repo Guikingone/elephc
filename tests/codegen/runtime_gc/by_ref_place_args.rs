@@ -1,6 +1,6 @@
 //! Purpose:
-//! Heap-debug coverage for mutating array builtins whose by-reference argument is a property,
-//! static property, or container element. Those calls are lowered as
+//! Heap-debug coverage for calls whose by-reference argument needs a caller-visible temporary,
+//! including property/static/container places and gradual scalar locals. Those calls lower as
 //! `$tmp = <place>; f($tmp, ...); <place> = $tmp;`, which adds a synthetic local, a
 //! copy-on-write separation, and a write-back that releases the property's previous occupant.
 //! Every one of those steps has to stay balanced.
@@ -112,4 +112,64 @@ echo implode(",", $b->items);
 "#,
     );
     assert_clean(out, "0,1,1,2,2,3,3,4");
+}
+
+/// User functions, instance methods, and static methods share the same non-local l-value
+/// semantics. Each call must write the separated array back while preserving pre-call aliases;
+/// a side-effectful element index must also be evaluated exactly once.
+#[test]
+fn test_declared_calls_write_back_non_local_array_arguments() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function append_value(array &$values, int $value): void { $values[] = $value; }
+function next_key(): string { echo "K"; return "slot"; }
+
+class Mutator {
+    public function append(array &$values, int $value): void { $values[] = $value; }
+    public static function appendStatic(array &$values, int $value): void { $values[] = $value; }
+}
+class Box {
+    public array $items = [1];
+    public static array $shared = [4];
+}
+
+$box = new Box();
+$mutator = new Mutator();
+$itemsCopy = $box->items;
+$sharedCopy = Box::$shared;
+$map = ["slot" => [7]];
+append_value($box->items, 2);
+$mutator->append($box->items, 3);
+Mutator::appendStatic(Box::$shared, 5);
+$mutator->append($map[next_key()], 8);
+echo "|", implode(",", $box->items), "|", implode(",", $itemsCopy);
+echo "|", implode(",", Box::$shared), "|", implode(",", $sharedCopy);
+echo "|", implode(",", $map["slot"]);
+"#,
+    );
+    assert_clean(out, "K|1,2,3|1|4,5|4|7,8");
+}
+
+/// Declared reference parameters adapt gradual caller storage in both directions: a boxed value
+/// is checked before a concrete parameter receives its address, while a nullable parameter can
+/// widen a previously concrete caller variable and publish null back into its boxed frame slot.
+#[test]
+fn test_declared_scalar_refs_adapt_gradual_caller_storage() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function runtime_value(): mixed { return 4; }
+class RefMutator {
+    public static function increment(int &$value): void { $value++; }
+    public function clear(?int &$value): void { $value = null; }
+}
+
+$value = runtime_value();
+RefMutator::increment($value);
+$number = 7;
+$mutator = new RefMutator();
+$mutator->clear($number);
+echo $value, "|", $number === null ? "null" : "value";
+"#,
+    );
+    assert_clean(out, "5|null");
 }

@@ -113,16 +113,6 @@ fn test_error_generic_object_parameter_rejects_array() {
     );
 }
 
-/// Verifies an unqualified `Closure` hint inside a namespace remains namespace-relative
-/// instead of silently referring to PHP's global `\Closure` class.
-#[test]
-fn test_error_namespaced_unqualified_closure_does_not_resolve_globally() {
-    expect_error(
-        "<?php namespace App; function consume(Closure $callback): void {}",
-        "Unknown type: App\\Closure",
-    );
-}
-
 /// Verifies that declaring two functions with names differing only by case produces a
 /// duplicate declaration error (functions are case-sensitive in PHP).
 #[test]

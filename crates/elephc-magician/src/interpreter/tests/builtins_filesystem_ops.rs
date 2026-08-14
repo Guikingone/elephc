@@ -67,6 +67,32 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval mkdir creates missing parent directories when recursive mode is enabled.
+#[test]
+fn execute_program_honors_recursive_mkdir() {
+    let pid = std::process::id();
+    let root = format!("elephc_magician_recursive_dir_{pid}");
+    let leaf = format!("{root}/branch/leaf");
+    let source = format!(
+        r#"echo mkdir("{leaf}", 0701, true) ? "mkdir:" : "bad:";
+echo is_dir("{leaf}") ? "recursive" : "bad";
+rmdir("{leaf}");
+rmdir("{root}/branch");
+rmdir("{root}");
+return true;"#,
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let _ = std::fs::remove_dir_all(&root);
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(values.output, "mkdir:recursive");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
 /// Verifies eval `stream_resolve_include_path()` mirrors elephc realpath semantics.
 #[test]
 fn execute_program_dispatches_stream_resolve_include_path_builtin() {
@@ -171,6 +197,7 @@ file_put_contents("{dir}/a.txt", "a");
 file_put_contents("{dir}/b.log", "b");
 file_put_contents("{dir}/c.txt", "c");
 file_put_contents("{dir}/.hidden.txt", "h");
+mkdir("{dir}/sub");
 $matches = glob("{dir}/*.txt");
 echo count($matches) === 2 && basename($matches[0]) === "a.txt" && basename($matches[1]) === "c.txt" ? "glob" : "bad"; echo ":";
 echo count(glob("{dir}/*.none")) === 0 ? "empty" : "bad"; echo ":";
@@ -178,6 +205,11 @@ $literal = glob("{dir}/a.txt");
 echo count($literal) === 1 && $literal[0] === "{dir}/a.txt" ? "literal" : "bad"; echo ":";
 $all = glob("{dir}/*");
 echo in_array("{dir}/.hidden.txt", $all) ? "bad" : "hidden"; echo ":";
+$dirs = glob("{dir}/*", GLOB_NOSORT | GLOB_ONLYDIR);
+echo count($dirs) === 1 && basename($dirs[0]) === "sub" ? "onlydir" : "bad"; echo ":";
+$brace = glob("{dir}/*.{{txt,log}}", GLOB_BRACE);
+echo count($brace) === 3 ? "brace" : "bad"; echo ":";
+echo glob("{dir}/missing", GLOB_NOCHECK)[0] === "{dir}/missing" ? "nocheck" : "bad"; echo ":";
 $call = call_user_func("glob", "{dir}/*.log");
 echo count($call) === 1 && basename($call[0]) === "b.log" ? "callglob" : "bad"; echo ":";
 $call_array = call_user_func_array("glob", ["pattern" => "{dir}/*.txt"]);
@@ -186,8 +218,9 @@ unlink("{dir}/.hidden.txt");
 unlink("{dir}/c.txt");
 unlink("{dir}/b.log");
 unlink("{dir}/a.txt");
+echo rmdir("{dir}/sub") ? "subcleanup" : "bad"; echo ":";
 echo rmdir("{dir}") ? "cleanup" : "bad"; echo ":";
-echo function_exists("glob");
+echo function_exists("glob"); echo defined("GLOB_ERR");
 return true;"#
     );
     let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
@@ -208,7 +241,7 @@ return true;"#
     let _ = std::fs::remove_dir(&dir);
     assert_eq!(
         values.output,
-        "glob:empty:literal:hidden:callglob:callarray:cleanup:1"
+        "glob:empty:literal:hidden:onlydir:brace:nocheck:callglob:callarray:subcleanup:cleanup:11"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

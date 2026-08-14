@@ -17,7 +17,7 @@ use crate::types::PhpType;
 builtin! {
     name: "file_put_contents",
     area: Io,
-    params: [filename: Str, data: Str],
+    params: [filename: Str, data: Str, flags: Int = crate::builtins::spec::DefaultSpec::Int(0), context: Mixed = crate::builtins::spec::DefaultSpec::Null],
     returns: Int,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

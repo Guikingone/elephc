@@ -239,8 +239,18 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::image_prelude::inject_if_used(resolved, false);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let resolved =
-        elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    let (resolved, _, declaration_source_files) =
+        elephc::autoload::run_collecting_included_with_defines_and_sources(
+            resolved,
+            dir,
+            &autoload_registry,
+            defines,
+        )
+        .expect("autoload failed");
+    let resolved = elephc::assert_prelude::inject_if_used(resolved);
+    let resolved = elephc::array_merge_prelude::inject_if_used(resolved);
+    let resolved = elephc::array_reduce_prelude::inject_if_used(resolved);
+    let resolved = elephc::backend_gap_prelude::inject_if_used(resolved);
     // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
@@ -258,6 +268,8 @@ fn try_compile_source_to_asm_with_defines_repr(
         .any(|lib| lib == "elephc_tls");
     let mut ir_module =
         lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    ir_module.declared_class_source_files = declaration_source_files.class_likes;
+    ir_module.declared_function_source_files = declaration_source_files.functions;
     if with_regex {
         ir_module.required_runtime_features.regex = true;
     }

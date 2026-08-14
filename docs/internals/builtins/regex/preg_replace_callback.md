@@ -2,7 +2,7 @@
 title: "preg_replace_callback() — internals"
 description: "Compiler internals for preg_replace_callback(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 355
+  order: 362
 ---
 
 ## `preg_replace_callback()` — internals
@@ -39,17 +39,19 @@ sidebar:
 ## Signature summary
 
 ```php
-function preg_replace_callback(string $pattern, callable $callback, string $subject): string
+function preg_replace_callback(string $pattern, callable $callback, string $subject, int $limit = -1, int $count = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 3 arguments.
+- **Arity**: takes 3–5 arguments (2 optional).
+- **By-reference parameters**: `$count`.
 
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace_callback.rs) (`eval_builtin!`)
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$count`.
 
 ## Cross-references
 

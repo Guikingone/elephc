@@ -189,6 +189,13 @@ pub(super) fn method_call_result_type(
     let Some(return_ty) = method_signature(ctx, object, method)
         .map(|signature| normalize_value_php_type(signature.return_type))
     else {
+        if let Some(return_ty) = narrowed_runtime_method_return_type(ctx, &object_ty, method) {
+            return if op == Op::NullsafeMethodCall && nullable {
+                nullable_result_type(return_ty)
+            } else {
+                return_ty
+            };
+        }
         if dynamic_method_receiver_needs_mixed_fallback(&object_ty) {
             return PhpType::Mixed;
         }
@@ -216,6 +223,37 @@ pub(super) fn method_call_result_type(
     } else {
         return_ty
     }
+}
+
+/// Infers the result shared by concrete runtime classes compatible with a narrowed receiver.
+///
+/// Flow-sensitive `instanceof` validation can accept a method that is absent from the receiver's
+/// original nominal class or interface. EIR retains that original receiver type, so recover the
+/// concrete return contract from the same closed-world class set used by backend class-id dispatch.
+fn narrowed_runtime_method_return_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver_type: &PhpType,
+    method: &str,
+) -> Option<PhpType> {
+    let (receiver_name, _) = singular_object_class(receiver_type)?;
+    let receiver_name = receiver_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method);
+    let receiver_is_interface = ctx.interfaces.contains_key(receiver_name);
+    let candidates = ctx
+        .classes
+        .iter()
+        .filter(|(class_name, _)| {
+            receiver_name.is_empty()
+                || if receiver_is_interface {
+                    class_implements_interface_for_ir(ctx, class_name, receiver_name)
+                } else {
+                    class_extends_class(ctx, class_name, receiver_name)
+                }
+        })
+        .filter_map(|(_, class_info)| class_info.methods.get(&method_key))
+        .map(|signature| normalize_value_php_type(signature.return_type.codegen_repr()))
+        .collect::<Vec<_>>();
+    normalize_union_members(candidates)
 }
 
 /// Returns whether a type contains a nominal object member whose runtime class is not proven.

@@ -82,6 +82,9 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (prune_expr(key), prune_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => {
+            ExprKind::ArrayReference(Box::new(prune_expr(*value)))
+        }
         ExprKind::Match {
             subject,
             arms,
@@ -189,6 +192,12 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
                 property: Box::new(prune_expr(*property)),
             }
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(prune_expr(*property)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => {
             ExprKind::NullsafePropertyAccess {
                 object: Box::new(prune_expr(*object)),
@@ -258,6 +267,12 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(prune_expr(*receiver)),
+                name,
+            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,

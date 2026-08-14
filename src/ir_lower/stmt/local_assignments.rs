@@ -16,7 +16,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // checker injects the variable as `Void` and emits a warning. At the
     // lowering level, we must initialize the local slot to null/0 before
     // the compound read so the runtime does not read garbage from the stack.
-    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
+    if is_compound_assignment_self_read(value, name, span)
+        && !ctx.has_local_slot(name)
+        && !crate::globals_array::is_alias(name)
+    {
         let null_value = ctx.builder.emit_const_null();
         let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
         ctx.store_local(name, null_lowered, PhpType::Void, Some(span));
@@ -144,7 +147,7 @@ pub(super) fn contextualize_local_assignment(
             lowered,
             &source_repr,
             &contextual_repr,
-            span,
+            Some(span),
         );
         return (converted, contextual_ty);
     }
@@ -168,7 +171,7 @@ pub(super) fn contextualize_local_assignment(
             lowered,
             &source_repr,
             &contextual_repr,
-            span,
+            Some(span),
         );
         return (converted, contextual_ty);
     }
@@ -227,6 +230,9 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         ExprKind::PropertyAccess { .. } => {
             crate::ir_lower::expr::lower_ref_assign_property(ctx, target, source, span);
         }
+        ExprKind::DynamicPropertyAccess { .. } => {
+            crate::ir_lower::expr::lower_ref_assign_dynamic_property(ctx, target, source, span);
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
@@ -244,4 +250,3 @@ pub(super) fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, 
         }
     }
 }
-

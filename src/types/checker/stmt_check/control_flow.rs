@@ -125,6 +125,41 @@ fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
     }
 }
 
+/// Joins the bindings from every branch that can reach the statement after a conditional.
+///
+/// A real PHP local absent from one reachable branch remains a possible runtime binding but has no
+/// safe precise type, so it is widened to `Mixed`. Synthetic property-narrowing keys are different:
+/// absence means the fact is not common to every path, so those keys are omitted. Bindings present
+/// everywhere are widened to the normalized union of their exit types.
+fn join_fallthrough_type_envs(checker: &Checker, branches: &[TypeEnv]) -> Option<TypeEnv> {
+    branches.first()?;
+    let mut names = branches
+        .iter()
+        .flat_map(|branch| branch.keys().cloned())
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+
+    let mut joined = TypeEnv::new();
+    for name in names {
+        let mut types = Vec::with_capacity(branches.len());
+        for branch in branches {
+            if let Some(ty) = branch.get(&name) {
+                types.push(ty.clone());
+            }
+        }
+
+        if types.len() != branches.len() {
+            if !name.starts_with('\u{1}') {
+                joined.insert(name, PhpType::Mixed);
+            }
+        } else {
+            joined.insert(name, checker.normalize_union_type(types));
+        }
+    }
+    Some(joined)
+}
+
 impl Checker {
     /// Validates control-flow statements and updates the type environment for their assignment effects.
     ///
@@ -292,130 +327,57 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
 
-                // Flow-sensitive type narrowing across the if / elseif* / else chain.
-                //
-                // Each recognized guard narrows its variable to the guarded type while checking
-                // that branch's body. The fallthrough env for the remaining clauses (and the final
-                // else) accumulates the complement, which is sound because reaching a later clause
-                // means every earlier condition was false.
-                //
-                // After the whole construct we restore every variable we narrowed, so code after
-                // the `if` sees the joined view. The single exception is an exhaustively divergent
-                // chain (no else and *every* clause body diverges): there the only way to fall
-                // through is with all conditions false, so the accumulated complement is sound for
-                // the statements after the `if`.
+                // Each clause body receives its own environment. The shared `env` carries only the
+                // accumulated false-condition path into the next elseif/else; mutating it while
+                // checking a truthy sibling would leak assignments between mutually exclusive
+                // branches. Reachable exits are joined after the whole chain.
                 let mut clauses: Vec<(&Expr, &Vec<Stmt>)> = vec![(condition, then_body)];
                 clauses.extend(elseif_clauses.iter().map(|(c, b)| (c, b)));
-
-                // Pre-`if` type of every variable we narrow, captured the first time we touch it,
-                // so each one can be restored after the construct.
-                let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
-                let mut applied_any_guard = false;
-                // Single-clause join state: the guarded key and the type it has where the
-                // then-branch falls out of the construct. `None` means "no usable fact" (the
-                // branch diverged, or a call inside it purged the narrowing).
-                let mut join_key: Option<String> = None;
-                let mut then_exit_ty: Option<PhpType> = None;
-                let single_clause = clauses.len() == 1;
+                let mut fallthrough_clause_envs = Vec::new();
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
+                    let condition_env = env.clone();
+                    let mut branch_env = condition_env.clone();
+                    self.install_truthy_short_circuit_effects(cond, &mut branch_env)?;
 
-                    if let Some(guard) = self.guard_narrowing(cond, env)? {
-                        applied_any_guard = true;
-                        // Remember the variable's pre-`if` type the first time we narrow it.
-                        if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
-                            saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
-                        }
-
-                        // Check the guarded body with the "then" type.
-                        let saved = env.get(&guard.var).cloned();
-                        env.insert(guard.var.clone(), guard.then_ty.clone());
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
-                        }
-                        // Join only when the then-branch WROTE the guarded place, i.e. when the
-                        // fact at branch exit is no longer the guard's own `then` type. That is
-                        // exactly the lazy-initialization shape; joining unconditionally would
-                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
-                        // after the `if`, where it does not hold.
-                        let branch_exit = env.get(&guard.var);
-                        if single_clause
-                            && Self::narrowed_place_key_is_property(&guard.var)
-                            && !self.body_cannot_fall_through(body)
-                            && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
-                        {
-                            join_key = Some(guard.var.clone());
-                            then_exit_ty = branch_exit.cloned();
-                        }
-                        restore_narrowed_var(env, &guard.var, &saved);
-
-                        // The fallthrough env for the rest of the chain (next elseif or else)
-                        // sees the complement.
-                        env.insert(guard.var.clone(), guard.else_ty.clone());
+                    if let Some(guard) = self.guard_narrowing(cond, &branch_env)? {
+                        branch_env.insert(guard.var.clone(), guard.then_ty);
+                        *env = condition_env;
+                        env.insert(guard.var, guard.else_ty);
                     } else {
-                        // No narrowing for this clause — check the body with the current env.
-                        for s in *body {
-                            if let Err(error) = self.check_stmt(s, env) {
-                                errors.extend(error.flatten());
-                            }
-                        }
+                        *env = condition_env;
                     }
-                }
 
-                // Final else body (if present) is checked with the accumulated complement.
-                // `None` = the else path cannot reach the code after the `if`. `Some(None)` = it
-                // can, but the guarded fact was lost there. `Some(Some(ty))` = it can and the
-                // fact is `ty`.
-                let mut else_exit_ty: Option<Option<PhpType>> = None;
-                let mut else_falls_through = else_body.is_none();
-                if let Some(body) = else_body {
-                    for s in body {
-                        if let Err(error) = self.check_stmt(s, env) {
+                    for s in *body {
+                        if let Err(error) = self.check_stmt(s, &mut branch_env) {
                             errors.extend(error.flatten());
                         }
                     }
-                    else_falls_through = !self.body_cannot_fall_through(body);
-                }
-                if let Some(key) = &join_key {
-                    if else_falls_through {
-                        else_exit_ty = Some(env.get(key).cloned());
+                    if !self.body_cannot_fall_through(body) {
+                        fallthrough_clause_envs.push(branch_env);
                     }
+                    self.install_falsy_short_circuit_effects(cond, env)?;
                 }
 
-                // Keep the accumulated complement for the statements after the `if` only when no
-                // guarded clause can fall through: there is no else and every clause ends in a
-                // non-fallthrough statement, so reaching the following code implies all conditions
-                // were false. Otherwise restore every narrowed variable to its pre-`if` type.
-                let keep_complement_after_if = applied_any_guard
-                    && else_body.is_none()
-                    && clauses
-                        .iter()
-                        .all(|(_, body)| self.body_cannot_fall_through(body));
-                // A single guarded clause whose then-branch also falls through joins the two
-                // exit facts instead of discarding both. `if (X === null) { X = new S(); }`
-                // leaves `S` on the then path (the write recorded it) and `S` on the else path
-                // (the guard complement), so the union is `S` — the singleton pattern.
-                let joined = join_key.as_ref().and_then(|key| {
-                    let then_ty = then_exit_ty.clone()?;
-                    let joined = match &else_exit_ty {
-                        None => then_ty,
-                        Some(Some(else_ty)) => {
-                            self.normalize_union_type(vec![then_ty, else_ty.clone()])
+                // The final else receives the accumulated complements without mutating the
+                // already-recorded truthy exits. With no explicit else, that false path itself is
+                // a reachable exit.
+                if let Some(body) = else_body {
+                    let mut branch_env = env.clone();
+                    for s in body {
+                        if let Err(error) = self.check_stmt(s, &mut branch_env) {
+                            errors.extend(error.flatten());
                         }
-                        Some(None) => return None,
-                    };
-                    Some((key.clone(), joined))
-                });
-                if !keep_complement_after_if {
-                    for (var, original) in &saved_vars {
-                        restore_narrowed_var(env, var, original);
                     }
-                    if let Some((key, joined)) = joined {
-                        env.insert(key, joined);
+                    if !self.body_cannot_fall_through(body) {
+                        fallthrough_clause_envs.push(branch_env);
                     }
+                } else {
+                    fallthrough_clause_envs.push(env.clone());
+                }
+                if let Some(joined) = join_fallthrough_type_envs(self, &fallthrough_clause_envs) {
+                    *env = joined;
                 }
 
                 if errors.is_empty() {
@@ -437,7 +399,12 @@ impl Checker {
             StmtKind::While { condition, body } => {
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
+                let truthy_short_circuit_bindings =
+                    self.install_truthy_short_circuit_effects(condition, env)?;
                 let errors = self.check_break_continue_target_body(body, env);
+                for (name, previous) in &truthy_short_circuit_bindings {
+                    restore_narrowed_var(env, name, previous);
+                }
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -479,6 +446,11 @@ impl Checker {
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    ref ty
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
+                    {
+                        Ok(())
+                    }
                     _ => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object value",

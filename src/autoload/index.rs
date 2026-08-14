@@ -1,15 +1,15 @@
 //! Purpose:
-//! Builds the Composer autoload index used by the AOT autoload pass.
-//! Reads PSR-4, PSR-0, classmap, files, and exclude rules from project/vendor composer.json files.
+//! Builds the static namespace and class-file index used by the AOT autoload pass.
+//! Reads PSR-4, PSR-0, classmap, eager-file, and exclusion rules from supported manifests.
 //!
 //! Called from:
 //! - `crate::autoload::Registry::build()`
 //!
 //! Key details:
-//! - Produces FQN-to-path mappings and `autoload.files` entries for compile-time inclusion.
-//! - `autoload` and `autoload-dev` are intentionally merged because compiled binaries have no Composer runtime mode.
+//! - Produces FQN-to-path mappings and eager source entries for compile-time inclusion.
+//! - Production and development mapping sections are merged because compiled binaries have one source graph.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use crate::parser::ast::{Stmt, StmtKind};
@@ -21,26 +21,21 @@ pub struct AutoloadIndex {
 }
 
 impl AutoloadIndex {
-    /// Build the index by reading `<project_root>/composer.json` and any
-    /// `<project_root>/vendor/<vendor>/<pkg>/composer.json`. Empty index
-    /// when no composer.json exists.
+    /// Builds the index from the nearest supported root manifest and nested dependency manifests.
+    /// Returns an empty index when no supported manifest exists at or above the entry directory.
     pub fn from_project_root(project_root: &Path) -> Self {
+        let Some(project_root) = nearest_autoload_manifest_root(project_root) else {
+            return Self {
+                fqn_to_path: HashMap::new(),
+                files_to_include: Vec::new(),
+            };
+        };
         let mut builder = IndexBuilder::default();
-        builder.load_composer(project_root);
-        let vendor = project_root.join("vendor");
-        if vendor.is_dir() {
-            for vendor_entry in std::fs::read_dir(&vendor).into_iter().flatten().flatten() {
-                let pkg_dir = vendor_entry.path();
-                if !pkg_dir.is_dir() {
-                    continue;
-                }
-                for sub in std::fs::read_dir(&pkg_dir).into_iter().flatten().flatten() {
-                    let inner = sub.path();
-                    if inner.is_dir() {
-                        builder.load_composer(&inner);
-                    }
-                }
-            }
+        for manifest in autoload_manifest_paths(&project_root) {
+            builder.load_manifest(&manifest, true);
+        }
+        for manifest in nested_autoload_manifest_paths(&project_root) {
+            builder.load_manifest(&manifest, false);
         }
         AutoloadIndex {
             fqn_to_path: builder.fqn_to_path,
@@ -65,18 +60,104 @@ impl AutoloadIndex {
     }
 }
 
+/// Finds the nearest ancestor containing a structurally recognized autoload manifest.
+fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf> {
+    entry_dir
+        .ancestors()
+        .find(|candidate| !autoload_manifest_paths(candidate).is_empty())
+        .map(Path::to_path_buf)
+}
+
+/// Returns direct JSON manifests containing a supported autoload section.
+fn autoload_manifest_paths(dir: &Path) -> Vec<PathBuf> {
+    let mut manifests = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && path_has_json_extension(path))
+        .filter(|path| manifest_has_autoload_section(path))
+        .collect::<Vec<_>>();
+    manifests.sort();
+    manifests
+}
+
+/// Recursively discovers structurally recognized manifests below the project root.
+fn nested_autoload_manifest_paths(root: &Path) -> Vec<PathBuf> {
+    let mut pending = VecDeque::from([root.to_path_buf()]);
+    let mut visited = HashSet::new();
+    let mut manifests = Vec::new();
+    while let Some(dir) = pending.pop_front() {
+        let canonical = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        if !visited.insert(canonical) {
+            continue;
+        }
+        let mut entries = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                pending.push_back(path);
+            } else if file_type.is_file()
+                && path_has_json_extension(&path)
+                && manifest_has_autoload_section(&path)
+                && path.parent() != Some(root)
+            {
+                manifests.push(path);
+            }
+        }
+    }
+    manifests
+}
+
+/// Returns whether a path uses the JSON extension, case-insensitively.
+fn path_has_json_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+}
+
+/// Returns whether a JSON document exposes at least one supported autoload section.
+fn manifest_has_autoload_section(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    if !content.contains("\"autoload\"") && !content.contains("\"autoload-dev\"") {
+        return false;
+    }
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    ["autoload", "autoload-dev"]
+        .into_iter()
+        .any(|key| json.get(key).is_some_and(serde_json::Value::is_object))
+}
+
 #[derive(Default)]
-/// Helper that accumulates autoload index entries while reading composer.json files.
+/// Accumulates static autoload index entries while reading supported manifests.
 struct IndexBuilder {
     fqn_to_path: HashMap<String, PathBuf>,
     files_to_include: Vec<PathBuf>,
 }
 
 impl IndexBuilder {
-    /// Load composer.json from a directory and merge its autoload sections.
-    fn load_composer(&mut self, dir: &Path) {
-        let composer_path = dir.join("composer.json");
-        let Ok(content) = std::fs::read_to_string(&composer_path) else {
+    /// Loads one supported manifest, optionally collecting its eager source entries.
+    ///
+    /// Nested manifests always contribute mappings. Only the root manifest contributes eager
+    /// entries directly; nested eager entries remain owned by the loader source the program
+    /// actually includes, avoiding duplicate execution and unrelated graph expansion.
+    fn load_manifest(&mut self, manifest_path: &Path, include_files: bool) {
+        let Some(dir) = manifest_path.parent() else {
+            return;
+        };
+        let Ok(content) = std::fs::read_to_string(manifest_path) else {
             return;
         };
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
@@ -86,13 +167,18 @@ impl IndexBuilder {
         // model has no production/test split, so they merge.
         for section_key in ["autoload", "autoload-dev"] {
             if let Some(section) = json.get(section_key) {
-                self.load_section(dir, section);
+                self.load_section(dir, section, include_files);
             }
         }
     }
 
     /// Parse one autoload section (psr-4, psr-0, classmap, files) and update the index.
-    fn load_section(&mut self, base_dir: &Path, section: &serde_json::Value) {
+    fn load_section(
+        &mut self,
+        base_dir: &Path,
+        section: &serde_json::Value,
+        include_files: bool,
+    ) {
         let excludes = section
             .get("exclude-from-classmap")
             .and_then(|v| v.as_array())
@@ -112,14 +198,16 @@ impl IndexBuilder {
         if let Some(classmap) = section.get("classmap").and_then(|c| c.as_array()) {
             self.read_classmap(base_dir, classmap, &excludes);
         }
-        if let Some(files) = section.get("files").and_then(|f| f.as_array()) {
-            self.read_files(base_dir, files);
+        if include_files {
+            if let Some(files) = section.get("files").and_then(|f| f.as_array()) {
+                self.read_files(base_dir, files);
+            }
         }
     }
 
     /// Shared driver for `psr-4` and `psr-0`. Sorts prefixes by length
     /// descending so longer prefixes claim FQNs before shorter ones (PHP
-    /// composer's longest-prefix-wins rule).
+    /// longest-prefix-wins rule).
     fn read_psr_namespaced(
         &mut self,
         base_dir: &Path,
@@ -192,7 +280,7 @@ fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
         let path = entry.path();
         if path.is_dir() {
             walk_psr4(&path, ns_prefix, root, index);
-        } else if crate::source::is_composer_source_path(&path) {
+        } else if crate::source::is_discoverable_source_path(&path) {
             let Ok(rel) = path.strip_prefix(root) else {
                 continue;
             };
@@ -207,7 +295,7 @@ fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
                 continue;
             }
             if let Some(last) = parts.last_mut() {
-                *last = crate::source::composer_source_stem(last);
+                *last = crate::source::discoverable_source_stem(last);
             }
             let suffix = parts.join("\\");
             let prefix = ns_prefix.trim_matches('\\');
@@ -245,7 +333,7 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
         let path = entry.path();
         if path.is_dir() {
             walk_psr0(&path, ns_prefix, root, index);
-        } else if crate::source::is_composer_source_path(&path) {
+        } else if crate::source::is_discoverable_source_path(&path) {
             let Ok(rel) = path.strip_prefix(root) else {
                 continue;
             };
@@ -260,7 +348,7 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
                 continue;
             }
             if let Some(last) = parts.last_mut() {
-                *last = crate::source::composer_source_stem(last);
+                *last = crate::source::discoverable_source_stem(last);
             }
             let prefix = ns_prefix.trim_matches('\\');
             let prefix_has_namespace = prefix.contains('\\');
@@ -327,7 +415,7 @@ fn is_excluded(path: &Path, excludes: &[String]) -> bool {
 ///
 /// Relative patterns are joined with `base_dir` and canonicalised. A
 /// trailing `/` is rewritten as `/**` so `"tests/"` matches everything
-/// inside `tests/`, mirroring composer's directory-shorthand semantic.
+/// inside `tests/`, matching the manifest format's directory-shorthand semantic.
 fn normalize_exclude_pattern(base_dir: &Path, raw: &str) -> String {
     let trimmed = raw.trim_start_matches("./");
     let with_dirstar = if trimmed.ends_with('/') {
@@ -450,7 +538,49 @@ fn glob_match_bytes(p: &[u8], s: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::glob_match;
+    use super::{glob_match, AutoloadIndex};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static MANIFEST_TEST_ID: AtomicUsize = AtomicUsize::new(0);
+
+    /// Creates one isolated directory for structural manifest discovery tests.
+    fn manifest_test_dir() -> std::path::PathBuf {
+        let id = MANIFEST_TEST_ID.fetch_add(1, Ordering::SeqCst);
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_autoload_manifest_{}_{}",
+            std::process::id(),
+            id
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Verifies that manifest contents, rather than a tool-specific filename, select the adapter.
+    #[test]
+    fn structural_manifest_discovery_accepts_arbitrary_json_name() {
+        let dir = manifest_test_dir();
+        let entry_dir = dir.join("public");
+        let source_dir = dir.join("src");
+        std::fs::create_dir_all(&entry_dir).unwrap();
+        std::fs::create_dir_all(&source_dir).unwrap();
+        std::fs::write(
+            dir.join("module-layout.json"),
+            r#"{"autoload":{"psr-4":{"Demo\\":"src/"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source_dir.join("Thing.php"),
+            "<?php namespace Demo; class Thing {}",
+        )
+        .unwrap();
+
+        let index = AutoloadIndex::from_project_root(&entry_dir);
+        assert_eq!(
+            index.lookup("Demo\\Thing"),
+            Some(source_dir.join("Thing.php").canonicalize().unwrap().as_path())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Implements the `glob_literal` operation for this module.
     #[test]
@@ -493,10 +623,10 @@ mod tests {
 
 /// Parses a PHP/LFC source file and indexes all class/interface/trait/enum declarations found.
 fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
-    if !crate::source::is_composer_source_path(path) {
+    if !crate::source::is_discoverable_source_path(path) {
         return;
     }
-    let Ok(content) = std::fs::read_to_string(path) else {
+    let Ok(content) = crate::source::read_physical_source(path) else {
         return;
     };
     let mode = crate::source::SourceMode::from_path(path);

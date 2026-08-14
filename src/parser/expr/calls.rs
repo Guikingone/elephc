@@ -35,10 +35,37 @@ pub(super) fn parse_scoped_static_call(
         ));
     }
     *pos += 1;
+    if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
+        let property = parse_dynamic_static_property_name(tokens, pos, span)?;
+        return Ok(Expr::new(
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(property),
+            },
+            span,
+        ));
+    }
     let method = match tokens.get(*pos).map(|(token, _)| token) {
         Some(Token::Variable(property)) => {
             let property = property.clone();
             *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
+                *pos += 1;
+                let dynamic_args = parse_args(tokens, pos, span)?;
+                let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
+                super::pratt::reject_named_args_in_dynamic_call(&dynamic_args, span)?;
+                let class = Expr::new(ExprKind::ClassConstant { receiver }, span);
+                let method = Expr::new(ExprKind::Variable(property), span);
+                let mut args = vec![Expr::new(ExprKind::ArrayLiteral(vec![class, method]), span)];
+                args.extend(dynamic_args);
+                return Ok(Expr::new(
+                    ExprKind::FunctionCall {
+                        name: crate::names::Name::unqualified("call_user_func"),
+                        args,
+                    },
+                    span,
+                ));
+            }
             return Ok(Expr::new(
                 ExprKind::StaticPropertyAccess { receiver, property },
                 span,
@@ -97,6 +124,37 @@ pub(super) fn parse_scoped_static_call(
     }
 }
 
+/// Parses the runtime name expression after `receiver::$` in a dynamic static-property access.
+pub(super) fn parse_dynamic_static_property_name(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Expr, CompileError> {
+    *pos += 1;
+    match tokens.get(*pos).map(|(token, _)| token.clone()) {
+        Some(Token::LBrace) => {
+            *pos += 1;
+            let property = crate::parser::expr::parse_expr(tokens, pos)?;
+            if !matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::RBrace)) {
+                return Err(CompileError::new(
+                    span,
+                    "Expected '}' after dynamic static property name",
+                ));
+            }
+            *pos += 1;
+            Ok(property)
+        }
+        Some(Token::Variable(name)) => {
+            *pos += 1;
+            Ok(Expr::new(ExprKind::Variable(name), span))
+        }
+        _ => Err(CompileError::new(
+            span,
+            "Expected '{' or variable after '$' in dynamic static property access",
+        )),
+    }
+}
+
 /// Checks whether `...)` appears at the current position, indicating PHP's first-class callable
 /// syntax `Name::method(...)`. Returns `true` and consumes both the ellipsis and `)` tokens if
 /// found; returns `false` and advances nothing otherwise. Called after the initial `(` of a
@@ -137,6 +195,7 @@ pub(super) fn peek_cast(tokens: &[SpannedToken], pos: usize) -> Option<CastType>
             Some(CastType::Bool)
         }
         Token::Identifier(name) if name.eq_ignore_ascii_case("array") => Some(CastType::Array),
+        Token::Identifier(name) if name.eq_ignore_ascii_case("object") => Some(CastType::Object),
         _ => None,
     }
 }

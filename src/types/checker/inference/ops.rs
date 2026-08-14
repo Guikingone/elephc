@@ -249,6 +249,16 @@ impl Checker {
                     value: Box::new(value),
                 })
             }
+            (left, right)
+                if is_gradual_array_union_operand(left) && is_array_like_type(right) =>
+            {
+                Ok(gradual_array_union_result_type())
+            }
+            (left, right)
+                if is_array_like_type(left) && is_gradual_array_union_operand(right) =>
+            {
+                Ok(gradual_array_union_result_type())
+            }
             _ => Err(CompileError::new(
                 expr.span,
                 "Array union requires both operands to be arrays",
@@ -433,13 +443,20 @@ impl Checker {
         let var_ty = env.get(var).cloned().ok_or_else(|| {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
-        if var_ty != PhpType::Callable {
+        if var_ty != PhpType::Callable && !var_ty.is_closure_object() {
+            if matches!(var_ty, PhpType::Mixed | PhpType::Union(_)) {
+                self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+                for arg in args {
+                    self.infer_call_argument_type(arg, env)?;
+                }
+                return Ok(PhpType::Mixed);
+            }
             if matches!(var_ty.codegen_repr(), PhpType::Str) {
                 // The callee name is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
                 self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
                 for arg in args {
-                    self.infer_type(arg, env)?;
+                    self.infer_call_argument_type(arg, env)?;
                 }
                 return Ok(PhpType::Mixed);
             }
@@ -528,7 +545,7 @@ impl Checker {
         // still apply PHP's syntactic unpack-after-named rule.
         self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_call_argument_type(arg, env)?;
         }
         Ok(self
             .closure_return_types
@@ -563,7 +580,7 @@ impl Checker {
             };
             self.require_no_spread_after_named_args(args, &callee_desc)?;
             for arg in args {
-                self.infer_type(arg, env)?;
+                self.infer_call_argument_type(arg, env)?;
             }
             return Ok(PhpType::Mixed);
         }
@@ -595,9 +612,19 @@ impl Checker {
                 );
             }
         }
+        if matches!(callee_ty, PhpType::Mixed | PhpType::Union(_)) {
+            self.require_no_spread_after_named_args(args, "callable expression")?;
+            for arg in args {
+                self.infer_call_argument_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
-        if callee_ty != PhpType::Callable && !nullable_callable {
+        if callee_ty != PhpType::Callable
+            && !callee_ty.is_closure_object()
+            && !nullable_callable
+        {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -699,7 +726,7 @@ impl Checker {
             return Ok(self.nullable_callable_result(ret_ty, nullable_callable));
         }
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_call_argument_type(arg, env)?;
         }
         // Try to determine return type from closure signature
         match &callee.kind {
@@ -731,9 +758,29 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         for arg in args {
-            self.infer_type(arg, env)?;
+            self.infer_call_argument_type(arg, env)?;
         }
         Ok(PhpType::Mixed)
+    }
+
+    /// Infers one call argument while permitting runtime-validated unpack of a gradual array.
+    pub(crate) fn infer_call_argument_type(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        let ExprKind::Spread(inner) = &arg.kind else {
+            return self.infer_type(arg, env);
+        };
+        match self.infer_type(inner, env)? {
+            PhpType::Array(elem_ty) => Ok(*elem_ty),
+            PhpType::AssocArray { value, .. } => Ok(*value),
+            PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
+            _ => Err(CompileError::new(
+                arg.span,
+                "Spread operator requires an array",
+            )),
+        }
     }
 
     /// Returns true when an array type can represent a callable array selected at runtime.
@@ -1161,7 +1208,7 @@ impl Checker {
         let mut changed = false;
         let mut param_idx = 0usize;
         for arg in &normalized_args {
-            let actual_ty = self.infer_type(arg, env)?;
+            let actual_ty = self.infer_call_argument_type(arg, env)?;
             if matches!(arg.kind, ExprKind::Spread(_)) {
                 continue;
             }
@@ -1240,6 +1287,19 @@ fn expr_contains_nullsafe_member(expr: &Expr) -> bool {
 /// Returns `true` if `ty` is an array-like type (flat `Array` or `AssocArray`).
 fn is_array_like_type(ty: &PhpType) -> bool {
     matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Returns whether an operand needs a runtime array-tag guard before PHP array union.
+fn is_gradual_array_union_operand(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Mixed | PhpType::Union(_))
+}
+
+/// Returns the conservative hash shape produced when one array-union operand is gradual.
+fn gradual_array_union_result_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
 }
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators

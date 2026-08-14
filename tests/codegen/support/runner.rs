@@ -66,6 +66,8 @@ struct TestBridgeStaticlib {
     lib_name: &'static str,
     /// Cargo package that produces `lib<lib_name>.a` for tests.
     package: &'static str,
+    /// macOS libraries required by the bridge's transitive native dependencies.
+    macos_libraries: &'static [&'static str],
 }
 
 /// Lists bridge staticlibs that codegen fixtures may link through `extra_link_libs`.
@@ -73,30 +75,37 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_tls",
         package: "elephc-tls",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_pdo",
         package: "elephc-pdo",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_tz",
         package: "elephc-tz",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_image",
         package: "elephc-image",
+        macos_libraries: &[],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_magician",
         package: "elephc-magician",
+        macos_libraries: &["iconv"],
     },
 ];
 
@@ -589,6 +598,11 @@ pub(crate) fn link_binary(
             append_test_link_inputs(&mut ld_cmd, &plan, Platform::MacOS);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
+            }
+            for bridge in requested_bridge_staticlibs(&actual_link_libs) {
+                for library in bridge.macos_libraries {
+                    ld_cmd.arg(format!("-l{library}"));
+                }
             }
             append_test_frameworks(&mut ld_cmd, &plan);
             // The PostgreSQL driver in the PDO bridge pulls in `whoami`, which

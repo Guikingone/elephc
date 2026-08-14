@@ -9,6 +9,53 @@
 
 use super::*;
 
+/// Builds the abstract callable-reflection base from the methods shared by its two concrete
+/// children. The abstract contracts contain no storage-dependent bodies; concrete owners retain
+/// their populated slot-backed implementations and override every inherited contract.
+pub(super) fn builtin_reflection_function_abstract_class(
+    function: &FlattenedClass,
+    method: &FlattenedClass,
+) -> FlattenedClass {
+    let method_names = method
+        .methods
+        .iter()
+        .map(|member| php_symbol_key(&member.name))
+        .collect::<HashSet<_>>();
+    let mut methods = function
+        .methods
+        .iter()
+        .filter(|member| {
+            let key = php_symbol_key(&member.name);
+            method_names.contains(&key)
+                && !matches!(
+                    key.as_str(),
+                    "__construct" | "invoke" | "invokeargs" | "getclosure"
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for member in &mut methods {
+        member.is_abstract = true;
+        member.has_body = false;
+        member.body.clear();
+    }
+    FlattenedClass {
+        name: "ReflectionFunctionAbstract".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: vec!["Reflector".to_string(), "Stringable".to_string()],
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods,
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
 /// Builds a `FlattenedClass` for simple reflection owner classes
 /// with a private `__attrs` array property and two methods: `__construct`
 /// (public, accepting the supplied params) and `getAttributes` (public,
@@ -113,6 +160,39 @@ pub(super) fn builtin_reflection_owner_class(
     }
     if matches!(name, "ReflectionFunction" | "ReflectionMethod") {
         properties.push(builtin_property(
+            "__file_name",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
+        properties.push(builtin_property(
+            "__start_line",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        properties.push(builtin_property(
+            "__end_line",
+            Visibility::Private,
+            Some(TypeExpr::Int),
+            int_lit(0),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getFileName",
+            "__file_name",
+            string_or_bool_type(),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getStartLine",
+            "__start_line",
+            int_or_bool_type(),
+        ));
+        methods.push(builtin_reflection_slot_getter(
+            "getEndLine",
+            "__end_line",
+            int_or_bool_type(),
+        ));
+        properties.push(builtin_property(
             "__string",
             Visibility::Private,
             Some(TypeExpr::Str),
@@ -193,7 +273,21 @@ pub(super) fn builtin_reflection_owner_class(
             "__string",
         ));
     }
+    if name == "ReflectionFunction" {
+        properties.push(builtin_property(
+            "__callable",
+            Visibility::Private,
+            Some(mixed_type()),
+            null_expr(),
+        ));
+    }
     if name == "ReflectionMethod" {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
         properties.push(builtin_property(
             "__has_prototype",
             Visibility::Private,
@@ -213,12 +307,27 @@ pub(super) fn builtin_reflection_owner_class(
         methods.push(builtin_reflection_method_get_prototype_method());
         methods.push(builtin_reflection_method_invoke_method());
         methods.push(builtin_reflection_method_invoke_args_method());
+        methods.push(builtin_reflection_get_closure_method(true));
         methods.push(builtin_reflection_method_create_from_method_name_method());
         methods.push(builtin_reflection_set_accessible_method());
     }
     if name == "ReflectionFunction" {
         methods.push(builtin_reflection_function_invoke_method());
         methods.push(builtin_reflection_function_invoke_args_method());
+        methods.push(builtin_reflection_get_closure_method(false));
+        methods.push(builtin_reflection_constant_false_bool_method(
+            "isAnonymous",
+        ));
+        methods.push(builtin_reflection_constant_false_bool_method("isStatic"));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureThis",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureScopeClass",
+        ));
+        methods.push(builtin_reflection_constant_null_mixed_method(
+            "getClosureCalledClass",
+        ));
         methods.push(builtin_reflection_constant_empty_array_method(
             "getClosureUsedVariables",
         ));
@@ -240,7 +349,7 @@ pub(super) fn builtin_reflection_owner_class(
         name: name.to_string(),
         span: dummy(),
         extends: None,
-        implements: Vec::new(),
+        implements: vec!["Reflector".to_string()],
         is_abstract: false,
         is_final: true,
         is_readonly_class: false,

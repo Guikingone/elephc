@@ -77,6 +77,8 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Platform};
 use crate::exports::ExportedFunction;
 use crate::ir::Module;
+use crate::names::php_symbol_key;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 /// Output artifact kind selected by the compiler's `--emit` flag.
@@ -93,6 +95,8 @@ pub enum Emit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenIrError {
     message: String,
+    /// Optional source location attached by the block walker.
+    location: Option<String>,
 }
 
 impl CodegenIrError {
@@ -100,6 +104,7 @@ impl CodegenIrError {
     pub(super) fn invalid_module(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            location: None,
         }
     }
 
@@ -107,6 +112,7 @@ impl CodegenIrError {
     pub(super) fn unsupported(message: impl Into<String>) -> Self {
         Self {
             message: format!("unsupported EIR backend feature: {}", message.into()),
+            location: None,
         }
     }
 
@@ -114,14 +120,30 @@ impl CodegenIrError {
     pub(super) fn missing_entry(kind: &str, raw: u32) -> Self {
         Self {
             message: format!("EIR backend missing {} with id {}", kind, raw),
+            location: None,
         }
+    }
+
+    /// Attaches the innermost known source location to this backend error.
+    pub(super) fn at(mut self, location: impl Into<String>) -> Self {
+        self.location.get_or_insert_with(|| location.into());
+        self
+    }
+
+    /// Returns the location-free cause used to group inventory failures.
+    pub(super) fn message(&self) -> &str {
+        &self.message
     }
 }
 
 impl fmt::Display for CodegenIrError {
     /// Formats the backend error for CLI diagnostics.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+        formatter.write_str(&self.message)?;
+        match &self.location {
+            Some(location) => write!(formatter, " ({})", location),
+            None => Ok(()),
+        }
     }
 }
 
@@ -303,6 +325,51 @@ fn finalize_user_asm(
     }
     user_asm.push('\n');
     user_asm.push_str(&user_data);
+    if module.required_runtime_features.const_introspection {
+        let const_registry = scalar_const_registry(module);
+        let mut enum_names: Vec<String> = module
+            .enum_infos
+            .keys()
+            .map(|name| name.trim_start_matches('\\').to_string())
+            .collect();
+        enum_names.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
+        let error_class_id = runtime_classes
+            .get("Error")
+            .map(|info| info.class_id)
+            .unwrap_or(u64::MAX);
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_const_registry_data(
+            &const_registry,
+            &enum_names,
+            error_class_id,
+        ));
+    }
+    if module.required_runtime_features.class_introspection {
+        let class_names = sorted_lowercased_registry_names(
+            module
+                .class_infos
+                .keys()
+                .filter(|name| !is_internal_synthetic_class_name(name)),
+        );
+        let interface_names = sorted_lowercased_registry_names(module.interface_infos.keys());
+        let trait_names = sorted_lowercased_registry_names(module.trait_table.names.iter());
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_registry_data(
+            &class_names,
+            &interface_names,
+            &trait_names,
+        ));
+    }
+    if module.required_runtime_features.class_relation_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_relation_registry_data(module));
+    }
+    if module.required_runtime_features.class_methods_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_class_methods_registry_data(module));
+        user_asm.push('\n');
+        user_asm.push_str(&runtime::emit_member_exists_registry_data(module));
+    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()
@@ -319,4 +386,39 @@ fn finalize_user_asm(
         return crate::codegen::visibility::append_hidden_directives(&user_asm, &exported);
     }
     user_asm
+}
+
+/// Builds the deterministic scalar subset used by runtime constant lookup.
+fn scalar_const_registry(module: &Module) -> Vec<(String, crate::ir::ConstScalar)> {
+    let mut registry = module
+        .global_constants
+        .iter()
+        .filter_map(|(name, (value, _))| {
+            let scalar = match value {
+                ExprKind::IntLiteral(value) => crate::ir::ConstScalar::Int(*value),
+                ExprKind::FloatLiteral(value) => crate::ir::ConstScalar::Float(*value),
+                ExprKind::BoolLiteral(value) => crate::ir::ConstScalar::Bool(*value),
+                ExprKind::StringLiteral(value) => crate::ir::ConstScalar::Str(value.clone()),
+                ExprKind::Null => crate::ir::ConstScalar::Null,
+                _ => return None,
+            };
+            Some((name.trim_start_matches('\\').to_string(), scalar))
+        })
+        .collect::<Vec<_>>();
+    registry.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
+    registry
+}
+
+/// Normalizes registry names to the lowercased sorted runtime-search representation.
+fn sorted_lowercased_registry_names<'a>(names: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut normalized = names
+        .map(|name| php_symbol_key(name.trim_start_matches('\\')))
+        .collect::<Vec<_>>();
+    normalized.sort_by(|left, right| left.as_bytes().cmp(right.as_bytes()));
+    normalized
+}
+
+/// Returns true for compiler-internal classes hidden from PHP class lookup.
+fn is_internal_synthetic_class_name(name: &str) -> bool {
+    php_symbol_key(name).starts_with("__elephc")
 }

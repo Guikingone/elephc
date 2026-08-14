@@ -66,6 +66,12 @@ impl Checker {
                 self.infer_eval_barrier_dynamic_constructor_args(args, expr, env)?;
                 return Ok(PhpType::Mixed);
             }
+            if self.allows_absent_runtime_class() {
+                for arg in args {
+                    self.infer_type(arg, env)?;
+                }
+                return Ok(PhpType::Object(class_name));
+            }
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined class: {}", class_name),
@@ -149,14 +155,7 @@ impl Checker {
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
                     if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                        let param_has_declared_type =
-                            declared_flags.get(i).copied().unwrap_or(false);
-                        self.propagate_constructor_arg_type(
-                            class_name.as_str(),
-                            i,
-                            &arg_ty,
-                            param_has_declared_type,
-                        );
+                        self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
                     }
                 }
                 return Ok(PhpType::Object(class_name));
@@ -179,7 +178,7 @@ impl Checker {
         for (i, arg) in args.iter().enumerate() {
             let arg_ty = self.infer_type(arg, env)?;
             if param_to_prop.get(i).is_some_and(|mapped| mapped.is_some()) {
-                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty, false);
+                self.propagate_constructor_arg_type(class_name.as_str(), i, &arg_ty);
             }
         }
         Ok(PhpType::Object(class_name))
@@ -256,6 +255,9 @@ impl Checker {
             &format!("Constructor '{}::__construct'", class_name),
             env,
         )?;
+        if self.reflection_constructor_uses_runtime_metadata(&normalized_args, env)? {
+            return Ok(());
+        }
         self.check_user_declared_call(
             &sig,
             &normalized_args,
@@ -272,6 +274,12 @@ impl Checker {
             return self.validate_reflection_function_constructor(&normalized_args, expr, env);
         }
         if class_name == "ReflectionObject" {
+            return Ok(());
+        }
+
+        if class_name == "ReflectionClass"
+            && self.reflection_class_arg_is_dynamic_string(&normalized_args[0], env)?
+        {
             return Ok(());
         }
 
@@ -331,6 +339,29 @@ impl Checker {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Returns whether Reflection constructor operands require runtime metadata validation.
+    fn reflection_constructor_uses_runtime_metadata(
+        &mut self,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        for arg in args {
+            let ty = self.infer_type(arg, env)?;
+            if matches!(
+                ty.codegen_repr(),
+                PhpType::Mixed | PhpType::Union(_) | PhpType::Callable | PhpType::Object(_)
+            ) {
+                return Ok(true);
+            }
+            if matches!(ty.codegen_repr(), PhpType::Str)
+                && !matches!(arg.kind, ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. })
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Validates deprecated `new ReflectionMethod("Class::method")` calls.
@@ -411,10 +442,23 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<(), CompileError> {
+        let Some(function_arg) = args.first() else {
+            return Err(CompileError::new(
+                expr.span,
+                "ReflectionFunction::__construct() expects exactly one argument",
+            ));
+        };
+        match self.infer_type(function_arg, env)?.codegen_repr() {
+            PhpType::Callable => return Ok(()),
+            PhpType::Str if !matches!(function_arg.kind, ExprKind::StringLiteral(_)) => {
+                return Ok(())
+            }
+            _ => {}
+        }
         let function_name = self.reflection_string_literal_arg(
             "ReflectionFunction",
             "function name",
-            args.first(),
+            Some(function_arg),
             env,
         )?;
         if self
@@ -679,6 +723,21 @@ impl Checker {
         None
     }
 
+    /// Returns whether a ReflectionClass operand is a runtime string rather than static metadata.
+    fn reflection_class_arg_is_dynamic_string(
+        &mut self,
+        arg: &Expr,
+        env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if !matches!(self.infer_type(arg, env)?.codegen_repr(), PhpType::Str) {
+            return Ok(false);
+        }
+        Ok(!matches!(
+            arg.kind,
+            ExprKind::StringLiteral(_) | ExprKind::ClassConstant { .. }
+        ))
+    }
+
     /// Extracts the class name argument from a reflection constructor call.
     ///
     /// Accepts a string literal or `ClassName::class` constant; returns the
@@ -692,11 +751,19 @@ impl Checker {
     ) -> Result<String, CompileError> {
         let arg_ty = self.infer_type(arg, env)?;
         if let PhpType::Object(class_name) = arg_ty.codegen_repr() {
-            if reflection_type == "ReflectionClass"
-                && !class_name.is_empty()
-                && self.classes.contains_key(class_name.as_str())
-            {
-                return Ok(class_name);
+            let resolved_class = match class_name.as_str() {
+                "self" | "static" => self.current_class.clone(),
+                "parent" => self
+                    .current_class
+                    .as_deref()
+                    .and_then(|current| self.classes.get(current))
+                    .and_then(|info| info.parent.clone()),
+                _ => Some(class_name),
+            };
+            if let Some(resolved_class) = resolved_class {
+                if self.classes.contains_key(resolved_class.as_str()) {
+                    return Ok(resolved_class);
+                }
             }
             return Err(CompileError::new(
                 arg.span,

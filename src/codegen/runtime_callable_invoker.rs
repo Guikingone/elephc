@@ -18,7 +18,7 @@
 use crate::codegen::callable_descriptor;
 use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
-    INVOKER_ARG_REF_CELL_TAG,
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
 };
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -222,14 +222,10 @@ fn emit_runtime_callable_invoker_impl(
 
 /// Boxes the callable target's return value into the invoker's uniform Mixed result.
 ///
-/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
-/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
-/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
-/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
-/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
-/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
-/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
-/// return registers, owned by nobody.
+/// OWNERSHIP — a `Str` return follows the ordinary function-return contract: heap-backed values
+/// cross the boundary as an owned result, while static strings need no release. Borrowed strings
+/// are acquired by return lowering and scratch-backed results are persisted before the terminator.
+/// The Mixed cell therefore TAKES the returned pointer/length pair rather than copying it.
 ///
 /// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
 /// `__rt_mixed_from_value` persists a SECOND copy for the cell
@@ -684,7 +680,7 @@ fn emit_loaded_indexed_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, emitter);
     sig.return_type.clone()
 }
 
@@ -796,7 +792,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- append hidden capture arguments and dispatch to the callable entry --
     push_descriptor_captures_as_hidden_args(captures, emitter, &mut arg_types);
-    call_target_with_pushed_args(call_reg, &arg_types, sig, emitter);
+    call_target_with_pushed_args(call_reg, &arg_types, emitter);
     sig.return_type.clone()
 }
 
@@ -1176,10 +1172,18 @@ fn emit_branch_if_invoker_ref_cell_tag(tag_reg: &str, label: &str, emitter: &mut
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #{}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // compare the value tag against the invoker ref-cell marker
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, ARRAY_GLOBAL_REF_CELL_TAG)); // compare against the owning global-reference marker
+            emitter.instruction(&format!("b.eq {}", label));                    // both marker kinds share the ref-cell payload layout
+            emitter.instruction(&format!("cmp {}, #{}", tag_reg, ARRAY_LOCAL_REF_CELL_TAG)); // compare against the owning local-reference marker
+            emitter.instruction(&format!("b.eq {}", label));                    // every marker kind shares the ref-cell payload layout
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, {}", tag_reg, INVOKER_ARG_REF_CELL_TAG)); // compare the value tag against the invoker ref-cell marker
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, ARRAY_GLOBAL_REF_CELL_TAG)); // compare against the owning global-reference marker
+            emitter.instruction(&format!("je {}", label));                      // both marker kinds share the ref-cell payload layout
+            emitter.instruction(&format!("cmp {}, {}", tag_reg, ARRAY_LOCAL_REF_CELL_TAG)); // compare against the owning local-reference marker
+            emitter.instruction(&format!("je {}", label));                      // every marker kind shares the ref-cell payload layout
         }
     }
 }
@@ -1223,6 +1227,16 @@ fn emit_branch_if_boxed_invoker_ref_cell(
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
             )); // does the boxed cell carry the invoker ref-cell marker tag?
             emitter.instruction(&format!("b.eq {}", label));                    // take the ref-cell path when the marker tag matches
+            emitter.instruction(&format!(
+                "cmp {}, #{}",
+                marker_tag_reg, ARRAY_GLOBAL_REF_CELL_TAG
+            )); // does the boxed cell carry an owning global-reference marker?
+            emitter.instruction(&format!("b.eq {}", label));                    // global markers expose the same ref-cell payload layout
+            emitter.instruction(&format!(
+                "cmp {}, #{}",
+                marker_tag_reg, ARRAY_LOCAL_REF_CELL_TAG
+            )); // does the boxed cell carry an owning local-reference marker?
+            emitter.instruction(&format!("b.eq {}", label));                    // local markers expose the same ref-cell payload layout
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("cmp {}, 7", raw_tag_reg));            // is the hash value a boxed Mixed pointer (tag 7)?
@@ -1233,6 +1247,16 @@ fn emit_branch_if_boxed_invoker_ref_cell(
                 marker_tag_reg, INVOKER_ARG_REF_CELL_TAG
             )); // does the boxed cell carry the invoker ref-cell marker tag?
             emitter.instruction(&format!("je {}", label));                      // take the ref-cell path when the marker tag matches
+            emitter.instruction(&format!(
+                "cmp {}, {}",
+                marker_tag_reg, ARRAY_GLOBAL_REF_CELL_TAG
+            )); // does the boxed cell carry an owning global-reference marker?
+            emitter.instruction(&format!("je {}", label));                      // global markers expose the same ref-cell payload layout
+            emitter.instruction(&format!(
+                "cmp {}, {}",
+                marker_tag_reg, ARRAY_LOCAL_REF_CELL_TAG
+            )); // does the boxed cell carry an owning local-reference marker?
+            emitter.instruction(&format!("je {}", label));                      // local markers expose the same ref-cell payload layout
         }
     }
     emitter.label(&not_boxed_label);
@@ -1250,7 +1274,11 @@ fn load_boxed_invoker_ref_cell_to_raw_regs(
     abi::emit_load_from_address(emitter, raw_hi_reg, marker_reg, 16);
 }
 
-/// Coerces and pushes a loaded indexed-array element as a call argument.
+/// Coerces and pushes a borrowed indexed-array element as a call argument.
+///
+/// The argument container remains live across the nested call, so an unchanged
+/// refcounted element stays borrowed from that container. A coercion that boxes
+/// the value already creates the independent representation it pushes.
 fn push_loaded_array_element_arg(
     source_elem_ty: &PhpType,
     target_ty: Option<&PhpType>,
@@ -1258,11 +1286,8 @@ fn push_loaded_array_element_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
-    let (pushed_ty, boxed_to_mixed) =
+    let (pushed_ty, _boxed_to_mixed) =
         coerce_current_value_to_target(emitter, ctx, data, source_elem_ty, target_ty);
-    if !boxed_to_mixed {
-        abi::emit_incref_if_refcounted(emitter, &pushed_ty);
-    }
     abi::emit_push_result_value(emitter, &pushed_ty);
     pushed_ty
 }
@@ -2094,14 +2119,13 @@ fn push_descriptor_captures_as_hidden_args(
 fn call_target_with_pushed_args(
     call_reg: &str,
     arg_types: &[PhpType],
-    sig: &FunctionSig,
     emitter: &mut Emitter,
 ) {
     let assignments = abi::build_outgoing_arg_assignments_for_target(emitter.target, arg_types, 0);
     let overflow_bytes = abi::materialize_outgoing_args(emitter, &assignments);
     save_concat_offset_before_nested_call(emitter);
     abi::emit_call_reg(emitter, call_reg);
-    restore_concat_offset_after_nested_call(emitter, &sig.return_type);
+    restore_concat_offset_after_nested_call(emitter);
     abi::emit_release_temporary_stack(emitter, overflow_bytes);
 }
 
@@ -2115,11 +2139,8 @@ fn save_concat_offset_before_nested_call(emitter: &mut Emitter) {
     }
 }
 
-/// Restores the concat offset after a nested callable target returns.
-fn restore_concat_offset_after_nested_call(emitter: &mut Emitter, return_ty: &PhpType) {
-    if return_ty.codegen_repr() == PhpType::Str {
-        abi::emit_call_label(emitter, "__rt_str_persist");
-    }
+/// Restores the concat offset after a nested callable target returns without duplicating its result.
+fn restore_concat_offset_after_nested_call(emitter: &mut Emitter) {
     let scratch = abi::temp_int_reg(emitter.target);
     match emitter.target.arch {
         Arch::AArch64 => abi::emit_pop_reg(emitter, scratch),

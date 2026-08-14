@@ -1208,3 +1208,30 @@ foreach ($uasorted as $value) {
     );
     assert_eq!(out, "34:23:11,12,:321:321:321");
 }
+
+/// Verifies an interface-typed receiver resolves a first-class method callable through the
+/// concrete implementor selected by the runtime class id.
+#[test]
+fn test_first_class_callable_interface_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+interface ValueResolverInterface {
+    public function resolveValue(string $value): string;
+}
+
+final class PrefixValueResolver implements ValueResolverInterface {
+    public function resolveValue(string $value): string {
+        return "resolved:" . $value;
+    }
+}
+
+function invokeResolver(ValueResolverInterface $resolver): string {
+    $callable = $resolver->resolveValue(...);
+    return $callable("ok");
+}
+
+echo invokeResolver(new PrefixValueResolver());
+"#,
+    );
+    assert_eq!(out, "resolved:ok");
+}

@@ -10,6 +10,24 @@
 
 use super::super::super::*;
 
+/// Resolves PHP's optional byte offset, clamping negative offsets and rejecting positive overflow.
+pub(in crate::interpreter) fn eval_preg_start_offset(
+    offset: Option<RuntimeCellHandle>,
+    subject_len: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<usize>, EvalStatus> {
+    let Some(offset) = offset else {
+        return Ok(Some(0));
+    };
+    let offset = eval_int_value(offset, values)?;
+    if offset < 0 {
+        let distance = usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX);
+        return Ok(Some(subject_len.saturating_sub(distance)));
+    }
+    let start = usize::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?;
+    Ok((start <= subject_len).then_some(start))
+}
+
 /// Builds PHP's indexed `$matches` capture array for one regex result.
 pub(in crate::interpreter) fn eval_preg_capture_array(
     subject: &[u8],

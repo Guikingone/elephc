@@ -106,7 +106,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x15, x14, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x15, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // strings/raw blocks contribute no outgoing cycle edges
-    emitter.instruction("cmp x15, #5");                                         // is this within the array/hash/object/mixed range?
+    emitter.instruction("cmp x15, #7");                                         // is this within the array/hash/object/mixed/refcell range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // ignore unknown/raw heap kinds
     emitter.instruction("cmp x15, #2");                                         // is this an indexed array?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_array");             // scan array payload children
@@ -114,6 +114,8 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash");              // scan hash payload children
     emitter.instruction("cmp x15, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed");             // scan the boxed mixed child pointer
+    emitter.instruction("cmp x15, #7");                                         // is this a managed reference cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_refcell");           // scan the cell's inner heap value
     emitter.instruction("b __rt_gc_collect_cycles_count_object");               // remaining refcounted kind 4 is an object
 
     emitter.label("__rt_gc_collect_cycles_count_array");
@@ -160,10 +162,13 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #1");                                          // is this hash slot occupied?
     emitter.instruction("b.ne __rt_gc_collect_cycles_count_hash_next");         // skip empty or tombstone slots
     emitter.instruction("ldr x0, [x15, #40]");                                  // load this entry's runtime value_tag
+    emitter.instruction("cmp x0, #11");                                         // does this entry hold a managed reference cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash_child");        // count the incoming edge into the cell
     emitter.instruction("cmp x0, #4");                                          // does this entry hold a heap-backed child?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_hash_next");         // scalar/string entries contribute no graph edges
     emitter.instruction("cmp x0, #7");                                          // do the per-entry heap-backed tags stay within range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_hash_next");         // unknown per-entry tags are ignored
+    emitter.label("__rt_gc_collect_cycles_count_hash_child");
     emitter.instruction("ldr x0, [x15, #24]");                                  // load the nested child pointer from the hash value
     emitter.instruction("str x12, [sp, #32]");                                  // preserve the parent hash pointer across the helper call
     emitter.instruction("str x13, [sp, #40]");                                  // preserve the hash capacity across the helper call
@@ -178,13 +183,26 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
 
     emitter.label("__rt_gc_collect_cycles_count_mixed");
     emitter.instruction("ldr x15, [x12]");                                      // load the boxed mixed runtime value_tag
+    emitter.instruction("cmp x15, #11");                                        // does the boxed value hold a managed reference cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed_child");       // count the incoming edge into the cell
     emitter.instruction("cmp x15, #4");                                         // does the boxed mixed value hold a heap-backed child?
     emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // scalar/string/null mixed payloads contribute no graph edges
     emitter.instruction("cmp x15, #7");                                         // do boxed mixed tags stay within the supported heap-backed range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // unknown mixed tags are ignored
+    emitter.label("__rt_gc_collect_cycles_count_mixed_child");
     emitter.instruction("ldr x0, [x12, #8]");                                   // load the boxed mixed child pointer
     emitter.instruction("bl __rt_gc_note_child_ref");                           // add one incoming heap edge to the boxed child
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
+
+    emitter.label("__rt_gc_collect_cycles_count_refcell");
+    emitter.instruction("ldr x15, [x12, #8]");                                  // load the reference cell's inner runtime tag
+    emitter.instruction("cmp x15, #4");                                         // does the cell own a heap-backed inner value?
+    emitter.instruction("b.lo __rt_gc_collect_cycles_count_next");              // scalar and string inner values add no edge
+    emitter.instruction("cmp x15, #7");                                         // is the inner tag in the managed heap-backed range?
+    emitter.instruction("b.hi __rt_gc_collect_cycles_count_next");              // unknown inner tags are ignored
+    emitter.instruction("ldr x0, [x12]");                                       // load the cell's inner heap pointer
+    emitter.instruction("bl __rt_gc_note_child_ref");                           // count the reference cell's outgoing edge
+    emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // reference-cell counting is complete
 
     emitter.label("__rt_gc_collect_cycles_count_object");
     emitter.instruction("ldr x14, [x12]");                                      // load the runtime class_id from the object payload
@@ -263,10 +281,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_root_next");               // strings/raw blocks are outside the cycle collector set
-    emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
+    emitter.instruction("cmp x14, #7");                                         // is this within the array/hash/object/mixed/refcell range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_root_next");               // ignore unknown/raw heap kinds
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
-    emitter.instruction("b.ne __rt_gc_collect_cycles_root_refcounted");         // hashes/objects decide in their dedicated branches
+    emitter.instruction("b.ne __rt_gc_collect_cycles_root_refcounted");         // hashes/objects/mixed/refcells are refcounted candidates
     emitter.instruction("lsr x15, x13, #8");                                    // move the packed array value_type tag into the low bits
     emitter.instruction("and x15, x15, #0x7f");                                 // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x15, #4");                                         // is this an array of indexed arrays?
@@ -316,10 +334,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("and x14, x13, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x14, #2");                                         // is this at least an indexed array?
     emitter.instruction("b.lo __rt_gc_collect_cycles_free_next");               // strings/raw blocks are outside the cycle collector set
-    emitter.instruction("cmp x14, #5");                                         // is this within the array/hash/object/mixed range?
+    emitter.instruction("cmp x14, #7");                                         // is this within the array/hash/object/mixed/refcell range?
     emitter.instruction("b.hi __rt_gc_collect_cycles_free_next");               // ignore unknown/raw heap kinds
     emitter.instruction("cmp x14, #2");                                         // is this an indexed array candidate?
-    emitter.instruction("b.ne __rt_gc_collect_cycles_free_refcounted");         // hashes/objects decide in their dedicated branches
+    emitter.instruction("b.ne __rt_gc_collect_cycles_free_refcounted");         // hashes/objects/mixed/refcells are refcounted candidates
     emitter.instruction("lsr x15, x13, #8");                                    // move the packed array value_type tag into the low bits
     emitter.instruction("and x15, x15, #0x7f");                                 // isolate the packed array value_type tag without the persistent COW flag
     emitter.instruction("cmp x15, #4");                                         // is this an array of indexed arrays?
@@ -345,7 +363,12 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_hash");               // deep-free unreachable hashes
     emitter.instruction("cmp x14, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_free_mixed");              // deep-free unreachable mixed cells
+    emitter.instruction("cmp x14, #7");                                         // is this a managed reference cell?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_refcell");            // deep-free unreachable reference cells
     emitter.instruction("bl __rt_object_free_deep");                            // deep-free unreachable objects
+    emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
+    emitter.label("__rt_gc_collect_cycles_free_refcell");
+    emitter.instruction("bl __rt_ref_cell_free_deep");                          // deep-free the cell and release its inner value
     emitter.instruction("b __rt_gc_collect_cycles_free_loop");                  // continue scanning from the saved next header
     emitter.label("__rt_gc_collect_cycles_free_array");
     emitter.instruction("bl __rt_array_free_deep");                             // deep-free the unreachable array graph node

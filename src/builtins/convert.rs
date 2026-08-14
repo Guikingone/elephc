@@ -28,6 +28,7 @@ pub fn type_spec_to_php(ty: &TypeSpec) -> PhpType {
         TypeSpec::Str => PhpType::Str,
         TypeSpec::Bool => PhpType::Bool,
         TypeSpec::Mixed => PhpType::Mixed,
+        TypeSpec::ArrayMixed => PhpType::Array(Box::new(PhpType::Mixed)),
         TypeSpec::Void => PhpType::Void,
     }
 }
@@ -77,6 +78,10 @@ mod tests {
         assert_eq!(type_spec_to_php(&TypeSpec::Float), PhpType::Float);
         assert_eq!(type_spec_to_php(&TypeSpec::Bool), PhpType::Bool);
         assert_eq!(type_spec_to_php(&TypeSpec::Mixed), PhpType::Mixed);
+        assert_eq!(
+            type_spec_to_php(&TypeSpec::ArrayMixed),
+            PhpType::Array(Box::new(PhpType::Mixed))
+        );
         assert_eq!(type_spec_to_php(&TypeSpec::Void), PhpType::Void);
     }
 

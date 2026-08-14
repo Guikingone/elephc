@@ -49,9 +49,15 @@ pub(super) fn main_name_uses_eval_global_scope(ctx: &FunctionContext<'_>, name: 
     ctx.is_main && eval_sync_global_type(ctx, name).is_some()
 }
 
-/// Collects caller-scope `global` aliases that eval fragments inherit by name.
+/// Collects caller-scope globals that eval fragments inherit by name.
+///
+/// Request superglobals are implicit aliases in every PHP scope. The eval
+/// bridge stores them in its dedicated global scope, so web-mode fragments
+/// must mark the corresponding local-scope names as aliases even when the
+/// source contains no explicit `global` statement.
 pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAlias> {
-    ctx.function
+    let mut aliases = ctx
+        .function
         .locals
         .iter()
         .filter(|local| local.kind == LocalKind::GlobalAlias)
@@ -62,7 +68,19 @@ pub(super) fn eval_global_aliases(ctx: &FunctionContext<'_>) -> Vec<EvalGlobalAl
                 name,
             })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if ctx.module.web {
+        for &name in crate::superglobals::SUPERGLOBALS {
+            if aliases.iter().any(|alias| alias.name == name) {
+                continue;
+            }
+            aliases.push(EvalGlobalAlias {
+                name: name.to_string(),
+                global_name: name.to_string(),
+            });
+        }
+    }
+    aliases
 }
 
 /// Collects program globals that can be boxed into the eval global scope.
@@ -214,14 +232,52 @@ pub(super) fn eval_sync_type_supported(ty: &PhpType) -> bool {
 pub(super) fn flush_eval_scope_locals(ctx: &mut FunctionContext<'_>, locals: &[EvalSyncLocal]) -> Result<()> {
     for local in locals {
         let ty = ctx.load_local_to_result(local.slot)?.codegen_repr();
+        let absent = ctx.next_label("eval_scope_flush_absent");
+        let done = ctx.next_label("eval_scope_flush_done");
+        if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            // Eval barriers widen PHP-visible locals to boxed Mixed storage. A zero slot is
+            // therefore the frame's uninitialized marker, not PHP null (which has its own
+            // non-null Mixed cell). Keep the materialized scope's visibility in sync so
+            // `extract(..., EXTR_SKIP)` does not mistake a future local slot for an existing
+            // caller variable.
+            abi::emit_branch_if_int_result_zero(ctx.emitter, &absent);
+        }
         if !matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
             emit_box_current_value_as_mixed(ctx.emitter, &ty);
         }
         let result_reg = abi::int_result_reg(ctx.emitter);
         abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
         emit_eval_scope_set(ctx, local, scope_set_flags_for_type(&ty));
+        if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&absent);
+            emit_eval_scope_unset_name(ctx, &local.name);
+            ctx.emitter.label(&done);
+        }
     }
     Ok(())
+}
+
+/// Marks one statically named local as absent from the materialized eval scope.
+fn emit_eval_scope_unset_name(ctx: &mut FunctionContext<'_>, name: &str) {
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    load_eval_scope_to_arg(ctx, 0);
+    abi::emit_symbol_address(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 1),
+        &name_label,
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 2),
+        name_len as i64,
+    );
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_scope_unset");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Flushes supported program globals into the eval global scope before eval.
@@ -258,6 +314,10 @@ pub(super) fn flush_eval_globals_to_local_scope(ctx: &mut FunctionContext<'_>, g
 pub(super) fn load_global_to_result(ctx: &mut FunctionContext<'_>, global: &EvalSyncGlobal) {
     let symbol = ir_global_symbol(&global.name);
     let ty = global.ty.codegen_repr();
+    if crate::superglobals::uses_shared_ref_cell(ctx.module, &global.name) {
+        super::super::super::globals_constants::load_shared_web_global_to_result(ctx, &symbol);
+        return;
+    }
     ctx.data.add_comm(symbol.clone(), ty.stack_size().max(8));
     abi::emit_load_symbol_to_result(ctx.emitter, &symbol, &ty);
 }

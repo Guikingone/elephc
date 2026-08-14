@@ -98,7 +98,8 @@ fn null_coalesce_assignment_type(
 ///
 /// Handles null-coalescing assignment by extracting the default expression and combining
 /// types appropriately. Preserves callable metadata when assigning closures or callable
-/// expressions. Updates the type environment with the merged assignment type.
+/// expressions. Updates the flow-sensitive type environment with the assigned value type while
+/// preserving any explicit local declaration contract.
 ///
 /// On success, updates `env` with the resolved type for `name`. On error, returns a
 /// type mismatch diagnostic.
@@ -109,6 +110,22 @@ pub(super) fn check_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    let suffix_key = (checker.current_loop_storage_scope.clone(), name.to_string());
+    if let ExprKind::BinaryOp {
+        op: crate::parser::ast::BinOp::Concat,
+        right,
+        ..
+    } = &value.kind
+    {
+        if let ExprKind::StringLiteral(suffix) = &right.kind {
+            checker.string_suffix_locals.insert(suffix_key, suffix.clone());
+        } else {
+            checker.string_suffix_locals.remove(&suffix_key);
+        }
+    } else {
+        checker.string_suffix_locals.remove(&suffix_key);
+    }
+
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
     // marker so a subsequent `$dst[$k] = $v` is routed by `$k`'s real type (e.g.
@@ -244,6 +261,9 @@ pub(super) fn check_ref_assign(
             clear_callable_metadata(checker, target);
             Ok(())
         }
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            check_ref_assign_dynamic_property(checker, target, object, property, span, env)
+        }
         ExprKind::FunctionCall { .. }
         | ExprKind::MethodCall { .. }
         | ExprKind::StaticMethodCall { .. }
@@ -256,19 +276,38 @@ pub(super) fn check_ref_assign(
             Ok(())
         }
         ExprKind::ArrayAccess { array, index } => {
+            if let ExprKind::StaticPropertyAccess { receiver, property } = &array.kind {
+                let target_ty = super::static_properties::check_local_ref_assign_static_prop_element(
+                    checker,
+                    receiver,
+                    property,
+                    index,
+                    span,
+                    env,
+                )?;
+                env.insert(target.to_string(), target_ty);
+                checker.active_ref_params.insert(target.to_string());
+                clear_callable_metadata(checker, target);
+                return Ok(());
+            }
             let array_ty = checker.infer_type(array, env)?;
             let index_ty = checker.infer_type(index, env)?;
-            if !matches!(array_ty, PhpType::Array(_)) {
+            if !matches!(&array_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
                 return Err(CompileError::new(
                     span,
-                    "Reference assignment to an array element requires an indexed array",
+                    "Reference assignment to an array element requires an array",
                 ));
             }
-            if !matches!(index_ty, PhpType::Int) {
+            if matches!(&array_ty, PhpType::Array(_)) && !matches!(index_ty, PhpType::Int) {
                 return Err(CompileError::new(
                     span,
                     "Reference assignment to an array element requires an integer index",
                 ));
+            }
+            if matches!(&array_ty, PhpType::AssocArray { .. })
+                && !super::properties::is_php_array_key_type(&index_ty)
+            {
+                return Err(CompileError::new(span, "Invalid associative array key type"));
             }
             let target_ty = checker.infer_type(source, env)?;
             env.insert(target.to_string(), target_ty);
@@ -286,6 +325,137 @@ pub(super) fn check_ref_assign(
         return Err(error);
     }
     Ok(())
+}
+
+/// Type-checks a local reference alias to a runtime-named declared property.
+///
+/// A literal name selects one slot. A local whose value has a known string suffix selects only
+/// declared slots with that suffix. Every selected slot must have a compatible runtime layout;
+/// those slots are then promoted to owned reference cells before code generation.
+fn check_ref_assign_dynamic_property(
+    checker: &mut Checker,
+    target: &str,
+    object: &Expr,
+    property: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(class_name) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Err(CompileError::new(
+            span,
+            "Dynamic property reference requires one statically known object class",
+        ));
+    };
+    let property_ty = checker.infer_type(property, env)?;
+    if property_ty != PhpType::Str {
+        return Err(CompileError::new(
+            property.span,
+            "Dynamic property reference name must be a string",
+        ));
+    }
+
+    let exact_name = match &property.kind {
+        ExprKind::StringLiteral(name) => Some(name.as_str()),
+        _ => None,
+    };
+    let suffix = match &property.kind {
+        ExprKind::Variable(name) => checker
+            .string_suffix_locals
+            .get(&(checker.current_loop_storage_scope.clone(), name.clone()))
+            .map(String::as_str),
+        _ => None,
+    };
+    if exact_name.is_none() && suffix.is_none() {
+        return Err(CompileError::new(
+            property.span,
+            "Dynamic property reference requires a literal name or a locally known string suffix",
+        ));
+    }
+
+    let normalized_class = class_name.trim_start_matches('\\');
+    let candidates = checker
+        .classes
+        .get(normalized_class)
+        .ok_or_else(|| CompileError::new(span, &format!("Unknown class: {}", normalized_class)))?
+        .properties
+        .iter()
+        .filter(|(name, _)| {
+            exact_name.is_some_and(|exact| name == exact)
+                || suffix.is_some_and(|suffix| name.ends_with(suffix))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(CompileError::new(
+            property.span,
+            "Dynamic property reference does not match a declared property",
+        ));
+    }
+
+    let mut candidate_ty = candidates[0].1.clone();
+    for (_, next_ty) in &candidates[1..] {
+        candidate_ty = merge_dynamic_reference_candidate_type(checker, candidate_ty, next_ty)
+            .ok_or_else(|| {
+                CompileError::new(
+                    property.span,
+                    "Dynamic property reference candidates have incompatible storage types",
+                )
+            })?;
+    }
+    for (property_name, _) in candidates {
+        checker
+            .reference_property_promotions
+            .insert((normalized_class.to_string(), property_name));
+    }
+    checker.dynamic_ref_local_types.insert(
+        (checker.current_loop_storage_scope.clone(), target.to_string()),
+        candidate_ty.clone(),
+    );
+    env.insert(target.to_string(), candidate_ty);
+    checker.active_ref_params.insert(target.to_string());
+    clear_callable_metadata(checker, target);
+    Ok(())
+}
+
+/// Merges compatible candidate types for one runtime-named property reference.
+fn merge_dynamic_reference_candidate_type(
+    checker: &Checker,
+    current: PhpType,
+    next: &PhpType,
+) -> Option<PhpType> {
+    if &current == next {
+        return Some(current);
+    }
+    match (current, next) {
+        (PhpType::Array(left), PhpType::Array(right)) => Some(PhpType::Array(Box::new(
+            checker
+                .merge_array_element_type(&left, right)
+                .unwrap_or(PhpType::Mixed),
+        ))),
+        (
+            PhpType::AssocArray {
+                key: left_key,
+                value: left_value,
+            },
+            PhpType::AssocArray {
+                key: right_key,
+                value: right_value,
+            },
+        ) => Some(PhpType::AssocArray {
+            key: Box::new(
+                checker
+                    .merge_array_element_type(&left_key, right_key)
+                    .unwrap_or(PhpType::Mixed),
+            ),
+            value: Box::new(
+                checker
+                    .merge_array_element_type(&left_value, right_value)
+                    .unwrap_or(PhpType::Mixed),
+            ),
+        }),
+        _ => None,
+    }
 }
 
 /// Type-checks `$target =& $source` where the source is a plain variable.
@@ -738,14 +908,11 @@ fn resolve_class_name<'a>(checker: &'a Checker, class_name: &str) -> Option<&'a 
         .map(String::as_str)
 }
 
-/// Merges the assigned type into the type environment for the given variable.
+/// Records the new flow-sensitive type of an ordinary local assignment.
 ///
-/// If `name` already exists in `env`, attempts to merge the new type with the existing
-/// type using `checker.merged_assignment_type()`. If merging is not possible, returns
-/// a type incompatibility error. If `name` does not exist, inserts the type directly.
-///
-/// The merge operation supports widening (e.g., `Int | Float` from separate assignments)
-/// and preserves type specificity where possible.
+/// Ordinary PHP locals may change runtime representation on each assignment. An explicit
+/// typed-local declaration is the only local form that keeps a persistent type contract and
+/// therefore validates later writes before preserving its declared type in the environment.
 fn merge_local_assignment_type(
     checker: &Checker,
     name: &str,
@@ -753,25 +920,21 @@ fn merge_local_assignment_type(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
-    if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty);
-        if merged_ty.is_none() {
+    let declaration_key = (checker.current_loop_storage_scope.clone(), name.to_string());
+    if let Some(declared) = checker.declared_local_types.get(&declaration_key) {
+        if !checker.type_accepts(declared, ty) {
             return Err(CompileError::new(
                 span,
                 &format!(
                     "Type error: cannot reassign ${} from {} to {}",
-                    name, existing, ty
+                    name, declared, ty
                 ),
             ));
         }
-        if let Some(merged_ty) = merged_ty {
-            if &merged_ty != existing {
-                env.insert(name.to_string(), merged_ty);
-            }
-        }
-    } else {
-        env.insert(name.to_string(), ty.clone());
+        env.insert(name.to_string(), declared.clone());
+        return Ok(());
     }
+    env.insert(name.to_string(), ty.clone());
     Ok(())
 }
 
@@ -823,6 +986,10 @@ pub(super) fn check_typed_assign(
             ),
         ));
     }
+    checker.declared_local_types.insert(
+        (checker.current_loop_storage_scope.clone(), name.to_string()),
+        declared_ty.clone(),
+    );
     env.insert(name.to_string(), declared_ty);
     let reflected_class = reflection_class_assignment_target(checker, value, env);
     update_reflection_class_assignment_metadata(checker, name, reflected_class);
@@ -847,9 +1014,10 @@ pub(super) fn check_const_decl(
 
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
-/// Infers the right-hand side and accepts homogeneous indexed arrays or associative arrays.
-/// Indexed arrays propagate their element type, while associative values bind adaptively as
-/// `Mixed`. Returns an error for non-array types, including unresolved nullable unions.
+/// Infers the right-hand side and accepts homogeneous indexed arrays, associative arrays, or a
+/// fully gradual `Mixed` value guarded by the runtime reader. Indexed arrays propagate their
+/// element type, while associative and gradual values bind adaptively as `Mixed`. Returns an
+/// error for known non-array types, including unresolved nullable unions.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -871,6 +1039,10 @@ pub(super) fn check_list_unpack(
         // Associative arrays can contain integer keys used by positional destructuring. Their
         // element type stays adaptive because hash values may be heterogeneous or absent.
         PhpType::AssocArray { .. } => PhpType::Mixed,
+        // Dynamic method/eval boundaries cannot expose a static return shape. EIR list-unpack
+        // lowering already routes boxed Mixed sources through `__rt_mixed_array_get`, which
+        // validates the runtime tag before reading the positional keys.
+        PhpType::Mixed => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);

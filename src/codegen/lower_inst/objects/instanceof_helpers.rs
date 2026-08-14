@@ -9,6 +9,53 @@
 
 use super::*;
 
+/// Tests PHP's built-in `Closure` class against Elephc's callable descriptor representation.
+///
+/// Direct callable values are non-null descriptor pointers. Boxed gradual values carry runtime
+/// tag 10 when their payload is such a descriptor; strings, arrays, invokable objects, and other
+/// callable forms intentionally remain false because PHP's `Closure` class is narrower than
+/// PHP's general callable set.
+pub(super) fn emit_closure_instanceof(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    match value_ty.codegen_repr() {
+        PhpType::Callable => {
+            ctx.load_value_to_reg(value, result_reg)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #0");                      // null descriptors are not Closure objects
+                    ctx.emitter.instruction("cset x0, ne");                     // return true for a live callable descriptor
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rax, rax");                   // null descriptors are not Closure objects
+                    ctx.emitter.instruction("setne al");                        // materialize the non-null descriptor predicate
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the PHP integer register
+                }
+            }
+        }
+        PhpType::Mixed => {
+            ctx.load_value_to_reg(value, result_reg)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 identifies a boxed callable descriptor
+                    ctx.emitter.instruction("cset x0, eq");                     // return whether the boxed value is a Closure descriptor
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 identifies a boxed callable descriptor
+                    ctx.emitter.instruction("sete al");                         // materialize the callable-tag predicate
+                    ctx.emitter.instruction("movzx rax, al");                   // widen the boolean result to the PHP integer register
+                }
+            }
+        }
+        _ => emit_false(ctx),
+    }
+    Ok(())
+}
+
 /// Normalizes the tested value into an object pointer or null for dynamic `instanceof`.
 pub(super) fn emit_normalized_dynamic_instanceof_value(
     ctx: &mut FunctionContext<'_>,
@@ -184,7 +231,12 @@ pub(super) fn emit_invalid_dynamic_target_fatal(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the metadata matcher call with object-or-mixed input already in argument 0.
-pub(super) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, target_kind: i64, helper: &str) {
+pub(in crate::codegen::lower_inst) fn emit_match_call(
+    ctx: &mut FunctionContext<'_>,
+    target_id: u64,
+    target_kind: i64,
+    helper: &str,
+) {
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_arg_reg_name(ctx.emitter.target, 1),
@@ -199,7 +251,10 @@ pub(super) fn emit_match_call(ctx: &mut FunctionContext<'_>, target_id: u64, tar
 }
 
 /// Classifies a named target as a class `(kind 0)` or interface `(kind 1)`.
-pub(super) fn classify_named_target(ctx: &FunctionContext<'_>, class_name: &str) -> Option<(u64, i64)> {
+pub(in crate::codegen::lower_inst) fn classify_named_target(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+) -> Option<(u64, i64)> {
     let normalized = class_name.trim_start_matches('\\');
     if let Some(class_info) = ctx.module.class_infos.get(normalized) {
         return Some((class_info.class_id, 0));
@@ -230,7 +285,10 @@ pub(super) fn property_name_immediate<'a>(
 }
 
 /// Resolves an instruction class-name immediate into the module data pool.
-pub(super) fn class_name_immediate<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruction) -> Result<&'a str> {
+pub(in crate::codegen::lower_inst) fn class_name_immediate<'a>(
+    ctx: &'a FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<&'a str> {
     let data = expect_data(inst)?;
     ctx.module
         .data

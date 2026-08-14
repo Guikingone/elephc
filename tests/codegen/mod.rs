@@ -28,6 +28,7 @@ mod eval_constructors;
 mod eval_reflection_invocation;
 mod operators;
 mod control_flow;
+mod arg_return_coercions;
 mod scalar_strings;
 mod array_basics;
 mod numeric_scalars;

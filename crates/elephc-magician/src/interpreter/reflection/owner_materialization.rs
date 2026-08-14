@@ -214,6 +214,29 @@ pub(super) fn eval_reflection_owner_object_with_members(
         backing_value_cell,
         constructor,
     )?;
+    if matches!(
+        owner_kind,
+        EVAL_REFLECTION_OWNER_FUNCTION | EVAL_REFLECTION_OWNER_METHOD
+    ) {
+        let has_return_type = values.bool_value(type_metadata.is_some())?;
+        let return_type = match type_metadata {
+            Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
+            None => values.null()?,
+        };
+        let declaring_class = if owner_kind == EVAL_REFLECTION_OWNER_FUNCTION {
+            "ReflectionFunction"
+        } else {
+            "ReflectionMethod"
+        };
+        eval_reflection_with_declaring_class_scope(
+            declaring_class,
+            context,
+            |_| -> Result<(), EvalStatus> {
+                values.property_set(object, "__has_return_type", has_return_type)?;
+                values.property_set(object, "__type", return_type)
+            },
+        )?;
+    }
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
         let has_type = values.bool_value(type_metadata.is_some())?;
         let type_value = match type_metadata {
@@ -1051,6 +1074,11 @@ pub(super) fn eval_reflection_member_object_result(
     } else {
         0
     };
+    let type_metadata = if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
+        member.return_type_metadata.as_ref()
+    } else {
+        member.type_metadata.as_ref()
+    };
     eval_reflection_owner_object(
         owner_kind,
         reflected_name,
@@ -1061,7 +1089,7 @@ pub(super) fn eval_reflection_member_object_result(
         &[],
         member.declaring_class_name.as_deref(),
         &member.parameters,
-        member.type_metadata.as_ref(),
+        type_metadata,
         member.settable_type_metadata.as_ref(),
         member.default_value.as_ref(),
         member.default_value_trait_origin.as_deref(),

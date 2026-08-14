@@ -454,9 +454,12 @@ pub(crate) fn lower_class_name_lookup(
             emit_mixed_object_class_name(ctx, name);
         }
         PhpType::Str if name == "get_parent_class" => {
-            let class_name = const_string_operand(ctx, value)?;
-            let parent = parent_of(ctx, &class_name);
-            emit_string_result(ctx, parent.as_bytes());
+            if let Some(class_name) = optional_const_string_operand(ctx, value)? {
+                let parent = parent_of(ctx, &class_name);
+                emit_string_result(ctx, parent.as_bytes());
+            } else {
+                emit_dynamic_parent_class_name(ctx, value)?;
+            }
         }
         _ => {
             ctx.load_value_to_result(value)?;
@@ -464,6 +467,59 @@ pub(crate) fn lower_class_name_lookup(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Resolves a runtime class-name string against the closed-world AOT class metadata.
+fn emit_dynamic_parent_class_name(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let mut candidates = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter_map(|(class_name, info)| {
+            info.parent
+                .as_ref()
+                .map(|parent| (class_name.clone(), parent.clone()))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    if candidates.is_empty() {
+        emit_string_result(ctx, b"");
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let done_label = ctx.next_label("get_parent_class_dynamic_done");
+    let case_labels = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            ctx.next_label(&format!("get_parent_class_dynamic_case_{}", index))
+        })
+        .collect::<Vec<_>>();
+    for ((class_name, _), case_label) in candidates.iter().zip(case_labels.iter()) {
+        super::emit_branch_if_dynamic_class_like_exists_candidate(
+            ctx,
+            class_name,
+            case_label,
+        );
+    }
+    emit_string_result(ctx, b"");
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    for ((_, parent), case_label) in candidates.iter().zip(case_labels.iter()) {
+        ctx.emitter.label(case_label);
+        emit_string_result(ctx, parent.as_bytes());
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
@@ -792,7 +848,10 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     match ctx.emitter.target.arch {
@@ -827,6 +886,33 @@ fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     emit_string_result(ctx, b"");
 
     ctx.emitter.label(&done_label);
+}
+
+/// Emits a class-name lookup for a boxed gradual value while preserving the unboxed object payload.
+pub(super) fn emit_mixed_object_class_name_from_value(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
+    let object_label = ctx.next_label("get_class_mixed_obj");
+    let done_label = ctx.next_label("get_class_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_class_name_missing");
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&object_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),
+    }
+    emit_dynamic_object_class_name(ctx, name);
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits AArch64 runtime object class-name lookup for `get_class()` and `get_parent_class()`.

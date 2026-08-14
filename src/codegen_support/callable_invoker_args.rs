@@ -18,6 +18,18 @@ use crate::types::PhpType;
 /// Internal boxed-Mixed tag used only inside descriptor-invoker argument arrays.
 pub(crate) const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
+/// Internal boxed-Mixed tag for an array element that owns a share of a global ref-cell.
+///
+/// Unlike tag 11, releasing this marker decrements the ref-cell itself. The cell keeps the
+/// referenced web superglobal alive after an array containing the alias escapes its function.
+pub(crate) const ARRAY_GLOBAL_REF_CELL_TAG: i64 = 12;
+
+/// Internal boxed-Mixed tag for an array element that owns a share of a local ref-cell.
+///
+/// The marker retains the promoted heap cell when it is created and releases that share when the
+/// containing array is destroyed, so the alias remains valid after its declaring frame returns.
+pub(crate) const ARRAY_LOCAL_REF_CELL_TAG: i64 = 13;
+
 /// Clones a boxed runtime Mixed argument container into a normalized boxed Mixed container.
 pub(crate) fn emit_clone_runtime_mixed_invoker_arg_as_mixed(
     dest_reg: &str,

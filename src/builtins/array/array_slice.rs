@@ -18,8 +18,10 @@
 //!   with `args: &[]` and could not see the flag there. A boxed `Mixed`/`Union` source therefore
 //!   reports `array<mixed>` — the exact layout `lower_mixed_array_slice` materializes — rather
 //!   than a bare `Mixed`, which is also PHP-accurate because `array_slice()` always returns an
-//!   array. `RuntimeFnId::ArraySlice::fallback_result_type` supplies the same layout for
-//!   synthetic call sites with no checked type.
+//!   array. A key-preserving gradual source uses a mixed-key/mixed-value associative result,
+//!   materialized by the PHP compatibility prelude without guessing an indexed slot layout.
+//!   `RuntimeFnId::ArraySlice::fallback_result_type` supplies the indexed layout for synthetic
+//!   call sites with no checked type.
 //! - The checked type below is a CHECKER type: call-site specialization narrows an untyped
 //!   parameter (`function top($scores)`) that EIR still lowers under the boxed-`Mixed` ABI
 //!   contract, so the type recorded here can be narrower than the operand the slice helper
@@ -72,8 +74,8 @@ fn literal_preserve_keys(flag: Option<&Expr>) -> Option<bool> {
 /// `array<mixed>`. With a literal `preserve_keys: true` an indexed source keeps the integer keys of
 /// the selected window, which is an `AssocArray` keyed by `Int`; a source that is already associative
 /// keeps its own shape because narrowing a hash preserves its keys. Non-array first arguments and
-/// a non-literal flag are rejected, and so is a key-preserving slice of a boxed `Mixed` array,
-/// whose element layout is not statically known. The first argument is re-inferred here; the
+/// a non-literal flag are rejected. A key-preserving boxed `Mixed` source yields a gradual
+/// associative result and is routed through the compatibility prelude. The first argument is re-inferred here; the
 /// registry already inferred every argument once for side effects, and arity (2 to 4) is
 /// pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
@@ -86,10 +88,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     })?;
     if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
         if preserve {
-            return Err(CompileError::new(
-                cx.span,
-                "array_slice() preserve_keys requires a statically known array type",
-            ));
+            return Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            });
         }
         return Ok(PhpType::Array(Box::new(PhpType::Mixed)));
     }

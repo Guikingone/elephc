@@ -202,6 +202,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// target. Those locals get boxed `Mixed` frame storage from their first store, so
     /// every read of the slot is already a boxed load instead of an owned string detach.
     pub string_incdec_locals: &'m HashSet<(String, String)>,
+    /// Checker-selected boxed storage contracts for caller locals whose by-reference
+    /// parameter may replace their value with any member of a Mixed-represented type.
+    pub by_ref_local_storage_types: &'m HashMap<(String, String), PhpType>,
+    pub dynamic_ref_local_types: &'m HashMap<(String, String), PhpType>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -278,6 +282,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
         string_incdec_locals: &'m HashSet<(String, String)>,
+        by_ref_local_storage_types: &'m HashMap<(String, String), PhpType>,
+        dynamic_ref_local_types: &'m HashMap<(String, String), PhpType>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -311,6 +317,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             builtin_call_types,
             loop_storage_types,
             string_incdec_locals,
+            by_ref_local_storage_types,
+            dynamic_ref_local_types,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -472,6 +480,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.data.intern_global_name(value)
     }
 
+    /// Interns the backing program-global name for a PHP variable or `$GLOBALS` alias.
+    pub(crate) fn intern_global_storage_name(&mut self, name: &str) -> DataId {
+        let storage = crate::globals_array::alias_target(name).unwrap_or(name);
+        self.intern_global_name(storage)
+    }
+
     /// Interns a function-name metadata string in the module data pool.
     pub(crate) fn intern_function_name(&mut self, value: &str) -> DataId {
         self.data.intern_function_name(value)
@@ -488,6 +502,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .get(name)
             .cloned()
             .unwrap_or(PhpType::Mixed)
+    }
+
+    /// Returns the frame representation allocated for a local, including whole-scope widening.
+    pub(crate) fn local_storage_type(&self, name: &str) -> PhpType {
+        self.local_slots
+            .get(name)
+            .map(|slot| self.builder.local_php_type(*slot))
+            .unwrap_or_else(|| self.required_local_storage_type(name, self.local_type(name)))
     }
 
     /// Records a foreach loop-key local whose source is a concretely-indexed
@@ -516,6 +538,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// instead. Ordinary PHP globals use boxed Mixed storage in every scope
     /// because a function declaring `global $x` may replace its runtime type.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
+        let name = crate::globals_array::alias_target(name).unwrap_or(name);
         if self.web && crate::superglobals::is_superglobal(name) {
             return crate::superglobals::superglobal_type();
         }
@@ -642,11 +665,15 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Declares a local slot if it does not already exist.
     pub(crate) fn declare_local(&mut self, name: &str, php_type: PhpType) -> LocalSlotId {
-        self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
+        let kind = if crate::globals_array::is_alias(name) {
+            LocalKind::GlobalAlias
+        } else {
+            LocalKind::PhpLocal
+        };
+        self.declare_local_with_kind(name, php_type, kind)
     }
 
-    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
-    /// `++`/`--` can retype.
+    /// Returns the frame storage type required for all accesses to a local.
     ///
     /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
     /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
@@ -655,12 +682,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
     /// first store — including the incoming-parameter store — keeps every access on the
     /// ordinary boxed-Mixed path instead.
-    fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
-        if !matches!(php_type.codegen_repr(), PhpType::Str) {
-            return php_type;
-        }
+    fn required_local_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
         let key = (self.loop_storage_scope.clone(), name.to_string());
-        if self.string_incdec_locals.contains(&key) {
+        if let Some(required) = self.by_ref_local_storage_types.get(&key) {
+            return required.clone();
+        }
+        if matches!(php_type.codegen_repr(), PhpType::Str)
+            && self.string_incdec_locals.contains(&key)
+        {
             return PhpType::Mixed;
         }
         php_type
@@ -677,7 +706,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return *slot;
         }
         let boxed_php_type = if kind == LocalKind::PhpLocal {
-            self.boxed_incdec_storage_type(name, php_type.clone())
+            self.required_local_storage_type(name, php_type.clone())
         } else {
             php_type.clone()
         };
@@ -865,15 +894,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::OwnedTemp);
         name
-    }
-
-    /// Declares a parser-reserved hidden expression-result temporary.
-    pub(crate) fn declare_owned_hidden_temp_with_name(
-        &mut self,
-        name: &str,
-        php_type: PhpType,
-    ) -> LocalSlotId {
-        self.declare_local_with_kind(name, php_type, LocalKind::OwnedTemp)
     }
 
     /// Ensures this function has a persistent eval context handle slot.
@@ -1114,8 +1134,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         };
         let slot = self.declare_local(name, php_type.clone());
         let ir_type = value_ir_type(&php_type);
-        let ownership = Ownership::for_php_type(&php_type);
         let is_ref_bound = self.is_ref_bound_local(name) && !uses_global && kind == LocalKind::PhpLocal;
+        // A ref-cell load dereferences storage owned by the cell; the backend does not retain
+        // the loaded payload. Mark it borrowed so provisional expression cleanup cannot release
+        // the property's or caller's live value. Consumers that need an independent owner emit
+        // an explicit `Acquire`, just as they do for ordinary borrowed property loads.
+        let ownership = if is_ref_bound
+            && Ownership::php_type_needs_lifetime_tracking(&php_type)
+        {
+            Ownership::Borrowed
+        } else {
+            Ownership::for_php_type(&php_type)
+        };
         let op = match (is_ref_bound, uses_global, kind) {
             (true, _, _) => Op::LoadRefCell,
             (false, true, _) => Op::LoadGlobal,
@@ -1123,7 +1153,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             _ => Op::LoadLocal,
         };
         let immediate = if uses_global {
-            Some(Immediate::GlobalName(self.intern_global_name(name)))
+            Some(Immediate::GlobalName(self.intern_global_storage_name(name)))
         } else {
             Some(Immediate::LocalSlot(slot))
         };
@@ -1272,7 +1302,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             _ => Op::LoadLocal,
         };
         let immediate = if uses_global {
-            Some(Immediate::GlobalName(self.intern_global_name(name)))
+            Some(Immediate::GlobalName(self.intern_global_storage_name(name)))
         } else {
             Some(Immediate::LocalSlot(slot))
         };
@@ -1395,7 +1425,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else if previous_kind == LocalKind::PhpLocal {
             // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
             // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.
-            self.boxed_incdec_storage_type(name, php_type)
+            self.required_local_storage_type(name, php_type)
         } else {
             php_type
         };
@@ -2048,6 +2078,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             return true;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::Cast)
+            && matches!(php_type.codegen_repr(), PhpType::Object(_))
+        {
+            return true;
+        }
         // By-value foreach binds either an owned current value or an owned boxed
         // Mixed key. Concrete `Str` values are the exception: like `ArrayGet`
         // string results they borrow the source container's payload, so treating
@@ -2071,6 +2106,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg
+                    | Op::ArrayLocalRefCell
                     | Op::MixedNumericBinop
                     | Op::StrIncDec
                     | Op::ICheckedAdd
@@ -2091,6 +2127,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ArrayHashUnion
                     | Op::HashArrayUnion
                     | Op::ArrayToHash
+                    | Op::MixedToHash
+                    | Op::MixedUnbox
                     | Op::ObjectNew
                     | Op::ObjectCloneShallow
                     | Op::DynamicObjectNew
@@ -2363,6 +2401,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 Some(
                     Op::ArrayGet
                         | Op::ArrayGetForWrite
+                        | Op::ArrayGetMixedKeyForWrite
                         | Op::HashGet
                         | Op::HashGetSilent
                         | Op::HashGetForWrite
@@ -2399,6 +2438,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashGetForWrite
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
+                    | Op::ArrayGetMixedKeyForWrite
             )
         )
     }
@@ -2412,6 +2452,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
             )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::DynamicInclude { .. },
+            )) => true,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
                     target.result_ownership(),
@@ -2612,6 +2655,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)
+            || crate::globals_array::is_alias(name)
             || (self.in_main && self.all_global_var_names.contains(name))
     }
 
@@ -2623,7 +2667,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value: LoweredValue,
         span: Option<Span>,
     ) {
-        let data = self.intern_global_name(name);
+        let data = self.intern_global_storage_name(name);
         self.builder.emit_with_effects(
             Op::StoreGlobal,
             vec![value.value],

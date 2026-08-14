@@ -62,6 +62,12 @@ pub(in crate::interpreter) fn eval_call(
     if name == "preg_match_all" {
         return eval_builtin_preg_match_all_call(args, context, scope, values);
     }
+    if name == "preg_replace" {
+        return eval_builtin_preg_replace_call(args, context, scope, values);
+    }
+    if name == "preg_replace_callback" {
+        return eval_builtin_preg_replace_callback_call(args, context, scope, values);
+    }
     if name == "is_callable" {
         return eval_builtin_is_callable_call(args, context, scope, values);
     }

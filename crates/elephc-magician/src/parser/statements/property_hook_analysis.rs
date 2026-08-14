@@ -32,6 +32,9 @@ pub(super) fn eval_stmt_uses_this_property(stmt: &EvalStmt, property_name: &str)
             eval_expr_uses_this_property(index, property_name)
                 || eval_expr_uses_this_property(value, property_name)
         }
+        EvalStmt::ArrayDestructure { value, .. } => {
+            eval_expr_uses_this_property(value, property_name)
+        }
         EvalStmt::Break
         | EvalStmt::Continue
         | EvalStmt::ClassDecl(_)
@@ -453,7 +456,20 @@ pub(super) fn eval_expr_uses_this_property(expr: &EvalExpr, property_name: &str)
         EvalExpr::NewAnonymousClass { args, .. } => args
             .iter()
             .any(|arg| eval_expr_uses_this_property(arg.value(), property_name)),
-        EvalExpr::NullCoalesce { value, default } => {
+        EvalExpr::NullCoalesce { value, default }
+        | EvalExpr::NullCoalesceAssign {
+            target: value,
+            default,
+        }
+        | EvalExpr::CompoundAssign {
+            target: value,
+            value: default,
+            ..
+        }
+        | EvalExpr::Assign {
+            target: value,
+            value: default,
+        } => {
             eval_expr_uses_this_property(value, property_name)
                 || eval_expr_uses_this_property(default, property_name)
         }

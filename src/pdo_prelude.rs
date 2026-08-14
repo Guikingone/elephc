@@ -764,7 +764,7 @@ function __elephc_pdo_impl_error_message(string $state, string $detail): string 
 
 class PDOException extends RuntimeException {
     // PHP surfaces the [SQLSTATE, driver-specific code, message] triple here;
-    // frameworks (Doctrine, Laravel) read $e->errorInfo[0] for the SQLSTATE. Typed
+    // userland database consumers read $e->errorInfo[0] for the SQLSTATE. Typed
     // `?array` (not left untyped): an untyped property fed both an array literal (SQL
     // errors) and an explicit null (unrecognized-driver connect failure) reads back as
     // a corrupted Mixed — `$e->errorInfo === null` returns the wrong answer, `[0]` will
@@ -2066,7 +2066,7 @@ class PDO {
         // WARNING writes to stderr and lets the caller return its failure value;
         // SILENT is quiet and the caller returns its failure value. The SQLSTATE
         // and native driver code are attached so callers can read $e->errorInfo
-        // (frameworks parse errorInfo[0] as the SQLSTATE).
+        // (database consumers parse errorInfo[0] as the SQLSTATE).
         if ($this->errMode == 0) {
             return;
         }
@@ -2074,7 +2074,7 @@ class PDO {
         $_native = elephc_pdo_errcode($this->conn);
         // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
         // description, native code, driver message); errorInfo keeps the raw
-        // [state, native, message] triple frameworks read via $e->errorInfo.
+        // [state, native, message] triple userland reads via $e->errorInfo.
         $_errorInfo = [$_sqlstate, $_native, $message];
         if (elephc_pdo_driver_name($this->conn) === "dblib") {
             $_errorInfo = $this->dblibErrorInfo($message);
@@ -3826,7 +3826,7 @@ class PDOStatement implements IteratorAggregate {
         $_native = elephc_pdo_stmt_errcode($this->stmt);
         // php-src pdo_handle_error builds "SQLSTATE[%s]: %s: %d %s" (state,
         // description, native code, driver message); errorInfo keeps the raw
-        // [state, native, message] triple frameworks read via $e->errorInfo.
+        // [state, native, message] triple userland reads via $e->errorInfo.
         $_errorInfo = [$_sqlstate, $_native, $message];
         if (elephc_pdo_driver_name($this->conn) === "dblib") {
             $_errorInfo = $this->dblibStatementErrorInfo($message);

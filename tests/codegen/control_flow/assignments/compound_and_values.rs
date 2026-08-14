@@ -292,6 +292,27 @@ echo count($result) . ":" . count($items[0]);
     assert_eq!(out, "0:0");
 }
 
+/// Verifies a `Mixed` value installed by associative `??=` remains independently owned by the
+/// hash when the assignment expression temporary is reused and released by later expressions.
+#[test]
+fn test_assoc_null_coalesce_assignment_preserves_mixed_value_across_later_write() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$_SERVER = [];
+$_ENV = [];
+if (is_string($_SERVER['APP_RUNTIME_OPTIONS'] ??= $_ENV['APP_RUNTIME_OPTIONS'] ?? [])) {}
+$_SERVER['APP_RUNTIME'] ??= 'App\\Runtime\\WebRuntime';
+$_SERVER['APP_RUNTIME_OPTIONS'] += ['project_dir' => '/tmp'];
+echo $_SERVER['APP_RUNTIME_OPTIONS']['project_dir'];
+echo '|';
+echo $_SERVER['APP_RUNTIME'];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "/tmp|App\\Runtime\\WebRuntime");
+    assert_eq!(out.stderr, "");
+}
+
 /// Verifies object property assignment with compound `+=` returns the new value.
 /// Fixture: `Box` with `$value = 1`; `$box->value += 4` returns and stores 5.
 #[test]

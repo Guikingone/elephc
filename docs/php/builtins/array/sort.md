@@ -2,19 +2,20 @@
 title: "sort()"
 description: "Sorts an array in ascending order."
 sidebar:
-  order: 67
+  order: 68
 ---
 
 ## sort()
 
 ```php
-function sort(array $array): bool
+function sort(array $array, int $flags = 0): bool
 ```
 
 Sorts an array in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 

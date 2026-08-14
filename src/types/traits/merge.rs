@@ -12,10 +12,71 @@ use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
 use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
+
+/// Merges imported trait constants with constants declared directly by the consuming class-like.
+pub(super) fn merge_constants(
+    imported: &[ClassConst],
+    local: &[ClassConst],
+    span: Span,
+    owner_label: &str,
+    replace_compatible_existing: bool,
+) -> Result<Vec<ClassConst>, CompileError> {
+    let mut merged = imported.to_vec();
+    let mut local_names = HashSet::new();
+    for constant in local {
+        if !local_names.insert(constant.name.as_str()) {
+            return Err(CompileError::new(
+                constant.span,
+                &format!(
+                    "{} declares duplicate constant '{}'",
+                    owner_label, constant.name
+                ),
+            ));
+        }
+        merge_constant_into(
+            &mut merged,
+            constant.clone(),
+            span,
+            owner_label,
+            replace_compatible_existing,
+        )?;
+    }
+    Ok(merged)
+}
+
+/// Adds one trait constant, rejecting same-named declarations with incompatible contracts.
+pub(super) fn merge_constant_into(
+    merged: &mut Vec<ClassConst>,
+    constant: ClassConst,
+    span: Span,
+    owner_label: &str,
+    replace_compatible_existing: bool,
+) -> Result<(), CompileError> {
+    if let Some(index) = merged
+        .iter()
+        .position(|existing| existing.name == constant.name)
+    {
+        if merged[index] == constant {
+            if replace_compatible_existing {
+                merged[index] = constant;
+            }
+            return Ok(());
+        }
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "{} has incompatible duplicate constant '{}'",
+                owner_label, constant.name
+            ),
+        ));
+    }
+    merged.push(constant);
+    Ok(())
+}
 
 /// Merges `imported` trait properties with `local` class/trait properties.
 /// Conflicts (same name, incompatible modifiers) are reported as errors.

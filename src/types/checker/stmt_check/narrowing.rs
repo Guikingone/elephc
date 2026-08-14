@@ -1,5 +1,5 @@
 //! Purpose:
-//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates.
+//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates or truthiness.
 //! Narrows a union- or mixed-typed variable to the guarded type in the matching branch.
 //!
 //! Called from:
@@ -8,7 +8,8 @@
 //! Key details:
 //! - Recognizes scalar, null, array, and callable `is_*($var)` predicates (and aliases),
 //!   `$var instanceof Class`, `=== null` / `=== false` and their `!==` forms, and single-operand
-//!   `isset(...)`. `!==` and `isset` are self-negating guards, which combine with a leading `!`
+//!   `isset(...)`. Bare locals and simple local assignments also narrow representable null/false
+//!   members on their truthy edge. `!==` and `isset` are self-negating guards, which combine with a leading `!`
 //!   the same way two negations cancel. Narrowing is applied to each clause in an if/elseif*/else
 //!   chain (each subsequent clause, and the else, see the accumulated complement from previous
 //!   guards). For a chain with no else where *every* clause body cannot fall through to the
@@ -87,6 +88,9 @@ impl Checker {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
+        if let Some(narrowing) = self.truthy_binding_guard_narrowing(cond, prefix_negated, env)? {
+            return Ok(Some(narrowing));
+        }
         let Some((receiver, target, comparison_negated)) = guard_receiver_and_target(cond) else {
             return Ok(None);
         };
@@ -133,6 +137,70 @@ impl Checker {
         Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
     }
 
+    /// Narrows a local truthiness guard, including a simple assignment used as the condition.
+    ///
+    /// Assignment conditions use the right-hand side's precise type rather than the local's
+    /// storage-wide join: PHP evaluates the assignment before testing it, so a preceding value of
+    /// another type cannot reach either branch. Only fully representable falsey members (`null`
+    /// and literal `false`) are removed; zero and empty strings/arrays remain conservative.
+    fn truthy_binding_guard_narrowing(
+        &mut self,
+        condition: &Expr,
+        negated: bool,
+        env: &TypeEnv,
+    ) -> Result<Option<GuardNarrowing>, CompileError> {
+        let (var, current, overwrites) = match &condition.kind {
+            ExprKind::Variable(var) => {
+                let Some(current) = env.get(var) else {
+                    return Ok(None);
+                };
+                (var.clone(), current.clone(), false)
+            }
+            ExprKind::Assignment {
+                target,
+                value,
+                result_target: None,
+                prelude,
+                conditional_value_temp: None,
+                ..
+            } if prelude.is_empty() => {
+                let ExprKind::Variable(var) = &target.kind else {
+                    return Ok(None);
+                };
+                (var.clone(), self.infer_type(value, env)?, true)
+            }
+            _ => return Ok(None),
+        };
+        let truthy = match &current {
+            PhpType::Union(members) => {
+                let kept: Vec<PhpType> = members
+                    .iter()
+                    .filter(|member| !matches!(member, PhpType::Void | PhpType::False))
+                    .cloned()
+                    .collect();
+                if kept.is_empty() || kept.len() == members.len() {
+                    current.clone()
+                } else {
+                    self.normalize_union_type(kept)
+                }
+            }
+            _ => current.clone(),
+        };
+        if !overwrites && truthy == current {
+            return Ok(None);
+        }
+        let (then_ty, else_ty) = if negated {
+            (current, truthy)
+        } else {
+            (truthy, current)
+        };
+        Ok(Some(GuardNarrowing {
+            var,
+            then_ty,
+            else_ty,
+        }))
+    }
+
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
     /// more complex receiver). The `\x01` sigil bytes cannot appear in a real variable name, so
     /// this key never collides with a variable binding — a normal property read only picks it up
@@ -163,15 +231,6 @@ impl Checker {
         }
         let class_name = self.resolve_static_property_receiver(receiver, expr).ok()?;
         Some(format!("\u{1}sprop\u{1}{class_name}::${property}"))
-    }
-
-    /// Returns whether a narrowing key names a property place rather than a plain local.
-    ///
-    /// Synthetic property keys carry the `\x01` sigil, which no PHP variable name can contain.
-    /// Only these places can be re-established by a write inside a guarded branch, so the
-    /// post-`if` join in `control_flow` is limited to them.
-    pub(crate) fn narrowed_place_key_is_property(key: &str) -> bool {
-        key.starts_with('\u{1}')
     }
 
     /// `TypeEnv` key for a guard receiver: a variable's name, or the synthetic property key for a
@@ -428,9 +487,18 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
+            let class_name = class.as_str();
+            let narrowed_type = if class_name
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case("Closure")
+            {
+                PhpType::Callable
+            } else {
+                PhpType::Object(class_name.to_string())
+            };
             Some((
                 value,
-                GuardTarget::Exact(PhpType::Object(class.as_str().to_string())),
+                GuardTarget::Exact(narrowed_type),
                 false,
             ))
         }

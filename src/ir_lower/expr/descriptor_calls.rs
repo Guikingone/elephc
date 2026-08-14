@@ -68,6 +68,13 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     args: &[Expr],
     span: Span,
 ) -> Option<LoweredValue> {
+    if let [Expr {
+        kind: ExprKind::Spread(inner),
+        ..
+    }] = args
+    {
+        return Some(lower_expr(ctx, inner));
+    }
     if crate::types::call_args::has_named_args(args) {
         return Some(lower_untyped_descriptor_invoker_hash_container(ctx, args, span));
     }
@@ -354,4 +361,3 @@ pub(super) fn lower_first_class_callable_expr_call(
         _ => None,
     }
 }
-

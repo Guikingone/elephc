@@ -49,10 +49,10 @@ impl Parser {
 
     /// Parses PHP keyword `and`, whose precedence is lower than ternary and `&&`.
     pub(in crate::parser) fn parse_keyword_and(&mut self) -> Result<EvalExpr, EvalParseError> {
-        let mut expr = self.parse_ternary()?;
+        let mut expr = self.parse_assignment()?;
         while matches!(self.current(), TokenKind::Ident(name) if ident_eq(name, "and")) {
             self.advance();
-            let right = self.parse_ternary()?;
+            let right = self.parse_assignment()?;
             expr = EvalExpr::Binary {
                 op: EvalBinOp::LogicalAnd,
                 left: Box::new(expr),
@@ -60,6 +60,52 @@ impl Parser {
             };
         }
         Ok(expr)
+    }
+
+    /// Parses supported right-associative assignment expressions.
+    pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
+        let target = self.parse_ternary()?;
+        let null_coalescing = self.consume(TokenKind::QuestionQuestionEqual);
+        let assignment = if null_coalescing {
+            None
+        } else {
+            assignment_op(self.current())
+        };
+        if !null_coalescing && assignment.is_none() {
+            return Ok(target);
+        }
+        if !matches!(
+            target,
+            EvalExpr::LoadVar(_)
+                | EvalExpr::ArrayGet { .. }
+                | EvalExpr::PropertyGet { .. }
+                | EvalExpr::DynamicPropertyGet { .. }
+                | EvalExpr::StaticPropertyGet { .. }
+                | EvalExpr::DynamicStaticPropertyGet { .. }
+                | EvalExpr::DynamicStaticPropertyNameGet { .. }
+        ) {
+            return Err(EvalParseError::UnexpectedToken);
+        }
+        if null_coalescing {
+            let default = self.parse_assignment()?;
+            return Ok(EvalExpr::NullCoalesceAssign {
+                target: Box::new(target),
+                default: Box::new(default),
+            });
+        }
+        self.advance();
+        let value = self.parse_assignment()?;
+        Ok(match assignment.expect("assignment operator was checked") {
+            Some(op) => EvalExpr::CompoundAssign {
+                target: Box::new(target),
+                op,
+                value: Box::new(value),
+            },
+            None => EvalExpr::Assign {
+                target: Box::new(target),
+                value: Box::new(value),
+            },
+        })
     }
 
     /// Parses PHP ternary expressions, including the short `expr ?: fallback` form.

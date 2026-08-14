@@ -23,6 +23,69 @@ echo Utils::greet("World");
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies runtime static-property names select the correct declared read slot.
+#[test]
+fn test_dynamic_static_property_read_named_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticReadConfig {
+    public static int $retries = 5;
+    public static string $name = "prod";
+}
+$key = 'retries';
+echo DynamicStaticReadConfig::${$key};
+echo "|";
+$key = 'name';
+echo DynamicStaticReadConfig::${$key};
+"#,
+    );
+    assert_eq!(out, "5|prod");
+}
+
+/// Verifies direct writes dispatch to the runtime-selected static-property slot.
+#[test]
+fn test_dynamic_static_property_write() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticWriteConfig {
+    public static int $x = 0;
+    public static int $y = 0;
+}
+$name = 'x';
+DynamicStaticWriteConfig::${$name} = 5;
+$name = 'y';
+DynamicStaticWriteConfig::${$name} = 9;
+echo DynamicStaticWriteConfig::$x;
+echo "|";
+echo DynamicStaticWriteConfig::$y;
+"#,
+    );
+    assert_eq!(out, "5|9");
+}
+
+/// Verifies indexed writes mutate and persist the runtime-selected static array.
+#[test]
+fn test_dynamic_static_property_array_element_write() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicStaticArrayStore {
+    public static array $cache = [];
+    public static array $other = [];
+}
+$name = 'cache';
+DynamicStaticArrayStore::${$name}[0] = 'v';
+DynamicStaticArrayStore::${$name}[1] = 'x';
+$name = 'other';
+DynamicStaticArrayStore::${$name}[0] = 'w';
+echo DynamicStaticArrayStore::$cache[0];
+echo DynamicStaticArrayStore::$cache[1];
+echo "|";
+echo DynamicStaticArrayStore::$other[0];
+"#,
+    );
+    assert_eq!(out, "vx|w");
+}
+
 /// Tests calling a class static method that returns a new instance via `new`, then
 /// invoking an instance method on the returned object.
 #[test]
@@ -404,6 +467,18 @@ echo A::$x;
     assert_eq!(out, "1");
 }
 
+/// Tests that a static-property pre-increment yields its updated value inside an expression.
+#[test]
+fn test_static_property_pre_increment_expression_value() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public static $x = 99; }
+if (100 < ++A::$x) { echo 'too-high'; } else { echo A::$x; }
+"#,
+    );
+    assert_eq!(out, "100");
+}
+
 /// Tests post-decrement and pre-decrement `--A::$x` / `A::$x--` on a static property.
 #[test]
 fn test_static_property_decrement() {
@@ -508,4 +583,23 @@ if ($o !== null) {
 "#,
     );
     assert_eq!(out, "VVNV");
+}
+
+/// Verifies an untyped static property can own, replace, reload, and invoke callable values.
+#[test]
+fn test_static_property_replaces_and_invokes_callable_values() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableHolder { public static $callback; }
+
+CallableHolder::$callback = static fn(int $value): int => $value + 1;
+$first = CallableHolder::$callback;
+echo $first(40), "|";
+
+CallableHolder::$callback = static fn(int $value): int => $value * 2;
+$second = CallableHolder::$callback;
+echo $second(21);
+"#,
+    );
+    assert_eq!(out, "41|42");
 }

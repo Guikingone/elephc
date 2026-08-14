@@ -63,6 +63,23 @@ impl Platform {
         }
     }
 
+    /// Returns PHP's target-specific `PHP_MAXPATHLEN` predefined constant.
+    pub fn php_max_path_len(&self) -> i64 {
+        match self {
+            Platform::MacOS => 1024,
+            Platform::Linux => 4096,
+            Platform::Windows => 2048,
+        }
+    }
+
+    /// Returns the target C library's `LC_NUMERIC` category value exposed by PHP.
+    pub fn lc_numeric(&self) -> i64 {
+        match self {
+            Platform::MacOS | Platform::Windows => 4,
+            Platform::Linux => 1,
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///
     /// These flags open a file for writing, creating it if it does not exist,

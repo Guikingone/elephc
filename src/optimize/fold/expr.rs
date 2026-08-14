@@ -195,6 +195,9 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 .map(|(key, value)| (fold_expr(key), fold_expr(value)))
                 .collect(),
         ),
+        ExprKind::ArrayReference(value) => {
+            ExprKind::ArrayReference(Box::new(fold_expr(*value)))
+        }
         ExprKind::Match {
             subject,
             arms,
@@ -318,6 +321,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             object: Box::new(fold_expr(*object)),
             property: Box::new(fold_expr(*property)),
         },
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            ExprKind::DynamicStaticPropertyAccess {
+                receiver,
+                property: Box::new(fold_expr(*property)),
+            }
+        }
         ExprKind::NullsafePropertyAccess { object, property } => ExprKind::NullsafePropertyAccess {
             object: Box::new(fold_expr(*object)),
             property,
@@ -385,6 +394,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
+        }
+        ExprKind::DynamicScopedConstantAccess { receiver, name } => {
+            ExprKind::DynamicScopedConstantAccess {
+                receiver: Box::new(fold_expr(*receiver)),
+                name,
+            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,

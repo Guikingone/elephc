@@ -695,3 +695,165 @@ echo "survived";
     );
     assert_eq!(out, "bool(false)\nsurvived");
 }
+
+/// Verifies an uncalled optional adapter may invoke methods on its freshly constructed absent
+/// dependency without the backend mistaking the nominal receiver for a narrowed interface.
+#[test]
+fn test_uncalled_absent_optional_dependency_method_chain_still_links() {
+    let out = compile_and_run(
+        r#"<?php
+function optional_adapter() {
+    $options = new MissingExtensionOptions();
+    $options->credentials('user', 'password');
+}
+echo "linked";
+"#,
+    );
+    assert_eq!(out, "linked");
+}
+
+/// Verifies `parent::class` folds and `static::class` dispatches for member-existence probes.
+#[test]
+fn test_method_exists_accepts_parent_class_constant() {
+    let out = compile_and_run(
+        r#"<?php
+class ParentMemberProbe {
+    public function ping() {}
+    public function __destruct() {}
+}
+class ChildMemberProbe extends ParentMemberProbe {
+    public static function probe(): string {
+        return parent::class
+            .(method_exists(parent::class, 'ping') ? ':ping' : ':no-ping')
+            .(method_exists(parent::class, '__destruct') ? ':destruct' : ':no-destruct');
+    }
+    public static function lateProbe(): bool {
+        return method_exists(static::class, 'probe');
+    }
+}
+class GrandchildMemberProbe extends ChildMemberProbe {}
+echo ChildMemberProbe::probe();
+echo ChildMemberProbe::lateProbe() ? ':late' : ':no-late';
+echo GrandchildMemberProbe::lateProbe() ? ':forwarded' : ':no-forwarded';
+"#,
+    );
+    assert_eq!(out, "ParentMemberProbe:ping:destruct:late:forwarded");
+}
+
+/// Verifies unsetting a reference-backed property detaches it without changing its old alias.
+#[test]
+fn test_unset_reference_property_detaches_alias() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferencePropertyUnsetProbe {
+    public string $value = 'initial';
+
+    public function bind(string &$external): void {
+        $this->value =& $external;
+    }
+
+    public function clear(): void {
+        unset($this->value);
+    }
+}
+
+$external = 'aliased';
+$probe = new ReferencePropertyUnsetProbe();
+$probe->bind($external);
+$probe->clear();
+echo isset($probe->value) ? 'set' : 'unset';
+echo ':'.$external;
+$probe->value = 'replacement';
+echo ':'.$probe->value.':'.$external;
+"#,
+    );
+    assert_eq!(out, "unset:aliased:replacement:aliased");
+}
+
+/// Verifies erased `iterable` properties accept indexed arrays, associative arrays, and
+/// Traversable objects without boxing or changing their runtime payload representation.
+#[test]
+fn test_iterable_properties_accept_concrete_iterable_shapes() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyIterator implements Iterator {
+    private int $position = 0;
+    public function current(): mixed { return 7; }
+    public function key(): mixed { return 'iterator'; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 1; }
+}
+class IterablePropertyHolder {
+    public static iterable $shared = ['initial' => 5];
+
+    public function __construct(private iterable $items = []) {}
+
+    public function replace(iterable $items): void {
+        $this->items = $items;
+    }
+
+    public function dump(): void {
+        foreach ($this->items as $key => $value) {
+            echo $key, '=', $value, ';';
+        }
+    }
+}
+
+$holder = new IterablePropertyHolder([1, 2]);
+$holder->dump();
+$holder->replace(['left' => 3]);
+$holder->dump();
+$holder->replace(new PropertyIterator());
+$holder->dump();
+foreach (IterablePropertyHolder::$shared as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+IterablePropertyHolder::$shared = ['static' => 4];
+foreach (IterablePropertyHolder::$shared as $key => $value) {
+    echo $key, '=', $value, ';';
+}
+"#,
+    );
+    assert_eq!(out, "0=1;1=2;left=3;iterator=7;initial=5;static=4;");
+}
+
+/// Verifies `get_parent_class()` dispatches a non-literal class-name string through AOT metadata.
+#[test]
+fn test_get_parent_class_on_runtime_class_string() {
+    let out = compile_and_run(
+        r#"<?php
+class RuntimeParent {}
+class RuntimeChild extends RuntimeParent {}
+function runtime_parent(string $class): string {
+    return get_parent_class($class);
+}
+echo runtime_parent("RuntimeChild");
+"#,
+    );
+    assert_eq!(out, "RuntimeParent");
+}
+
+/// Verifies that unsetting fixed declared properties releases their old values, makes typed
+/// properties uninitialized and untyped properties null, and still permits later reassignment.
+#[test]
+fn test_unset_declared_typed_and_untyped_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class PropertyBox {
+    public string $typed = "typed";
+    public $untyped = "untyped";
+
+    public function clear(): void {
+        unset($this->typed, $this->untyped);
+        var_dump(isset($this->typed), isset($this->untyped));
+        $this->typed = "restored";
+        $this->untyped = "again";
+        echo $this->typed, ":", $this->untyped;
+    }
+}
+(new PropertyBox())->clear();
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nrestored:again");
+}

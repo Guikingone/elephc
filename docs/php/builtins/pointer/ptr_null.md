@@ -2,7 +2,7 @@
 title: "ptr_null()"
 description: "Returns a null raw pointer."
 sidebar:
-  order: 324
+  order: 331
 ---
 
 ## ptr_null()

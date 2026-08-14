@@ -171,6 +171,42 @@ fn test_for_loop() {
     assert_eq!(out, "01234");
 }
 
+/// Verifies comma-separated `for` clauses execute left-to-right, including after `continue`.
+#[test]
+fn test_for_multiple_init_and_update_expressions() {
+    let out = compile_and_run(
+        r#"<?php
+for ($i = 0, $j = 3; $i < 3; ++$i, --$j) {
+    if ($i === 1) { continue; }
+    echo $i . ":" . $j . ";";
+}
+echo $i . ":" . $j;
+"#,
+    );
+    assert_eq!(out, "0:3;2:1;3:0");
+}
+
+/// Verifies that call expressions in `for` clauses execute for their side effects.
+#[test]
+fn test_for_call_expression_init_and_update() {
+    let out = compile_and_run(
+        r#"<?php
+$paths = ['a', 'b', 'c'];
+for (next($paths); null !== key($paths); next($paths)) {
+    echo current($paths);
+}
+"#,
+    );
+    assert_eq!(out, "bc");
+}
+
+/// Verifies a literal-led short-circuit assignment statement preserves its RHS side effect.
+#[test]
+fn test_literal_led_short_circuit_assignment_statement() {
+    let out = compile_and_run("<?php $value = -1; 0 > $value && $value += 0x40; echo $value;");
+    assert_eq!(out, "63");
+}
+
 /// Verifies break exits the for loop when $i reaches 3, producing 012.
 #[test]
 fn test_for_break() {
@@ -247,6 +283,87 @@ if ($x) {
 fn test_while_null_no_loop() {
     let out = compile_and_run("<?php $x = null; while ($x) { echo \"bad\"; } echo \"ok\";");
     assert_eq!(out, "ok");
+}
+
+/// Makes an assignment on the right of `||` visible when the false outcome selects `else`.
+#[test]
+fn test_false_or_outcome_exposes_rhs_assignment_in_else() {
+    let out = compile_and_run(
+        "<?php
+        function render(bool $lead): void {
+            if ($lead || !($value = 'ready')) {
+                echo 'then';
+            } else {
+                echo $value;
+            }
+        }
+        render(false);",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Preserves the value assigned as the left operand of an `instanceof` condition.
+#[test]
+fn test_instanceof_condition_preserves_assignment_effect() {
+    let out = compile_and_run(
+        "<?php
+        class Marker {}
+        function render(object $input): void {
+            if (($value = $input) instanceof Marker) {
+                echo $value::class;
+            }
+        }
+        render(new Marker());",
+    );
+    assert_eq!(out, "Marker");
+}
+
+/// Makes assignments from a successful `&&` chain visible to the true ternary arm.
+#[test]
+fn test_ternary_true_arm_sees_short_circuit_assignment() {
+    let out = compile_and_run(
+        "<?php
+        $result = true
+            && (($value = 'ready') === 'ready')
+            && strlen($value) > 0
+                ? $value
+                : 'missing';
+        echo $result;",
+    );
+    assert_eq!(out, "ready");
+}
+
+/// Makes an assignment in a false equality condition visible to the false ternary arm.
+#[test]
+fn test_ternary_false_arm_sees_condition_assignment() {
+    let out = compile_and_run(
+        "<?php
+        function prefix(string $value): string {
+            return false === ($position = strrpos($value, '\\\\'))
+                ? ''
+                : substr($value, 0, $position);
+        }
+        echo prefix('Alpha\\\\Beta');",
+    );
+    assert_eq!(out, "Alpha");
+}
+
+/// Preserves a ternary's branch-local assignment inside a property `??=` initializer.
+#[test]
+fn test_property_null_coalesce_ternary_sees_condition_assignment() {
+    let out = compile_and_run(
+        "<?php
+        final class PrefixCache {
+            private ?string $cached = null;
+            public function resolve(string $value): string {
+                return $this->cached ??= false === ($position = strrpos($value, '\\\\'))
+                    ? ''
+                    : substr($value, 0, $position);
+            }
+        }
+        echo (new PrefixCache())->resolve('Alpha\\\\Beta');",
+    );
+    assert_eq!(out, "Alpha");
 }
 
 // --- Ternary operator ---

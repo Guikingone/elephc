@@ -612,6 +612,65 @@ fn test_enum_implements_interface() {
     assert_eq!(out, "hearts");
 }
 
+/// Verifies pure and backed enums expose PHP's implicit enum interfaces and their parents.
+#[test]
+fn test_enum_implicit_unit_and_backed_interfaces() {
+    let out = compile_and_run(
+        r#"<?php
+interface UnitMarker extends UnitEnum {}
+interface BackedMarker extends BackedEnum {}
+enum PureState implements UnitMarker { case Ready; }
+enum BackedState: string implements BackedMarker { case Ready = "ready"; }
+function acceptUnit(UnitEnum $value): string { return "unit"; }
+function acceptBacked(BackedEnum $value): string { return "backed"; }
+echo interface_exists("UnitEnum") ? "U" : "u";
+echo interface_exists("BackedEnum") ? "B" : "b";
+echo PureState::Ready instanceof UnitEnum ? "P" : "p";
+echo PureState::Ready instanceof BackedEnum ? "bad" : "N";
+echo BackedState::Ready instanceof UnitEnum ? "U" : "u";
+echo BackedState::Ready instanceof BackedEnum ? "B" : "b";
+echo ":", acceptUnit(PureState::Ready), ":", acceptBacked(BackedState::Ready);
+echo ":", implode(",", class_implements("PureState"));
+echo ":", implode(",", class_implements("BackedState"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "UBPNUB:unit:backed:UnitMarker,UnitEnum:BackedMarker,UnitEnum,BackedEnum"
+    );
+}
+
+/// Verifies `instanceof` narrowing from `mixed` preserves enum interface property access and
+/// dispatches the differing pure/backed enum object layouts by runtime class id.
+#[test]
+fn test_enum_interface_properties_after_mixed_narrowing() {
+    let out = compile_and_run(
+        r#"<?php
+enum PureState { case Ready; }
+enum StringState: string { case Ready = "ready"; }
+enum IntState: int { case Ready = 7; }
+function describe(mixed $value): string {
+    if (!$value instanceof UnitEnum) { return "none"; }
+    return $value::class . ":" . $value->name;
+}
+function backing(mixed $value): mixed {
+    if (!$value instanceof BackedEnum) { return "none"; }
+    return $value->value;
+}
+echo describe(null), "|";
+echo describe(PureState::Ready), "|";
+echo describe(StringState::Ready), "|";
+echo backing(PureState::Ready), "|";
+echo backing(StringState::Ready), "|";
+echo backing(IntState::Ready);
+"#,
+    );
+    assert_eq!(
+        out,
+        "none|PureState:Ready|StringState:Ready|none|ready|7"
+    );
+}
+
 /// Verifies that an enum instance method can read `$this->name` (and `$this->value`), dispatching
 /// on the case singleton. Previously `$this->name` inside a method was unsupported.
 #[test]

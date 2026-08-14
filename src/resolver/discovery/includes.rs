@@ -19,7 +19,7 @@ use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
 use super::super::files::{parse_file, resolve_path};
-use super::super::include_path::fold_include_path;
+use super::super::include_path::{fold_include_path, is_runtime_dynamic_include_path};
 use super::super::state::ResolveState;
 
 /// Processes a statically resolvable `include`/`require` statement.
@@ -54,7 +54,11 @@ pub(super) fn discover_include(
     state: &mut ResolveState,
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
-    let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
+    let path_str = match fold_include_path(path, state) {
+        Ok(path) => path,
+        Err(_) if is_runtime_dynamic_include_path(path) => return Ok(()),
+        Err(msg) => return Err(CompileError::new(span, &msg)),
+    };
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
 

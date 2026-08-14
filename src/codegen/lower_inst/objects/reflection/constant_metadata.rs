@@ -22,10 +22,19 @@ pub(super) fn reflection_class_constant_metadata(
     };
     let reflected_class =
         const_string_or_class_operand(ctx, class_operand, "ReflectionClassConstant")?;
+    reflection_class_constant_metadata_for_name(ctx, &reflected_class, constant_operand)
+}
+
+/// Resolves ReflectionClassConstant metadata for a runtime-selected declaring class.
+pub(super) fn reflection_class_constant_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    constant_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let constant_name =
         const_required_string_operand(ctx, constant_operand, "ReflectionClassConstant")?;
     if let Some((enum_name, case)) =
-        resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
+        resolve_reflection_enum_case(ctx, reflected_class, &constant_name)
     {
         return Ok(ReflectionOwnerMetadata {
             reflected_name: Some(constant_name.clone()),
@@ -83,7 +92,7 @@ pub(super) fn reflection_class_constant_metadata(
         });
     }
     Ok(
-        reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
+        reflection_class_constant_lookup(ctx, reflected_class, &constant_name)?
             .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
             .unwrap_or_else(empty_reflection_metadata),
     )
@@ -102,9 +111,19 @@ pub(super) fn reflection_enum_case_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_enum = const_string_or_class_operand(ctx, enum_operand, class_name)?;
+    reflection_enum_case_metadata_for_name(ctx, class_name, &reflected_enum, case_operand)
+}
+
+/// Resolves Reflection enum-case metadata for a runtime-selected enum class.
+pub(super) fn reflection_enum_case_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    class_name: &str,
+    reflected_enum: &str,
+    case_operand: ValueId,
+) -> Result<ReflectionOwnerMetadata> {
     let case_name = const_required_string_operand(ctx, case_operand, class_name)?;
     Ok(
-        resolve_reflection_enum_case(ctx, &reflected_enum, &case_name)
+        resolve_reflection_enum_case(ctx, reflected_enum, &case_name)
             .map(|(enum_name, case)| ReflectionOwnerMetadata {
                 reflected_name: Some(case_name.clone()),
                 attr_names: case.attribute_names.clone(),
@@ -412,4 +431,3 @@ pub(super) fn is_reflection_enum(ctx: &FunctionContext<'_>, enum_name: &str) -> 
         .keys()
         .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == enum_key)
 }
-

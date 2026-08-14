@@ -9,6 +9,134 @@
 
 use super::*;
 
+/// Lowers a property read from a raw object whose static type is polymorphic.
+///
+/// Interface or abstract-parent typing identifies the contract but not the concrete object layout.
+/// Dispatch by runtime class id across every AOT implementation that owns the requested property,
+/// then read that implementation's authoritative slot.
+pub(super) fn lower_polymorphic_object_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    target_name: &str,
+    property: &str,
+) -> Result<()> {
+    let candidates = polymorphic_property_candidates(ctx, target_name, property, inst)?;
+    if candidates.is_empty() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for polymorphic property {}::${}",
+            inst.op.name(),
+            target_name,
+            property
+        )));
+    }
+
+    let miss_label = ctx.next_label("interface_prop_miss");
+    let done_label = ctx.next_label("interface_prop_done");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "interface_prop_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    let object_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, object_reg)?;
+    emit_raw_object_property_class_dispatch(ctx, &candidates, &match_labels, &miss_label);
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if candidate.slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        }
+        emit_property_load(ctx, &candidate.slot, base_reg)?;
+        materialize_loaded_property_result(ctx, inst, &candidate.slot.php_type)?;
+        store_if_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&miss_label);
+    emit_dynamic_property_miss_result(ctx, inst);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Collects concrete property slots for classes satisfying one interface or parent-class target.
+fn polymorphic_property_candidates(
+    ctx: &FunctionContext<'_>,
+    target_name: &str,
+    property: &str,
+    inst: &Instruction,
+) -> Result<Vec<MixedPropertyCandidate>> {
+    let target_key = php_symbol_key(target_name.trim_start_matches('\\'));
+    let target_is_interface = ctx
+        .module
+        .interface_infos
+        .keys()
+        .any(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == target_key);
+    let mut candidates = Vec::new();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        let satisfies_target = if target_is_interface {
+            object_type_implements_interface(ctx, class_name, target_name)
+        } else {
+            php_symbol_key(class_name.trim_start_matches('\\')) == target_key
+                || class_extends_class(ctx, class_name, target_name)
+        };
+        let backing = crate::types::checker::reflection_virtual_property_backing(
+            class_name,
+            property,
+        )
+        .unwrap_or(property);
+        if !satisfies_target
+            || !class_info
+                .properties
+                .iter()
+                .any(|(name, _)| name == backing)
+        {
+            continue;
+        }
+        candidates.push(MixedPropertyCandidate {
+            class_id: class_info.class_id,
+            slot: resolve_property_slot_for_class(ctx, class_name, property, inst)?,
+        });
+    }
+    candidates.sort_by_key(|candidate| candidate.class_id);
+    Ok(candidates)
+}
+
+/// Emits class-id branches for a raw interface object already loaded in the result register.
+fn emit_raw_object_property_class_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    candidates: &[MixedPropertyCandidate],
+    match_labels: &[String],
+    miss_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the concrete class id behind the interface value
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp x9, x10");                         // compare against one AOT interface implementor
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // read that implementor's declared property slot
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the concrete class id behind the interface value
+            for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+                abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
+                ctx.emitter.instruction("cmp r11, r10");                        // compare against one AOT interface implementor
+                ctx.emitter.instruction(&format!("je {}", label));              // read that implementor's declared property slot
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, miss_label);
+}
+
 /// Lowers a declared-property read from a boxed union that may hold one known object class.
 pub(super) fn lower_union_object_prop_get(
     ctx: &mut FunctionContext<'_>,

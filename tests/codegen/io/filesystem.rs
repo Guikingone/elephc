@@ -52,6 +52,29 @@ if (!is_dir("testdir")) { echo "gone"; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies mkdir honors permissions, recursive parent creation, and named optional arguments.
+#[test]
+fn test_mkdir_permissions_recursive_and_named_defaults() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$previousMask = umask(0);
+$made = mkdir("tree/branch/leaf", 0701, true);
+echo $made && is_dir("tree/branch/leaf") && (fileperms("tree/branch/leaf") & 0777) === 0701
+    ? "recursive:" : "bad:";
+$named = mkdir(directory: "named/child", recursive: true);
+echo $named && is_dir("named/child") ? "named" : "bad";
+rmdir("tree/branch/leaf");
+rmdir("tree/branch");
+rmdir("tree");
+rmdir("named/child");
+rmdir("named");
+umask($previousMask);
+"#,
+    );
+    assert_eq!(out, "recursive:named");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies copy, unlink, and file existence by creating a file, copying it,
 /// reading through the copy, deleting both files, and confirming removal.
 #[test]

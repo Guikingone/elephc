@@ -295,6 +295,26 @@ echo ($user instanceof (User::class)) ? "T" : "F";
     assert_eq!(out, "T");
 }
 
+/// Tests a `$this` property as a dynamic class target used by metadata-processing code.
+#[test]
+fn test_dynamic_instanceof_this_property_target() {
+    let out = compile_and_run(
+        r#"<?php
+class DynamicTargetUser {}
+class DynamicTargetHolder {
+    public object $target;
+    public function __construct(object $target) { $this->target = $target; }
+    public function matches(object $value): bool {
+        return $value instanceof $this->target;
+    }
+}
+$holder = new DynamicTargetHolder(new DynamicTargetUser());
+echo $holder->matches(new DynamicTargetUser()) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "T");
+}
+
 /// Tests that dynamic instanceof with a non-string, non-object target (integer) fails
 /// with a Fatal error when the LHS is an object.
 #[test]

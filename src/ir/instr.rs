@@ -264,7 +264,11 @@ pub enum Op {
     StoreStaticLocal,
     InitStaticLocal,
     LoadStaticProperty,
+    /// Loads a static property selected by a runtime string name.
+    LoadDynamicStaticProperty,
     StoreStaticProperty,
+    /// Stores a static property selected by a runtime string name.
+    StoreDynamicStaticProperty,
     LoadReflectionStaticProperty,
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
@@ -323,6 +327,8 @@ pub enum Op {
     /// Copies a boxed Mixed zval cell while retaining its nested payload for value semantics.
     MixedClone,
     InvokerRefArg,
+    /// Boxes an owning marker for a promoted local reference cell stored in an array.
+    ArrayLocalRefCell,
     MixedUnbox,
     MixedTagOf,
     ArrayToMixed,
@@ -357,6 +363,10 @@ pub enum Op {
     ArrayElemAddr,
     ArraySet,
     HashSet,
+    /// Promotes a hash element to a shared managed reference cell and yields the cell pointer.
+    HashRefElement,
+    /// Binds a hash element to an existing managed reference cell and yields the updated hash.
+    HashBindRefElement,
     HashUnset,
     /// Writes PHP null into `container[key]`, releasing whatever was there.
     ///
@@ -383,9 +393,13 @@ pub enum Op {
     HashArrayUnion,
     HashSpread,
     ArrayToHash,
+    MixedToHash,
     ArraySetMixedKey,
     ArrayGetMixedKey,
     ArrayGetMixedKeySilent,
+    /// Reads a boxed element for an imminent nested write while dispatching a runtime key and a
+    /// possibly promoted indexed/hash container.
+    ArrayGetMixedKeyForWrite,
     ArrayKeyExists,
     OffsetExists,
     OffsetUnset,
@@ -425,9 +439,6 @@ pub enum Op {
     /// Tests whether a statically named declared property is initialized and non-null without
     /// performing an observable property read. Operand: object; immediate: property-name data id.
     PropIsset,
-    /// Unsets a statically named declared instance property. Operand: object; immediate:
-    /// property-name data id. Typed slots become uninitialized; untyped slots become null.
-    PropUnset,
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property
@@ -447,7 +458,16 @@ pub enum Op {
     /// Operand: the cell pointer (SSA value); immediate: target local slot. The local
     /// does not own the cell (no release at scope exit); the owner is the object/source.
     BindRefCellPtr,
+    /// Replaces a declared reference property's owned cell with another property's cell.
+    /// Operands: target object, then source cell pointer; immediate: target property name.
+    BindPropRefCell,
     DynamicPropGet,
+    /// Loads the raw reference-cell pointer for a runtime-named declared property.
+    /// Operands: object, then the runtime property-name string.
+    DynamicPropRefCell,
+    /// Unsets a runtime-named instance property. Operands: object, then the runtime
+    /// property-name string. Declared slots transition to PHP's uninitialized state.
+    DynamicPropUnset,
     DynamicPropSet,
     NullsafePropGet,
     NullsafeMethodCall,
@@ -629,6 +649,7 @@ impl Op {
             | ClassAttrArgs
             | ClassGetAttributes
             | CatchCurrent => E::READS_GLOBAL,
+            LoadDynamicStaticProperty => E::READS_HEAP | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
             | StoreStaticLocal
@@ -639,22 +660,33 @@ impl Op {
             | FunctionVariantMark
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
+            StoreDynamicStaticProperty => {
+                E::WRITES_HEAP | E::READS_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
-            Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
-            InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
+            Cast => {
+                E::READS_HEAP
+                    | E::ALLOC_HEAP
+                    | E::ALLOC_CONCAT
+                    | E::REFCOUNT_OP
+                    | E::MAY_WARN
+                    | E::MAY_FATAL
+            }
+            InvokerRefArg => E::READS_LOCAL | E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            ArrayLocalRefCell => E::READS_LOCAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
-            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
-            | PtrReadString => {
+            IsNull | IsTruthy | TypePredicate | MixedCastBool | MixedCastInt | MixedCastFloat
+            | BufferGet | BufferLen | PackedFieldGet | PtrRead | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
+            MixedUnbox => E::READS_HEAP | E::MAY_FATAL | E::MAY_THROW | E::REFCOUNT_OP,
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
@@ -678,15 +710,27 @@ impl Op {
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
+            DynamicPropRefCell => E::READS_HEAP | E::MAY_FATAL,
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
+            BindPropRefCell => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
-            | PropUnset | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            HashRefElement | HashBindRefElement => {
+                E::READS_HEAP
+                    | E::WRITES_HEAP
+                    | E::ALLOC_HEAP
+                    | E::WRITES_LOCAL
+                    | E::MAY_FATAL
+                    | E::REFCOUNT_OP
+            }
             PropIsset => E::READS_HEAP | E::MAY_FATAL,
             // Reads the fixed slot's initialization marker and old refcounted payload before
             // transitioning it to the typed-uninitialized sentinel or untyped null.
-            PropUnset => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            PropUnset | DynamicPropUnset => {
+                E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP
+            }
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
@@ -697,8 +741,18 @@ impl Op {
             }
             ArrayGetMixedKey => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::MAY_WARN,
             ArrayGetMixedKeySilent => E::READS_HEAP | E::ALLOC_HEAP | E::MAY_FATAL,
+            ArrayGetMixedKeyForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL
+            }
             ArrayUnion | HashUnion | ArrayHashUnion | HashArrayUnion | ArrayToHash => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+            }
+            MixedToHash => {
+                E::READS_HEAP
+                    | E::ALLOC_HEAP
+                    | E::MAY_FATAL
+                    | E::MAY_THROW
+                    | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
             MethodCall | NullsafeMethodCall => {
@@ -836,7 +890,9 @@ impl Op {
             StoreStaticLocal => "store_static_local",
             InitStaticLocal => "init_static_local",
             LoadStaticProperty => "load_static_property",
+            LoadDynamicStaticProperty => "load_dynamic_static_property",
             StoreStaticProperty => "store_static_property",
+            StoreDynamicStaticProperty => "store_dynamic_static_property",
             LoadReflectionStaticProperty => "load_reflection_static_property",
             StoreReflectionStaticProperty => "store_reflection_static_property",
             ReflectionStaticPropertyInitialized => "reflection_static_property_initialized",
@@ -894,6 +950,7 @@ impl Op {
             MixedBox => "mixed_box",
             MixedClone => "mixed_clone",
             InvokerRefArg => "invoker_ref_arg",
+            ArrayLocalRefCell => "array_local_ref_cell",
             MixedUnbox => "mixed_unbox",
             MixedTagOf => "mixed_tag_of",
             ArrayToMixed => "array_to_mixed",
@@ -924,6 +981,8 @@ impl Op {
             ArrayElemAddr => "array_elem_addr",
             ArraySet => "array_set",
             HashSet => "hash_set",
+            HashRefElement => "hash_ref_element",
+            HashBindRefElement => "hash_bind_ref_element",
             HashUnset => "hash_unset",
             SlotDetach => "slot_detach",
             ArrayPush => "array_push",
@@ -939,9 +998,11 @@ impl Op {
             HashArrayUnion => "hash_array_union",
             HashSpread => "hash_spread",
             ArrayToHash => "array_to_hash",
+            MixedToHash => "mixed_to_hash",
             ArraySetMixedKey => "array_set_mixed_key",
             ArrayGetMixedKey => "array_get_mixed_key",
             ArrayGetMixedKeySilent => "array_get_mixed_key_silent",
+            ArrayGetMixedKeyForWrite => "array_get_mixed_key_for_write",
             ArrayKeyExists => "array_key_exists",
             OffsetExists => "offset_exists",
             OffsetUnset => "offset_unset",
@@ -973,13 +1034,15 @@ impl Op {
             PropGet => "prop_get",
             PropInitialized => "prop_initialized",
             PropIsset => "prop_isset",
-            PropUnset => "prop_unset",
             PropSet => "prop_set",
             PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",
+            BindPropRefCell => "bind_prop_ref_cell",
             DynamicPropGet => "dynamic_prop_get",
+            DynamicPropRefCell => "dynamic_prop_ref_cell",
+            DynamicPropUnset => "dynamic_prop_unset",
             DynamicPropSet => "dynamic_prop_set",
             NullsafePropGet => "nullsafe_prop_get",
             NullsafeMethodCall => "nullsafe_method_call",

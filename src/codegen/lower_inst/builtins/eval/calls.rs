@@ -62,6 +62,64 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionCon
     store_if_result(ctx, inst)
 }
 
+/// Lowers a runtime include/require through Magician while sharing and reloading caller scope.
+pub(in crate::codegen::lower_inst::builtins) fn lower_dynamic_include(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    once: bool,
+    required: bool,
+    strict_php: bool,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "dynamic include", 1)?;
+    let path = expect_operand(inst, 0)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    // Scope synchronization owns the generic temp-cell slot, so preserve the borrowed
+    // path in the otherwise-unused saved-code pointer slot until the include call.
+    store_eval_mixed_operand_at(ctx, path, EVAL_CODE_PTR_OFFSET)?;
+    ensure_eval_context(ctx)?;
+    mark_eval_strict_php_value(ctx, strict_php);
+    mark_eval_php_version(ctx);
+    set_eval_call_site(ctx, inst);
+    ensure_eval_scope(ctx)?;
+    ensure_eval_global_scope(ctx)?;
+    let sync_locals = eval_sync_locals(ctx);
+    let sync_globals = eval_sync_globals(ctx);
+    let global_aliases = eval_global_aliases(ctx);
+    flush_eval_scope_locals(ctx, &sync_locals)?;
+    flush_eval_global_scope(ctx, &sync_globals)?;
+    mark_eval_scope_global_aliases(ctx, &global_aliases);
+    set_eval_context_global_scope(ctx);
+    let pushed_class_scope = push_eval_context_class_scope(ctx)?;
+    load_eval_context_to_arg(ctx, 0);
+    load_eval_scope_to_arg(ctx, 1);
+    let path_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, path_arg, EVAL_CODE_PTR_OFFSET);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 3),
+        i64::from(required),
+    );
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 4),
+        i64::from(once),
+    );
+    let out_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_temporary_stack_address(ctx.emitter, out_arg, 0);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_include");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    pop_eval_context_class_scope(ctx, pushed_class_scope);
+    emit_eval_status_check(ctx);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_RESULT_VALUE_CELL_OFFSET);
+    abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    reload_eval_scope_locals(ctx, &sync_locals)?;
+    reload_eval_global_scope(ctx, &sync_globals)?;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, result_reg, EVAL_TEMP_CELL_OFFSET);
+    abi::emit_release_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
+    store_if_result(ctx, inst)
+}
+
 /// Calls a pre-lowered internal EIR function for no-scope literal eval fragments.
 pub(super) fn lower_eval_literal_eir_function(
     ctx: &mut FunctionContext<'_>,

@@ -50,10 +50,8 @@ pub mod method_exists;
 pub mod preg_replace_callback;
 pub mod property_exists;
 
-// Internal object-introspection aliases used by the injected `var_export`
-// prelude. They have no PHP-visible counterpart to alias: PHP would use
-// `get_object_vars()` / `$v instanceof UnitEnum`, neither of which elephc can
-// express for a runtime `mixed` today.
+// Internal object-introspection aliases used by injected support code. They keep
+// metadata access private instead of adding PHP-visible extension functions.
 #[allow(non_snake_case)]
 pub mod __elephc_object_is_enum;
 #[allow(non_snake_case)]

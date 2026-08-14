@@ -13,6 +13,8 @@
 use super::*;
 use crate::parse_cache::parse_fragment_cached;
 
+const EVAL_TRACE_ENV: &str = "ELEPHC_EVAL_TRACE";
+
 /// Evaluates nested `eval(...)` calls against the current materialized scope.
 pub(super) fn eval_nested_eval(
     args: &[EvalExpr],
@@ -26,7 +28,10 @@ pub(super) fn eval_nested_eval(
     let code = eval_expr(code, context, scope, values)?;
     let code = values.string_bytes(code)?;
     let program = parse_fragment_cached(&code).map_err(EvalParseError::status)?;
-    execute_program_with_context(context, program.as_ref(), scope, values)
+    context.push_include_execution(false);
+    let result = execute_program_with_context(context, program.as_ref(), scope, values);
+    context.pop_include_execution();
+    result
 }
 
 /// Evaluates an eval-fragment include or require expression.
@@ -39,6 +44,18 @@ pub(super) fn eval_include_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_expr(path, context, scope, values)?;
+    eval_include_value(path, required, once, context, scope, values)
+}
+
+/// Evaluates an already materialized include path cell against the current caller scope.
+pub(super) fn eval_include_value(
+    path: RuntimeCellHandle,
+    required: bool,
+    once: bool,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     let path = eval_path_string(path, values)?;
     let resolved_path = eval_resolve_include_path(&path, context);
     let include_key = eval_include_key(&resolved_path);
@@ -141,7 +158,11 @@ fn eval_execute_include_code(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let program = parse_fragment_cached(code).map_err(EvalParseError::status)?;
+    trace_include_fragment("input", code, path, context, None);
+    let program = parse_fragment_cached(code).map_err(|error| {
+        trace_include_fragment("parse_error", code, path, context, Some(&error));
+        error.status()
+    })?;
     let previous = context.call_site();
     let file = path.to_string_lossy().into_owned();
     let dir = path
@@ -150,10 +171,48 @@ fn eval_execute_include_code(
         .unwrap_or_default();
     context.set_call_site(file.clone(), dir, 1);
     context.set_file_magic_override(Some(file));
+    context.push_include_execution(true);
     let result = execute_statements(program.statements(), context, scope, values);
+    context.pop_include_execution();
     context.set_call_site(previous.0, previous.1, previous.2);
     context.set_file_magic_override(previous.3);
     result
+}
+
+/// Emits an opt-in, panic-safe trace for the exact PHP block parsed from an included file.
+fn trace_include_fragment(
+    phase: &str,
+    code: &[u8],
+    path: &std::path::Path,
+    context: &ElephcEvalContext,
+    error: Option<&EvalParseError>,
+) {
+    if std::env::var_os(EVAL_TRACE_ENV).is_none() {
+        return;
+    }
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let caller = context.call_site();
+        if error.is_some() {
+            let escaped = code.escape_ascii().map(char::from).collect::<String>();
+            eprintln!(
+                "[elephc-eval-trace] kind=include phase={phase} path={:?} len={} error={error:?} caller_file={:?} caller_dir={:?} caller_line={} caller_override={:?} bytes={escaped}",
+                path,
+                code.len(),
+                caller.0,
+                caller.1,
+                caller.2,
+                caller.3,
+            );
+        } else {
+            eprintln!(
+                "[elephc-eval-trace] kind=include phase={phase} path={:?} len={} caller_file={:?} caller_line={}",
+                path,
+                code.len(),
+                caller.0,
+                caller.2,
+            );
+        }
+    }));
 }
 
 /// Echoes raw non-PHP include bytes through the eval value hooks.

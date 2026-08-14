@@ -299,7 +299,7 @@ fn validate_instruction_immediate(
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | BindPropRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -314,7 +314,13 @@ fn validate_instruction_immediate(
         }),
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal => require_immediate(inst_id, inst, "local slot", |imm| {
+            matches!(imm, Imm::LocalSlot(_))
+        }),
+        InvokerRefArg => require_immediate(inst_id, inst, "local slot or global name", |imm| {
+            matches!(imm, Imm::LocalSlot(_) | Imm::GlobalName(_))
+        }),
+        ArrayLocalRefCell => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
         PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
@@ -404,7 +410,7 @@ fn validate_opcode_rules(
     match inst.op {
         ConstI64 | ConstBool | ConstNull => check_count(inst_id, inst, 0, "0"),
         ConstF64 | ConstStr | ConstClassName | ConstEnumCase | LoadCalledClassId | DataAddr | ArrayNew | HashNew
-        | CallableArrayNew | GeneratorNew | InvokerRefArg
+        | CallableArrayNew | GeneratorNew | InvokerRefArg | ArrayLocalRefCell
         | ErrorSuppressBegin | ErrorSuppressEnd | TryPushHandler | TryPopHandler
         | CatchCurrent | CatchBind | FinallyEnter | FinallyExit | IncludeOnceMark
         | IncludeOnceGuard | FunctionVariantMark | FunctionVariantDispatch | EvalFunctionExists
@@ -477,11 +483,19 @@ fn validate_opcode_rules(
         | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
+        LoadDynamicStaticProperty => {
+            check_count(inst_id, inst, 1, "1")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
+        StoreDynamicStaticProperty => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
+        }
         ReleaseUnlessAliases => {
             check_count(inst_id, inst, 2, "2")
         }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
-        | MixedCastString => {
+        | MixedCastString | MixedToHash => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
         }
         ArrayUnion => check_binary(
@@ -503,7 +517,7 @@ fn validate_opcode_rules(
         HashSpread => check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)"),
         ArrayLen | ArrayGet | ArrayGetSilent | ArrayIsset | ArrayElemAddr | ArraySet | ArrayPush | ArrayEnsureUnique
         | ArrayCloneShallow | ArrayToHash | ArraySetMixedKey | ArrayGetMixedKey
-        | ArrayGetMixedKeySilent => {
+        | ArrayGetMixedKeySilent | ArrayGetMixedKeyForWrite => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
         // The fetch-for-write element read is emitted from exactly one site (a by-reference
@@ -540,7 +554,11 @@ fn validate_opcode_rules(
             )
         }
         HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
-        | HashCloneShallow => {
+        | HashCloneShallow | HashRefElement => {
+            check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
+        }
+        HashBindRefElement => {
+            check_count(inst_id, inst, 3, "3")?;
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
         // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
@@ -566,6 +584,7 @@ fn validate_opcode_rules(
         }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
+        DynamicPropUnset | DynamicPropRefCell | BindPropRefCell => check_count(inst_id, inst, 2, "2"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }

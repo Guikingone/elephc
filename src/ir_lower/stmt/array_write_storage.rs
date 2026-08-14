@@ -12,7 +12,7 @@ use super::*;
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let array_value = ctx.load_local(array, Some(span));
-    let value = lower_expr(ctx, value);
+    let value = lower_array_reference_or_value(ctx, value);
     let op = if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Array) {
         Op::ArrayPush
     } else if array_value.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
@@ -218,4 +218,3 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
     normalize_materialized_element_type(item_type)
 }
-

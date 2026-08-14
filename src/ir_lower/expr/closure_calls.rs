@@ -18,9 +18,11 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     let mut instance_signature = None;
     if let Some(target) = ctx.static_callable_local(var) {
         result_type = Some(static_callable_return_type(ctx, &target));
-        instance_signature = instance_callable_signature(&target).cloned();
-        if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
-            return value;
+        if !has_dynamic_call_spread(args) {
+            instance_signature = instance_callable_signature(&target).cloned();
+            if let Some(value) = lower_static_callable_call(ctx, target, args, expr) {
+                return value;
+            }
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
@@ -95,15 +97,19 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_literal_callable_array_expr_call(ctx, callee, args, expr) {
         return value;
     }
-    if let Some(callback) = static_call_user_func_callback(ctx, callee) {
-        if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
-            return value;
+    if !has_dynamic_call_spread(args) {
+        if let Some(callback) = static_call_user_func_callback(ctx, callee) {
+            if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
+                return value;
+            }
         }
     }
-    if let Some(callback) = static_assignment_callable_target(ctx, callee) {
-        lower_expr(ctx, callee);
-        if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
-            return value;
+    if !has_dynamic_call_spread(args) {
+        if let Some(callback) = static_assignment_callable_target(ctx, callee) {
+            lower_expr(ctx, callee);
+            if let Some(value) = lower_static_callable_call(ctx, callback, args, expr) {
+                return value;
+            }
         }
     }
     // `Closure::bind(fn &() => $this->prop, $obj, $obj)()` invokes the bound closure. Lower it
@@ -146,6 +152,11 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
         Op::ExprCall.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns whether a call contains a spread whose elements are only known at runtime.
+fn has_dynamic_call_spread(args: &[Expr]) -> bool {
+    args.iter().any(is_spread_arg) && !has_static_call_spread_args(args)
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`
@@ -286,4 +297,3 @@ pub(super) fn terminate_dynamic_method_call_on_null(
     );
     ctx.builder.terminate(Terminator::Unreachable);
 }
-

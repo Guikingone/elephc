@@ -20,7 +20,7 @@ pub(super) fn read_and_parse(
 ) -> parser::ast::Program {
     crate::progress::phase("read");
     let phase_started = Instant::now();
-    let source = match fs::read_to_string(filename) {
+    let source = match crate::source::read_physical_source(filename) {
         Ok(s) => s,
         Err(e) => {
             crate::progress::clear();

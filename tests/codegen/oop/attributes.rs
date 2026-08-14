@@ -59,8 +59,8 @@ echo double(7);
 }
 
 /// Verifies that fully-qualified attribute names (e.g. `#[\App\Annotations\Mark]`,
-/// `#[\Symfony\Contracts\Service\Attribute\Required]`) are accepted by the parser
-/// and pass through codegen unchanged. Symfony-style attributes must not affect
+/// `#[\Vendor\Package\Service\Attribute\Required]`) are accepted by the parser
+/// and pass through codegen unchanged. User-defined attributes must not affect
 /// runtime behavior.
 #[test]
 fn test_qualified_attribute_name_compiles() {
@@ -68,7 +68,7 @@ fn test_qualified_attribute_name_compiles() {
         r#"<?php
 #[\App\Annotations\Mark]
 class Tagged {
-    #[\Symfony\Contracts\Service\Attribute\Required]
+    #[\Vendor\Package\Service\Attribute\Required]
     public function setUp(): void {
     }
 }

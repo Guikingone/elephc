@@ -17,7 +17,9 @@ use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::super::expect_semicolon;
-use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
+use super::compound::{
+    assignment_operator, assignment_value, is_valid_reference_source, AssignmentOperator,
+};
 
 /// Parses a postfix assignment where the target involves property access, array access,
 /// or other complex expressions. Detects `+=` append style via `[]` in the target.
@@ -65,6 +67,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
     }
 
     *pos = assign_pos + 1;
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        return parse_complex_ref_assignment(lhs_expr, is_append, tokens, pos, span).map(Some);
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -130,10 +137,104 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
             },
             span,
         )),
+        // `$GLOBALS['name']` tokens look postfix-shaped, but the expression parser rewrites the
+        // complete target to one alias variable, so this is an ordinary variable assignment.
+        ExprKind::Variable(name) => StmtKind::Assign { name, value },
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
     Ok(Some(Stmt::new(stmt, span)))
+}
+
+/// Lowers a complex target reference bind into ordinary statements.
+///
+/// For `$obj->prop =& $source`, PHP first writes the source value into the property-owned cell and
+/// then aliases the source local to that cell. A local source therefore lowers to a synthetic
+/// property assignment plus the existing local reference assignment. A declared-property source
+/// retains its own cell identity in `PropertyRefAssign`, allowing both object slots to own the same
+/// cell instead of rebinding a temporary and losing the original alias.
+/// Array-element targets such as `$values[$key] =& $source` and nested appends such as
+/// `$loops[$key][] =& $source` wrap the source in the owning array-reference marker before
+/// reusing the ordinary set or nested append/write-back lowering.
+fn parse_complex_ref_assignment(
+    target: Expr,
+    is_append: bool,
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let source = parse_expr(tokens, pos)?;
+    if !is_valid_reference_source(&source.kind) {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment source must be a variable, array/property element, or a by-reference call",
+        ));
+    }
+    expect_semicolon(tokens, pos)?;
+    if is_append {
+        if !matches!(&source.kind, ExprKind::Variable(_)) {
+            return Err(CompileError::new(
+                span,
+                "Nested array reference appends currently require a variable source",
+            ));
+        }
+        let reference = Expr::new(ExprKind::ArrayReference(Box::new(source)), span);
+        return lower_nested_append_assignment(target, reference, span);
+    }
+    let source_name = match &source.kind {
+        ExprKind::Variable(source_name) => Some(source_name),
+        ExprKind::PropertyAccess { .. } => None,
+        _ => {
+            return Err(CompileError::new(
+                span,
+                "Complex reference targets currently require a variable or declared-property source",
+            ));
+        }
+    };
+    if matches!(&target.kind, ExprKind::ArrayAccess { .. }) {
+        if source_name.is_none() {
+            return Err(CompileError::new(
+                span,
+                "Array reference targets currently require a variable source",
+            ));
+        }
+        let reference = Expr::new(ExprKind::ArrayReference(Box::new(source)), span);
+        let kind = assignment_target_store_stmt(target, reference, span)?;
+        return Ok(Stmt::new(kind, span));
+    }
+    let ExprKind::PropertyAccess { object, property } = &target.kind else {
+        return Err(CompileError::new(
+            span,
+            "Complex reference targets currently require a declared property",
+        ));
+    };
+    if source_name.is_none() {
+        return Ok(Stmt::new(
+            StmtKind::PropertyRefAssign {
+                object: object.clone(),
+                property: property.clone(),
+                source,
+            },
+            span,
+        ));
+    }
+    let assign = Stmt::new(
+        StmtKind::PropertyAssign {
+            object: object.clone(),
+            property: property.clone(),
+            value: source.clone(),
+        },
+        span,
+    );
+    let bind = Stmt::new(
+        StmtKind::RefAssign {
+            target: source_name.expect("variable reference source checked above").clone(),
+            source: target,
+        },
+        span,
+    );
+    Ok(Stmt::new(StmtKind::Synthetic(vec![assign, bind]), span))
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a
@@ -170,7 +271,7 @@ fn lower_nested_append_assignment(
 /// Builds the statement that writes `value` back into an already-stabilized
 /// assignment target. Supports the same local, property, static property, and
 /// array target families as postfix assignment lowering.
-fn assignment_target_store_stmt(
+pub(crate) fn assignment_target_store_stmt(
     target: Expr,
     value: Expr,
     span: Span,
@@ -216,6 +317,51 @@ fn assignment_target_store_stmt(
         },
         _ => Err(CompileError::new(span, "Invalid assignment target")),
     }
+}
+
+/// Builds the statement that appends `value` through an assignment-expression target.
+///
+/// Bare locals and property/static-property receivers map to their ordinary push statements;
+/// nested array targets reuse the established read/push/write-back desugaring so growth is
+/// republished all the way to the original container.
+pub(crate) fn assignment_target_append_stmt(
+    target: Expr,
+    value: Expr,
+    span: Span,
+) -> Result<Stmt, CompileError> {
+    let kind = match target.kind {
+        ExprKind::Variable(array) => StmtKind::ArrayPush { array, value },
+        ExprKind::PropertyAccess { object, property } => StmtKind::PropertyArrayPush {
+            object,
+            property,
+            value,
+        },
+        ExprKind::StaticPropertyAccess { receiver, property } => {
+            StmtKind::StaticPropertyArrayPush {
+                receiver,
+                property,
+                value,
+            }
+        }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index: None,
+                append: true,
+                value,
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            return lower_nested_append_assignment(
+                Expr::new(ExprKind::ArrayAccess { array, index }, span),
+                value,
+                span,
+            );
+        }
+        _ => return Err(CompileError::new(span, "Invalid assignment target")),
+    };
+    Ok(Stmt::new(kind, span))
 }
 
 /// Parses discarded post-increment/decrement on a scoped (static class member) l-value target.
@@ -327,6 +473,34 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    if op == AssignmentOperator::Assign
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        *pos += 1;
+        let source = parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        let ExprKind::ArrayAccess { array, index } = lhs_expr.kind else {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment target must be a static-property array element",
+            ));
+        };
+        let ExprKind::StaticPropertyAccess { receiver, property } = array.kind else {
+            return Err(CompileError::new(
+                span,
+                "Reference assignment target must be a static-property array element",
+            ));
+        };
+        return Ok(Some(Stmt::new(
+            StmtKind::StaticPropertyElementRefAssign {
+                receiver,
+                property,
+                index: *index,
+                source,
+            },
+            span,
+        )));
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -355,12 +529,30 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
                 value,
             }
         }
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } if is_append => {
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index: None,
+                append: true,
+                value,
+            }
+        }
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 StmtKind::StaticPropertyArrayAssign {
                     receiver,
                     property,
                     index: *index,
+                    value,
+                }
+            }
+            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+                StmtKind::DynamicStaticPropertyWrite {
+                    receiver,
+                    property,
+                    index: Some(*index),
+                    append: false,
                     value,
                 }
             }
@@ -374,6 +566,15 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
             property,
             value,
         },
+        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
+            StmtKind::DynamicStaticPropertyWrite {
+                receiver,
+                property,
+                index: None,
+                append: false,
+                value,
+            }
+        }
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
@@ -381,8 +582,9 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
 }
 
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
-/// and returns the position and operator of the first top-level assignment at nesting depth 0.
-/// Returns `None` if no assignment operator is found before a semicolon at depth 0.
+/// and returns the first statement-level assignment before a top-level conditional begins.
+/// Assignments in ternary or null-coalescing branches remain expression assignments for Pratt.
+/// Returns `None` if no eligible operator is found before a semicolon at depth 0.
 fn find_top_level_assignment(
     tokens: &[SpannedToken],
     start: usize,
@@ -390,6 +592,7 @@ fn find_top_level_assignment(
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
     let mut brace_depth = 0usize;
+    let mut saw_top_level_conditional = false;
     let mut pos = start;
 
     while pos < tokens.len() {
@@ -403,9 +606,25 @@ fn find_top_level_assignment(
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
+            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+                // An assignment after a top-level ternary marker belongs to a branch, not to
+                // the whole expression as a postfix statement target (`cond ?: $obj->p = v`).
+                // Let the Pratt parser preserve PHP's assignment precedence in that branch.
+                saw_top_level_conditional = true;
+            }
+            Token::QuestionQuestion
+                if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 =>
+            {
+                // `??` is right-associative and its fallback may be an assignment:
+                // `$a ?? $b ?? $k = $name`. Stealing that `=` would treat the complete
+                // coalescing expression as an lvalue and reject valid PHP.
+                saw_top_level_conditional = true;
+            }
             _ if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                if let Some(op) = assignment_operator(&tokens[pos].0) {
-                    return Some((pos, op));
+                if !saw_top_level_conditional {
+                    if let Some(op) = assignment_operator(&tokens[pos].0) {
+                        return Some((pos, op));
+                    }
                 }
             }
             _ => {}
@@ -416,10 +635,12 @@ fn find_top_level_assignment(
     None
 }
 
-/// Finds a top-level `++` or `--` before the statement semicolon.
+/// Finds a top-level postfix `++` or `--` immediately before the statement semicolon.
 ///
 /// Nested occurrences inside indexes or call arguments are ignored so expressions
-/// such as `$items[$i++] = 1` remain assignment statements with an effectful index.
+/// such as `$items[$i++] = 1` remain assignment statements with an effectful index. A
+/// prefix operator inside an assignment RHS (`$id = 'x'.++$obj->counter`) is not a
+/// postfix statement target and must remain with the ordinary assignment parser.
 fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -437,10 +658,20 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
-            Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+            Token::PlusPlus
+                if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && matches!(tokens.get(pos + 1), Some((Token::Semicolon, _))) =>
+            {
                 return Some((pos, true));
             }
-            Token::MinusMinus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
+            Token::MinusMinus
+                if paren_depth == 0
+                    && bracket_depth == 0
+                    && brace_depth == 0
+                    && matches!(tokens.get(pos + 1), Some((Token::Semicolon, _))) =>
+            {
                 return Some((pos, false));
             }
             _ => {}

@@ -9,6 +9,11 @@
 //! - Keep startup thin so CLI validation and pipeline behavior stay in dedicated modules.
 
 mod autoload;
+mod array_merge_prelude;
+mod array_reduce_prelude;
+mod assert_prelude;
+mod ast_usage;
+mod backend_gap_prelude;
 mod builtins;
 mod cli;
 mod codegen;
@@ -17,7 +22,9 @@ mod conditional;
 mod errors;
 mod eval_aot;
 mod exports;
+mod filter_var_prelude;
 mod func_args;
+mod globals_array;
 mod hash_prelude;
 mod image_prelude;
 mod intrinsics;

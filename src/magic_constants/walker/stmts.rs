@@ -11,7 +11,7 @@
 use crate::parser::ast::{CatchClause, EnumCaseDecl, Stmt, StmtKind};
 
 use super::exprs::walk_expr;
-use super::members::{walk_class_method, walk_class_property};
+use super::members::{walk_class_const, walk_class_method, walk_class_property};
 use super::Pass;
 
 /// Applies a magic-constant pass to a sequence of top-level statements.
@@ -102,6 +102,15 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             property,
             value: walk_expr(value, pass),
         },
+        StmtKind::PropertyRefAssign {
+            object,
+            property,
+            source,
+        } => StmtKind::PropertyRefAssign {
+            object: Box::new(walk_expr(*object, pass)),
+            property,
+            source: walk_expr(source, pass),
+        },
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -149,6 +158,30 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             receiver,
             property,
             index: walk_expr(index, pass),
+            value: walk_expr(value, pass),
+        },
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index,
+            source,
+        } => StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            property,
+            index: walk_expr(index, pass),
+            source: walk_expr(source, pass),
+        },
+        StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property,
+            index,
+            append,
+            value,
+        } => StmtKind::DynamicStaticPropertyWrite {
+            receiver,
+            property: Box::new(walk_expr(*property, pass)),
+            index: index.map(|index| walk_expr(index, pass)),
+            append,
             value: walk_expr(value, pass),
         },
         StmtKind::If {
@@ -281,7 +314,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             trait_uses,
             properties,
             methods,
-        constants,
+            constants,
         } => {
             pass.enter_class(&name);
             let new_properties = properties
@@ -291,6 +324,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             let new_methods = methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
+                .collect();
+            let new_constants = constants
+                .into_iter()
+                .map(|constant| walk_class_const(constant, pass))
                 .collect();
             pass.leave_class();
             StmtKind::ClassDecl {
@@ -303,7 +340,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::TraitDecl {
@@ -311,7 +348,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             trait_uses,
             properties,
             methods,
-        constants,
+            constants,
         } => {
             pass.enter_trait(&name);
             let new_properties = properties
@@ -322,13 +359,17 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
+            let new_constants = constants
+                .into_iter()
+                .map(|constant| walk_class_const(constant, pass))
+                .collect();
             pass.leave_trait();
             StmtKind::TraitDecl {
                 name,
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-            constants,
+                constants: new_constants,
             }
         }
         StmtKind::InterfaceDecl {
@@ -336,20 +377,30 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             extends,
             properties,
             methods,
-        constants,
-        } => StmtKind::InterfaceDecl {
-            name,
-            extends,
-            properties: properties
+            constants,
+        } => {
+            pass.enter_class(&name);
+            let properties = properties
                 .into_iter()
-                .map(|p| walk_class_property(p, pass))
-                .collect(),
-            methods: methods
+                .map(|property| walk_class_property(property, pass))
+                .collect();
+            let methods = methods
                 .into_iter()
-                .map(|m| walk_class_method(m, pass))
-                .collect(),
-        constants,
-        },
+                .map(|method| walk_class_method(method, pass))
+                .collect();
+            let constants = constants
+                .into_iter()
+                .map(|constant| walk_class_const(constant, pass))
+                .collect();
+            pass.leave_class();
+            StmtKind::InterfaceDecl {
+                name,
+                extends,
+                properties,
+                methods,
+                constants,
+            }
+        }
         StmtKind::EnumDecl {
             name,
             backing_type,
@@ -372,6 +423,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             let methods = methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
+                .collect();
+            let constants = constants
+                .into_iter()
+                .map(|constant| walk_class_const(constant, pass))
                 .collect();
             pass.leave_class();
             StmtKind::EnumDecl {

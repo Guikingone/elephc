@@ -103,6 +103,7 @@ pub(crate) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str]
         "RecursiveDirectoryIterator",
         "RecursiveFilterIterator",
         "RecursiveIteratorIterator",
+        "RecursiveTreeIterator",
         "RecursiveRegexIterator",
         "ReflectionAttribute",
         "ReflectionClass",

@@ -72,6 +72,41 @@ echo $left . ":" . $right;
     assert_eq!(out, "left:right");
 }
 
+/// Verifies positional list unpacking validates and reads a boxed Mixed array result at runtime.
+#[test]
+fn test_list_unpack_mixed_function_result() {
+    let out = compile_and_run(
+        r#"<?php
+function resolveRuntime(): mixed {
+    return ["app", "args"];
+}
+[$app, $args] = resolveRuntime();
+echo $app . ":" . $args;
+"#,
+    );
+    assert_eq!(out, "app:args");
+}
+
+/// Verifies destructuring is valid inside a condition, evaluates its RHS once, and yields that
+/// original array before the surrounding boolean operators inspect it.
+#[test]
+fn test_list_unpack_assignment_expression_in_condition() {
+    let out = compile_and_run(
+        r#"<?php
+function serviceEntry(): array {
+    echo "E";
+    return [null, "ok"];
+}
+if (!([$file, $code] = serviceEntry()) || null !== $file) {
+    echo "bad";
+} else {
+    echo $code;
+}
+"#,
+    );
+    assert_eq!(out, "Eok");
+}
+
 /// Verifies `foreach` value destructuring in both spellings PHP accepts (`[...]` and
 /// `list(...)`), plus the `$key => [...]` form. Expected output matches `php -r` on 8.4.
 #[test]

@@ -16,6 +16,9 @@
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
 };
+use crate::codegen::callable_invoker_args::{
+    ARRAY_GLOBAL_REF_CELL_TAG, ARRAY_LOCAL_REF_CELL_TAG, INVOKER_ARG_REF_CELL_TAG,
+};
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, ValueId};
 use crate::types::PhpType;
@@ -322,6 +325,91 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     receiver.store_back_value(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
+}
+
+/// Promotes one associative-array element to a managed reference cell.
+///
+/// The runtime returns both a possibly relocated hash and the shared cell pointer. The hash is
+/// written back to its receiver place before the cell becomes this instruction's SSA result.
+pub(super) fn lower_hash_ref_element(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_element");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            ctx.store_result_value(hash)?;
+            receiver.store_back_value(ctx, hash)?;
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_ref_element");
+            abi::emit_push_reg(ctx.emitter, "rdx");
+            ctx.store_result_value(hash)?;
+            receiver.store_back_value(ctx, hash)?;
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Binds one associative-array element to an existing managed reference cell.
+///
+/// The runtime retains the cell, releases the previous bucket value, and returns the possibly
+/// relocated hash for both receiver write-back and this instruction's SSA result.
+pub(super) fn lower_hash_bind_ref_element(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let cell = expect_operand(inst, 2)?;
+    require_hash(ctx.value_php_type(hash)?, inst)?;
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_hash_key_aarch64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.load_value_to_reg(hash, "x0")?;
+            ctx.load_value_to_reg(cell, "x3")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_bind_ref_element");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.store_result_value(hash)?;
+            receiver.store_back_value(ctx, hash)?;
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            materialize_hash_key_x86_64(ctx, key)?;
+            abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+            ctx.load_value_to_reg(hash, "rdi")?;
+            ctx.load_value_to_reg(cell, "rcx")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_bind_ref_element");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.store_result_value(hash)?;
+            receiver.store_back_value(ctx, hash)?;
+            ctx.writeback_global_array_source(hash)?;
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `unset($hash[$key])` for associative arrays through the shared hash-unset helper.
@@ -1317,6 +1405,10 @@ pub(super) fn emit_hash_get_success_aarch64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    // A tag-11 bucket stores a managed reference cell rather than the PHP-visible value.
+    // Normalize it before the ordinary typed/Mixed materialization so reads observe writes
+    // performed through any alias, including nested write receivers.
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov x0, x1");                              // move the borrowed hash scalar payload into the standard integer result
@@ -1355,6 +1447,9 @@ pub(super) fn emit_hash_get_success_x86_64(
     result_ty: &PhpType,
     for_write: bool,
 ) -> Result<()> {
+    // Keep the x86_64 read contract identical to AArch64: tag-11 buckets expose the
+    // reference cell's current inner value and tag before normal result shaping.
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     match value_ty {
         PhpType::Int | PhpType::Bool | PhpType::Callable => {
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed hash scalar payload into the standard integer result
@@ -1392,6 +1487,10 @@ pub(super) fn emit_hash_get_success_x86_64(
 /// Materializes a successful AArch64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write: bool) {
     let box_label = ctx.next_label("hash_get_mixed_box");
+    let ref_label = ctx.next_label("hash_get_mixed_ref");
+    let ref_box_label = ctx.next_label("hash_get_mixed_ref_box");
+    let ref_string_label = ctx.next_label("hash_get_mixed_ref_string");
+    let ref_mixed_label = ctx.next_label("hash_get_mixed_ref_mixed");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp x3, #7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("b.ne {}", box_label));                    // box concrete per-entry payloads before returning them as Mixed
@@ -1399,7 +1498,34 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write:
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
+        ctx.emitter.instruction("ldr x9, [x0]");                                // inspect boxed entries before cloning a stored reference marker
+        ctx.emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));  // detect borrowed invoker reference markers
+        ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // dereference the marker instead of exposing it as a PHP value
+        ctx.emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));  // detect owning request-global reference markers
+        ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // both marker kinds share the same ref-cell payload layout
+        ctx.emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));  // detect owning local reference markers
+        ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // every marker kind shares the same ref-cell payload layout
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // skip the marker-only dereference path
+        ctx.emitter.label(&ref_label);
+        ctx.emitter.instruction("ldr x10, [x0, #8]");                           // load the referenced storage address carried by the marker
+        ctx.emitter.instruction("ldr x9, [x0, #16]");                           // load the referenced value's runtime tag
+        ctx.emitter.instruction("ldr x1, [x10]");                               // load its low payload word
+        ctx.emitter.instruction("mov x2, #0");                                  // non-string referenced values have no high payload word
+        ctx.emitter.instruction("cmp x9, #7");                                  // does the referenced storage hold a boxed Mixed handle?
+        ctx.emitter.instruction(&format!("b.eq {}", ref_mixed_label));          // clone the nested cell directly
+        ctx.emitter.instruction("cmp x9, #1");                                  // does the referenced storage hold a string pair?
+        ctx.emitter.instruction(&format!("b.eq {}", ref_string_label));         // load its length before boxing
+        ctx.emitter.label(&ref_box_label);
+        ctx.emitter.instruction("mov x0, x9");                                  // pass the referenced runtime tag to the boxing helper
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");             // materialize an ordinary PHP-visible Mixed result
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // join the ordinary boxed-entry path
+        ctx.emitter.label(&ref_string_label);
+        ctx.emitter.instruction("ldr x2, [x10, #8]");                           // load the referenced string length
+        ctx.emitter.instruction(&format!("b {}", ref_box_label));               // box the complete string pair
+        ctx.emitter.label(&ref_mixed_label);
+        ctx.emitter.instruction("mov x0, x1");                                  // pass the referenced boxed Mixed handle to the clone helper
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach the referenced value for a read
     }
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
@@ -1411,6 +1537,10 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write:
 /// Materializes a successful x86_64 Mixed hash lookup as a boxed Mixed result.
 fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: bool) {
     let box_label = ctx.next_label("hash_get_mixed_box");
+    let ref_label = ctx.next_label("hash_get_mixed_ref");
+    let ref_box_label = ctx.next_label("hash_get_mixed_ref_box");
+    let ref_string_label = ctx.next_label("hash_get_mixed_ref_string");
+    let ref_mixed_label = ctx.next_label("hash_get_mixed_ref_mixed");
     let done_label = ctx.next_label("hash_get_mixed_done");
     ctx.emitter.instruction("cmp rcx, 7");                                      // check whether the entry already stores a boxed Mixed cell
     ctx.emitter.instruction(&format!("jne {}", box_label));                     // box concrete per-entry payloads before returning them as Mixed
@@ -1418,7 +1548,34 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: 
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
+        ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                    // inspect boxed entries before cloning a stored reference marker
+        ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));  // detect borrowed invoker reference markers
+        ctx.emitter.instruction(&format!("je {}", ref_label));                  // dereference the marker instead of exposing it as a PHP value
+        ctx.emitter.instruction(&format!("cmp r11, {}", ARRAY_GLOBAL_REF_CELL_TAG));  // detect owning request-global reference markers
+        ctx.emitter.instruction(&format!("je {}", ref_label));                  // both marker kinds share the same ref-cell payload layout
+        ctx.emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));  // detect owning local reference markers
+        ctx.emitter.instruction(&format!("je {}", ref_label));                  // every marker kind shares the same ref-cell payload layout
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip the marker-only dereference path
+        ctx.emitter.label(&ref_label);
+        ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");                // load the referenced storage address carried by the marker
+        ctx.emitter.instruction("mov r11, QWORD PTR [rax + 16]");               // load the referenced value's runtime tag
+        ctx.emitter.instruction("mov rdi, QWORD PTR [r10]");                    // load its low payload word
+        ctx.emitter.instruction("xor rsi, rsi");                                // non-string referenced values have no high payload word
+        ctx.emitter.instruction("cmp r11, 7");                                  // does the referenced storage hold a boxed Mixed handle?
+        ctx.emitter.instruction(&format!("je {}", ref_mixed_label));            // clone the nested cell directly
+        ctx.emitter.instruction("cmp r11, 1");                                  // does the referenced storage hold a string pair?
+        ctx.emitter.instruction(&format!("je {}", ref_string_label));           // load its length before boxing
+        ctx.emitter.label(&ref_box_label);
+        ctx.emitter.instruction("mov rax, r11");                                // pass the referenced runtime tag to the boxing helper
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");             // materialize an ordinary PHP-visible Mixed result
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // join the ordinary boxed-entry path
+        ctx.emitter.label(&ref_string_label);
+        ctx.emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                // load the referenced string length
+        ctx.emitter.instruction(&format!("jmp {}", ref_box_label));             // box the complete string pair
+        ctx.emitter.label(&ref_mixed_label);
+        ctx.emitter.instruction("mov rax, rdi");                                // pass the referenced boxed Mixed handle to the clone helper
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach the referenced value for a read
     }
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip on-demand boxing for already boxed entries
     ctx.emitter.label(&box_label);
@@ -1435,6 +1592,7 @@ fn emit_hash_get_mixed_for_write_aarch64(
 ) -> Result<()> {
     let boxed = ctx.next_label("hash_get_write_boxed");
     let done = ctx.next_label("hash_get_write_done");
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     ctx.emitter.instruction("cmp x3, #7");                                      // does the hash already store a boxed Mixed cell?
     ctx.emitter.instruction(&format!("b.eq {}", boxed));                        // retain the existing cell without changing its identity
     ctx.emitter.instruction("mov x0, x3");                                      // pass the typed runtime tag to the Mixed boxing helper
@@ -1467,6 +1625,7 @@ fn emit_hash_get_mixed_for_write_x86_64(
 ) -> Result<()> {
     let boxed = ctx.next_label("hash_get_write_boxed");
     let done = ctx.next_label("hash_get_write_done");
+    abi::emit_call_label(ctx.emitter, "__rt_deref_if_reference");
     ctx.emitter.instruction("cmp rcx, 7");                                      // does the hash already store a boxed Mixed cell?
     ctx.emitter.instruction(&format!("je {}", boxed));                          // retain the existing cell without changing its identity
     ctx.emitter.instruction("mov rax, rcx");                                    // pass the typed runtime tag to the Mixed boxing helper

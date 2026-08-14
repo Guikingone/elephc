@@ -56,6 +56,12 @@ pub(super) fn emit_reflection_member_object(
         member.declaring_class_name.as_deref(),
     )?;
     if member_class_name == "ReflectionMethod" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            member_class_name,
+            "__class",
+            member.declaring_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_parameter_array_property_by_name(
             ctx,
             member_class_name,
@@ -232,4 +238,3 @@ pub(super) fn emit_reflection_parameter_object(
     )?;
     emit_reflection_parameter_properties(ctx, parameter)
 }
-

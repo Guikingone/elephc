@@ -32,6 +32,10 @@ impl Checker {
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
             ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            ExprKind::ArrayReference(inner) => {
+                self.infer_type(inner, env)?;
+                Ok(PhpType::Mixed)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
                 match ty {
@@ -377,6 +381,11 @@ impl Checker {
                         expr.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
+                    ref ty
+                        if crate::types::checker::type_compat::type_is_gradual_object_family(ty) =>
+                    {
+                        Ok(PhpType::Void)
+                    }
                     _ => Err(CompileError::new(
                         expr.span,
                         "Type error: throw requires an object value",
@@ -384,14 +393,19 @@ impl Checker {
                 }
             }
             ExprKind::Cast { target, expr } => {
-                self.infer_type(expr, env)?;
+                let source_type = self.infer_type(expr, env)?;
                 use crate::parser::ast::CastType;
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+                    // A PHP array cast can produce an empty array, an indexed array containing
+                    // any scalar/object value, or preserve an existing hash. The EIR runtime
+                    // therefore uses its kind-dispatched `array<mixed>` representation.
+                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
+                    CastType::Object if matches!(&source_type, PhpType::Object(_)) => source_type,
+                    CastType::Object => PhpType::Object("stdClass".to_string()),
                 })
             }
             _ => unreachable!("non-basic expression routed to basic inference"),

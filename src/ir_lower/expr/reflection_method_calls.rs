@@ -20,6 +20,31 @@ pub(super) fn lower_reflection_method_invoke_call(
     let method_key = php_symbol_key(method);
     let object_expr = object_expr?;
     let (class_name, reflected_method) = reflection_method_reflected_target(ctx, object_expr)?;
+    if method_key == "getclosure" {
+        let object_arg = reflection_method_get_closure_object(ctx, args)?;
+        let target_kind = reflection_method_target_kind(ctx, &class_name, &reflected_method)?;
+        let target = match target_kind {
+            ReflectionMethodTargetKind::Static => {
+                let ignored_object = lower_expr(ctx, &object_arg);
+                if ctx.value_is_owning_temporary(ignored_object) {
+                    crate::ir_lower::ownership::release_if_owned(
+                        ctx,
+                        ignored_object,
+                        Some(object_arg.span),
+                    );
+                }
+                CallableTarget::StaticMethod {
+                    receiver: StaticReceiver::Named(Name::from(class_name)),
+                    method: reflected_method,
+                }
+            }
+            ReflectionMethodTargetKind::Instance => CallableTarget::Method {
+                object: Box::new(object_arg),
+                method: reflected_method,
+            },
+        };
+        return Some(lower_first_class_callable(ctx, &target, expr));
+    }
     let Some((object_arg, forwarded_args)) = (match method_key.as_str() {
         "invoke" => reflection_method_invoke_args(args),
         "invokeargs" => reflection_method_invoke_args_array(ctx, args),
@@ -55,6 +80,28 @@ pub(super) fn lower_reflection_method_invoke_call(
             &forwarded_args,
             expr,
         )),
+    }
+}
+
+/// Normalizes the optional receiver accepted by `ReflectionMethod::getClosure()`.
+fn reflection_method_get_closure_object(
+    _ctx: &LoweringContext<'_, '_>,
+    args: &[Expr],
+) -> Option<Expr> {
+    let args = reflection_class_new_instance_args(args);
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    match args.as_slice() {
+        [] => Some(Expr::new(ExprKind::Null, crate::span::Span::dummy())),
+        [arg] => match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "object" => {
+                Some((**value).clone())
+            }
+            ExprKind::NamedArg { .. } => None,
+            _ => Some(arg.clone()),
+        },
+        _ => None,
     }
 }
 
@@ -236,4 +283,3 @@ pub(super) fn lower_reflection_method_invoke_unsupported(
     ctx.builder.terminate(Terminator::Fatal { message });
     result
 }
-

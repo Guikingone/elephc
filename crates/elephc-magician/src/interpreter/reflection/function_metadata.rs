@@ -57,7 +57,10 @@ pub(super) fn eval_reflection_function_method_target(
                 return_type_metadata,
             }));
         }
-        let lookup_name = name.to_ascii_lowercase();
+        let lookup_name = closure_target
+            .as_ref()
+            .and_then(eval_reflection_closure_target_lookup_name)
+            .unwrap_or_else(|| name.to_ascii_lowercase());
         if let Some(function) = context.function(&lookup_name) {
             let is_variadic = function
                 .parameter_is_variadic()
@@ -221,6 +224,17 @@ pub(super) fn eval_reflection_function_method_target(
         is_deprecated,
         return_type_metadata,
     }))
+}
+
+/// Returns the registered callable lookup key retained by a named Closure target.
+fn eval_reflection_closure_target_lookup_name(
+    target: &EvalClosureObjectTarget,
+) -> Option<String> {
+    match target {
+        EvalClosureObjectTarget::Named(name)
+        | EvalClosureObjectTarget::BoundNamed { name, .. } => Some(name.clone()),
+        _ => None,
+    }
 }
 
 /// Returns an eval method body that can contribute ReflectionMethod static locals.
@@ -572,11 +586,16 @@ pub(super) fn eval_reflection_function_closure_scope_class_name(
             bound_this,
             bound_scope,
         } => {
-            if context.closure(name).is_none() {
-                return Ok(bound_this.map(|_| String::from("Closure")));
-            }
             if let Some(bound_scope) = bound_scope {
                 return Ok(Some(bound_scope.clone()));
+            }
+            if context.closure(name).is_none() {
+                return match bound_this {
+                    Some(object) => {
+                        eval_closure_bound_object_class_name(*object, context, values).map(Some)
+                    }
+                    None => Ok(None),
+                };
             }
             match bound_this {
                 Some(object) => eval_closure_bound_object_class_name(*object, context, values)

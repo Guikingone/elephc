@@ -47,6 +47,9 @@ pub(super) fn lower_list_unpack(ctx: &mut LoweringContext<'_, '_>, vars: &[Strin
         );
         ctx.store_local(var, item, item_type.clone(), Some(span));
     }
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
 }
 
 /// Emits the positional integer key used to read one list-unpack element.
@@ -139,4 +142,3 @@ pub(super) fn lower_static_var(ctx: &mut LoweringContext<'_, '_>, name: &str, in
         Some(span),
     );
 }
-

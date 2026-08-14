@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
-use crate::parser::ast::Expr;
+use crate::parser::ast::{CastType, Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{
     merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
@@ -34,21 +34,90 @@ pub(super) fn check_property_assign(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
+    let storage_ty = property_assignment_storage_type(value, &val_ty);
     if let PhpType::Object(class_name) = &obj_ty {
         check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
-        refine_object_property_type(checker, class_name, property, &val_ty);
+        refine_object_property_type(checker, class_name, property, &storage_ty);
     } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
         // A factory-style `Object|false` receiver still targets the one object
         // class when the runtime value is an object. Validate writes against that
         // class so readonly/visibility/type rules are not silently bypassed merely
         // because the success value has not yet been narrowed with instanceof.
         check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
-        refine_object_property_type(checker, &class_name, property, &val_ty);
+        refine_object_property_type(checker, &class_name, property, &storage_ty);
     }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
     Ok(())
+}
+
+/// Type-checks a declared-property reference bind and promotes both property slots to cells.
+pub(super) fn check_property_ref_assign(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &str,
+    source: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
+    let val_ty = checker.infer_type_with_assignment_effects(source, env)?;
+    let target_class = if let PhpType::Object(class_name) = &obj_ty {
+        check_object_property_write(checker, object, class_name, property, source, &val_ty, span)?;
+        refine_object_property_type(checker, class_name, property, &val_ty);
+        Some(class_name.clone())
+    } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
+        check_object_property_write(checker, object, &class_name, property, source, &val_ty, span)?;
+        refine_object_property_type(checker, &class_name, property, &val_ty);
+        Some(class_name)
+    } else {
+        None
+    };
+    if let Some(class_name) = target_class {
+        checker
+            .reference_property_promotions
+            .insert((class_name, property.to_string()));
+    }
+    let ExprKind::PropertyAccess {
+        object: source_object,
+        property: source_property,
+    } = &source.kind
+    else {
+        return Err(CompileError::new(
+            source.span,
+            "Property reference binding currently requires a declared-property source",
+        ));
+    };
+    let source_object_ty = checker.infer_type(source_object, env)?;
+    if let Some(class_name) = crate::types::checker::single_object_class_name(&source_object_ty) {
+        checker
+            .reference_property_promotions
+            .insert((class_name, source_property.clone()));
+    }
+    Ok(())
+}
+
+/// Returns the backend storage contract of a whole-value property assignment.
+///
+/// Gradual `array_merge` and `(array)` expressions can produce indexed or associative storage
+/// with heterogeneous values. Their EIR result is therefore `array<mixed>` even when closed-world
+/// inference can describe the current inputs more narrowly; an untyped property must follow the
+/// materialized representation so later loads and cleanup use the correct slot layout.
+fn property_assignment_storage_type(value: &Expr, inferred: &PhpType) -> PhpType {
+    let uses_gradual_array_storage = match &value.kind {
+        ExprKind::Cast {
+            target: CastType::Array,
+            ..
+        } => true,
+        ExprKind::FunctionCall { name, .. } => php_symbol_key(name.as_str()) == "array_merge",
+        _ => false,
+    };
+    if uses_gradual_array_storage {
+        PhpType::Array(Box::new(PhpType::Mixed))
+    } else {
+        inferred.clone()
+    }
 }
 
 /// Type-checks an array-push property operation (`$obj->prop[] = value`).
@@ -433,8 +502,60 @@ pub(super) fn refined_untyped_property_assignment_type(
                 return Some(val_ty.clone());
             }
             let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
-            (refined_ty != *current).then_some(refined_ty)
+            if refined_ty != *current {
+                return Some(refined_ty);
+            }
+            merge_untyped_property_array_storage(current, val_ty)
         }
+    }
+}
+
+/// Widens incompatible array shapes written to one untyped property without inventing a PHP type.
+///
+/// Untyped properties frequently start as a precise associative shape after keyed writes and are
+/// later replaced by a bare `array` parameter. A raw associative slot cannot safely receive an
+/// indexed pointer, so that cross-shape assignment becomes the runtime-dispatched `array<mixed>`
+/// representation. Two associative shapes keep hash storage and widen only their key/value facts.
+fn merge_untyped_property_array_storage(
+    current: &PhpType,
+    assigned: &PhpType,
+) -> Option<PhpType> {
+    match (current.codegen_repr(), assigned.codegen_repr()) {
+        (
+            PhpType::AssocArray {
+                key: current_key,
+                value: current_value,
+            },
+            PhpType::AssocArray {
+                key: assigned_key,
+                value: assigned_value,
+            },
+        ) => {
+            let key = if current_key.codegen_repr() == assigned_key.codegen_repr() {
+                current_key
+            } else {
+                Box::new(PhpType::Mixed)
+            };
+            let value = if current_value.codegen_repr() == assigned_value.codegen_repr() {
+                current_value
+            } else {
+                Box::new(PhpType::Mixed)
+            };
+            let merged = PhpType::AssocArray { key, value };
+            (merged != current.codegen_repr()).then_some(merged)
+        }
+        (PhpType::Array(current_element), PhpType::Array(assigned_element)) => {
+            if current_element.codegen_repr() == assigned_element.codegen_repr() {
+                None
+            } else {
+                Some(PhpType::Array(Box::new(PhpType::Mixed)))
+            }
+        }
+        (
+            PhpType::Array(_) | PhpType::AssocArray { .. },
+            PhpType::Array(_) | PhpType::AssocArray { .. },
+        ) => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        _ => None,
     }
 }
 
@@ -443,7 +564,7 @@ pub(super) fn refined_untyped_property_assignment_type(
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
 /// documentation for the nullable-union storage rules. Only updates when the refined
 /// type differs from the current type.
-fn refine_object_property_type(
+pub(super) fn refine_object_property_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
@@ -565,6 +686,10 @@ fn resolve_object_array_property(
 ///
 /// For typed arrays: validates the pushed value against the element type via `require_compatible_arg_type`.
 /// For untyped arrays: merges the pushed value's type into the element type via `merge_array_element_type`.
+/// For `AssocArray` properties: gradual-merges the appended integer key and value because a PHP
+/// `array` declaration does not constrain either dimension.
+/// For nullable/false array unions: accepts PHP's null/false auto-vivification and preserves the
+/// declared union storage shape.
 /// For untyped `Int` or `Void` base types: converts the property to `array<value_type>`.
 /// Returns an error for buffer types or non-array property types.
 fn updated_array_property_push_type(
@@ -602,6 +727,21 @@ fn updated_array_property_push_type(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         )),
+        PhpType::AssocArray { key, value } => {
+            let merged_value = checker
+                .merge_array_element_type(value, val_ty)
+                .unwrap_or(PhpType::Mixed);
+            let merged_key = checker
+                .merge_array_element_type(key, &PhpType::Int)
+                .unwrap_or(PhpType::Mixed);
+            Ok(PhpType::AssocArray {
+                key: Box::new(merged_key),
+                value: Box::new(merged_value),
+            })
+        }
+        PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
+            Ok(prop_ty.clone())
+        }
         other => Err(CompileError::new(
             span,
             &format!("Array push requires an array property, got {}", other),
@@ -617,6 +757,8 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
+/// - For `Mixed` and nullable/false array unions: preserves the boxed storage type while the
+///   runtime writer performs the mutation and PHP-compatible auto-vivification.
 fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -692,6 +834,10 @@ fn updated_array_property_assign_type(
                 value: Box::new(merged_value),
             })
         }
+        PhpType::Mixed => Ok(prop_ty.clone()),
+        PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
+            Ok(prop_ty.clone())
+        }
         other => Err(CompileError::new(
             span,
             &format!(
@@ -702,9 +848,59 @@ fn updated_array_property_assign_type(
     }
 }
 
-/// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
-fn is_php_array_key_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
+/// Returns true when `members` contains at least one array storage member and all remaining
+/// alternatives are PHP's null/false auto-vivification cases.
+pub(super) fn array_family_bool_void_union_accepts_write(members: &[PhpType]) -> bool {
+    let mut saw_array = false;
+    for member in members {
+        match member {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
+            PhpType::Bool | PhpType::False | PhpType::Void => {}
+            _ => return false,
+        }
+    }
+    saw_array
+}
+
+/// Returns true if `ty` can be coerced to a PHP array key for a write operation.
+pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Int
+        | PhpType::Str
+        | PhpType::Mixed
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Float
+        | PhpType::Void
+        | PhpType::Never => true,
+        PhpType::Union(members) => members.iter().all(is_php_array_key_type),
+        _ => false,
+    }
+}
+
+/// Returns whether every non-null member is an object implementing `ArrayAccess`.
+pub(super) fn type_satisfies_array_access(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class_name) => {
+            checker.object_type_implements_interface(class_name, "ArrayAccess")
+        }
+        PhpType::Union(members) => {
+            let mut saw_array_access = false;
+            for member in members {
+                match member {
+                    PhpType::Void | PhpType::Never => {}
+                    PhpType::Object(class_name)
+                        if checker.object_type_implements_interface(class_name, "ArrayAccess") =>
+                    {
+                        saw_array_access = true;
+                    }
+                    _ => return false,
+                }
+            }
+            saw_array_access
+        }
+        _ => false,
+    }
 }
 
 /// Computes the resulting `PhpType::AssocArray` type after writing to an array property with a
@@ -714,7 +910,7 @@ fn is_php_array_key_type(ty: &PhpType) -> bool {
 /// write operands). Otherwise merges the element type with the assigned value type via
 /// `merge_array_element_type`. If the property has a declared `Mixed` element type, returns
 /// a fully `Mixed` `AssocArray` to preserve type soundness.
-fn assoc_property_type_after_keyed_write(
+pub(super) fn assoc_property_type_after_keyed_write(
     checker: &Checker,
     elem_ty: &PhpType,
     property_has_declared_type: bool,
@@ -780,7 +976,10 @@ fn update_object_property_type(
 /// Currently returns true only when the property is declared as `array<PhpType::Mixed>` and the
 /// updated type is an `AssocArray` with `PhpType::Mixed` values. This guards against widening
 /// a typed array to an associative storage with a narrower element type.
-fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
+pub(super) fn declared_generic_array_can_use_assoc_storage(
+    current: &PhpType,
+    updated: &PhpType,
+) -> bool {
     matches!(
         (current, updated),
         (

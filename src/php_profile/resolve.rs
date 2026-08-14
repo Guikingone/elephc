@@ -8,22 +8,18 @@
 //!
 //! Key details:
 //!
-//! - ONLY EXACT PINS ARE READ. `composer.lock`'s `platform-overrides.php` and
-//!   `composer.json`'s `config.platform.php` exist precisely to say "resolve as if PHP were
-//!   exactly this", and `.php-version` is the phpenv/asdf convention for the same statement.
-//!   Each is an ANSWER, not a guess. A `require.php` CONSTRAINT (`"^8.2"`) is deliberately
-//!   NOT read here: it is a range, choosing a point in it is a judgement call, and Composer's
-//!   range syntax differs from Cargo's in ways that make the `semver` crate unusable
-//!   (Composer's `~8.2` is `>=8.2 <9.0`; Cargo's is `>=8.2 <8.3`), so it needs a parser of
-//!   its own before it can be honest.
+//! - EXACT PINS TAKE PRECEDENCE. Lock manifests, project manifests, and `.php-version` files
+//!   can each state the PHP profile exactly. A version CONSTRAINT (`"^8.2"`) is considered only
+//!   when it excludes the newest maintained profile, because choosing an arbitrary point inside
+//!   an otherwise compatible range would invent intent that the declaration does not express.
 //!
 //! - NOTHING IS REQUIRED. Every source is optional at every level, and a project with no
-//!   `composer.json` at all resolves to the default exactly as before. Compiling a lone
-//!   `.php` file must never need a manifest.
+//!   recognized manifest resolves to the default exactly as before. Compiling a lone `.php`
+//!   file must never need project metadata.
 //!
 //! - THE SEARCH IS AN UPWARD WALK from the entry file's directory, first hit wins, the way
-//!   Cargo and npm find their manifests. Within one directory the sources are tried in
-//!   confidence order, so a lockfile pin beats a manifest pin beats a toolchain file.
+//!   project-oriented tools find their metadata. Within one directory the sources are tried in
+//!   confidence order, so a lock pin beats a manifest pin beats a profile file.
 //!
 //! - A PIN OUTSIDE THE MAINTAINED RANGE IS CLAMPED, NOT IGNORED. A project pinning `8.1`
 //!   cannot be emulated, but it is still saying "old", so the oldest maintained profile is
@@ -63,7 +59,7 @@ enum Pin {
 ///
 /// Only the major and minor components are considered: a profile is a language profile, so
 /// `8.3.11` and `8.3` name the same one (see `PhpVersion::version_string` for the
-/// patch-is-zero rule). Composer also allows a trailing stability suffix, which is stripped.
+/// patch-is-zero rule). A trailing stability or build suffix is ignored.
 fn classify(raw: &str) -> Pin {
     let cleaned = raw.trim();
     let cleaned = cleaned.split(['-', '+']).next().unwrap_or(cleaned);
@@ -117,15 +113,14 @@ fn apply(raw: &str, source: &str, notes: &mut Vec<String>) -> Option<PhpVersion>
     }
 }
 
-/// What one read of a JSON manifest found.
+/// What one read of a JSON document found.
 ///
-/// The three cases are kept apart because they lead somewhere different: absent is the
-/// ordinary case and says nothing, parsed is queried, and unreadable earns the user a note —
-/// it is the one state where a pin they wrote was silently not honored.
+/// Absent and unreadable documents are distinct internally even though both are ignored during
+/// structural discovery; neither can safely be assumed to be intended project metadata.
 enum Manifest {
     /// The file does not exist, or could not be read.
     Absent,
-    /// The file exists but is not valid JSON.
+    /// The file exists but is not valid JSON and cannot be structurally identified.
     Unreadable,
     /// The parsed document.
     Parsed(serde_json::Value),
@@ -133,13 +128,11 @@ enum Manifest {
 
 /// Reads and parses a JSON manifest ONCE.
 ///
-/// A malformed manifest is a state rather than an error: elephc is not the arbiter of a
-/// project's Composer files, and a build must not fail over one.
+/// A malformed manifest is a state rather than an error: optional project metadata must not make
+/// an otherwise standalone source file fail to compile.
 ///
-/// The single read matters because `composer.json` is consulted up to three times per
-/// directory — `config.platform.php`, the parse check, then `require.php` — and a Composer
-/// project that pins nothing hits all three. Doing the I/O per QUESTION rather than per FILE
-/// put three reads and three parses on every compilation of an ordinary project.
+/// The single read matters because one manifest can provide both an exact platform declaration
+/// and a compatible-version constraint. Reading per query would duplicate I/O and parsing.
 fn read_manifest(path: &Path) -> Manifest {
     let Ok(text) = std::fs::read_to_string(path) else {
         return Manifest::Absent;
@@ -148,6 +141,28 @@ fn read_manifest(path: &Path) -> Manifest {
         Ok(document) => Manifest::Parsed(document),
         Err(_) => Manifest::Unreadable,
     }
+}
+
+/// Reads direct JSON documents in deterministic path order.
+fn read_json_manifests(dir: &Path) -> Vec<Manifest> {
+    let mut paths = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .iter()
+        .map(|path| read_manifest(path))
+        .collect()
 }
 
 impl Manifest {
@@ -166,21 +181,21 @@ impl Manifest {
 
 /// Looks for a declared profile in one directory, in confidence order.
 fn resolve_in(dir: &Path, notes: &mut Vec<String>) -> Option<(PhpVersion, Provenance)> {
-    let lock = read_manifest(&dir.join("composer.lock"));
-    if let Some(raw) = lock.string_at(&["platform-overrides", "php"]) {
-        if let Some(profile) = apply(raw, "composer.lock platform-overrides", notes) {
-            return Some((profile, Provenance::ComposerLock));
+    let manifests = read_json_manifests(dir);
+    for manifest in &manifests {
+        if let Some(raw) = manifest.string_at(&["platform-overrides", "php"]) {
+            if let Some(profile) = apply(raw, "lock manifest platform override", notes) {
+                return Some((profile, Provenance::LockManifest));
+            }
         }
     }
 
-    let manifest = read_manifest(&dir.join("composer.json"));
-    if let Some(raw) = manifest.string_at(&["config", "platform", "php"]) {
-        if let Some(profile) = apply(raw, "composer.json config.platform.php", notes) {
-            return Some((profile, Provenance::ComposerPlatform));
+    for manifest in &manifests {
+        if let Some(raw) = manifest.string_at(&["config", "platform", "php"]) {
+            if let Some(profile) = apply(raw, "project manifest platform declaration", notes) {
+                return Some((profile, Provenance::ProjectManifest));
+            }
         }
-    }
-    if matches!(manifest, Manifest::Unreadable) {
-        notes.push("composer.json could not be parsed; its platform pin was not read".to_string());
     }
 
     let toolchain = dir.join(".php-version");
@@ -200,11 +215,13 @@ fn resolve_in(dir: &Path, notes: &mut Vec<String>) -> Option<(PhpVersion, Proven
     // That restriction is what makes reading a range defensible at all. Picking a point
     // inside one is a judgement call, and this makes the call only in the case where every
     // reasonable reading agrees: the project has explicitly ruled newer PHP out.
-    if let Some(raw) = manifest.string_at(&["require", "php"]) {
-        let newest = PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1];
-        if let Some(admitted) = crate::php_profile::constraint::newest_admitted(raw) {
-            if admitted.version_id() < newest.version_id() {
-                return Some((admitted, Provenance::ComposerRequire));
+    for manifest in &manifests {
+        if let Some(raw) = manifest.string_at(&["require", "php"]) {
+            let newest = PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1];
+            if let Some(admitted) = crate::php_profile::constraint::newest_admitted(raw) {
+                if admitted.version_id() < newest.version_id() {
+                    return Some((admitted, Provenance::ProjectConstraint));
+                }
             }
         }
     }
@@ -290,16 +307,16 @@ mod tests {
 
     /// `config.platform.php` is honored, and the patch component is irrelevant.
     #[test]
-    fn composer_platform_pin_is_honored() {
+    fn project_manifest_platform_pin_is_honored() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"config":{"platform":{"php":"8.3.11"}}}"#,
         );
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerPlatform);
+        assert_eq!(resolved.provenance, Provenance::ProjectManifest);
         assert_eq!(resolved.profile, PhpVersion::Php83);
         assert!(resolved.notes.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
@@ -312,17 +329,17 @@ mod tests {
         write(&dir, "prog.php", "<?php echo 1;");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"config":{"platform":{"php":"8.3"}}}"#,
         );
-        write(&dir, "composer.lock", r#"{"platform-overrides":{"php":"8.4"}}"#);
+        write(&dir, "resolution.json", r#"{"platform-overrides":{"php":"8.4"}}"#);
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerLock);
+        assert_eq!(resolved.provenance, Provenance::LockManifest);
         assert_eq!(resolved.profile, PhpVersion::Php84);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `.php-version` is read when no Composer pin exists.
+    /// `.php-version` is read when no manifest pin exists.
     #[test]
     fn php_version_file_is_honored() {
         let dir = temp_dir();
@@ -334,19 +351,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A Composer pin beats `.php-version` in the same directory.
+    /// A project-manifest pin beats `.php-version` in the same directory.
     #[test]
-    fn composer_pin_beats_php_version_file() {
+    fn project_manifest_pin_beats_php_version_file() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
         write(&dir, ".php-version", "8.2");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"config":{"platform":{"php":"8.4"}}}"#,
         );
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerPlatform);
+        assert_eq!(resolved.provenance, Provenance::ProjectManifest);
         assert_eq!(resolved.profile, PhpVersion::Php84);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -360,11 +377,11 @@ mod tests {
         write(&nested, "prog.php", "<?php echo 1;");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"config":{"platform":{"php":"8.3"}}}"#,
         );
         let resolved = resolve(&nested.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerPlatform);
+        assert_eq!(resolved.provenance, Provenance::ProjectManifest);
         assert_eq!(resolved.profile, PhpVersion::Php83);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -376,7 +393,7 @@ mod tests {
     fn non_narrowing_constraint_leaves_the_default() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
-        write(&dir, "composer.json", r#"{"require":{"php":"^8.2"}}"#);
+        write(&dir, "project.json", r#"{"require":{"php":"^8.2"}}"#);
         let resolved = resolve(&dir.join("prog.php"));
         assert_eq!(resolved.provenance, Provenance::Default);
         assert_eq!(resolved.profile, PhpVersion::default());
@@ -389,9 +406,9 @@ mod tests {
     fn narrowing_constraint_is_honored() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
-        write(&dir, "composer.json", r#"{"require":{"php":"~8.3.0"}}"#);
+        write(&dir, "project.json", r#"{"require":{"php":"~8.3.0"}}"#);
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerRequire);
+        assert_eq!(resolved.provenance, Provenance::ProjectConstraint);
         assert_eq!(resolved.profile, PhpVersion::Php83);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -403,11 +420,11 @@ mod tests {
         write(&dir, "prog.php", "<?php echo 1;");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"require":{"php":"~8.3.0"},"config":{"platform":{"php":"8.2"}}}"#,
         );
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.provenance, Provenance::ComposerPlatform);
+        assert_eq!(resolved.provenance, Provenance::ProjectManifest);
         assert_eq!(resolved.profile, PhpVersion::Php82);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -418,7 +435,7 @@ mod tests {
     fn unsatisfiable_constraint_leaves_the_default() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
-        write(&dir, "composer.json", r#"{"require":{"php":"~7.4.0"}}"#);
+        write(&dir, "project.json", r#"{"require":{"php":"~7.4.0"}}"#);
         let resolved = resolve(&dir.join("prog.php"));
         assert_eq!(resolved.provenance, Provenance::Default);
         let _ = std::fs::remove_dir_all(&dir);
@@ -431,7 +448,7 @@ mod tests {
         write(&dir, "prog.php", "<?php echo 1;");
         write(
             &dir,
-            "composer.json",
+            "project.json",
             r#"{"config":{"platform":{"php":"8.1.0"}}}"#,
         );
         let resolved = resolve(&dir.join("prog.php"));
@@ -456,16 +473,15 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A malformed `composer.json` never fails the build, and says why the pin was skipped.
+    /// An arbitrary malformed JSON document never fails the build or claims to be project metadata.
     #[test]
-    fn malformed_manifest_is_reported_not_fatal() {
+    fn malformed_json_is_ignored_not_fatal() {
         let dir = temp_dir();
         write(&dir, "prog.php", "<?php echo 1;");
-        write(&dir, "composer.json", "{ this is not json");
+        write(&dir, "project.json", "{ this is not json");
         let resolved = resolve(&dir.join("prog.php"));
         assert_eq!(resolved.provenance, Provenance::Default);
-        assert_eq!(resolved.notes.len(), 1);
-        assert!(resolved.notes[0].contains("composer.json"));
+        assert!(resolved.notes.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

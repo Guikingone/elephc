@@ -21,9 +21,17 @@ pub(super) fn eval_reflection_class_new(
     let reflected_name = context
         .resolve_class_like_name(&class_name)
         .unwrap_or_else(|| class_name.trim_start_matches('\\').to_string());
-    eval_reflection_class_owner_object_result(
+    let result = eval_reflection_class_owner_object_result(
         EVAL_REFLECTION_OWNER_CLASS,
         &reflected_name,
+        context,
+        values,
+    )?;
+    if result.is_some() {
+        return Ok(result);
+    }
+    eval_throw_reflection_exception(
+        &format!("Class \"{}\" does not exist", reflected_name),
         context,
         values,
     )
@@ -84,23 +92,26 @@ pub(super) fn eval_reflection_class_owner_object_result(
         else {
             return Ok(None);
         };
+        let canonical_name = values
+            .reflection_canonical_class_name(reflected_name)?
+            .unwrap_or_else(|| reflected_name.trim_start_matches('\\').to_string());
         let method_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_METHOD,
-            reflected_name,
+            &canonical_name,
             values,
         )?;
         let property_names = eval_reflection_aot_member_names(
             EVAL_REFLECTION_OWNER_PROPERTY,
-            reflected_name,
+            &canonical_name,
             values,
         )?;
-        let interface_names = eval_reflection_aot_class_interface_names(reflected_name, values)?;
-        let trait_names = eval_reflection_aot_class_trait_names(reflected_name, values)?;
-        let parent_class_name = eval_reflection_aot_parent_class_name(reflected_name, values)?;
-        let attributes = context.native_class_attributes(reflected_name);
+        let interface_names = eval_reflection_aot_class_interface_names(&canonical_name, values)?;
+        let trait_names = eval_reflection_aot_class_trait_names(&canonical_name, values)?;
+        let parent_class_name = eval_reflection_aot_parent_class_name(&canonical_name, values)?;
+        let attributes = context.native_class_attributes(&canonical_name);
         return eval_reflection_owner_object(
             owner_kind,
-            reflected_name,
+            &canonical_name,
             &attributes,
             &interface_names,
             &trait_names,

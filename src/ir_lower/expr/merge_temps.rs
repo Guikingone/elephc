@@ -22,7 +22,7 @@ pub(super) fn store_expr_into_temp(
 }
 
 /// Stores an already lowered value into a hidden merge temporary.
-pub(super) fn store_value_into_temp(
+pub(in crate::ir_lower) fn store_value_into_temp(
     ctx: &mut LoweringContext<'_, '_>,
     temp_name: &str,
     temp_type: PhpType,
@@ -183,7 +183,7 @@ pub(super) fn coerce_value_for_temp(
         }
         PhpType::Float => coerce_to_float_at_span(ctx, value, Some(span)),
         PhpType::Str => coerce_to_string_at_span(ctx, value, Some(span)),
-        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, span),
+        _ => coerce_container_to_mixed_payload(ctx, value, &source_ty, &target_ty, Some(span)),
     }
 }
 
@@ -199,7 +199,7 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     value: LoweredValue,
     source_ty: &PhpType,
     target_ty: &PhpType,
-    span: crate::span::Span,
+    span: Option<crate::span::Span>,
 ) -> LoweredValue {
     let target_has_mixed_payload = match target_ty {
         PhpType::Array(elem) => elem.codegen_repr() == PhpType::Mixed,
@@ -209,16 +209,33 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     if !target_has_mixed_payload {
         return value;
     }
-    let op = match (source_ty, target_ty) {
+    let (op, result_ty) = match (source_ty, target_ty) {
         (PhpType::Array(source_elem), PhpType::Array(_))
             if source_elem.codegen_repr() != PhpType::Mixed =>
         {
-            Op::ArrayToMixed
+            (Op::ArrayToMixed, target_ty.clone())
         }
         (PhpType::AssocArray { value: source_value, .. }, PhpType::AssocArray { .. })
             if source_value.codegen_repr() != PhpType::Mixed =>
         {
-            Op::HashToMixed
+            (Op::HashToMixed, target_ty.clone())
+        }
+        (
+            PhpType::AssocArray {
+                key,
+                value: source_value,
+            },
+            PhpType::Array(target_element),
+        ) if source_value.codegen_repr() != PhpType::Mixed
+            && target_element.codegen_repr() == PhpType::Mixed =>
+        {
+            (
+                Op::HashToMixed,
+                PhpType::AssocArray {
+                    key: key.clone(),
+                    value: Box::new(PhpType::Mixed),
+                },
+            )
         }
         (PhpType::Mixed | PhpType::Union(_), _)
             if value.ir_type == IrType::Heap(IrHeapKind::Mixed) =>
@@ -247,7 +264,7 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                     None,
                     PhpType::Array(Box::new(PhpType::Never)),
                     effects_lookup::runtime_effects(),
-                    Some(span),
+                    span,
                 );
                 return ctx.emit_value(
                     Op::ArrayToMixed,
@@ -255,7 +272,7 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                     None,
                     target_ty.clone(),
                     Op::ArrayToMixed.default_effects(),
-                    Some(span),
+                    span,
                 );
             }
             let converted = ctx.emit_value(
@@ -264,10 +281,10 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
                 None,
                 target_ty.clone(),
                 effects_lookup::runtime_effects(),
-                Some(span),
+                span,
             );
             if cell_is_owning {
-                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                crate::ir_lower::ownership::release_if_owned(ctx, value, span);
             }
             return converted;
         }
@@ -283,15 +300,15 @@ pub(in crate::ir_lower) fn coerce_container_to_mixed_payload(
     let source = if source_is_consumable {
         value
     } else {
-        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, span)
     };
     ctx.emit_value(
         op,
         vec![source.value],
         None,
-        target_ty.clone(),
+        result_ty,
         op.default_effects(),
-        Some(span),
+        span,
     )
 }
 
