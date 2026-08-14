@@ -549,6 +549,18 @@ fn lower_array_slice_preserve_keys(
 /// before the call keeps the original iteration order, and the possibly relocated pointer
 /// is written back to the source local before the sorter runs. The helpers only rewrite
 /// the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
+///
+/// A local whose FRAME storage is boxed `Mixed` needs both halves of the ownership pairing that
+/// `lower_hash_set` already performs, and for the same reason: loading a concrete hash out of a
+/// Mixed slot unboxes it with an EXTRA owned reference, so the slot's box and the loaded value each
+/// hold one. Releasing the box first (`release_mutated_source_local_owner`) leaves the loaded value
+/// sole owner, which is also what stops `__rt_hash_ensure_unique` from splitting a table nothing
+/// else aliases; and the write-back must then re-box WITHOUT consuming that reference, because this
+/// builtin's EIR releases the receiver after the call. Measured with neither half,
+/// `function g(array $a) { $a["k"] = "img2"; natsort($a); return json_encode($a); }` printed the
+/// EMPTY string: the table was split, the clone was owned once by the fresh box, released twice,
+/// and `json_encode` then read freed storage. `ksort`, `krsort`, `asort` and `arsort` reach this
+/// same entry point on a hash and shared the defect.
 fn lower_hash_link_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -556,8 +568,11 @@ fn lower_hash_link_sort(
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
+    if let Some(slot) = receiver.slot() {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
     ensure_unique_hash_sort_source(ctx, array)?;
-    receiver.store_back_value(ctx, array)?;
+    receiver.store_back_borrowed_value(ctx, array)?;
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);

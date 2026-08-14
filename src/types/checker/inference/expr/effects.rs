@@ -322,6 +322,12 @@ impl Checker {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
                 }
+                promote_indexed_local_for_key_preserving_sort(
+                    builtin_name,
+                    &expanded_args,
+                    &self.active_ref_params,
+                    env,
+                );
                 if builtin_name.eq_ignore_ascii_case("eval") {
                     self.mark_eval_barrier(env);
                 }
@@ -604,6 +610,65 @@ fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
             args.get(5)
                 .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
         })
+}
+
+/// Promotes a packed indexed-array local to an int-keyed hash when a KEY-PRESERVING sort mutates
+/// it through its by-reference receiver.
+///
+/// php sorts with `zend_array_sort(Z_ARRVAL_P(array), <comparator>, renumber)`
+/// (ext/standard/array.c). `sort()` and `usort()` pass `renumber = 1`; `natsort()` and
+/// `natcasesort()` pass `0`, so only the iteration order moves and every key stays attached to its
+/// own value — measured, `php -n -r '$n=["img12","img2"]; natsort($n); echo json_encode($n);'`
+/// prints `{"1":"img2","0":"img12"}`. A packed array stores its keys implicitly as slot positions
+/// `0..n-1` and has nowhere to put that permutation, so the receiver's STORAGE has to become a
+/// hash; re-typing the local as `AssocArray<Int, T>` is what makes the lowering emit
+/// `Op::ArrayToHash` for it and what makes every later read of the local — `foreach`,
+/// `json_encode`, `$n[0]`, `count` — go through the hash view the runtime now holds. Which
+/// receivers move is `crate::types::key_preserving_sort_promotes`, the SAME predicate the lowering
+/// applies; splitting that decision in two is how a local ends up with the checker and the backend
+/// compiling its reads against different storage.
+///
+/// This is the ARGUMENT-DEPENDENT counterpart of `ParamSpec::writes`: the written type is not a
+/// fixed `TypeSpec` but a function of the argument's own type (the element type carries over), and
+/// the parameter is in-out rather than write-only. `promote_indexed_local_for_element_unset` is the
+/// same shape one construct over — `unset($a[$k])` also re-types a local from `Array(T)` to
+/// `AssocArray` because php's own semantics leave the array unable to stay packed — and this
+/// re-uses that shape rather than adding a second retyping mechanism to the registry.
+///
+/// A local that ALIASES someone else's storage — `$s = &$r`, a `&$a` parameter — is left alone.
+/// Converting one rewrites the storage the alias points at while every OTHER name for it stays
+/// compiled against the packed layout, which reads the hash header as elements: measured,
+/// `$r = ["img12","img2"]; $s = &$r; natsort($s); json_encode($r)` printed `[5,0]`. The lowering
+/// skips the same locals through `is_ref_bound_local`, so neither side promotes storage the other
+/// would not.
+fn promote_indexed_local_for_key_preserving_sort(
+    builtin_name: &str,
+    args: &[Expr],
+    ref_bound: &std::collections::HashSet<String>,
+    env: &mut TypeEnv,
+) {
+    let [arg] = args else {
+        return;
+    };
+    let Some(name) = output_variable(arg) else {
+        return;
+    };
+    if ref_bound.contains(name) {
+        return;
+    }
+    let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else {
+        return;
+    };
+    if !crate::types::key_preserving_sort_promotes(builtin_name, &elem_ty) {
+        return;
+    }
+    env.insert(
+        name.clone(),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem_ty,
+        },
+    );
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is

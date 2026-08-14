@@ -60,6 +60,78 @@ pub(super) fn lower_static_array_push(
     Some(lower_null(ctx, expr))
 }
 
+/// Converts a packed indexed receiver of a KEY-PRESERVING sort to int-keyed hash storage.
+///
+/// php sorts with `zend_array_sort(Z_ARRVAL_P(array), <comparator>, renumber)`
+/// (ext/standard/array.c). `sort()` passes `renumber = 1`; `natsort()` and `natcasesort()` pass
+/// `0`, so php moves only the iteration order and leaves every key on its own value:
+/// `natsort(["img12","img2"])` yields `{"1":"img2","0":"img12"}`, measured under `php -n` 8.5.6. A
+/// packed array stores its keys implicitly as slot positions `0..n-1`, which cannot express that
+/// permutation, so the receiver's STORAGE has to become a hash before the sort runs. Once it is
+/// one, the backend's existing `__rt_hash_natsort` / `__rt_hash_natcasesort` relinkers — which
+/// rewrite only the table's iteration chain — deliver php's answer with no new runtime code.
+///
+/// The conversion is the same `Op::ArrayToHash` pairing `lower_string_key_array_promotion` uses for
+/// `$a["k"] = …` on a packed local: release the boxed owner, convert, store the result back. It is
+/// emitted HERE, before the argument is lowered, so the by-reference receiver the call loads is
+/// already the hash; and because it goes through `set_local_type`, the statement-level
+/// representation fixed point sees the conversion and hoists it above any branch that hides it.
+/// `Op::ArrayToHash` is idempotent, so a hoisted copy plus this one stay correct.
+///
+/// Which receivers move is `crate::types::key_preserving_sort_promotes`, the SAME predicate the
+/// checker's `promote_indexed_local_for_key_preserving_sort` applies to the type environment: if
+/// the two disagreed, one side would compile the local's later reads against a layout the other
+/// never built.
+pub(super) fn promote_key_preserving_sort_receiver(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+) {
+    if args.len() != 1
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return;
+    }
+    let ExprKind::Variable(local) = &args[0].kind else {
+        return;
+    };
+    // A local that ALIASES other storage (`$s = &$r`, a `&$a` parameter) keeps the packed layout:
+    // converting it rewrites storage every other name for it is still compiled against, which then
+    // reads the hash header as elements — measured, `$r = ["img12","img2"]; $s = &$r; natsort($s);
+    // json_encode($r)` printed `[5,0]`. The checker skips the same locals through
+    // `active_ref_params`, so the two never disagree about what the receiver's storage is.
+    if ctx.is_ref_bound_local(local) {
+        return;
+    }
+    // Matched on the local's own recorded type, not on `codegen_repr()`, because the checker's
+    // half matches the environment entry the same way: a shape that only COLLAPSES to `Array` is
+    // promoted by neither, so the two can never end up compiling the local against different
+    // storage.
+    let PhpType::Array(elem_ty) = ctx.local_type(local) else {
+        return;
+    };
+    if !crate::types::key_preserving_sort_promotes(name, &elem_ty) {
+        return;
+    }
+    let span = args[0].span;
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: elem_ty,
+    };
+    let array_value = ctx.load_local(local, Some(span));
+    ctx.prepare_mutated_local_owner(local, array_value, assoc_ty.clone(), Some(span));
+    let hash = ctx.emit_value(
+        Op::ArrayToHash,
+        vec![array_value.value],
+        None,
+        assoc_ty.clone(),
+        Op::ArrayToHash.default_effects(),
+        Some(span),
+    );
+    ctx.store_prepared_mutated_local(local, hash, assoc_ty, Some(span));
+}
+
 /// Lowers `sort($local)` / `rsort($local)` on an `array|false`-union local as unbox-then-sort.
 ///
 /// `$d = scandir($dir); sort($d);` stores a BOXED value, and the by-reference receiver path

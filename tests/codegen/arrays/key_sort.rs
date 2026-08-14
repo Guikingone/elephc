@@ -525,6 +525,201 @@ fn the_runtime_defines_the_natural_hash_sorts_on_both_targets() {
     }
 }
 
+/// Issue repro: `natsort()` on an INDEXED receiver used to reindex it.
+///
+/// `php -n -r '$n=["img12","img2"]; natsort($n); echo json_encode($n);'` prints
+/// `{"1":"img2","0":"img12"}` — `renumber = 0` moves the iteration order and leaves every key
+/// on its own value, so a packed receiver whose keys ARE its slot positions cannot express the
+/// answer. The receiver is now promoted to int-keyed hash storage before the sort, which is why
+/// all five consumers below agree with php at once: the object-shaped `json_encode`, the permuted
+/// `foreach` keys, the `$n[0]` lookup that still finds the ORIGINAL first element, the count, and
+/// the iteration-ordered `implode`.
+#[test]
+fn test_natsort_on_an_indexed_receiver_preserves_its_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$n = ["img12", "img10", "img2", "img1"];
+natsort($n);
+echo json_encode($n), "|";
+foreach ($n as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|", $n[0], "|", count($n), "|", implode(",", $n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"3\":\"img1\",\"2\":\"img2\",\"1\":\"img10\",\"0\":\"img12\"}\
+         |3=img1;2=img2;1=img10;0=img12;|img12|4|img1,img2,img10,img12"
+    );
+}
+
+/// `natcasesort()` promotes the same way, and the promoted receiver stays an ordinary hash
+/// afterwards: `ksort()` puts the keys back in `0,1` order (which php then prints as a JSON
+/// LIST, not an object), a bare append picks the next free integer key, and `unset()` removes
+/// one without renumbering the rest.
+#[test]
+fn test_natcasesort_promotes_and_the_receiver_stays_a_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$c = ["IMG12", "img10", "Img2"];
+natcasesort($c);
+echo json_encode($c), "|";
+foreach ($c as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$d = ["img12", "img2"];
+natsort($d);
+ksort($d);
+echo json_encode($d), "|";
+$e = ["img12", "img2"];
+natsort($e);
+$e[] = "img3";
+unset($e[0]);
+echo json_encode($e), "|", json_encode(array_keys($e)), "|", json_encode(array_values($e));
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"2\":\"Img2\",\"1\":\"img10\",\"0\":\"IMG12\"}|2=Img2;1=img10;0=IMG12;\
+         |[\"img12\",\"img2\"]|{\"1\":\"img2\",\"2\":\"img3\"}|[1,2]|[\"img2\",\"img3\"]"
+    );
+}
+
+/// The promotion also has to work where the checker's environment does NOT reach the lowering.
+///
+/// A function body is lowered against its SIGNATURE's parameter types, not against the checker's
+/// final environment, so `$a` is still packed there and the lowering performs the conversion
+/// itself. That leaves the frame slot boxed `Mixed` (a slot cannot be both packed and hashed),
+/// which is the shape that exposed the hash sorters' ownership pairing: the receiver is unboxed
+/// with an extra owned reference, and without releasing the slot's box first AND re-boxing
+/// without consuming that reference, the table was split, released twice, and read back freed —
+/// every one of these four calls printed the EMPTY string. The `$src` check pins that php's
+/// by-VALUE parameter is still a copy: the caller's array is untouched.
+#[test]
+fn test_natsort_promotes_a_by_value_parameter_and_keeps_the_table_alive() {
+    let out = compile_and_run(
+        r#"<?php
+function nat(array $a): string {
+    natsort($a);
+    return json_encode($a);
+}
+$src = ["img12", "img2"];
+echo nat($src), "|", json_encode($src), "|";
+
+function boxed(array $a): string {
+    $a["k"] = "img2";
+    natsort($a);
+    return json_encode($a);
+}
+echo boxed(["img12", "img10"]), "|";
+
+function boxedasort(array $a): string {
+    $a["k"] = "img2";
+    asort($a);
+    return json_encode($a);
+}
+echo boxedasort(["img12", "img10"]), "|";
+
+function boxedksort(array $a): string {
+    $a["k"] = "img2";
+    ksort($a);
+    return json_encode($a);
+}
+echo boxedksort(["img12", "img10"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"1\":\"img2\",\"0\":\"img12\"}|[\"img12\",\"img2\"]\
+         |{\"k\":\"img2\",\"1\":\"img10\",\"0\":\"img12\"}\
+         |{\"1\":\"img10\",\"0\":\"img12\",\"k\":\"img2\"}\
+         |{\"0\":\"img12\",\"1\":\"img10\",\"k\":\"img2\"}"
+    );
+}
+
+/// A receiver that ALIASES other storage is deliberately left packed.
+///
+/// Converting `$s` would rewrite the storage `$r` also names while `$r` stays compiled against
+/// the packed layout, which then reads the hash header as elements — measured, an unguarded
+/// promotion printed `[5,0]` for `json_encode($r)`. Both the checker and the lowering skip
+/// reference aliases, so the ORDER php produces still holds through every name for the array
+/// (asserted here, and the assertion a corrupted receiver breaks); only the permuted KEYS are
+/// missing, which is this receiver shape's tracked divergence.
+#[test]
+fn test_natsort_on_a_reference_alias_keeps_packed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ["img12", "img10", "img2"];
+$s = &$r;
+natsort($s);
+echo implode(",", $r), "|", implode(",", $s), "|", count($r);
+"#,
+    );
+    assert_eq!(out, "img2,img10,img12|img2,img10,img12|3");
+}
+
+/// The comparator's own edge cases, asserted through the KEYS this time.
+///
+/// `tests/codegen/io/filesystem.rs` pins the same four fixtures through `implode()`, which reads
+/// only the iteration order. These are the permutations php leaves behind for each — whitespace
+/// skipped before a field, digit runs compared as integers, a leading zero turning the field
+/// fractional, case folded UP, and PHP 8's stable order for the three equal `img2` values, which
+/// keeps keys `0`, `2`, `3` in that relative order.
+#[test]
+fn test_promoted_natural_sorts_permute_keys_on_the_comparator_edge_cases() {
+    let out = compile_and_run(
+        r#"<?php
+$n = ["img2", "img1", "img2", "img2"];
+natsort($n);
+echo json_encode($n), "|";
+$m = ["a 3", "a002", "a01", "a1", "a2", "a10"];
+natsort($m);
+echo json_encode($m), "|";
+$c = ["B", "a", "C", "b", "A_x", "Ax"];
+natcasesort($c);
+echo json_encode($c), "|";
+$d = ["x", "", " ", "x1y10", "x1y9", "x01y2"];
+natsort($d);
+echo json_encode($d);
+"#,
+    );
+    assert_eq!(
+        out,
+        "{\"1\":\"img1\",\"0\":\"img2\",\"2\":\"img2\",\"3\":\"img2\"}\
+         |{\"1\":\"a002\",\"2\":\"a01\",\"3\":\"a1\",\"4\":\"a2\",\"0\":\"a 3\",\"5\":\"a10\"}\
+         |{\"1\":\"a\",\"5\":\"Ax\",\"4\":\"A_x\",\"0\":\"B\",\"3\":\"b\",\"2\":\"C\"}\
+         |{\"1\":\"\",\"2\":\" \",\"0\":\"x\",\"5\":\"x01y2\",\"4\":\"x1y9\",\"3\":\"x1y10\"}"
+    );
+}
+
+/// The promotion allocates one hash for the receiver and nothing else: `Op::ArrayToHash` consumes
+/// the packed array it converts, and the relinking sorter only rewrites the iteration chain. A
+/// loop is what makes a per-iteration leak visible at all — one leaked table is a rounding error,
+/// twenty is not.
+#[test]
+fn test_promoted_natural_sorts_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $n = ["img12", "img10", "img2"];
+    natsort($n);
+    $m = ["IMG12", "img10", "Img2"];
+    natcasesort($m);
+    echo implode(",", $n), implode(",", $m);
+}
+"#,
+    );
+    assert!(
+        out.stdout.ends_with("img2,img10,img12Img2,img10,IMG12"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
 /// The natural-order sorters reuse the same relinking engine, so they must be just as
 /// heap-neutral as `ksort`/`asort`: no key or value changes ownership, and the copy-on-write
 /// split the receiver asks for is the only allocation involved.

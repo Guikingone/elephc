@@ -86,6 +86,7 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     let operands = if is_extern || is_user_function {
         lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
+        promote_key_preserving_sort_receiver(ctx, canonical, args);
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
     let php_type = if is_extern || is_user_function {

@@ -509,10 +509,13 @@ unlink("fld/f.txt"); rmdir("fld");
 /// "img10"), a leading zero turning the field fractional ("a002" before "a01" before "a1",
 /// "1.002" < "1.010" < "1.02"), and case folded UP for the case-insensitive spelling —
 /// `strnatcasecmp("_", "x")` is +1 in php, which only toupper reproduces. Every line is
-/// php's measured output. Values only, and deliberately so: these receivers are INDEXED
-/// arrays, whose keys are slot positions `0..n-1` with no room for the permuted keys php
-/// leaves behind, so this form stays reindexed. The key-preserving hash form is pinned by
-/// `tests/codegen/arrays/key_sort.rs`.
+/// php's measured output.
+///
+/// Values only, through `implode()`, which reads php's ITERATION order — the half of the
+/// answer the comparator decides. These receivers start as indexed arrays and are now
+/// promoted to int-keyed hashes so the permuted KEYS survive too; that half is pinned by
+/// `tests/codegen/arrays/key_sort.rs`, which is also why these expectations did not move
+/// when the promotion landed.
 #[test]
 fn test_natsort_on_string_arrays_matches_php() {
     let out = compile_and_run_capture(
