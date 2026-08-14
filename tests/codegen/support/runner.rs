@@ -83,6 +83,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         package: "elephc-crypto",
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_bcmath",
+        package: "elephc-bcmath",
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_phar",
         package: "elephc-phar",
     },

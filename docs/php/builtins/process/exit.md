@@ -2,7 +2,7 @@
 title: "exit()"
 description: "Terminates execution with an optional status."
 sidebar:
-  order: 342
+  order: 356
 ---
 
 ## exit()
