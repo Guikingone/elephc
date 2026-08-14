@@ -42,6 +42,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the PHP BCMath procedural surface.
+    Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -337,6 +339,7 @@ impl EvalDirectHook {
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
             Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
+            Self::Bcmath => eval_builtin_bcmath_call(name, args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),

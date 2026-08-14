@@ -222,7 +222,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable an optional bridge (pdo, tls, crypto, phar, tz, image, eval, web)
+# Force-enable an optional bridge (pdo, tls, crypto, bcmath, phar, tz, image, eval, web)
 elephc app.php --with-pdo --with-crypto
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
@@ -411,7 +411,7 @@ Over 450 PHP built-ins are implemented natively, grouped here by category — st
 
 **Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `array_walk_recursive`, `array_is_list`, `array_key_first`, `array_key_last`, `array_replace`, `array_replace_recursive`, `array_merge_recursive`, `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect`, `array_find`, `array_any`, `array_all`, `array_multisort`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
 
-**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `clamp`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
+**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `clamp`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`, `bcadd`, `bcsub`, `bcmul`, `bcdiv`, `bcmod`, `bcdivmod`, `bcpow`, `bcpowmod`, `bcsqrt`, `bccomp`, `bcscale`, `bcceil`, `bcfloor`, `bcround`
 
 **Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_integer`, `is_long`, `is_float`, `is_double`, `is_real`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `is_array`, `is_object`, `is_scalar`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`, `method_exists`, `property_exists`, `strval`
 

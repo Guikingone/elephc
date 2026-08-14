@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of math builtins, including floor wrong args, ceil wrong args, and round wrong args.
+//! Integration or regression tests for diagnostic coverage of math builtins, including BCMath,
+//! floor, ceil, and round argument-count failures.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -8,6 +9,27 @@
 //! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
 
 use super::*;
+
+/// Verifies `bcadd()` rejects a call missing its second required operand.
+#[test]
+fn test_error_bcadd_too_few_args() {
+    expect_error("<?php bcadd('1');", "bcadd() takes 2 or 3 arguments");
+}
+
+/// Verifies `bcpowmod()` rejects a call missing its modulus operand.
+#[test]
+fn test_error_bcpowmod_too_few_args() {
+    expect_error(
+        "<?php bcpowmod('2', '3');",
+        "bcpowmod() takes 3 or 4 arguments",
+    );
+}
+
+/// Verifies `bcscale()` rejects more than its single optional scale argument.
+#[test]
+fn test_error_bcscale_too_many_args() {
+    expect_error("<?php bcscale(1, 2);", "bcscale() takes at most 1 argument");
+}
 
 /// Verifies floor() rejects excess positional arguments. Input: `floor(1, 2)`.
 #[test]

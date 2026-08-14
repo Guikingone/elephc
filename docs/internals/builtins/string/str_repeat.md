@@ -2,7 +2,7 @@
 title: "str_repeat() — internals"
 description: "Compiler internals for str_repeat(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 433
+  order: 447
 ---
 
 ## `str_repeat()` — internals

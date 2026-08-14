@@ -33,6 +33,7 @@ use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
 pub(crate) mod arrays;
+pub(crate) mod bcmath;
 pub(crate) mod buffers;
 pub(crate) mod class_relations;
 pub(crate) mod ctype;

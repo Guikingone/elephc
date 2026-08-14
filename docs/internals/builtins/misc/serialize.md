@@ -2,7 +2,7 @@
 title: "serialize() — internals"
 description: "Compiler internals for serialize(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 330
 ---
 
 ## `serialize()` — internals

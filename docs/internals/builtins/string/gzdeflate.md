@@ -2,7 +2,7 @@
 title: "gzdeflate() — internals"
 description: "Compiler internals for gzdeflate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 387
+  order: 401
 ---
 
 ## `gzdeflate()` — internals

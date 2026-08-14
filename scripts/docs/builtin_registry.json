@@ -12710,6 +12710,2260 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcadd",
+    "description": "Adds two arbitrary-precision decimal numbers.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcadd.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcadd` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcadd.rs",
+      "sig_line": null
+    },
+    "name": "bcadd",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcadd"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcadd"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcadd",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcceil",
+    "description": "Rounds an arbitrary-precision decimal number up to an integer.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcceil.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcceil` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcceil.rs",
+      "sig_line": null
+    },
+    "name": "bcceil",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcceil"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcceil"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcceil",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bccomp",
+    "description": "Compares two arbitrary-precision decimal numbers.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bccomp.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bccomp` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bccomp.rs",
+      "sig_line": null
+    },
+    "name": "bccomp",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bccomp"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bccomp"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "bccomp",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcdiv",
+    "description": "Divides two arbitrary-precision decimal numbers.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcdiv.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcdiv` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcdiv.rs",
+      "sig_line": null
+    },
+    "name": "bcdiv",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcdiv"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcdiv"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcdiv",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcdivmod",
+    "description": "Returns the quotient and remainder of arbitrary-precision division.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcdivmod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcdivmod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcdivmod.rs",
+      "sig_line": null
+    },
+    "name": "bcdivmod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcdivmod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "bcdivmod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array",
+      "variadic": null
+    },
+    "slug": "bcdivmod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcfloor",
+    "description": "Rounds an arbitrary-precision decimal number down to an integer.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcfloor.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcfloor` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcfloor.rs",
+      "sig_line": null
+    },
+    "name": "bcfloor",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcfloor"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcfloor"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcfloor",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcmod",
+    "description": "Returns the remainder of arbitrary-precision decimal division.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcmod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcmod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcmod.rs",
+      "sig_line": null
+    },
+    "name": "bcmod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcmod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcmod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcmod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcmul",
+    "description": "Multiplies two arbitrary-precision decimal numbers.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcmul.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcmul` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcmul.rs",
+      "sig_line": null
+    },
+    "name": "bcmul",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcmul"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcmul"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcmul",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcpow",
+    "description": "Raises an arbitrary-precision decimal number to an integral power.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcpow.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcpow` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcpow.rs",
+      "sig_line": null
+    },
+    "name": "bcpow",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcpow"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcpow"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcpow",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "modulus",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcpowmod",
+    "description": "Returns an arbitrary-precision integral modular power.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcpowmod.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "modulus",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcpowmod` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcpowmod.rs",
+      "sig_line": null
+    },
+    "name": "bcpowmod",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcpowmod"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcpowmod"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "exponent",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "modulus",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcpowmod",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "precision",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 1,
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcround",
+    "description": "Rounds an arbitrary-precision decimal number.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcround.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "precision",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcround` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcround.rs",
+      "sig_line": null
+    },
+    "name": "bcround",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcround"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcround"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "precision",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcround",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcscale",
+    "description": "Gets or sets the process-wide default BCMath scale.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcscale.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcscale` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcscale.rs",
+      "sig_line": null
+    },
+    "name": "bcscale",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "writes_process",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcscale"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcscale"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "slug": "bcscale",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcsqrt",
+    "description": "Returns the square root of an arbitrary-precision decimal number.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcsqrt.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcsqrt` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcsqrt.rs",
+      "sig_line": null
+    },
+    "name": "bcsqrt",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcsqrt"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcsqrt"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcsqrt",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Math",
+    "canonical_name": "bcsub",
+    "description": "Subtracts two arbitrary-precision decimal numbers.",
+    "eval": {
+      "adapter_reason": "capability-dependent",
+      "area": "math",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/math/bcsub.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 544,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.bcsub` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/math/bcsub.rs",
+      "sig_line": null
+    },
+    "name": "bcsub",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_process",
+          "alloc_heap",
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "bcsub"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": [
+          {
+            "kind": "bridge",
+            "name": "elephc_bcmath"
+          }
+        ]
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "bcsub"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num1",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "num2",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "scale",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "bcsub",
+    "sub_area": "Math"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "string",
           "optional": false,
           "type": "string"

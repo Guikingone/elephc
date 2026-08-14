@@ -2,7 +2,7 @@
 title: "hex2bin() — internals"
 description: "Compiler internals for hex2bin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 398
+  order: 412
 ---
 
 ## `hex2bin()` — internals

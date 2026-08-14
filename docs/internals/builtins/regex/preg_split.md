@@ -2,7 +2,7 @@
 title: "preg_split() — internals"
 description: "Compiler internals for preg_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 356
+  order: 370
 ---
 
 ## `preg_split()` — internals

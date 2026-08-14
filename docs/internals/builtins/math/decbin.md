@@ -2,7 +2,7 @@
 title: "decbin() — internals"
 description: "Compiler internals for decbin(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 272
+  order: 286
 ---
 
 ## `decbin()` — internals

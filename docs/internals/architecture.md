@@ -378,6 +378,7 @@ src/
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
 │       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
 │       ├── buffers/           handle resolution, allocation/free, length, bounds/size/use-after-free diagnostics (8 files incl. mod.rs)
+│       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, unserialize, preg_*, ... (44 top-level files + 6 subdirectories; 82 files recursively)
@@ -394,6 +395,7 @@ src/
     └── report.rs              Error formatting
 
 crates/
+├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
