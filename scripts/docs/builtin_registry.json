@@ -44846,6 +44846,27 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 511,
+          "name": "permissions",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "recursive",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -44873,6 +44894,27 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "511",
+          "name": "permissions",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "recursive",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -44963,6 +45005,27 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "511",
+          "name": "permissions",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "recursive",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -56531,6 +56594,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -56558,6 +56628,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -56648,6 +56725,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -74991,6 +75075,13 @@
           "name": "filename",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -75018,6 +75109,13 @@
           "name": "filename",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -75108,6 +75206,13 @@
           "name": "filename",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",

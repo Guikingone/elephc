@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function mkdir(string $directory): bool
+function mkdir(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–4 arguments (3 optional).
 
 ## Eval interpreter (magician)
 

@@ -45,7 +45,7 @@ sidebar:
 | [`link()`](./filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`mkdir()`](./filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`mkdir()`](./filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
 | [`readfile()`](./filesystem/readfile.md) | `(string $filename, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
@@ -54,7 +54,7 @@ sidebar:
 | [`realpath_cache_get()`](./filesystem/realpath_cache_get.md) | `(): array` | `array` | ✓ | ✓ |
 | [`realpath_cache_size()`](./filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
-| [`rmdir()`](./filesystem/rmdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`rmdir()`](./filesystem/rmdir.md) | `(string $directory, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`scandir()`](./filesystem/scandir.md) | `(string $directory, int $sorting_order = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stat()`](./filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
@@ -63,4 +63,4 @@ sidebar:
 | [`tmpfile()`](./filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`touch()`](./filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
-| [`unlink()`](./filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
+| [`unlink()`](./filesystem/unlink.md) | `(string $filename, mixed $context = null): bool` | `bool` | ✓ | ✓ |

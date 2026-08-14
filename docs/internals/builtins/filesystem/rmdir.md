@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function rmdir(string $directory): bool
+function rmdir(string $directory, mixed $context = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

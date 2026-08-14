@@ -308,26 +308,138 @@ pub(super) fn emit_is_file_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Lowers a single-path wrapper-aware filesystem mutation.
-pub(super) fn lower_single_path_wrapper_op(
+/// Emits `mkdir()`'s wrapper-vs-filesystem dispatch, threading `$permissions` and `$recursive`.
+///
+/// Both are RUNTIME values, so unlike [`emit_single_path_wrapper_dispatch_with_options`] they are
+/// staged in the frame rather than materialized as constants. The path arrives in the string pair
+/// (`x1`/`x2`, or `rax`/`rdx`), and both routes read the same slots afterwards:
+///
+/// - the POSIX route gets the mode and the recursive flag, so `__rt_mkdir` can create parents;
+/// - the wrapper route gets `$mode` and an `$options` of
+///   `STREAM_REPORT_ERRORS | STREAM_MKDIR_RECURSIVE`, the value measured out of php 8.5.6.
+///
+/// Absent arguments use php's own defaults: `0777` and `false`.
+pub(super) fn emit_mkdir_wrapper_dispatch(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-    vtable_slot: usize,
+    permissions: Option<ValueId>,
+    recursive: Option<ValueId>,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, name, 1)?;
-    let path = expect_operand(inst, 0)?;
-    load_string_to_result(ctx, path, name)?;
-    emit_single_path_wrapper_dispatch(ctx, runtime_label, vtable_slot);
-    store_if_result(ctx, inst)
+    let wrapper = ctx.next_label("mkdir_wrapper");
+    let after = ctx.next_label("mkdir_after");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");                         // reserve path, mode and recursive scratch storage
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // preserve the directory path pointer
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // preserve the directory path length
+            match permissions {
+                Some(mode) => {
+                    require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "mkdir permissions")?;
+                }
+                None => ctx.emitter.instruction(&format!("mov x0, #{}", MKDIR_DEFAULT_MODE)),
+            }
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the requested permissions
+            match recursive {
+                Some(flag) => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                None => ctx.emitter.instruction("mov x0, #0"),
+            }
+            ctx.emitter.instruction("str x0, [sp, #24]");                       // preserve the recursive flag
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes dispatch to the wrapper's mkdir()
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // pass path pointer to the POSIX mkdir
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // pass path length to the POSIX mkdir
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // pass the requested mode to the POSIX mkdir
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // pass the recursive flag to the POSIX mkdir
+            ctx.emitter.instruction("add sp, sp, #32");                         // release scratch before the POSIX mkdir
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
+            ctx.emitter.instruction(&format!("b {}", after));                   // skip the wrapper route after the POSIX mkdir
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // pass the wrapper path pointer
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // pass the wrapper path length
+            ctx.emitter.instruction(&format!("mov x2, #{}", STREAM_WRAPPER_MKDIR_SLOT)); // select the mkdir vtable slot
+            ctx.emitter.instruction("ldr x3, [sp, #16]");                       // pass $mode through unchanged
+            ctx.emitter.instruction("ldr x4, [sp, #24]");                       // reload the recursive flag to fold into $options
+            ctx.emitter.instruction("cmp x4, #0");                              // normalize any truthy flag to exactly one bit
+            ctx.emitter.instruction("cset x4, ne");
+            ctx.emitter.instruction(&format!("orr x4, x4, #{}", STREAM_REPORT_ERRORS)); // php always reports errors on this route
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.instruction("add sp, sp, #32");                         // release scratch after the wrapper mkdir
+            ctx.emitter.label(&after);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");                             // reserve path, mode and recursive scratch storage
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the directory path pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // preserve the directory path length
+            match permissions {
+                Some(mode) => {
+                    require_int(ctx.load_value_to_result(mode)?.codegen_repr(), "mkdir permissions")?;
+                }
+                None => ctx.emitter.instruction(&format!("mov rax, {}", MKDIR_DEFAULT_MODE)),
+            }
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the requested permissions
+            match recursive {
+                Some(flag) => {
+                    ctx.load_value_to_result(flag)?;
+                }
+                None => ctx.emitter.instruction("xor eax, eax"),
+            }
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");           // preserve the recursive flag
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass path pointer to the wrapper-scheme probe
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass path length to the wrapper-scheme probe
+            abi::emit_call_label(ctx.emitter, "__rt_path_is_wrapper");
+            ctx.emitter.instruction("test rax, rax");                           // test whether the path scheme matched a registered wrapper
+            ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes dispatch to the wrapper's mkdir()
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // pass path pointer to the POSIX mkdir
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // pass path length to the POSIX mkdir
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // pass the requested mode to the POSIX mkdir
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // pass the recursive flag to the POSIX mkdir
+            ctx.emitter.instruction("add rsp, 32");                             // release scratch before the POSIX mkdir
+            abi::emit_call_label(ctx.emitter, "__rt_mkdir");
+            ctx.emitter.instruction(&format!("jmp {}", after));                 // skip the wrapper route after the POSIX mkdir
+            ctx.emitter.label(&wrapper);
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // pass the wrapper path pointer
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // pass the wrapper path length
+            ctx.emitter.instruction(&format!("mov rdx, {}", STREAM_WRAPPER_MKDIR_SLOT)); // select the mkdir vtable slot
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");           // pass $mode through unchanged
+            ctx.emitter.instruction("mov r8, QWORD PTR [rsp + 24]");            // reload the recursive flag to fold into $options
+            ctx.emitter.instruction("test r8, r8");                             // normalize any truthy flag to exactly one bit
+            ctx.emitter.instruction("setne r8b");
+            ctx.emitter.instruction("movzx r8, r8b");
+            ctx.emitter.instruction(&format!("or r8, {}", STREAM_REPORT_ERRORS)); // php always reports errors on this route
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
+            ctx.emitter.instruction("add rsp, 32");                             // release scratch after the wrapper mkdir
+            ctx.emitter.label(&after);
+        }
+    }
+    Ok(())
 }
 
 /// Emits wrapper dispatch for a single-path mutation with native fallback.
+///
+/// The wrapper method receives no extra arguments; use
+/// [`emit_single_path_wrapper_dispatch_with_options`] when php documents one.
 pub(super) fn emit_single_path_wrapper_dispatch(
     ctx: &mut FunctionContext<'_>,
     libc_helper: &str,
     vtable_slot: usize,
+) {
+    emit_single_path_wrapper_dispatch_with_options(ctx, libc_helper, vtable_slot, 0, 0);
+}
+
+/// Emits wrapper dispatch for a single-path mutation, passing two CONSTANT extra arguments.
+///
+/// `arg3`/`arg4` land after the path's (ptr,len) pair, so they are the wrapper method's second and
+/// third parameters — `rmdir($path, $options)` reads `arg3`. Hard-coding zero here was a measured
+/// divergence: php passes `STREAM_REPORT_ERRORS` to `rmdir()`, not 0.
+pub(super) fn emit_single_path_wrapper_dispatch_with_options(
+    ctx: &mut FunctionContext<'_>,
+    libc_helper: &str,
+    vtable_slot: usize,
+    arg3: usize,
+    arg4: usize,
 ) {
     let wrapper = ctx.next_label("path_op_wrapper");
     let after = ctx.next_label("path_op_after");
@@ -348,8 +460,8 @@ pub(super) fn emit_single_path_wrapper_dispatch(
             ctx.emitter.instruction("mov x0, x1");                              // pass the wrapper path pointer
             ctx.emitter.instruction("mov x1, x2");                              // pass the wrapper path length
             ctx.emitter.instruction(&format!("mov x2, #{}", vtable_slot));      // pass the wrapper vtable slot
-            ctx.emitter.instruction("mov x3, #0");                              // pass default mode/options argument
-            ctx.emitter.instruction("mov x4, #0");                              // pass default value/options argument
+            ctx.emitter.instruction(&format!("mov x3, #{}", arg3));             // pass the wrapper method's mode/options argument
+            ctx.emitter.instruction(&format!("mov x4, #{}", arg4));             // pass the wrapper method's value/options argument
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add sp, sp, #16");                         // release path scratch storage
@@ -371,8 +483,8 @@ pub(super) fn emit_single_path_wrapper_dispatch(
             ctx.emitter.instruction("mov rdi, rax");                            // pass the wrapper path pointer
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the wrapper path length
             ctx.emitter.instruction(&format!("mov rdx, {}", vtable_slot));      // pass the wrapper vtable slot
-            ctx.emitter.instruction("xor ecx, ecx");                            // pass default mode/options argument
-            ctx.emitter.instruction("xor r8d, r8d");                            // pass default value/options argument
+            ctx.emitter.instruction(&format!("mov rcx, {}", arg3));             // pass the wrapper method's mode/options argument
+            ctx.emitter.instruction(&format!("mov r8, {}", arg4));              // pass the wrapper method's value/options argument
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_path_op");
             ctx.emitter.label(&after);
             ctx.emitter.instruction("add rsp, 16");                             // release path scratch storage

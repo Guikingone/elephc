@@ -37,6 +37,10 @@ const STREAM_META_GROUP: usize = 5;
 const STREAM_META_ACCESS: usize = 6;
 const STREAM_OPTION_BLOCKING: usize = 1;
 const STREAM_OPTION_READ_TIMEOUT: usize = 4;
+/// `STREAM_REPORT_ERRORS`, the `$options` bit php sets on every wrapper path operation.
+const STREAM_REPORT_ERRORS: usize = 8;
+/// `mkdir()`'s documented default permissions, `0777`.
+const MKDIR_DEFAULT_MODE: usize = 0o777;
 const TOUCH_ATIME_NOW: u8 = 1;
 const TOUCH_MTIME_NOW: u8 = 2;
 const TOUCH_BOTH_NOW: u8 = TOUCH_ATIME_NOW | TOUCH_MTIME_NOW;

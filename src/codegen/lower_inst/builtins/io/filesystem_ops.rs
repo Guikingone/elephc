@@ -17,9 +17,14 @@ pub(crate) fn lower_file_exists(
     lower_file_exists_with_wrapper(ctx, inst)
 }
 
-/// Lowers `unlink(path)` through the target-aware runtime helper.
+/// Lowers `unlink(path, context)` through the target-aware runtime helper.
+///
+/// `$context` is accepted and IGNORED: php threads a stream context into the wrapper's `unlink()`
+/// through `$this->context`, and elephc has no context plumbing on the path-op route yet. Refusing
+/// the argument outright was worse — it made `unlink($p, $ctx)` a compile error on a signature php
+/// documents.
 pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "unlink", 1)?;
+    ensure_arg_count_between(inst, "unlink", 1, 2)?;
     let path = expect_operand(inst, 0)?;
     let path_literal = optional_const_string_operand(ctx, path)?;
     let can_be_phar = path_literal
@@ -38,14 +43,39 @@ pub(crate) fn lower_unlink(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `mkdir(path)` through the target-aware runtime helper.
+/// Lowers `mkdir(path, permissions, recursive, context)` through the target-aware runtime helper.
+///
+/// `$permissions` and `$recursive` reach BOTH routes: the POSIX `mkdir` gets the mode and creates
+/// missing parents when asked, and a userspace wrapper's `mkdir()` receives what php passes it —
+/// measured on 8.5.6 as `($path, 511, 8)` by default, `($path, 493, 8)` for an explicit `0755`, and
+/// `($path, 448, 9)` for `0700` recursive, i.e. `STREAM_REPORT_ERRORS | STREAM_MKDIR_RECURSIVE`.
+/// `$context` is accepted and ignored (see [`lower_unlink`]).
 pub(crate) fn lower_mkdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "mkdir", "__rt_mkdir", STREAM_WRAPPER_MKDIR_SLOT)
+    ensure_arg_count_between(inst, "mkdir", 1, 4)?;
+    let path = expect_operand(inst, 0)?;
+    let permissions = inst.operands.get(1).copied();
+    let recursive = inst.operands.get(2).copied();
+    load_string_to_result(ctx, path, "mkdir")?;
+    emit_mkdir_wrapper_dispatch(ctx, permissions, recursive)?;
+    store_if_result(ctx, inst)
 }
 
-/// Lowers `rmdir(path)` through the target-aware runtime helper.
+/// Lowers `rmdir(path, context)` through the target-aware runtime helper.
+///
+/// php hands a wrapper's `rmdir()` an `$options` of `STREAM_REPORT_ERRORS` (8), measured on 8.5.6;
+/// `$context` is accepted and ignored (see [`lower_unlink`]).
 pub(crate) fn lower_rmdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_single_path_wrapper_op(ctx, inst, "rmdir", "__rt_rmdir", STREAM_WRAPPER_RMDIR_SLOT)
+    ensure_arg_count_between(inst, "rmdir", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    load_string_to_result(ctx, path, "rmdir")?;
+    emit_single_path_wrapper_dispatch_with_options(
+        ctx,
+        "__rt_rmdir",
+        STREAM_WRAPPER_RMDIR_SLOT,
+        STREAM_REPORT_ERRORS,
+        0,
+    );
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `chdir(path)` through the target-aware runtime helper.

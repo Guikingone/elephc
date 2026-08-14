@@ -83,9 +83,13 @@ fn test_error_file_exists_wrong_args() {
 }
 
 /// Verifies `mkdir()` rejects zero arguments with arity error.
+///
+/// php's signature is `mkdir($directory, $permissions = 0777, $recursive = false, $context = null)`,
+/// so the range is 1 to 4 — the contract used to stop at the directory, which made the ordinary
+/// `mkdir($p, 0755, true)` a compile error rather than a call.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    expect_error("<?php mkdir();", "mkdir() takes exactly 1 argument");
+    expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
@@ -228,13 +232,13 @@ fn test_error_extended_stat_builtins_wrong_args() {
 /// Verifies `unlink()` rejects zero arguments with arity error.
 #[test]
 fn test_error_unlink_wrong_args() {
-    expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
+    expect_error("<?php unlink();", "unlink() takes 1 or 2 arguments");
 }
 
 /// Verifies `rmdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_rmdir_wrong_args() {
-    expect_error("<?php rmdir();", "rmdir() takes exactly 1 argument");
+    expect_error("<?php rmdir();", "rmdir() takes 1 or 2 arguments");
 }
 
 /// Verifies `chdir()` rejects zero arguments with arity error.

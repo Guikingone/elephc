@@ -155,7 +155,7 @@ sidebar:
 | [`link()`](./builtins/filesystem/link.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`linkinfo()`](./builtins/filesystem/linkinfo.md) | `(string $path): int` | `int` | ✓ | ✓ |
 | [`lstat()`](./builtins/filesystem/lstat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`mkdir()`](./builtins/filesystem/mkdir.md) | `(string $directory, int $permissions = 511, bool $recursive = false, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`pathinfo()`](./builtins/filesystem/pathinfo.md) | `(string $path, int $flags = 15): array` | `array` | ✓ | ✓ |
 | [`putenv()`](./builtins/filesystem/putenv.md) | `(string $assignment): bool` | `bool` | ✓ | ✓ |
 | [`readfile()`](./builtins/filesystem/readfile.md) | `(string $filename, bool $use_include_path = false, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
@@ -164,7 +164,7 @@ sidebar:
 | [`realpath_cache_get()`](./builtins/filesystem/realpath_cache_get.md) | `(): array` | `array` | ✓ | ✓ |
 | [`realpath_cache_size()`](./builtins/filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./builtins/filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
-| [`rmdir()`](./builtins/filesystem/rmdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
+| [`rmdir()`](./builtins/filesystem/rmdir.md) | `(string $directory, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`scandir()`](./builtins/filesystem/scandir.md) | `(string $directory, int $sorting_order = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stat()`](./builtins/filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./builtins/filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
@@ -173,7 +173,7 @@ sidebar:
 | [`tmpfile()`](./builtins/filesystem/tmpfile.md) | `(): mixed` | `mixed` | ✓ | ✓ |
 | [`touch()`](./builtins/filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./builtins/filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
-| [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
+| [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`diskfreespace()`](./builtins/io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

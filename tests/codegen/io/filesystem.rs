@@ -52,6 +52,71 @@ if (!is_dir("testdir")) { echo "gone"; }
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `mkdir()` honours `$permissions` and `$recursive`, the parameters php documents.
+///
+/// The contract stopped at one parameter, so `mkdir($p, 0755, true)` — the call every
+/// "create this directory tree" snippet makes — was a COMPILE ERROR: "mkdir() takes exactly 1
+/// argument". The runtime helper matched, hard-coding mode 0755 and having nowhere to put a
+/// recursive flag. Measured against php 8.5.6, which prints exactly the output below, including
+/// `false` for a second create over an existing directory.
+#[test]
+fn test_mkdir_honours_permissions_and_recursive() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+var_dump(mkdir("tree/a/b", 0755, true));
+var_dump(is_dir("tree/a/b"));
+printf("%o\n", fileperms("tree/a/b") & 0777);
+var_dump(mkdir("plain", 0700));
+printf("%o\n", fileperms("plain") & 0777);
+var_dump(@mkdir("plain", 0700));
+var_dump(rmdir("plain"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\n755\nbool(true)\n700\nbool(false)\nbool(true)\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `mkdir()` without `$recursive` must NOT create missing parents.
+///
+/// The recursive walk only runs when asked; php returns false here because the parent is absent.
+#[test]
+fn test_mkdir_without_recursive_refuses_a_missing_parent() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+var_dump(@mkdir("absent/child", 0777));
+var_dump(is_dir("absent/child"));
+var_dump(is_dir("absent"));
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(false)\nbool(false)\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `rmdir()` and `unlink()` accept the trailing `$context` php documents.
+///
+/// Both contracts stopped at the path, so passing a context was a compile error. elephc has no
+/// context plumbing on the path-op route, so the argument is accepted and IGNORED — but accepted,
+/// because refusing a documented signature is the worse answer.
+#[test]
+fn test_rmdir_and_unlink_accept_a_context_argument() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$ctx = stream_context_create([]);
+mkdir("ctxdir");
+file_put_contents("ctxfile.txt", "x");
+var_dump(rmdir("ctxdir", $ctx));
+var_dump(unlink("ctxfile.txt", $ctx));
+var_dump(is_dir("ctxdir"));
+var_dump(file_exists("ctxfile.txt"));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\nbool(false)\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies copy, unlink, and file existence by creating a file, copying it,
 /// reading through the copy, deleting both files, and confirming removal.
 #[test]
