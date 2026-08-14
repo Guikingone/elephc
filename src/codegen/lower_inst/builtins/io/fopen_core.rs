@@ -188,6 +188,10 @@ fn emit_publish_php_filter_open_dirs(ctx: &mut FunctionContext<'_>, mode: Dynami
 /// every path-reader route need exactly the same three steps and the same `callee` in the two
 /// diagnostics php words with it.
 pub(super) fn emit_dynamic_php_filter_finish(ctx: &mut FunctionContext<'_>, callee: &str) {
+    // Before anything reads the hand-off: the open that just ran may have been a user wrapper
+    // whose `stream_open` opened a filter URL of its own, and that inner parse published over
+    // every slot this open's three steps are about to consume.
+    emit_dynamic_php_filter_restore(ctx);
     // First, because it ends the suppression the open ran under and a failed open must print
     // its line ALONE — it drops the skipped names the report below would otherwise warn for.
     emit_php_filter_callee_call(ctx, callee, "__rt_php_filter_open_failed");
@@ -228,6 +232,20 @@ fn emit_php_filter_callee_call(ctx: &mut FunctionContext<'_>, callee: &str, help
 /// A no-op when nothing is pending, which is every open that did not come from a filter URL.
 fn emit_dynamic_php_filter_attach(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+}
+
+/// Parks the parse's whole hand-off for the length of the open that is about to run.
+///
+/// Paired with [`emit_dynamic_php_filter_restore`] on every path that reaches an opener, because
+/// an opener can run PHP: a user wrapper's `stream_open` that `fopen()`s anything re-enters the
+/// parse, and the parse publishes into fixed globals.
+pub(super) fn emit_dynamic_php_filter_save(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_php_filter_pending_save");
+}
+
+/// Republishes the hand-off [`emit_dynamic_php_filter_save`] parked, before anything reads it.
+pub(super) fn emit_dynamic_php_filter_restore(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_php_filter_pending_restore");
 }
 
 /// Opens a runtime filename that carries the `data://` prefix, falling through when it does not.
@@ -338,6 +356,10 @@ fn emit_dynamic_fopen_result(
     let plain = ctx.next_label("fopen_dynamic_plain");
     let done = ctx.next_label("fopen_dynamic_done");
     emit_dynamic_php_filter_swap(ctx, DynamicFilterMode::Staged);
+    // Park the hand-off before any opener runs, and republish it at each of the four exits below.
+    // Unconditional, exactly like the suppression push: the swap runs for EVERY dynamic filename,
+    // and a push that only sometimes happens cannot be popped in one place.
+    emit_dynamic_php_filter_save(ctx);
     // php-src's `php_stream_url_wrap_php` returns NULL the moment the INNER resource fails to
     // open, BEFORE a single filter is created, and the generic caller composes one fixed line
     // naming the WHOLE URL with the wrapper's own reason. The swap has just replaced the

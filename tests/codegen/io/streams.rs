@@ -10741,6 +10741,188 @@ var_dump(fopen($b, "r"));
     );
 }
 
+/// Verifies a filtered open NESTED inside another open does not STEAL the outer chain.
+///
+/// The parse hands its results to the attach through fixed globals, and the open that sits
+/// between them can run PHP: a user wrapper's `stream_open` is a PHP method, and a method that
+/// `fopen()`s anything re-enters the parse, which publishes over every one of those globals. The
+/// outer open then attached whatever the INNER URL left behind — nothing, because the inner
+/// open's own attach had already consumed and cleared it — and the outer chain vanished.
+///
+/// Both chains below are real and DIFFERENT, so the answer names which one ran: `php -n` 8.5.6
+/// prints `string(3) "NOP"` — the wrapper serves `abc` uppercased by the chain its own
+/// `stream_open` opened, and the outer chain then rot13s `ABC`. This branch's parent answered
+/// `ABC`: the inner filter applied, the outer one silently did not.
+#[test]
+fn test_a_nested_open_does_not_steal_the_outer_filter_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W1 {
+    public $context;
+    public $fh;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=string.toupper/resource=data://text/plain,abc";
+        $this->fh = fopen($u, "r");
+        return true;
+    }
+    public function stream_read($n) { return fread($this->fh, $n); }
+    public function stream_eof() { return feof($this->fh); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w1", "W1");
+$u = "php://filter/read=string.rot13/resource=w1://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"NOP\"\n");
+    assert_eq!(out.stderr, "", "both chains resolve, so neither warns");
+}
+
+/// Verifies the names the OUTER URL could not resolve survive a nested open too.
+///
+/// The unresolved-name spans travel in the same hand-off as the filter ids, so the inner parse
+/// took those with it: the outer URL's typo went unreported, which is the silence the whole
+/// channel exists to end. The inner open is `@`-silenced deliberately — php reports the inner
+/// names in the inner open's own words, and elephc's filter suppression still swallows them,
+/// which is a separate defect this test must not pin either way.
+///
+/// `php -n` 8.5.6 on this script prints exactly the two lines below and `string(3) "abc"`: a
+/// chain whose every name is unknown attaches nothing and the open still succeeds.
+#[test]
+fn test_a_nested_open_does_not_steal_the_outer_unresolved_names() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W6 {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=inner.absent/resource=data://text/plain,zzz";
+        $inner = @fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("w6", "W6");
+$u = "php://filter/read=outer.absent/resource=w6://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"abc\"\n");
+    assert_eq!(
+        out.stderr,
+        "Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
+         Warning: fopen(): Unable to create filter (outer.absent)\n",
+        "the outer URL's own skipped name must survive the inner open's parse"
+    );
+}
+
+/// Verifies the PATH readers keep their filter chain across a nested open as well.
+///
+/// `file_get_contents()` and `file_put_contents()` reach the same parse and the same attach
+/// through their own routes, so the hand-off has to be parked on all three or the defect simply
+/// moves. Measured on `php -n` 8.5.6: the read answers `string(3) "ABC"` and the write hands the
+/// wrapper `ABC`, then answers the INPUT byte count.
+#[test]
+fn test_the_path_readers_keep_their_filter_chain_across_a_nested_open() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class WR {
+    public $context;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $u = "php://filter/read=string.toupper/resource=data://text/plain,zzz";
+        $inner = fopen($u, "r");
+        $this->buf = "abc";
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_write($data) { echo "wrote:[", $data, "]\n"; return strlen($data); }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+stream_wrapper_register("wr", "WR");
+stream_wrapper_register("ww", "WR");
+$r = "php://filter/read=string.toupper/resource=wr://x";
+var_dump(file_get_contents($r));
+$w = "php://filter/write=string.toupper/resource=ww://x";
+var_dump(file_put_contents($w, "abc"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "string(3) \"ABC\"\nwrote:[ABC]\nint(3)\n",
+        "both path routes must attach their OWN chain, not the nested open's"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies nesting PAST the parked-frame bound stays quiet instead of corrupting the outer open.
+///
+/// php-src imposes no limit on how many filtered opens can be in flight; elephc parks each one's
+/// hand-off in a fixed BSS frame and keeps 8. The twelve below therefore overflow it by four, and
+/// what must hold is that the frames INSIDE the bound are untouched: the outermost open sits at
+/// depth 0 and its chain is the one the answer names. `php -n` 8.5.6 prints the twelve levels and
+/// `string(3) "ABC"`; this branch's parent printed `string(3) "abc"`, having lost the outermost
+/// chain to the very first nested open — the bound is not what this ever depended on.
+#[test]
+fn test_filtered_opens_nested_past_the_parked_frame_bound_keep_the_outer_chain() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class D {
+    public $context;
+    public $fh;
+    public $buf;
+    public $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened) {
+        $scheme = substr($path, 0, strpos($path, "://"));
+        $n = (int) substr($scheme, 1);
+        if ($n > 0) {
+            $u = "php://filter/read=/resource=d" . ($n - 1) . "://x";
+            $this->fh = fopen($u, "r");
+            $this->buf = stream_get_contents($this->fh);
+        } else {
+            $this->buf = "abc";
+        }
+        return true;
+    }
+    public function stream_read($n) {
+        $s = substr($this->buf, $this->pos, $n);
+        $this->pos += strlen($s);
+        return $s;
+    }
+    public function stream_eof() { return $this->pos >= strlen($this->buf); }
+    public function stream_stat() { return array(); }
+}
+for ($i = 0; $i < 12; $i++) { stream_wrapper_register("d" . $i, "D"); }
+$u = "php://filter/read=string.toupper/resource=d11://x";
+var_dump(stream_get_contents(fopen($u, "r")));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "string(3) \"ABC\"\n");
+    assert_eq!(
+        out.stderr,
+        "",
+        "an empty filter segment is skipped in silence, at every depth"
+    );
+}
+
 /// Verifies a literal `file_get_contents()` filter URL resolving NO filter still returns bytes.
 ///
 /// `emit_open_read_close_tail` called `__rt_stream_get_contents` without staging its second

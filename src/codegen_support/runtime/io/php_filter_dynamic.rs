@@ -59,6 +59,56 @@ pub(crate) const PHP_FILTER_PENDING_MAX: usize = 32;
 /// composes, which is quiet rather than wrong.
 pub(crate) const PHP_FILTER_OPEN_DEPTH_MAX: usize = 8;
 
+/// Words one parked hand-off occupies, rounded so the depth indexes it with a SHIFT.
+///
+/// [`PENDING_STATE`] is what actually has to fit; the assertion below is what keeps the two
+/// honest when a slot is added to the hand-off.
+pub(crate) const PHP_FILTER_PENDING_FRAME_SLOTS: usize = 128;
+
+/// `log2` of the frame stride in BYTES, so `depth << SHIFT` reaches a frame in one instruction.
+const PHP_FILTER_PENDING_FRAME_SHIFT: u32 = PHP_FILTER_PENDING_FRAME_SLOTS.trailing_zeros() + 3;
+
+/// Everything `__rt_php_filter_parse` publishes that must survive the OPEN it is published for.
+///
+/// The parse hands its results to the attach and the reports through fixed globals, and the open
+/// that sits between them can run PHP — a user wrapper's `stream_open` — which can `fopen()`
+/// something else and re-enter the parse. One global set therefore answers the INNER open's
+/// question to the OUTER open's caller: the outer chain vanished (`abc` where php answers `ABC`)
+/// and the outer URL's unresolved names went unreported with it.
+///
+/// `_php_filter_res_ptr`/`_len` are deliberately absent: the caller reads them into registers
+/// before it opens anything, so no nested parse can reach them. `_php_filter_open_dirs` IS here —
+/// it is published before the parse but read by the report AFTER the open, and a nested open
+/// publishes its own.
+const PENDING_STATE: &[(&str, usize)] = &[
+    ("_php_filter_pending_count", 1),
+    ("_php_filter_pending_mode", 1),
+    ("_php_filter_unknown_count", 1),
+    ("_php_filter_url_ptr", 1),
+    ("_php_filter_url_len", 1),
+    ("_php_filter_url_dir", 1),
+    ("_php_filter_open_dirs", 1),
+    ("_php_filter_pending_ids", PHP_FILTER_PENDING_MAX),
+    ("_php_filter_unknown_ptr", PHP_FILTER_PENDING_MAX),
+    ("_php_filter_unknown_len", PHP_FILTER_PENDING_MAX),
+];
+
+/// Words one parked hand-off actually needs.
+const PENDING_STATE_SLOTS: usize = {
+    let mut total = 0;
+    let mut index = 0;
+    while index < PENDING_STATE.len() {
+        total += PENDING_STATE[index].1;
+        index += 1;
+    }
+    total
+};
+
+const _: () = assert!(
+    PENDING_STATE_SLOTS <= PHP_FILTER_PENDING_FRAME_SLOTS,
+    "a parked php://filter hand-off must fit the frame the depth indexes"
+);
+
 /// Emits `__rt_pf_match`, `__rt_php_filter_parse` and `__rt_php_filter_attach_pending`.
 pub fn emit_php_filter_dynamic(emitter: &mut Emitter) {
     match emitter.target.arch {
@@ -68,6 +118,8 @@ pub fn emit_php_filter_dynamic(emitter: &mut Emitter) {
             emit_filter_attach_aarch64(emitter);
             emit_mode_dirs_aarch64(emitter);
             emit_suppress_begin_aarch64(emitter);
+            emit_pending_save_aarch64(emitter);
+            emit_pending_restore_aarch64(emitter);
             emit_open_failed_aarch64(emitter);
             emit_unknown_report_aarch64(emitter);
         }
@@ -77,6 +129,8 @@ pub fn emit_php_filter_dynamic(emitter: &mut Emitter) {
             emit_filter_attach_x86_64(emitter);
             emit_mode_dirs_x86_64(emitter);
             emit_suppress_begin_x86_64(emitter);
+            emit_pending_save_x86_64(emitter);
+            emit_pending_restore_x86_64(emitter);
             emit_open_failed_x86_64(emitter);
             emit_unknown_report_x86_64(emitter);
         }
@@ -489,6 +543,101 @@ fn emit_suppress_begin_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x30, [sp, #0]");
     emitter.instruction("add sp, sp, #16");
     emitter.label("__rt_pfsb_done");
+    emitter.instruction("ret");
+}
+
+/// `__rt_php_filter_pending_save()` — parks the whole hand-off until this open is finished.
+///
+/// Called after the parse and before the opener, and paired with
+/// [`emit_pending_restore_aarch64`] at the three places that consume a parse: the dynamic
+/// `fopen()` exits, the path readers' filter route, and `file_put_contents`'s.
+///
+/// The opener can run PHP. A user wrapper's `stream_open` is a PHP method, and a method that
+/// `fopen()`s anything re-enters the parse, which publishes over every slot in [`PENDING_STATE`].
+/// The outer open then attached the INNER URL's chain — usually nothing, since the inner parse's
+/// consumer has already cleared it — and reported the inner URL's unresolved names as its own.
+///
+/// Touches x9-x14 only: `fopen()` still holds the filename in x1/x2 and the mode in x3/x4 here,
+/// and the restore runs with the boxed result live in x0.
+fn emit_pending_save_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: park the php://filter hand-off for the length of one open ---");
+    emitter.label_global("__rt_php_filter_pending_save");
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_depth");
+    emitter.instruction("ldr x10, [x9]");                                       // hand-offs already parked
+    emitter.instruction("add x11, x10, #1");                                    // this one is now in flight
+    emitter.instruction("str x11, [x9]");                                       // counted even when it cannot be parked
+    emitter.instruction(&format!("cmp x10, #{PHP_FILTER_OPEN_DEPTH_MAX}"));
+    emitter.instruction("b.hs __rt_pfpsv_done");                                // past the bound: nothing is parked
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_stack");
+    emitter.instruction(&format!(
+        "add x12, x12, x10, lsl #{PHP_FILTER_PENDING_FRAME_SHIFT}"
+    ));                                                                         // this open's own frame
+    for (index, (symbol, words)) in PENDING_STATE.iter().enumerate() {
+        abi::emit_symbol_address(emitter, "x11", symbol);
+        if *words == 1 {
+            emitter.instruction("ldr x14, [x11]");
+            emitter.instruction("str x14, [x12]");                              // park the published value
+            emitter.instruction("add x12, x12, #8");
+            continue;
+        }
+        emitter.instruction("mov x13, #0");                                     // walk the published list
+        emitter.label(&format!("__rt_pfpsv_w{index}"));
+        emitter.instruction(&format!("cmp x13, #{words}"));
+        emitter.instruction(&format!("b.hs __rt_pfpsv_w{index}_end"));
+        emitter.instruction("ldr x14, [x11, x13, lsl #3]");
+        emitter.instruction("str x14, [x12, x13, lsl #3]");
+        emitter.instruction("add x13, x13, #1");
+        emitter.instruction(&format!("b __rt_pfpsv_w{index}"));
+        emitter.label(&format!("__rt_pfpsv_w{index}_end"));
+        emitter.instruction(&format!("add x12, x12, #{}", words * 8));
+    }
+    emitter.label("__rt_pfpsv_done");
+    emitter.instruction("ret");
+}
+
+/// `__rt_php_filter_pending_restore()` — republishes the hand-off this open parked.
+///
+/// Runs BEFORE the failed-open line, the attach and the unresolved-name report, because those
+/// three read the globals and two of them clear what they consume: restoring after the failed-open
+/// line would resurrect the names php drops for an open that never reached the filters.
+///
+/// Preserves x0, which carries the boxed open result across all three.
+fn emit_pending_restore_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: republish the php://filter hand-off this open parked ---");
+    emitter.label_global("__rt_php_filter_pending_restore");
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_depth");
+    emitter.instruction("ldr x10, [x9]");
+    emitter.instruction("cbz x10, __rt_pfprs_done");                            // nothing parked to republish
+    emitter.instruction("sub x10, x10, #1");
+    emitter.instruction("str x10, [x9]");
+    emitter.instruction(&format!("cmp x10, #{PHP_FILTER_OPEN_DEPTH_MAX}"));
+    emitter.instruction("b.hs __rt_pfprs_done");                                // past the bound: nothing was parked
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_stack");
+    emitter.instruction(&format!(
+        "add x12, x12, x10, lsl #{PHP_FILTER_PENDING_FRAME_SHIFT}"
+    ));                                                                         // this open's own frame
+    for (index, (symbol, words)) in PENDING_STATE.iter().enumerate() {
+        abi::emit_symbol_address(emitter, "x11", symbol);
+        if *words == 1 {
+            emitter.instruction("ldr x14, [x12]");
+            emitter.instruction("str x14, [x11]");                              // republish the parked value
+            emitter.instruction("add x12, x12, #8");
+            continue;
+        }
+        emitter.instruction("mov x13, #0");
+        emitter.label(&format!("__rt_pfprs_w{index}"));
+        emitter.instruction(&format!("cmp x13, #{words}"));
+        emitter.instruction(&format!("b.hs __rt_pfprs_w{index}_end"));
+        emitter.instruction("ldr x14, [x12, x13, lsl #3]");
+        emitter.instruction("str x14, [x11, x13, lsl #3]");
+        emitter.instruction("add x13, x13, #1");
+        emitter.instruction(&format!("b __rt_pfprs_w{index}"));
+        emitter.label(&format!("__rt_pfprs_w{index}_end"));
+        emitter.instruction(&format!("add x12, x12, #{}", words * 8));
+    }
+    emitter.label("__rt_pfprs_done");
     emitter.instruction("ret");
 }
 
@@ -1064,6 +1213,87 @@ fn emit_suppress_begin_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");
 }
 
+/// x86_64 form of [`emit_pending_save_aarch64`].
+///
+/// `__rt_php_filter_pending_save()`. Touches r8-r11 only: `rax`/`rdx` carry the filename and
+/// `rdi`/`rsi` the mode at the call site, exactly as for the suppression above.
+fn emit_pending_save_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: park the php://filter hand-off for the length of one open ---");
+    emitter.label_global("__rt_php_filter_pending_save");
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_depth");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // hand-offs already parked
+    emitter.instruction("lea r10, [r9 + 1]");                                   // this one is now in flight
+    emitter.instruction("mov QWORD PTR [r8], r10");                             // counted even when it cannot be parked
+    emitter.instruction(&format!("cmp r9, {PHP_FILTER_OPEN_DEPTH_MAX}"));
+    emitter.instruction("jae __rt_pfpsv_done_x");                               // past the bound: nothing is parked
+    emitter.instruction(&format!("shl r9, {PHP_FILTER_PENDING_FRAME_SHIFT}"));
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_pending_stack");
+    emitter.instruction("add r10, r9");                                         // this open's own frame
+    for (index, (symbol, words)) in PENDING_STATE.iter().enumerate() {
+        abi::emit_symbol_address(emitter, "r8", symbol);
+        if *words == 1 {
+            emitter.instruction("mov r9, QWORD PTR [r8]");
+            emitter.instruction("mov QWORD PTR [r10], r9");                     // park the published value
+            emitter.instruction("add r10, 8");
+            continue;
+        }
+        emitter.instruction("xor r11, r11");                                    // walk the published list
+        emitter.label(&format!("__rt_pfpsv_w{index}_x"));
+        emitter.instruction(&format!("cmp r11, {words}"));
+        emitter.instruction(&format!("jae __rt_pfpsv_w{index}_end_x"));
+        emitter.instruction("mov r9, QWORD PTR [r8 + r11 * 8]");
+        emitter.instruction("mov QWORD PTR [r10 + r11 * 8], r9");
+        emitter.instruction("add r11, 1");
+        emitter.instruction(&format!("jmp __rt_pfpsv_w{index}_x"));
+        emitter.label(&format!("__rt_pfpsv_w{index}_end_x"));
+        emitter.instruction(&format!("add r10, {}", words * 8));
+    }
+    emitter.label("__rt_pfpsv_done_x");
+    emitter.instruction("ret");
+}
+
+/// x86_64 form of [`emit_pending_restore_aarch64`].
+///
+/// `__rt_php_filter_pending_restore()`; preserves `rax`, which carries the boxed open result.
+fn emit_pending_restore_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: republish the php://filter hand-off this open parked ---");
+    emitter.label_global("__rt_php_filter_pending_restore");
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_depth");
+    emitter.instruction("mov r9, QWORD PTR [r8]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_pfprs_done_x");                                // nothing parked to republish
+    emitter.instruction("sub r9, 1");
+    emitter.instruction("mov QWORD PTR [r8], r9");
+    emitter.instruction(&format!("cmp r9, {PHP_FILTER_OPEN_DEPTH_MAX}"));
+    emitter.instruction("jae __rt_pfprs_done_x");                               // past the bound: nothing was parked
+    emitter.instruction(&format!("shl r9, {PHP_FILTER_PENDING_FRAME_SHIFT}"));
+    abi::emit_symbol_address(emitter, "r10", "_php_filter_pending_stack");
+    emitter.instruction("add r10, r9");                                         // this open's own frame
+    for (index, (symbol, words)) in PENDING_STATE.iter().enumerate() {
+        abi::emit_symbol_address(emitter, "r8", symbol);
+        if *words == 1 {
+            emitter.instruction("mov r9, QWORD PTR [r10]");
+            emitter.instruction("mov QWORD PTR [r8], r9");                      // republish the parked value
+            emitter.instruction("add r10, 8");
+            continue;
+        }
+        emitter.instruction("xor r11, r11");
+        emitter.label(&format!("__rt_pfprs_w{index}_x"));
+        emitter.instruction(&format!("cmp r11, {words}"));
+        emitter.instruction(&format!("jae __rt_pfprs_w{index}_end_x"));
+        emitter.instruction("mov r9, QWORD PTR [r10 + r11 * 8]");
+        emitter.instruction("mov QWORD PTR [r8 + r11 * 8], r9");
+        emitter.instruction("add r11, 1");
+        emitter.instruction(&format!("jmp __rt_pfprs_w{index}_x"));
+        emitter.label(&format!("__rt_pfprs_w{index}_end_x"));
+        emitter.instruction(&format!("add r10, {}", words * 8));
+    }
+    emitter.label("__rt_pfprs_done_x");
+    emitter.instruction("ret");
+}
+
 /// x86_64 form of [`emit_open_failed_aarch64`].
 ///
 /// `__rt_php_filter_open_failed(rax = boxed result, rdi = callee pointer, rsi = callee length)`;
@@ -1235,6 +1465,100 @@ fn emit_unknown_name_fragment_x86_64(emitter: &mut Emitter) {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::{Platform, Target};
+
+    /// Collects the `_php_filter_*` symbols one helper's emitted body touches, in order.
+    fn filter_symbols_in(asm: &str, helper: &str) -> Vec<String> {
+        let at = asm
+            .find(&format!("{helper}:"))
+            .unwrap_or_else(|| panic!("{helper} must be emitted"));
+        let end = asm[at..]
+            .find("--- runtime:")
+            .map_or(asm.len(), |offset| at + offset);
+        let mut found: Vec<String> = Vec::new();
+        let body = &asm[at..end];
+        let mut cursor = 0usize;
+        while let Some(offset) = body[cursor..].find("_php_filter_") {
+            let start = cursor + offset;
+            let tail = &body[start..];
+            let len = tail
+                .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .unwrap_or(tail.len());
+            cursor = start + len;
+            // `__rt_php_filter_parse` CONTAINS `_php_filter_parse`. Only a match that starts the
+            // identifier is a data symbol; anything glued to a preceding word is a helper name.
+            let glued = body[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            if glued {
+                continue;
+            }
+            let symbol = tail[..len].to_string();
+            if !found.contains(&symbol) {
+                found.push(symbol);
+            }
+        }
+        found
+    }
+
+    /// Every slot the PARSE publishes must be parked, or the nesting fix has a silent hole.
+    ///
+    /// The hand-off is a set of fixed globals, and a slot added to it later is invisible to the
+    /// save/restore pair: nothing fails to compile, nothing crashes, and the outer open simply
+    /// answers with the inner open's value for that one slot. That is exactly the shape the whole
+    /// defect had — `abc` where php answers `ABC` — so the table is checked against what the
+    /// parse actually writes rather than trusted to stay in step by hand.
+    ///
+    /// Only the resource pair is exempt: the caller reads it into registers before it opens
+    /// anything, so no nested parse can reach it.
+    #[test]
+    fn test_every_slot_the_parse_publishes_is_parked() {
+        const EXEMPT: &[&str] = &["_php_filter_res_ptr", "_php_filter_res_len"];
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_php_filter_dynamic(&mut emitter);
+            let asm = emitter.output();
+            for symbol in filter_symbols_in(&asm, "__rt_php_filter_parse") {
+                assert!(
+                    EXEMPT.contains(&symbol.as_str())
+                        || PENDING_STATE.iter().any(|(parked, _)| *parked == symbol),
+                    "{arch:?}: the parse publishes {symbol}, which no open parks across its resource's open"
+                );
+            }
+        }
+    }
+
+    /// The save and the restore must walk the SAME symbols, in the same order, on both arches.
+    ///
+    /// They are two hand-written loops over one frame layout: a symbol parked at one offset and
+    /// republished from another silently swaps two pieces of the hand-off — a filter count read
+    /// back as a URL pointer, say — which is a wrong answer, not a crash.
+    #[test]
+    fn test_the_parked_frame_is_saved_and_restored_symbol_for_symbol() {
+        let expected: Vec<String> = PENDING_STATE
+            .iter()
+            .map(|(symbol, _)| (*symbol).to_string())
+            .collect();
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_php_filter_dynamic(&mut emitter);
+            let asm = emitter.output();
+            let saved = filter_symbols_in(&asm, "__rt_php_filter_pending_save");
+            let restored = filter_symbols_in(&asm, "__rt_php_filter_pending_restore");
+            let bookkeeping = ["_php_filter_pending_depth", "_php_filter_pending_stack"]
+                .map(str::to_string)
+                .to_vec();
+            assert_eq!(
+                saved,
+                [bookkeeping, expected.clone()].concat(),
+                "{arch:?}: the save must park the whole hand-off, in table order"
+            );
+            assert_eq!(
+                saved, restored,
+                "{arch:?}: the restore must walk the frame the save wrote, slot for slot"
+            );
+        }
+    }
 
     /// The attach loop must spill its index BEFORE the calls that consume the filter.
     ///

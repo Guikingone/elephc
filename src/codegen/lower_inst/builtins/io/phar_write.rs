@@ -110,6 +110,9 @@ fn emit_file_put_contents_filter_route(
             // The openers name themselves and the bare RESOURCE when they fail; php names
             // `file_put_contents` and the whole URL. Same suppression the read route uses.
             abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // The resource may be a user wrapper, whose `stream_open` is PHP and can `fopen()` a
+            // filter URL of its own — which republishes the hand-off this route is holding.
+            super::fopen_core::emit_dynamic_php_filter_save(ctx);
             // -- the FILE_APPEND bit picks the mode, exactly as it does for the plain writer --
             match flags {
                 Some(flags) => {
@@ -143,6 +146,7 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.label(&boxed);
             box_stream_fd_or_false_result(ctx, "fpc_filter");
             abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: x9/x10 only
+            super::fopen_core::emit_dynamic_php_filter_restore(ctx);            // this route's own hand-off, not a nested open's
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
             super::fopen_core::emit_php_filter_unknown_report(ctx, "file_put_contents");
             ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
@@ -198,6 +202,8 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.instruction(&format!("jz {}", drop_and_fall));          // not a usable filter URL: the plain writer decides
             // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
             abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // See the AArch64 counterpart: a user wrapper's `stream_open` republishes the hand-off.
+            super::fopen_core::emit_dynamic_php_filter_save(ctx);
             match flags {
                 Some(flags) => {
                     ctx.load_value_to_result(flags)?;
@@ -229,6 +235,7 @@ fn emit_file_put_contents_filter_route(
             ctx.emitter.label(&boxed);
             box_stream_fd_or_false_result(ctx, "fpc_filter");
             abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");     // preserves the boxed result: r10 only
+            super::fopen_core::emit_dynamic_php_filter_restore(ctx);            // this route's own hand-off, not a nested open's
             abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
             super::fopen_core::emit_php_filter_unknown_report(ctx, "file_put_contents");
             ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag

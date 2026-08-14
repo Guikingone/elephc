@@ -1305,6 +1305,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ));
     }
     out.push_str(&comm_directive("_php_filter_open_depth", 8, target));
+    // One PARKED hand-off per open in flight, at a fixed stride so the depth reaches a frame with
+    // a shift. Everything above that the parse publishes and something after the OPEN reads lives
+    // here for the length of that open: the opener can run PHP — a user wrapper's `stream_open` —
+    // and PHP that opens anything re-enters the parse, which republishes every one of those
+    // globals. The outer open then attached the inner URL's chain, which its own consumer had
+    // already cleared, and answered `abc` where php answers `ABC`.
+    out.push_str(&comm_directive(
+        "_php_filter_pending_stack",
+        crate::codegen_support::runtime::io::PHP_FILTER_OPEN_DEPTH_MAX
+            * crate::codegen_support::runtime::io::PHP_FILTER_PENDING_FRAME_SLOTS
+            * 8,
+        target,
+    ));
+    out.push_str(&comm_directive("_php_filter_pending_depth", 8, target));
     // Needles the parse matches, kept as data so one spelling serves both assembly emitters.
     out.push_str(".globl _pf_n_prefix\n_pf_n_prefix:\n    .ascii \"php://filter/\"\n");
     out.push_str(".globl _pf_n_read\n_pf_n_read:\n    .ascii \"read=\"\n");

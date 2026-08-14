@@ -274,6 +274,9 @@ fn emit_dynamic_php_filter_read_route(
             // `file_get_contents` and the whole URL, so their warnings are suppressed and the
             // php-worded one is composed below once the outcome is known.
             abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // The resource may be a user wrapper, whose `stream_open` is PHP and can `fopen()` a
+            // filter URL of its own — which republishes the hand-off this route is holding.
+            fopen_core::emit_dynamic_php_filter_save(ctx);
             // -- the resource decides the opener, exactly as it does for fopen() --
             ctx.emitter.instruction("cmp x2, #6");                              // long enough for php://?
             ctx.emitter.instruction(&format!("b.lt {}", try_data));
@@ -321,6 +324,8 @@ fn emit_dynamic_php_filter_read_route(
             ctx.emitter.instruction(&format!("jz {}", fall_through));           // no: the plain reader handles the path
             // See the AArch64 counterpart: the openers' own failure warnings are suppressed.
             abi::emit_call_label(ctx.emitter, "__rt_diag_push_suppression");
+            // See the AArch64 counterpart: a user wrapper's `stream_open` republishes the hand-off.
+            fopen_core::emit_dynamic_php_filter_save(ctx);
             ctx.emitter.instruction("cmp rdx, 6");                              // long enough for php://?
             ctx.emitter.instruction(&format!("jl {}", try_data));
             for (offset, byte) in b"php://".iter().enumerate() {
@@ -360,6 +365,7 @@ fn emit_dynamic_php_filter_read_route(
     ctx.emitter.label(&boxed);
     box_stream_fd_or_false_result(ctx, "fgc_dynf");
     abi::emit_call_label(ctx.emitter, "__rt_diag_pop_suppression");             // preserves the boxed result: x9/x10 (r10) only
+    fopen_core::emit_dynamic_php_filter_restore(ctx);                           // this route's own hand-off, not a nested open's
     abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");        // the parked chain, now the stream exists
     // php warns twice for every name that named no filter, in the CALLING function's words, and
     // keeps the stream. A failed open never reaches the filters, and the report checks the tag.
