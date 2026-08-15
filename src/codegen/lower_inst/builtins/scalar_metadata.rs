@@ -46,11 +46,17 @@ pub(in crate::codegen::lower_inst) fn emit_duplicate_define_warning(ctx: &mut Fu
         Arch::AArch64 => {
             ctx.emitter.adrp("x1", "_diag_define_already_defined_msg");
             ctx.emitter.add_lo12("x1", "x1", "_diag_define_already_defined_msg");
-            ctx.emitter.instruction(&format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the duplicate-define warning byte length
+            ctx.emitter.instruction(
+                &format!("mov x2, #{}", DEFINE_ALREADY_DEFINED_WARNING.len())
+            );                                                                  // pass the duplicate-define warning byte length
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("lea rdi, [rip + _diag_define_already_defined_msg]"); // pass the duplicate-define warning pointer
-            ctx.emitter.instruction(&format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())); // pass the duplicate-define warning byte length
+            ctx.emitter.instruction(
+                "lea rdi, [rip + _diag_define_already_defined_msg]"
+            );                                                                  // pass the duplicate-define warning pointer
+            ctx.emitter.instruction(
+                &format!("mov esi, {}", DEFINE_ALREADY_DEFINED_WARNING.len())
+            );                                                                  // pass the duplicate-define warning byte length
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_diag_warning");

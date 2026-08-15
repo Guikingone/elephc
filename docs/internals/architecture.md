@@ -75,6 +75,13 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
+│ Function args│  src/func_args/
+│  desugaring  │  Rewrites func_num_args/get_args/get_arg into a hidden
+│              │  variadic parameter before optimization and checking.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
 │ OPcache bake │  src/opcache_prelude/
 │              │  Completes the resolved/autoloaded script manifest and
 │              │  replaces the injected placeholder bodies with baked data.
@@ -373,18 +380,22 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (74 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (155 files)
+│       ├── emitters/          Managed-value and platform-facing runtime orchestration (3 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (95 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (172 files)
 │       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
-│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
-│       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls
+│       ├── compare/           Loose/strict comparison and truthiness helpers (5 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (119 files)
+│       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files)
+│       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls (1 file)
+│       ├── eval_bridge/       Magician value, array, cast, reflection, clone, and builtin adapters (23 files)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
 │       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
+│       ├── pdo/               Target-aware PDO callable callback adapters (5 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, JSON, preg_*, ... (44 top-level files + 27 files under date/JSON/strtotime submodules)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
-│       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
-│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (10 files)
+│       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 top-level files) + `api/` (4 target-aware public API helper files)
+│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (13 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)

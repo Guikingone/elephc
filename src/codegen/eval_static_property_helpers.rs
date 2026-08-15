@@ -547,14 +547,22 @@ fn emit_x86_64_static_property_scope_check(
     target_label: &str,
 ) {
     let (scope_ptr_offset, scope_len_offset) = x86_64_scope_offsets(mode);
-    emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
-    emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+    emitter.instruction(
+        &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
+    );                                                                          // reload the active eval class-scope pointer
+    emitter.instruction(
+        &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
+    );                                                                          // reload the active eval class-scope length
     emitter.instruction("test rdi, rdi");                                       // check whether eval is executing inside a class scope
     emitter.instruction("jz 1f");                                               // skip scoped dispatch outside a class scope
     for scope_name in &slot.allowed_scopes {
         let (label, len) = data.add_string(scope_name.as_bytes());
-        emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)); // reload the active eval class-scope pointer
-        emitter.instruction(&format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)); // reload the active eval class-scope length
+        emitter.instruction(
+            &format!("mov rdi, QWORD PTR [rbp - {}]", scope_ptr_offset)
+        );                                                                      // reload the active eval class-scope pointer
+        emitter.instruction(
+            &format!("mov rsi, QWORD PTR [rbp - {}]", scope_len_offset)
+        );                                                                      // reload the active eval class-scope length
         abi::emit_symbol_address(emitter, "rdx", &label);
         abi::emit_load_int_immediate(emitter, "rcx", len as i64);
         emitter.instruction("call __rt_strcasecmp");                            // compare current eval scope with an allowed class

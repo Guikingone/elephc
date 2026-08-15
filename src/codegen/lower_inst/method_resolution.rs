@@ -83,13 +83,13 @@ pub(super) fn emit_dynamic_instance_method_call(ctx: &mut FunctionContext<'_>, s
             ctx.emitter.instruction(&format!(
                 "ldr {}, [{}, {}, lsl #3]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            )); // load the class-specific instance-vtable pointer
+            ));                                                                 // load the class-specific instance-vtable pointer
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!(
                 "mov {}, QWORD PTR [{} + {} * 8]",
                 dispatch_reg, dispatch_reg, class_id_reg
-            )); // load the class-specific instance-vtable pointer
+            ));                                                                 // load the class-specific instance-vtable pointer
         }
     }
     abi::emit_load_from_address(ctx.emitter, dispatch_reg, dispatch_reg, slot * 8);

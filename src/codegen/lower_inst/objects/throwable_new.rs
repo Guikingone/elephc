@@ -121,7 +121,9 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(&format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)); // request compact Throwable payload storage
+            ctx.emitter.instruction(
+                &format!("mov x0, #{}", THROWABLE_COMPACT_PAYLOAD_SIZE)
+            );                                                                  // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks runtime object payloads
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the Throwable payload
@@ -133,12 +135,14 @@ pub(super) fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id:
         }
         Arch::X86_64 => {
             // -- allocate and stamp the compact Throwable payload --
-            ctx.emitter.instruction(&format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)); // request compact Throwable payload storage
+            ctx.emitter.instruction(
+                &format!("mov rax, {}", THROWABLE_COMPACT_PAYLOAD_SIZE)
+            );                                                                  // request compact Throwable payload storage
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(6)
-            )); // materialize the x86_64 Throwable heap kind word
+            ));                                                                 // materialize the x86_64 Throwable heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the Throwable payload
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
@@ -164,14 +168,14 @@ pub(super) fn emit_throwable_creation_line_aarch64(
         ctx.emitter.instruction(&format!(
             "str xzr, [{}, #{}]",
             payload_reg, THROWABLE_CREATION_LINE_OFFSET
-        )); // no span on the allocating instruction: an unknown line reads back as zero
+        ));                                                                     // no span on the allocating instruction: an unknown line reads back as zero
         return;
     }
     abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
     ctx.emitter.instruction(&format!(
         "str {}, [{}, #{}]",
         scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
-    )); // store the one-based source line of the `new` expression
+    ));                                                                         // store the one-based source line of the `new` expression
 }
 
 /// Writes an x86_64 Throwable creation line into the payload.
@@ -186,7 +190,7 @@ pub(super) fn emit_throwable_creation_line_x86_64(
     ctx.emitter.instruction(&format!(
         "mov QWORD PTR [{} + {}], {}",
         payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line
-    )); // store the one-based source line of the `new` expression (zero when unknown)
+    ));                                                                         // store the one-based source line of the `new` expression (zero when unknown)
 }
 
 /// Saves the newly allocated Throwable object while constructor operands are loaded.

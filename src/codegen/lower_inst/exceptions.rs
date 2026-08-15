@@ -133,13 +133,13 @@ pub(super) fn emit_value_error_unless(
         }
         (Arch::AArch64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "x9", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, x9", reg));                // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("b.le {}", ok_label));              // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, x9", reg));               // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an argument at or below the maximum is in range
         }
         (Arch::X86_64, ValueGuard::SignedAtMost(reg, maximum)) => {
             abi::emit_load_int_immediate(ctx.emitter, "r10", *maximum);
-            ctx.emitter.instruction(&format!("cmp {}, r10", reg));               // compare the materialized argument against its PHP maximum
-            ctx.emitter.instruction(&format!("jle {}", ok_label));               // an argument at or below the maximum is in range
+            ctx.emitter.instruction(&format!("cmp {}, r10", reg));              // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an argument at or below the maximum is in range
         }
         (Arch::AArch64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
             let fail_label = ctx.next_label("value_guard_fail");
@@ -197,8 +197,10 @@ pub(super) fn emit_value_error_unless(
         (Arch::AArch64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
-            ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high)); // x9 = the smaller of the two endpoints
-            ctx.emitter.instruction(&format!("csel x10, {}, {}, le", high, low)); // x10 = the larger of the two endpoints
+            ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high));// x9 = the smaller of the two endpoints
+            ctx.emitter.instruction(
+                &format!("csel x10, {}, {}, le", high, low)
+            );                                                                  // x10 = the larger of the two endpoints
             ctx.emitter.instruction("sub x9, x10, x9");                         // x9 = high - low, the spanned interval as an unsigned width
             ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
             ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
@@ -315,7 +317,9 @@ fn emit_static_exception(
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
@@ -450,7 +454,9 @@ fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol:
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);

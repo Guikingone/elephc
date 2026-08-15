@@ -26,7 +26,7 @@ pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 "cset {}, {}",
                 result_reg,
                 aarch64_condition(predicate)?
-            )); // materialize the predicate result as 0 or 1
+            ));                                                                 // materialize the predicate result as 0 or 1
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -80,10 +80,14 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     abi::load_at_offset(ctx.emitter, state_reg, state_offset);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // select the alias representation after runtime promotion
+            ctx.emitter.instruction(
+                &format!("cbnz {}, {}", state_reg, ref_cell)
+            );                                                                  // select the alias representation after runtime promotion
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test the slot's runtime representation flag
+            ctx.emitter.instruction(
+                &format!("test {}, {}", state_reg, state_reg)
+            );                                                                  // test the slot's runtime representation flag
             ctx.emitter.instruction(&format!("jne {}", ref_cell));              // select the alias representation after runtime promotion
         }
     }

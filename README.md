@@ -398,34 +398,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (450+)
+### Built-in functions (500+)
 
-Over 450 PHP built-ins are implemented natively, grouped here by category — strings, arrays, math, I/O, streams/sockets, system, and more.
-
-<details>
-<summary>Show all built-in functions by category</summary>
-
-**Strings:** `strlen`, `substr`, `strpos`, `strrpos`, `strstr`, `str_replace`, `str_ireplace`, `substr_replace`, `strtolower`, `strtoupper`, `ucfirst`, `lcfirst`, `ucwords`, `trim`, `ltrim`, `rtrim`, `str_repeat`, `str_pad`, `strrev`, `chop`, `grapheme_strrev`, `str_split`, `strcmp`, `strcasecmp`, `str_contains`, `str_starts_with`, `str_ends_with`, `ord`, `chr`, `explode`, `implode`, `sprintf`, `printf`, `vprintf`, `vsprintf`, `sscanf`, `md5`, `sha1`, `hash`, `hash_algos`, `hash_equals`, `hash_hmac`, `hash_init`, `hash_update`, `hash_final`, `hash_copy`, `crc32`, `number_format`, `addslashes`, `stripslashes`, `nl2br`, `wordwrap`, `bin2hex`, `hex2bin`, `htmlspecialchars`, `htmlentities`, `html_entity_decode`, `parse_url`, `urlencode`, `urldecode`, `rawurlencode`, `rawurldecode`, `base64_encode`, `base64_decode`, `gzcompress`, `gzdeflate`, `gzinflate`, `gzuncompress`, `ip2long`, `long2ip`, `inet_ntop`, `inet_pton`, `ctype_alpha`, `ctype_digit`, `ctype_alnum`, `ctype_space`, `mb_strlen`, `mb_ereg_match`
-
-**Arrays:** `count`, `array_push`, `array_pop`, `in_array`, `array_keys`, `array_values`, `sort`, `rsort`, `isset`, `array_key_exists`, `array_search`, `array_merge`, `array_slice`, `array_splice`, `array_combine`, `array_flip`, `array_reverse`, `array_unique`, `array_sum`, `array_product`, `array_chunk`, `array_pad`, `array_fill`, `array_fill_keys`, `array_diff`, `array_intersect`, `array_diff_key`, `array_intersect_key`, `array_unshift`, `array_shift`, `asort`, `arsort`, `ksort`, `krsort`, `natsort`, `natcasesort`, `shuffle`, `array_rand`, `array_column`, `range`, `array_map`, `array_filter`, `array_reduce`, `array_walk`, `array_walk_recursive`, `array_is_list`, `array_key_first`, `array_key_last`, `array_replace`, `array_replace_recursive`, `array_merge_recursive`, `array_diff_assoc`, `array_intersect_assoc`, `array_udiff`, `array_uintersect`, `array_find`, `array_any`, `array_all`, `array_multisort`, `usort`, `uksort`, `uasort`, `call_user_func`, `call_user_func_array`, `function_exists`
-
-**Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `clamp`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`, `bcadd`, `bcsub`, `bcmul`, `bcdiv`, `bcmod`, `bcdivmod`, `bcpow`, `bcpowmod`, `bcsqrt`, `bccomp`, `bcscale`, `bcceil`, `bcfloor`, `bcround`
-
-**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_integer`, `is_long`, `is_float`, `is_double`, `is_real`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `is_array`, `is_object`, `is_scalar`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`, `method_exists`, `property_exists`, `strval`
-
-**I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `vfprintf`, `fscanf`, `fgets`, `fgetc`, `fpassthru`, `flock`, `tmpfile`, `readfile`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `hash_file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `symlink`, `link`, `readlink`, `linkinfo`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `disk_free_space`, `disk_total_space`, `basename`, `dirname`, `pathinfo`, `realpath`, `realpath_cache_get`, `realpath_cache_size`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `lchown`, `lchgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `opendir`, `readdir`, `rewinddir`, `closedir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
-
-**Output buffering:** `ob_start`, `ob_get_contents`, `ob_get_clean`, `ob_get_flush`, `ob_get_length`, `ob_get_level`, `ob_clean`, `ob_end_clean`, `ob_end_flush`, `ob_flush`, `ob_get_status`, `ob_implicit_flush`, `ob_list_handlers`
-
-**Streams and sockets:** `stream_isatty`, `stream_is_local`, `stream_supports_lock`, `stream_get_wrappers`, `stream_get_transports`, `stream_get_filters`, `stream_context_create`, `stream_context_get_default`, `stream_context_set_default`, `stream_context_set_option`, `stream_context_set_params`, `stream_context_get_options`, `stream_context_get_params`, `stream_resolve_include_path`, `stream_get_contents`, `stream_copy_to_stream`, `stream_get_line`, `stream_get_meta_data`, `stream_set_chunk_size`, `stream_set_read_buffer`, `stream_set_write_buffer`, `stream_set_blocking`, `stream_set_timeout`, `stream_select`, `stream_filter_register`, `stream_filter_append`, `stream_filter_prepend`, `stream_filter_remove`, `stream_bucket_new`, `stream_bucket_make_writeable`, `stream_bucket_append`, `stream_bucket_prepend`, `stream_wrapper_register`, `stream_wrapper_unregister`, `stream_wrapper_restore`, `stream_socket_server`, `stream_socket_client`, `stream_socket_accept`, `stream_socket_enable_crypto`, `stream_socket_shutdown`, `stream_socket_sendto`, `stream_socket_recvfrom`, `stream_socket_get_name`, `stream_socket_pair`, `fsockopen`, `pfsockopen`, `popen`, `pclose`, `gethostname`, `gethostbyname`, `gethostbyaddr`, `getprotobyname`, `getprotobynumber`, `getservbyname`, `getservbyport`
-
-**System:** `exit`, `die`, `time`, `microtime`, `hrtime`, `date`, `gmdate`, `mktime`, `gmmktime`, `checkdate`, `getdate`, `localtime`, `strtotime`, `date_default_timezone_get`, `date_default_timezone_set`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `extension_loaded`, `get_loaded_extensions`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace_callback`, `preg_replace`, `preg_split`, `define`, `defined`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`, `serialize`, `unserialize`, `header`, `http_response_code`
-
-**SPL/autoload:** `spl_autoload_register`, `spl_autoload_unregister`, `spl_autoload_functions`, `spl_autoload_extensions`, `spl_autoload_call`, `spl_autoload`, `spl_classes`, `spl_object_id`, `spl_object_hash`, `iterator_to_array`, `iterator_count`, `iterator_apply`
-
-**Pointers/Buffers:** `ptr`, `ptr_null`, `ptr_is_null`, `ptr_get`, `ptr_set`, `ptr_read8`, `ptr_read16`, `ptr_read32`, `ptr_read_string`, `ptr_write8`, `ptr_write16`, `ptr_write32`, `ptr_write_string`, `ptr_offset`, `ptr_cast<T>`, `ptr_sizeof`, `buffer_new`, `buffer_new<T>()`, `buffer_len`, `buffer_free`, `zval_pack`, `zval_unpack`, `zval_type`, `zval_free`
-
-</details>
+The shared builtin catalog currently exposes 505 PHP-visible entries across arrays, buffers, class introspection, dates, filesystems, I/O, JSON, math/BCMath, process control, regex, SPL, streams, strings, types, and elephc's pointer extensions. The exhaustive list, signatures, availability, and implementation links are generated from that catalog in [Built-in functions](docs/php/builtins.md); keeping one generated index avoids a second hand-maintained list drifting here.
 
 ### Constants
 
@@ -443,7 +418,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → function-argument introspection desugaring → OPcache manifest bake → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → assembly/source-map write → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -493,6 +468,8 @@ The static type system tracks these runtime shapes at compile time:
 - **Pointer** — raw 64-bit addresses, optionally tagged via `ptr_cast<T>()`
 - **Resource** — stream handles such as successful `fopen()` results and standard streams
 - **Union** — declared union types lowered to boxed tagged runtime payloads
+
+The checker also carries the internal `False` subtype and the two-word `TaggedScalar` codegen shape used by the default tagged null representation.
 
 A variable's type is set at first assignment. Compatible types (int/float/bool/null) can be reassigned between each other.
 
@@ -591,64 +568,42 @@ src/
 │       ├── type_compat/ # Type compatibility and assignment rules
 │       └── yield_validation/ # Generator/yield placement validation
 │
+├── builtins/            # AOT builtin semantic home files bound to the shared catalog
 ├── ir/                  # EIR data model, builder, validator, and printer
 ├── ir_lower/            # Active AST → EIR lowering
+├── ir_passes/           # EIR fixed-point optimization and register allocation
 ├── codegen/             # Active EIR → target assembly backend
+│   ├── frame/           # Function frame analysis and placement
+│   ├── lower_inst/      # Instruction, builtin, object, callable, and runtime lowering
+│   └── runtime_metadata/ # Runtime feature and symbol metadata collected by codegen
 ├── codegen_support/     # Shared ABI/runtime/target helpers used by codegen
-│   ├── mod.rs           # Shared metadata registries and support re-exports
-│   ├── driver_support.rs # Runtime object, deferred callable, boxing, and hash-key helpers
-│   ├── prescan.rs       # Constant pre-scan feeding EIR lowering
-│   ├── program_usage.rs # Required-class usage analysis feeding metadata emission
-│   ├── expr.rs          # Expression codegen dispatcher
-│   ├── expr/            # Focused expression helpers (arrays, calls, objects, binops, ...)
-│   ├── stmt.rs          # Statement codegen dispatcher
-│   ├── stmt/            # Focused statement helpers (arrays, control_flow, io, storage, ...)
-│   ├── abi/             # Target-aware calling-convention, frame, and value helpers
-│   ├── functions/       # Closure/FCC wrapper emission and epilogue cleanup
-│   ├── interface_wrappers.rs # Interface dispatch return-shape adapters
-│   ├── callables.rs     # Top-level callable metadata and indirect-call helpers
-│   ├── ffi.rs           # Extern function/global/class codegen
-│   ├── reflection.rs    # Shared ReflectionAttribute materialization helpers
-│   ├── context.rs       # Variables, labels, loop/finally stacks, ownership lattice
-│   ├── data_section.rs  # String/float literal .data section
-│   ├── emit.rs          # Assembly text buffer
-│   ├── platform/        # Target parsing, syscall remapping, Linux transforms
-│   │
-│   ├── builtins/        # Built-in function codegen (one file per language function)
-│   │   ├── strings/     # strlen, substr, strpos, explode, implode, ...
-│   │   ├── arrays/      # count, array_push, array_pop, sort, ...
-│   │   ├── math/        # abs, floor, pow, rand, fmod, ...
-│   │   ├── types/       # is_int, gettype, empty, unset, settype, ...
-│   │   ├── spl/         # spl_autoload_*, spl_classes, spl_object_id/hash
-│   │   ├── io/          # fopen, fclose, fread, fwrite, fgets, var_dump, print_r, file_get_contents, ...
-│   │   ├── pointers/    # ptr, ptr_get, ptr_set, ptr_read8, ptr_write8, ptr_offset, ...
-│   │   └── system/      # exit, die, time, sleep, getenv, exec, ...
-│   │
-│   └── runtime/         # Runtime routines and target-specific emission helpers
-│       ├── strings/     # itoa, concat, ftoa, strpos, str_replace, ...
-│       ├── arrays/      # heap_alloc, array_new, array_push, sort, ...
-│       ├── buffers/     # buffer_new, buffer_len, bounds and lifetime checks
-│       ├── data/        # fixed and user-program runtime data/metadata
-│       ├── exceptions.rs # exception runtime orchestration / re-exports
-│       ├── exceptions/  # setjmp/longjmp-based exception helpers
-│       ├── io/          # fopen, fclose, fread, fwrite, file_ops, ...
-│       ├── objects/     # stdClass, dynamic property, mixed object/index helpers
-│       ├── pointers/    # ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str
-│       ├── system/      # build_argv, time, getenv, shell_exec
-│       ├── fibers/      # Fiber stacks, context switch, entry trampoline, Fiber API
-│       └── generators/  # Generator frame layout and __rt_gen_* helpers
+│   ├── abi/             # Target-aware calling-convention, frame, symbol, and value helpers
+│   ├── platform/        # Target definitions and assembler/linker tooling
+│   ├── program_usage/   # Required-class and program-usage analysis
+│   ├── runtime/         # Shared target-aware __rt_* runtime emitters and data
+│   ├── stream_filters/  # zlib/bzip2/iconv stream-filter attachment
+│   └── wrappers/        # Callback and Fiber wrapper emitters
 │
 └── errors/              # Error formatting with line:col
 
 crates/
-└── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-builtin-contract/ # Dependency-neutral builtin catalog and signatures
+├── elephc-bcmath/       # Exact arbitrary-precision decimal bridge
+├── elephc-crypto/       # Hashing, HMAC, and OpenSSL-compatible crypto bridge
+├── elephc-image/        # GD/Exif/Imagick/Gmagick/Cairo image bridge
+├── elephc-magician/     # Optional EvalIR interpreter staticlib for dynamic eval
+├── elephc-pdo/          # Multi-driver PDO bridge
+├── elephc-phar/         # PHAR/tar/zip bridge
+├── elephc-tls/          # TLS stream bridge
+├── elephc-tz/           # IANA timezone bridge
+└── elephc-web/          # Prefork HTTP server bridge
 ```
 
 </details>
 
 ## Tests
 
-3000+ tests across lexer, parser, codegen, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
+10,000+ Rust test cases across lexer, parser, codegen, runtime, and error reporting. Each codegen test compiles inline PHP source to a native binary, runs it, and asserts stdout.
 
 ```bash
 cargo test                      # all tests

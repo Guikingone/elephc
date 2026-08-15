@@ -408,7 +408,7 @@ fn emit_int_reduce_x86_64(
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // r10 = the array's logical element count from its header
     ctx.emitter.instruction("test r10, r10");                                   // check whether the array holds any element at all
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET)); // r11 = address of the first payload slot
+    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET));// r11 = address of the first payload slot
     ctx.emitter.instruction("mov rax, QWORD PTR [r11]");                        // rax = running result seeded with element 0
     ctx.emitter.instruction("mov rcx, 1");                                      // rcx = cursor starting at the second element
     // -- fold every remaining element into the running result --
@@ -438,7 +438,7 @@ fn emit_float_reduce_x86_64(
     ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                        // r10 = the array's logical element count from its header
     ctx.emitter.instruction("test r10, r10");                                   // check whether the array holds any element at all
     ctx.emitter.instruction(&format!("jz {}", empty_label));                    // an empty array is PHP's ValueError, not a reduction
-    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET)); // r11 = address of the first payload slot
+    ctx.emitter.instruction(&format!("lea r11, [rax + {}]", ARRAY_DATA_OFFSET));// r11 = address of the first payload slot
     ctx.emitter.instruction("movsd xmm0, QWORD PTR [r11]");                     // xmm0 = running result seeded with element 0
     ctx.emitter.instruction("mov rcx, 1");                                      // rcx = cursor starting at the second element
     // -- fold every remaining element into the running result --
