@@ -14,7 +14,6 @@ use crate::parser::ast::{Expr, ExprKind, StaticReceiver, TypeExpr};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
     /// Infers the type of a method call expression (`$obj->method(...)`).
@@ -562,13 +561,20 @@ impl Checker {
                     // later checker pass then rejected the very call that produced it.
                     && !declared_flags.get(regular_param_count).copied().unwrap_or(false)
                 {
+                    // The join is `union_param_type`, the same one the regular parameters above
+                    // use, and NOT `wider_type_syntactic`. The syntactic widening exists for
+                    // COERCION contexts, where `Str`/`Float` absorb the other scalars; applied to
+                    // a variadic tail it collapsed a method called once with an int and once with
+                    // a float to `array<float>`, and the int call then stored its raw word in a
+                    // float slot — `$c->v("a", 1)` printed `[5.0e-324]`. A PHP array keeps a tag
+                    // per element, so disagreeing scalars have to become `Mixed` (boxed).
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            Self::union_param_type(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_return_type
@@ -1151,11 +1157,11 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            Self::union_param_type(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_static_return_type
@@ -1216,11 +1222,11 @@ impl Checker {
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
-                        elem_ty = wider_type_syntactic(&elem_ty, arg_ty);
+                        elem_ty = Self::union_param_type(&elem_ty, arg_ty);
                     }
                     if let Some((_, PhpType::Array(existing_elem_ty))) = sig.params.last_mut() {
                         **existing_elem_ty =
-                            wider_type_syntactic(existing_elem_ty.as_ref(), &elem_ty);
+                            Self::union_param_type(existing_elem_ty.as_ref(), &elem_ty);
                     }
                 }
                 return Ok(late_static_instance_return_type
