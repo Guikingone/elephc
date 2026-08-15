@@ -268,6 +268,8 @@ impl Checker {
                 PhpType::Object(_) | PhpType::Callable,
                 actual @ (PhpType::Mixed | PhpType::Union(_)),
             ) if actual.codegen_repr() == PhpType::Mixed => true,
+            (PhpType::Iterable, actual @ (PhpType::Mixed | PhpType::Union(_)))
+                if actual.codegen_repr() == PhpType::Mixed => true,
             (PhpType::Array(element), actual @ (PhpType::Mixed | PhpType::Union(_)))
                 if element.codegen_repr() == PhpType::Mixed
                     && actual.codegen_repr() == PhpType::Mixed => true,

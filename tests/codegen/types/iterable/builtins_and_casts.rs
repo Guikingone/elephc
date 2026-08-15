@@ -9,6 +9,71 @@
 
 use super::*;
 
+/// Verifies boxed gradual arrays are checked and unboxed at an iterable parameter boundary.
+#[test]
+fn test_mixed_arrays_bind_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function choose(bool $assoc): mixed {
+    return $assoc ? ['a' => 3, 'b' => 4] : [1, 2];
+}
+
+function total(iterable $values): int {
+    $sum = 0;
+    foreach ($values as $value) {
+        $sum += $value;
+    }
+    return $sum;
+}
+
+echo total(choose(false)), ':', total(choose(true));
+"#,
+    );
+    assert_eq!(out, "3:7");
+}
+
+/// Verifies a boxed Traversable object is validated and unboxed at an iterable boundary.
+#[test]
+fn test_mixed_traversable_object_binds_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function choose(): mixed {
+    return new ArrayIterator([5, 6]);
+}
+
+function total(iterable $values): int {
+    $sum = 0;
+    foreach ($values as $value) {
+        $sum += $value;
+    }
+    return $sum;
+}
+
+echo total(choose());
+"#,
+    );
+    assert_eq!(out, "11");
+}
+
+/// Verifies a non-iterable boxed gradual value raises a runtime type error at the boundary.
+#[test]
+fn test_mixed_scalar_rejected_by_iterable_parameter() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function choose(): mixed {
+    return 42;
+}
+
+function total(iterable $values): int {
+    return count($values);
+}
+
+echo total(choose());
+"#,
+    );
+    assert!(err.contains("Value must be of type iterable, int given"));
+}
+
 /// Verifies that `iterable` typed parameter returns "array" from `gettype()` for both hash and indexed arrays.
 #[test]
 fn test_gettype_iterable_returns_array() {

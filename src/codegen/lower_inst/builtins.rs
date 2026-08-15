@@ -50,7 +50,7 @@ mod member_exists;
 mod member_queries;
 mod scalar_metadata;
 mod shared;
-mod type_predicates;
+pub(in crate::codegen::lower_inst) mod type_predicates;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;

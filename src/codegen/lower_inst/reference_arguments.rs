@@ -426,11 +426,83 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 format!("Value must be of type callable, {} given", given)
             });
         }
+        (PhpType::Iterable, _) => emit_mixed_iterable_unbox_guard(ctx),
         _ => abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"),
     }
     move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     abi::emit_incref_if_refcounted(ctx.emitter, &result_ty);
     store_if_result(ctx, inst)
+}
+
+/// Unboxes a gradual iterable after validating arrays or Traversable object payloads.
+fn emit_mixed_iterable_unbox_guard(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let accepted_label = ctx.next_label("mixed_iterable_accepted");
+    let object_label = ctx.next_label("mixed_iterable_object");
+    let object_accepted_label = ctx.next_label("mixed_iterable_object_accepted");
+    let wrong_label = ctx.next_label("mixed_iterable_wrong_type");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 identifies an indexed array iterable
+            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept indexed array payloads without object checks
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 identifies an associative array iterable
+            ctx.emitter.instruction(&format!("b.eq {}", accepted_label));       // accept associative array payloads without object checks
+            ctx.emitter.instruction("cmp x0, #6");                              // runtime tag 6 identifies an object candidate
+            ctx.emitter.instruction(&format!("b.eq {}", object_label));         // validate object candidates against Traversable contracts
+            ctx.emitter.instruction(&format!("b {}", wrong_label));             // reject scalar and resource payloads at the boundary
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 identifies an indexed array iterable
+            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept indexed array payloads without object checks
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 identifies an associative array iterable
+            ctx.emitter.instruction(&format!("je {}", accepted_label));         // accept associative array payloads without object checks
+            ctx.emitter.instruction("cmp rax, 6");                              // runtime tag 6 identifies an object candidate
+            ctx.emitter.instruction(&format!("je {}", object_label));           // validate object candidates against Traversable contracts
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));           // reject scalar and resource payloads at the boundary
+        }
+    }
+
+    ctx.emitter.label(&object_label);
+    let interface_ids = builtins::type_predicates::traversable_interface_ids(ctx);
+    if interface_ids.is_empty() {
+        abi::emit_jump(ctx.emitter, &wrong_label);
+    } else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x1"),
+            Arch::X86_64 => abi::emit_push_reg(ctx.emitter, "rdi"),
+        }
+        for interface_id in interface_ids {
+            builtins::type_predicates::emit_saved_object_interface_check(
+                ctx,
+                interface_id,
+                &object_accepted_label,
+            );
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_pop_reg(ctx.emitter, "x1");
+                abi::emit_load_int_immediate(ctx.emitter, "x0", 6);
+            }
+            Arch::X86_64 => {
+                abi::emit_pop_reg(ctx.emitter, "rdi");
+                abi::emit_load_int_immediate(ctx.emitter, "rax", 6);
+            }
+        }
+        abi::emit_jump(ctx.emitter, &wrong_label);
+        ctx.emitter.label(&object_accepted_label);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x1"),
+            Arch::X86_64 => abi::emit_pop_reg(ctx.emitter, "rdi"),
+        }
+        abi::emit_jump(ctx.emitter, &accepted_label);
+    }
+
+    builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| format!("Value must be of type iterable, {} given", given),
+    );
+    ctx.emitter.label(&accepted_label);
 }
 
 /// Unboxes a dynamic value and raises a catchable type error unless its tag matches.

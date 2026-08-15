@@ -78,6 +78,14 @@ pub(super) fn coerce_gradual_value_to_boundary(
             Op::MixedUnbox.default_effects(),
             span,
         ),
+        PhpType::Iterable => ctx.emit_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            None,
+            target.clone(),
+            Op::MixedUnbox.default_effects(),
+            span,
+        ),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => ctx.emit_value(
             Op::MixedToHash,
             vec![value.value],
