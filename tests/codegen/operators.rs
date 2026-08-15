@@ -322,6 +322,20 @@ fn test_modulo_zero_remainder() {
     assert_eq!(out, "0");
 }
 
+/// Verifies `%` over a float source has the static integer type that PHP's operand conversion
+/// produces, so its result can bind directly to an `int` parameter.
+#[test]
+fn test_float_modulo_result_binds_to_int_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function takeInt(int $value): int { return $value; }
+function remainder(float $value): int { return takeInt($value % 3); }
+echo remainder(10.5);
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
 
 /// Verifies loose equality comparison returning true: 1 == 1 outputs "1".
 #[test]

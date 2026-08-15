@@ -115,8 +115,13 @@ impl Checker {
                         "Arithmetic operators require numeric operands",
                     ));
                 }
+                // PHP converts both modulo operands to integers and always returns an integer,
+                // even when either source operand is a float. Keep this before the general
+                // float propagation so the checker agrees with EIR's `ISMod` result.
+                if *op == BinOp::Mod {
+                    Ok(PhpType::Int)
                 // Division always returns float (PHP compat: 10/3 → 3.333...)
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                } else if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {

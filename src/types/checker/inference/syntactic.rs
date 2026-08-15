@@ -476,7 +476,9 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             BinOp::Sub | BinOp::Mul | BinOp::Mod => {
                 let lt = infer_expr_type_syntactic(left);
                 let rt = infer_expr_type_syntactic(right);
-                if lt == PhpType::Float || rt == PhpType::Float {
+                if *op == BinOp::Mod {
+                    PhpType::Int
+                } else if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
