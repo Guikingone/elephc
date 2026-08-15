@@ -233,6 +233,32 @@ fn local_storage_widening_ignores_later_void_state() {
     assert_eq!(builder.local_php_type(slot), PhpType::Int);
 }
 
+/// Keeps nullable scalar frame storage tagged when a control-flow path stores a plain scalar.
+#[test]
+fn local_storage_widening_preserves_tagged_scalar_for_plain_scalar_stores() {
+    let mut function =
+        Function::new("tagged_scalar_store".to_string(), IrType::Void, PhpType::Void);
+    let mut builder = Builder::new(&mut function);
+    let tagged_slot = builder.add_local(
+        Some("nullable".to_string()),
+        IrType::TaggedScalar,
+        PhpType::TaggedScalar,
+        LocalKind::PhpLocal,
+    );
+    let int_slot = builder.add_local(
+        Some("plain".to_string()),
+        IrType::I64,
+        PhpType::Int,
+        LocalKind::PhpLocal,
+    );
+
+    builder.widen_local_storage_type(tagged_slot, PhpType::Int);
+    builder.widen_local_storage_type(int_slot, PhpType::TaggedScalar);
+
+    assert_eq!(builder.local_php_type(tagged_slot), PhpType::TaggedScalar);
+    assert_eq!(builder.local_php_type(int_slot), PhpType::TaggedScalar);
+}
+
 /// Preserves an explicit owned-slot cleanup even when its storage remains concrete.
 #[test]
 fn owned_local_load_release_is_not_pruned_for_concrete_storage() {

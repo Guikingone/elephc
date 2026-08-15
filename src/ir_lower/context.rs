@@ -693,6 +693,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(required) = self.by_ref_local_storage_types.get(&key) {
             return required.clone();
         }
+        if let Some(current) = self.local_types.get(name) {
+            if current.codegen_repr() == PhpType::TaggedScalar
+                && matches!(
+                    php_type.codegen_repr(),
+                    PhpType::Int
+                        | PhpType::Bool
+                        | PhpType::Void
+                        | PhpType::Never
+                        | PhpType::TaggedScalar
+                )
+            {
+                // A conditional store into one branch of a nullable-scalar CFG must not make
+                // later merged reads forget the tag word. Keep the original semantic union so
+                // skipped branches still decode null rather than reading the payload as a scalar.
+                return current.clone();
+            }
+        }
         if matches!(php_type.codegen_repr(), PhpType::Str)
             && self.string_incdec_locals.contains(&key)
         {

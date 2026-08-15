@@ -577,6 +577,14 @@ fn widened_local_storage_type(current: &PhpType, incoming: &PhpType) -> PhpType 
     }
     match (&current, &incoming) {
         (current, PhpType::Void | PhpType::Never) => current.clone(),
+        (
+            PhpType::TaggedScalar,
+            PhpType::Int | PhpType::Bool | PhpType::TaggedScalar,
+        )
+        | (
+            PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never,
+            PhpType::TaggedScalar,
+        ) => PhpType::TaggedScalar,
         (PhpType::Array(_), PhpType::Array(_)) => incoming,
         (PhpType::AssocArray { .. }, PhpType::AssocArray { .. }) => incoming,
         (

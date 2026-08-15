@@ -800,6 +800,43 @@ echo conditionalOutput(true), conditionalOutput(false);
     assert_eq!(out, "30");
 }
 
+/// Verifies an OR operand sees the non-null fact required by its execution path.
+#[test]
+fn test_nullable_post_decrement_is_narrowed_by_short_circuit_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function retry(?int $attempts): int {
+    while (null === $attempts || $attempts--) {
+        return null === $attempts ? 0 : 1;
+    }
+    return -1;
+}
+
+echo retry(2);
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies an AND-controlled loop body sees a numeric lower-bound receiver as non-null.
+#[test]
+fn test_nullable_pre_decrement_is_narrowed_by_numeric_lower_bound() {
+    let out = compile_and_run(
+        r#"<?php
+function bounded(?int $limit): int {
+    while (1 < $limit && true) {
+        --$limit;
+        return 1;
+    }
+    return 0;
+}
+
+echo bounded(null), ':', bounded(2);
+"#,
+    );
+    assert_eq!(out, "0:1");
+}
+
 /// Verifies nullsafe method dispatch short-circuits a boxed gradual null receiver.
 #[test]
 fn test_nullsafe_method_call_on_mixed_receiver() {

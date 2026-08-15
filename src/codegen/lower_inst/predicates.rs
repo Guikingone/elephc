@@ -10,7 +10,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Instruction, ValueId};
+use crate::ir::{Instruction, IrType, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -20,6 +20,10 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        emit_tagged_scalar_truthiness(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;

@@ -56,6 +56,8 @@ pub(crate) struct GuardNarrowing {
 enum GuardTarget {
     /// An exact scalar, null, callable, or object target.
     Exact(PhpType),
+    /// A one-sided proof that the truthy path cannot contain null.
+    NonNull,
     /// An object-like target whose declaration is unavailable to the static checker.
     UnknownObject,
     /// Any indexed or associative array, regardless of its element types.
@@ -69,7 +71,7 @@ impl GuardTarget {
     fn fallback_type(&self) -> PhpType {
         match self {
             Self::Exact(ty) => ty.clone(),
-            Self::UnknownObject | Self::AnyArray => PhpType::Mixed,
+            Self::NonNull | Self::UnknownObject | Self::AnyArray => PhpType::Mixed,
             Self::Countable => PhpType::Union(vec![
                 PhpType::Array(Box::new(PhpType::Mixed)),
                 PhpType::Object("Countable".to_string()),
@@ -437,6 +439,9 @@ impl Checker {
     /// drops its matching members, while `Mixed` and concrete types are returned unchanged (the
     /// complement of `Mixed` is not representable). An empty result falls back to `current`.
     fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
+        if matches!(target, GuardTarget::NonNull) {
+            return current.clone();
+        }
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> = members
@@ -460,6 +465,7 @@ impl Checker {
     /// to the generic array-or-Countable union only on the guard's true edge.
     fn guard_matches(&self, member: &PhpType, target: &GuardTarget) -> bool {
         match target {
+            GuardTarget::NonNull => !matches!(member, PhpType::Void),
             GuardTarget::UnknownObject => false,
             GuardTarget::AnyArray => {
                 matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
@@ -604,6 +610,23 @@ fn guard_receiver_and_target<'a>(
                 GuardTarget::Exact(narrowed_type),
                 false,
             ))
+        }
+        // A true numeric lower-bound comparison proves the receiver is not null: PHP evaluates
+        // both `1 < null` and `null > 1` as false. The inverse path remains unconstrained
+        // because a false comparison may hold for either null or a smaller numeric value.
+        ExprKind::BinaryOp { left, op, right }
+            if matches!(&left.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_))
+                && is_guard_receiver_shape(&right.kind)
+                && matches!(op, BinOp::Lt | BinOp::LtEq) =>
+        {
+            Some((right, GuardTarget::NonNull, false))
+        }
+        ExprKind::BinaryOp { left, op, right }
+            if is_guard_receiver_shape(&left.kind)
+                && matches!(&right.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_))
+                && matches!(op, BinOp::Gt | BinOp::GtEq) =>
+        {
+            Some((left, GuardTarget::NonNull, false))
         }
         // `$var === false` / `false === $var`: narrow to the literal False subtype in the
         // then-branch; the else-branch strips only that member (e.g. int|false → int) while a full

@@ -34,7 +34,20 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let lt = self.infer_type(left, env)?;
-        let rt = self.infer_type(right, env)?;
+        let mut right_env = env.clone();
+        if matches!(op, BinOp::And | BinOp::Or) {
+            if let Some(narrowing) = self.guard_narrowing(left, env)? {
+                right_env.insert(
+                    narrowing.var,
+                    if *op == BinOp::And {
+                        narrowing.then_ty
+                    } else {
+                        narrowing.else_ty
+                    },
+                );
+            }
+        }
+        let rt = self.infer_type(right, &right_env)?;
         match op {
             BinOp::Pow => {
                 let lt_ok = is_numeric_operand_type(self, &lt);

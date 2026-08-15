@@ -114,7 +114,7 @@ fn lower_array_storage_to_owned_hash(
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
             ctx.emitter.instruction("cmp x0, #3");                              // distinguish a dynamically promoted hash from indexed storage
-            ctx.emitter.instruction(&format!("b.eq {}", hash));                // clone an existing hash so the stdClass remains isolated
+            ctx.emitter.instruction(&format!("b.eq {}", hash));                 // clone an existing hash so the stdClass remains isolated
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
             ctx.emitter.instruction(&format!("b {}", done));
@@ -129,8 +129,8 @@ fn lower_array_storage_to_owned_hash(
             ctx.load_value_to_reg(value, "rax")?;
             abi::emit_push_reg(ctx.emitter, "rax");
             abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
-            ctx.emitter.instruction("cmp rax, 3");                             // distinguish a dynamically promoted hash from indexed storage
-            ctx.emitter.instruction(&format!("je {}", hash));                 // clone an existing hash so the stdClass remains isolated
+            ctx.emitter.instruction("cmp rax, 3");                              // distinguish a dynamically promoted hash from indexed storage
+            ctx.emitter.instruction(&format!("je {}", hash));                   // clone an existing hash so the stdClass remains isolated
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_call_label(ctx.emitter, "__rt_array_to_hash");           // convert indexed storage into a fresh owned hash
             ctx.emitter.instruction(&format!("jmp {}", done));
@@ -167,6 +167,11 @@ fn lower_cast_to_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Res
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
 fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;
@@ -212,6 +217,12 @@ fn lower_cast_to_int(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
 /// Lowers an explicit cast to PHP float for concrete scalar operands.
 fn lower_cast_to_float(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    if ctx.value_ir_type(value)? == IrType::TaggedScalar {
+        ctx.load_value_to_result(value)?;
+        crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+        abi::emit_int_result_to_float_result(ctx.emitter);
+        return store_if_result(ctx, inst);
+    }
     let raw_ty = ctx.raw_value_php_type(value)?;
     if matches!(raw_ty, PhpType::Resource(_)) {
         ctx.load_value_to_result(value)?;

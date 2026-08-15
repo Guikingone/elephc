@@ -223,6 +223,16 @@ impl Checker {
                     } else {
                         self.install_falsy_short_circuit_effects(left, &mut right_env)?;
                     }
+                    if let Some(narrowing) = self.guard_narrowing(left, &right_env)? {
+                        right_env.insert(
+                            narrowing.var,
+                            if *op == BinOp::And {
+                                narrowing.then_ty
+                            } else {
+                                narrowing.else_ty
+                            },
+                        );
+                    }
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
                     merge_conditional_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
