@@ -174,3 +174,20 @@ class S {
         "return type expects Object(\"S\")",
     );
 }
+
+/// Verifies an `instanceof` guard narrows bare `$this` to the proven interface in its branch.
+#[test]
+fn test_this_instanceof_narrows_to_subinterface_method() {
+    expect_no_error(
+        "<?php interface Base { public function base(): string; } interface Kid extends Base { public function kids(): int; } abstract class NodeBase implements Base { public function go(): int { if ($this instanceof Kid) { return $this->kids(); } return 0; } }",
+    );
+}
+
+/// Verifies bare-`$this` narrowing still rejects methods absent from the proven interface.
+#[test]
+fn test_this_instanceof_rejects_method_absent_from_interface() {
+    expect_error(
+        "<?php interface Base { public function base(): string; } interface Kid extends Base { public function kids(): int; } abstract class NodeBase implements Base { public function go(): int { if ($this instanceof Kid) { return $this->notOnKid(); } return 0; } }",
+        "Undefined method: Kid::notOnKid",
+    );
+}

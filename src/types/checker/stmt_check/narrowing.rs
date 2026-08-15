@@ -146,14 +146,16 @@ impl Checker {
         {
             return Ok(None);
         }
-        // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls back
-        // to its declared field type. An unbound plain variable stays un-narrowed.
+        // A prior narrowing (or a variable binding) wins; otherwise a property or `$this`
+        // receiver falls back to its declared type. An unbound plain variable stays un-narrowed.
         let current = match env.get(&key) {
             Some(ty) => ty.clone(),
             None
                 if matches!(
                     receiver.kind,
-                    ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+                    ExprKind::PropertyAccess { .. }
+                        | ExprKind::StaticPropertyAccess { .. }
+                        | ExprKind::This
                 ) =>
             {
                 match self.infer_type(receiver, env) {
@@ -251,6 +253,14 @@ impl Checker {
         }
     }
 
+    /// Synthetic `TypeEnv` key for a narrowed bare `$this` receiver.
+    ///
+    /// The leading control-byte sigil keeps the fact outside the PHP variable namespace and lets
+    /// the existing property-effect invalidation discard it after calls that may mutate state.
+    pub(crate) fn narrowed_this_env_key() -> &'static str {
+        "\u{1}this\u{1}$this"
+    }
+
     /// Synthetic `TypeEnv` key for a narrowed static property access (`self::$p`, `Cls::$p`).
     ///
     /// The receiver is resolved to its declaring class first, so `self::$p` and `Cls::$p` inside
@@ -271,9 +281,9 @@ impl Checker {
         Some(format!("\u{1}sprop\u{1}{class_name}::${property}"))
     }
 
-    /// `TypeEnv` key for a guard receiver: a variable's name, or the synthetic property key for a
-    /// simple instance/static property access. `None` for receivers narrowing can't key
-    /// (complex chains, `static::$p`).
+    /// `TypeEnv` key for a guard receiver: a variable's name, bare `$this`, or the synthetic
+    /// property key for a simple instance/static property access. `None` for receivers narrowing
+    /// cannot key (complex chains, `static::$p`).
     fn guard_env_key(&self, receiver: &Expr) -> Option<String> {
         match &receiver.kind {
             ExprKind::Variable(var) => Some(var.clone()),
@@ -284,6 +294,7 @@ impl Checker {
                 receiver: static_receiver,
                 property,
             } => self.narrowed_static_property_env_key(static_receiver, property, receiver),
+            ExprKind::This => Some(Self::narrowed_this_env_key().to_string()),
             _ => None,
         }
     }

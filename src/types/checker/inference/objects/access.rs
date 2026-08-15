@@ -559,8 +559,16 @@ impl Checker {
     /// Infers the type of `$this` inside a class method.
     ///
     /// Errors if called from a static method or outside a class context.
-    /// Returns `PhpType::Object(current_class)` for valid contexts.
-    pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
+    /// Returns the flow-narrowed receiver type when an `instanceof` guard proves one, otherwise
+    /// `PhpType::Object(current_class)` for valid contexts.
+    pub(crate) fn infer_this_type(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(narrowed) = env.get(Self::narrowed_this_env_key()) {
+            return Ok(narrowed.clone());
+        }
         if self.current_method_is_static {
             return Err(CompileError::new(
                 expr.span,

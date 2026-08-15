@@ -827,3 +827,28 @@ echo receiver(false)?->value() ?? 'no';
         out.stderr
     );
 }
+
+/// Verifies a bare `$this` receiver narrowed by `instanceof` can cross an interface-typed call
+/// boundary while retaining the same runtime object.
+#[test]
+fn test_this_instanceof_narrowing_passes_interface_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface Named { public function name(): string; }
+abstract class Base {
+    public function describe(): string {
+        if ($this instanceof Named) {
+            return readName($this);
+        }
+        return "base";
+    }
+}
+final class Child extends Base implements Named {
+    public function name(): string { return "child"; }
+}
+function readName(Named $value): string { return $value->name(); }
+echo (new Child())->describe();
+"#,
+    );
+    assert_eq!(out, "child");
+}
