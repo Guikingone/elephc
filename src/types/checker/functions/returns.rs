@@ -377,6 +377,12 @@ impl Checker {
             return Ok(());
         }
 
+        // Return lowering already normalizes a boxed gradual value into iterable storage.
+        // Parameter binding has a distinct ABI path and deliberately remains stricter.
+        if matches!((expected, actual), (PhpType::Iterable, PhpType::Mixed)) {
+            return Ok(());
+        }
+
         self.require_compatible_arg_type(expected, actual, span, context)
     }
 

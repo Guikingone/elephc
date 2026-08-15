@@ -2003,3 +2003,16 @@ echo 'done';
         out.stderr
     );
 }
+
+/// Verifies a boxed `mixed` array can cross an iterable return boundary.
+#[test]
+fn test_mixed_array_crosses_iterable_return_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamic_items(): mixed { return ["a" => 4, "b" => 5]; }
+function return_iterable(): iterable { return dynamic_items(); }
+foreach (return_iterable() as $key => $value) { echo $key, $value; }
+"#,
+    );
+    assert_eq!(out, "a4b5");
+}
