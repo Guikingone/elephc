@@ -15,9 +15,11 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_param_names("pclose"),
             Some(["handle"].as_slice())
         );
+        // php documents `opendir(string $directory, $context = null)`; `$context` is accepted and
+        // ignored, so the name is part of the signature even though nothing reads it.
         assert_eq!(
             eval_declared_builtin_param_names("opendir"),
-            Some(["directory"].as_slice())
+            Some(["directory", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("closedir"),

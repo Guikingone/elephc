@@ -133,7 +133,8 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("scandir"),
-            Some(["directory", "sorting_order"].as_slice())
+            // php documents a third `$context`, accepted and ignored like `opendir()`'s.
+            Some(["directory", "sorting_order", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("tempnam"),
