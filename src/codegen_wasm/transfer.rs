@@ -426,6 +426,10 @@ fn emit_unbox_mixed_to_concrete(
                 "call $__rt_mixed_cast_float",
                 "unbox f64 payload from mixed cell",
             );
+            // The helper answers RAW f64 BITS in an i64 — every caller reinterprets;
+            // without this the f64 destination fails module validation.
+            ctx.fb
+                .ins("f64.reinterpret_i64", "reinterpret cast bits as f64");
         }
         WasmRepr::Str { .. } => {
             ctx.fb.ins(
