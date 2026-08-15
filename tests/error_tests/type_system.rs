@@ -883,6 +883,16 @@ fn test_error_self_type_outside_class() {
     );
 }
 
+/// Verifies a closure declared outside a class still rejects the unresolved relative `self`
+/// parameter type instead of treating it as an ordinary class name.
+#[test]
+fn test_error_closure_self_type_outside_class() {
+    expect_error(
+        "<?php $closure = static function (self $value): int { return 1; };",
+        "Cannot use 'self' as a type outside of a class",
+    );
+}
+
 /// Verifies that `static` is likewise rejected as a free-function parameter type.
 #[test]
 fn test_error_static_type_outside_class() {

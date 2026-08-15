@@ -32,7 +32,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<PhpType, CompileError> {
-        let ty = self.resolve_type_expr(type_expr, span)?;
+        let ty = self.resolve_type_expr_in_current_class(type_expr, span)?;
         match ty {
             PhpType::Void => Err(CompileError::new(
                 span,
@@ -60,16 +60,23 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
-        if type_expr.contains_late_static() {
-            if let Some(current_class) = self.current_class.as_deref() {
-                let parent = self
-                    .classes
-                    .get(current_class)
-                    .and_then(|class_info| class_info.parent.as_deref());
-                let resolved =
-                    type_expr.substitute_relative_class_types(current_class, parent);
-                return self.resolve_type_expr(&resolved, span);
-            }
+        self.resolve_type_expr_in_current_class(type_expr, span)
+    }
+
+    /// Resolves relative class names against the active lexical class before converting a
+    /// declaration type expression, while preserving the outside-class diagnostics otherwise.
+    fn resolve_type_expr_in_current_class(
+        &self,
+        type_expr: &TypeExpr,
+        span: crate::span::Span,
+    ) -> Result<PhpType, CompileError> {
+        if let Some(current_class) = self.current_class.as_deref() {
+            let parent = self
+                .classes
+                .get(current_class)
+                .and_then(|class_info| class_info.parent.as_deref());
+            let resolved = type_expr.substitute_relative_class_types(current_class, parent);
+            return self.resolve_type_expr(&resolved, span);
         }
         self.resolve_type_expr(type_expr, span)
     }

@@ -748,6 +748,7 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         parent.classes,
+        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -784,6 +785,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         parent.classes,
+        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -1435,9 +1437,41 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    current_class: Option<&str>,
 ) -> FunctionSig {
-    let mut signature =
-        signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    let parent_class = current_class.and_then(|class_name| {
+        classes
+            .get(class_name)
+            .and_then(|class_info| class_info.parent.as_deref())
+    });
+    let resolved_params = current_class.map(|class_name| {
+        params
+            .iter()
+            .map(|(name, type_ann, default, by_ref)| {
+                (
+                    name.clone(),
+                    type_ann.as_ref().map(|type_ann| {
+                        type_ann.substitute_relative_class_types(class_name, parent_class)
+                    }),
+                    default.clone(),
+                    *by_ref,
+                )
+            })
+            .collect::<Vec<_>>()
+    });
+    let resolved_return_type = current_class.and_then(|class_name| {
+        return_type.map(|return_type| {
+            return_type.substitute_relative_class_types(class_name, parent_class)
+        })
+    });
+    let signature_params = resolved_params.as_deref().unwrap_or(params);
+    let signature_return_type = resolved_return_type.as_ref().or(return_type);
+    let mut signature = signature_from_ast_with_variadic(
+        signature_params,
+        signature_return_type,
+        variadic,
+        variadic_by_ref,
+    );
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;

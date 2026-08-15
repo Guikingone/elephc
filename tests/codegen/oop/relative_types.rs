@@ -26,6 +26,29 @@ fn test_self_return_type_chains() {
     assert_eq!(out, "ok");
 }
 
+/// Verifies a closure declared inside a class resolves `self` in both its parameter and return
+/// contract against the lexical class, including when the closure is static.
+#[test]
+fn test_closure_relative_types_use_lexical_class() {
+    let out = compile_and_run(
+        r#"<?php
+class RelativeClosureOwner {
+    public function __construct(public string $label) {}
+
+    public static function run(): string {
+        $identity = static function (self $value): self {
+            return $value;
+        };
+        return $identity(new self("ok"))->label;
+    }
+}
+
+echo RelativeClosureOwner::run();
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Regression: a `self`-typed VARIADIC parameter (`self ...$items`) must have its `self`
 /// rewritten to the enclosing class like every other member type annotation. Previously the
 /// variadic-param type was skipped, so `self` survived and was rejected with
