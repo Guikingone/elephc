@@ -372,6 +372,16 @@ fn test_error_count_wrong_args() {
     expect_error("<?php count();", "count() takes 1 or 2 arguments");
 }
 
+/// Verifies an unguarded iterable remains too broad for `count()`: it may hold a Traversable that
+/// does not implement `Countable`, so only `is_countable()` can establish the required branch fact.
+#[test]
+fn test_error_count_unguarded_iterable() {
+    expect_error(
+        "<?php function size(iterable $values): int { return count($values); }",
+        "count() argument must be array or Countable object",
+    );
+}
+
 /// Verifies that error array diff wrong args.
 #[test]
 fn test_error_array_diff_wrong_args() {

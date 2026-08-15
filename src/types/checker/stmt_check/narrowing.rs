@@ -6,7 +6,7 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes scalar, null, array, and callable `is_*($var)` predicates (and aliases),
+//! - Recognizes scalar, null, array, countable, and callable `is_*($var)` predicates (and aliases),
 //!   `$var instanceof Class`, `=== null` / `=== false` and their `!==` forms, and single-operand
 //!   `isset(...)`. Bare locals and simple local assignments also narrow representable null/false
 //!   members on their truthy edge. `!==` and `isset` are self-negating guards, which combine with a leading `!`
@@ -52,8 +52,7 @@ pub(crate) struct GuardNarrowing {
     pub else_ty: PhpType,
 }
 
-/// Describes an exact guard type, an unresolved object target, or the element-agnostic array
-/// family.
+/// Describes an exact guard type, an unresolved object target, or a structural PHP type family.
 enum GuardTarget {
     /// An exact scalar, null, callable, or object target.
     Exact(PhpType),
@@ -61,6 +60,8 @@ enum GuardTarget {
     UnknownObject,
     /// Any indexed or associative array, regardless of its element types.
     AnyArray,
+    /// Any indexed/associative array or object implementing `Countable`.
+    Countable,
 }
 
 impl GuardTarget {
@@ -69,6 +70,10 @@ impl GuardTarget {
         match self {
             Self::Exact(ty) => ty.clone(),
             Self::UnknownObject | Self::AnyArray => PhpType::Mixed,
+            Self::Countable => PhpType::Union(vec![
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Object("Countable".to_string()),
+            ]),
         }
     }
 }
@@ -412,15 +417,18 @@ impl Checker {
     fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
-                let kept: Vec<PhpType> =
-                    members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
+                let kept: Vec<PhpType> = members
+                    .iter()
+                    .filter(|member| self.guard_matches(member, target))
+                    .cloned()
+                    .collect();
                 if kept.is_empty() {
                     target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
-            _ if guard_matches(current, target) => current.clone(),
+            _ if self.guard_matches(current, target) => current.clone(),
             _ => target.fallback_type(),
         }
     }
@@ -431,8 +439,11 @@ impl Checker {
     fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
-                let kept: Vec<PhpType> =
-                    members.iter().filter(|m| !guard_matches(m, target)).cloned().collect();
+                let kept: Vec<PhpType> = members
+                    .iter()
+                    .filter(|member| !self.guard_matches(member, target))
+                    .cloned()
+                    .collect();
                 if kept.is_empty() {
                     current.clone()
                 } else {
@@ -440,6 +451,34 @@ impl Checker {
                 }
             }
             _ => current.clone(),
+        }
+    }
+
+    /// Returns whether `member` satisfies the structural family represented by `target`.
+    ///
+    /// Countability is inheritance-aware for known object types; an unresolved value falls back
+    /// to the generic array-or-Countable union only on the guard's true edge.
+    fn guard_matches(&self, member: &PhpType, target: &GuardTarget) -> bool {
+        match target {
+            GuardTarget::UnknownObject => false,
+            GuardTarget::AnyArray => {
+                matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+            }
+            GuardTarget::Countable => match member {
+                PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+                PhpType::Object(class_name) => {
+                    class_name.trim_start_matches('\\').eq_ignore_ascii_case("Countable")
+                        || self.class_implements_interface(class_name, "Countable")
+                }
+                _ => false,
+            },
+            GuardTarget::Exact(PhpType::Object(target_class)) => {
+                matches!(member, PhpType::Object(member_class) if member_class == target_class)
+            }
+            GuardTarget::Exact(PhpType::Bool) => {
+                matches!(member, PhpType::Bool | PhpType::False)
+            }
+            GuardTarget::Exact(target) => member == target,
         }
     }
 
@@ -525,6 +564,9 @@ fn guard_receiver_and_target<'a>(
                 "is_null" => GuardTarget::Exact(PhpType::Void),
                 "is_callable" => GuardTarget::Exact(PhpType::Callable),
                 "is_array" => GuardTarget::AnyArray,
+                // A true result proves exactly the two families accepted by `count()`. Keep
+                // unguarded `iterable` strict because it may be a non-Countable Traversable.
+                "is_countable" => GuardTarget::Countable,
                 // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
                 // exactly when the storage holds a non-null value. This is what makes
                 // `if (!isset(self::$inst)) { self::$inst = new S(); }` narrow.
@@ -607,22 +649,5 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
         PhpType::Void | PhpType::Never | PhpType::Mixed => false,
         PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
         _ => true,
-    }
-}
-
-/// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
-/// (else) members. Exact targets require a matching variant; an `Object` target matches an object
-/// member with the same class name (inheritance-aware narrowing is left for the future), an
-/// unresolved object target matches no statically known member, and `AnyArray` matches either
-/// array shape.
-fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
-    match target {
-        GuardTarget::UnknownObject => false,
-        GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
-        GuardTarget::Exact(PhpType::Object(target_class)) => {
-            matches!(member, PhpType::Object(member_class) if member_class == target_class)
-        }
-        GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
-        GuardTarget::Exact(target) => member == target,
     }
 }

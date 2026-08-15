@@ -878,3 +878,27 @@ echo (new LabeledValue())->describe();
     );
     assert_eq!(out, "value");
 }
+
+/// Verifies `is_countable()` narrows an iterable inside a ternary without claiming every
+/// Traversable is countable. Arrays take the guarded `count()` edge; a plain iterator takes null.
+#[test]
+fn test_is_countable_narrows_iterable_inside_ternary() {
+    let out = compile_and_run(
+        r#"<?php
+final class Sequence implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 1; }
+}
+final class CountedSequence implements IteratorAggregate, Countable {
+    public function getIterator(): Traversable { yield 1; }
+    public function count(): int { return 9; }
+}
+function guarded_count(iterable $values): ?int {
+    return is_countable($values) ? count($values) : null;
+}
+echo guarded_count([1, 2, 3]), "|";
+var_dump(guarded_count(new Sequence()));
+echo guarded_count(new CountedSequence());
+"#,
+    );
+    assert_eq!(out, "3|NULL\n9");
+}

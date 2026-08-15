@@ -13,8 +13,8 @@ use super::*;
 ///
 /// Called from `crate::builtins::array::count` (the registry home) via a thin wrapper.
 /// Handles Array/AssocArray (reads length directly from the runtime header), Mixed/Union
-/// (delegates to `__rt_mixed_count`), and Countable Object (calls the object's `count`
-/// method via intrinsic or dynamic dispatch).
+/// (delegates to `__rt_mixed_count`), a guard-narrowed Iterable (runtime array/object dispatch),
+/// and Countable Object (calls the object's `count` method via intrinsic or dynamic dispatch).
 pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "count", 1, 2)?;
     let value = expect_operand(inst, 0)?;
@@ -51,6 +51,7 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             store_if_result(ctx, inst)
         }
+        PhpType::Iterable => lower_guarded_iterable_count(ctx, inst, value),
         PhpType::Object(class_name)
             if super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
@@ -65,6 +66,79 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             other
         ))),
     }
+}
+
+/// Lowers `count()` for an `iterable` storage value proven countable by a surrounding guard.
+///
+/// The raw pointer may denote an indexed array, an associative hash, or an object. Arrays expose
+/// their length in the shared header; objects dispatch the `Countable::count` method through the
+/// existing interface-vtable path. Any other heap kind preserves PHP's runtime TypeError boundary.
+fn lower_guarded_iterable_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value: ValueId,
+) -> Result<()> {
+    let indexed_case = ctx.next_label("count_iterable_indexed");
+    let hash_case = ctx.next_label("count_iterable_hash");
+    let object_case = ctx.next_label("count_iterable_object");
+    let invalid_case = ctx.next_label("count_iterable_invalid");
+    let invalid_loaded_case = ctx.next_label("count_iterable_invalid_loaded");
+    let done = ctx.next_label("count_iterable_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_kind");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_case));         // read its shared container header
+            ctx.emitter.instruction("cmp x0, #3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("b.eq {}", hash_case));            // read its shared container header
+            ctx.emitter.instruction("cmp x0, #4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // dispatch Countable::count dynamically
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 2");                              // is the iterable an indexed array?
+            ctx.emitter.instruction(&format!("je {}", indexed_case));           // read its shared container header
+            ctx.emitter.instruction("cmp rax, 3");                              // is the iterable an associative hash?
+            ctx.emitter.instruction(&format!("je {}", hash_case));              // read its shared container header
+            ctx.emitter.instruction("cmp rax, 4");                              // is the iterable an object?
+            ctx.emitter.instruction(&format!("je {}", object_case));            // dispatch Countable::count dynamically
+        }
+    }
+    abi::emit_jump(ctx.emitter, &invalid_case);
+
+    ctx.emitter.label(&object_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    super::lower_narrowed_interface_method_call(ctx, inst, "Countable", "count")?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&hash_case);
+    abi::emit_jump(ctx.emitter, &indexed_case);
+    ctx.emitter.label(&indexed_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &invalid_loaded_case,
+    );
+    abi::emit_load_from_address(ctx.emitter, result_reg, result_reg, 0);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&invalid_case);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    ctx.emitter.label(&invalid_loaded_case);
+    super::exceptions::emit_type_error(
+        ctx,
+        "count(): Argument #1 ($value) must be of type Countable|array",
+    );
+
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
