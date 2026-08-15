@@ -38,7 +38,7 @@ impl Checker {
         }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, expr);
+            return self.infer_property_on_class_type(class_name, property, object, expr);
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -51,7 +51,8 @@ impl Checker {
             if let Ok(Some((class_name, nullable))) =
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")
             {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+                let property_ty =
+                    self.infer_property_on_class_type(&class_name, property, object, expr)?;
                 return if nullable {
                     Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
                 } else {
@@ -59,7 +60,7 @@ impl Checker {
                 };
             }
             if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                return self.infer_property_on_class_type(&class_name, property, expr);
+                return self.infer_property_on_class_type(&class_name, property, object, expr);
             }
             // Union of two or more distinct object classes (`A|B`): the property
             // must exist on every object member; codegen dispatches on the runtime
@@ -68,7 +69,12 @@ impl Checker {
             if object_classes.len() >= 2 {
                 let mut property_types = Vec::with_capacity(object_classes.len());
                 for class_name in &object_classes {
-                    property_types.push(self.infer_property_on_class_type(class_name, property, expr)?);
+                    property_types.push(self.infer_property_on_class_type(
+                        class_name,
+                        property,
+                        object,
+                        expr,
+                    )?);
                 }
                 return Ok(self.normalize_union_type(property_types));
             }
@@ -139,7 +145,8 @@ impl Checker {
         else {
             return Ok(PhpType::Void);
         };
-        let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+        let property_ty =
+            self.infer_property_on_class_type(&class_name, property, object, expr)?;
         if nullable {
             Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
         } else {
@@ -205,6 +212,7 @@ impl Checker {
         &self,
         class_name: &str,
         property: &str,
+        receiver: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         if class_name.trim_start_matches('\\').is_empty() {
@@ -241,7 +249,14 @@ impl Checker {
                     .get(property)
                     .map(String::as_str)
                     .unwrap_or(class_name);
-                if !self.can_access_member(declaring_class, visibility) {
+                let inaccessible_dead_this_branch = matches!(visibility, crate::parser::ast::Visibility::Protected)
+                    && matches!(receiver.kind, ExprKind::This)
+                    && self.current_class.as_deref().is_some_and(|current| {
+                        self.classes_are_instanceof_incompatible(current, declaring_class)
+                    });
+                if !self.can_access_member(declaring_class, visibility)
+                    && !inaccessible_dead_this_branch
+                {
                     return Err(CompileError::new(
                         expr.span,
                         &format!(

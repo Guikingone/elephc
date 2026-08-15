@@ -63,6 +63,16 @@ impl Checker {
         }
     }
 
+    /// Returns true when no runtime object can belong to both concrete class families.
+    pub(crate) fn classes_are_instanceof_incompatible(&self, a: &str, b: &str) -> bool {
+        let a = a.trim_start_matches('\\');
+        let b = b.trim_start_matches('\\');
+        if a == b || !self.classes.contains_key(a) || !self.classes.contains_key(b) {
+            return false;
+        }
+        !self.is_subclass_of(a, b) && !self.is_subclass_of(b, a)
+    }
+
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {

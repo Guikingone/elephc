@@ -263,3 +263,28 @@ fn test_static_arrow_function_runs() {
     let out = compile_and_run("<?php $g = static fn($x) => $x * 2; echo $g(5);");
     assert_eq!(out, "10");
 }
+
+/// Verifies a protected read in an impossible `$this instanceof` sibling branch is accepted.
+#[test]
+fn test_this_instanceof_incompatible_class_protected_read_is_dead() {
+    let out = compile_and_run(
+        r#"<?php
+class AlternativeNode {
+    public function __construct(protected ?AlternativeNode $parent = null) {}
+}
+class ActiveNode {
+    use ReadsParent;
+    public function __construct(private ?ActiveNode $parent = null) {}
+}
+trait ReadsParent {
+    public function describe(): string {
+        return $this instanceof AlternativeNode
+            ? ($this->parent === null ? "unexpected" : "parent")
+            : "active";
+    }
+}
+echo (new ActiveNode())->describe();
+"#,
+    );
+    assert_eq!(out, "active");
+}

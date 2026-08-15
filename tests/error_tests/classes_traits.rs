@@ -96,6 +96,24 @@ echo $s->value;
     );
 }
 
+/// Verifies narrowing a non-`$this` value never authorizes an unrelated protected read.
+#[test]
+fn test_error_instanceof_narrowed_protected_property_on_variable() {
+    expect_error(
+        r#"<?php
+class ProtectedCandidate {
+    protected int $value = 7;
+}
+class UnrelatedReader {
+    public function read(object $candidate): int {
+        return $candidate instanceof ProtectedCandidate ? $candidate->value : 0;
+    }
+}
+"#,
+        "Cannot access protected property: ProtectedCandidate::value",
+    );
+}
+
 /// Verifies that declaring two classes differing only by case (Box vs box) reports
 /// "Duplicate class declaration: box".
 #[test]
