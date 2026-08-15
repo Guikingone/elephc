@@ -3707,6 +3707,125 @@ fn lower_file_builtin(
     store_result(ctx, inst)
 }
 
+/// Lowers `print_r($value, $return = false)` through the runtime renderer.
+///
+/// The value crosses as a boxed Mixed cell — the transfer layer boxes a concrete
+/// operand and hands back the cell it allocated, which is freed once the call
+/// returns. The helper answers a boxed cell either way: the rendered string in
+/// capture mode, `true` in echo mode. An unused result (echo-mode statement) is
+/// dropped so the operand stack stays balanced.
+fn lower_print_r(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let allocated = super::transfer::emit_push_call_argument(
+        ctx,
+        value,
+        IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Mixed,
+    )?;
+    if inst.operands.len() >= 2 {
+        ctx.emit_load_value(operand(inst, 1)?)?;
+    } else {
+        ctx.fb.ins("i64.const 0", "the return flag defaults to false");
+    }
+    ctx.fb.ins("call $__rt_print_r", "render php's print_r form");
+    if let Some((cell, _kind)) = allocated {
+        ctx.fb.ins(
+            &format!("local.get {cell}"),
+            "the cell synthesized for the argument",
+        );
+        ctx.fb
+            .ins("call $__rt_decref_any", "free it now the call is done");
+    }
+    if inst.result.is_none() {
+        ctx.fb.ins("drop", "echo-mode statement: the true is unused");
+        return Ok(());
+    }
+    // A site the checker narrowed to a BOOL result (echo mode, proven) takes the bool
+    // out of the cell; storing the cell pointer into an i64 bool would be nonsense the
+    // validator cannot see.
+    if inst.result_type == IrType::I64 {
+        let cell = ctx.fresh_temp(super::wat::ValType::I32);
+        ctx.fb.ins(&format!("local.tee {cell}"), "the boxed answer");
+        ctx.fb
+            .ins("call $__rt_mixed_cast_bool", "unbox the bool answer");
+        ctx.fb.ins(&format!("local.get {cell}"), "the now-redundant cell");
+        ctx.fb.ins("call $__rt_decref_any", "free it");
+    }
+    // And a site narrowed to a STRING result (capture mode with a literal true flag)
+    // takes the rendered string out — `__rt_mixed_cast_string` hands back a persisted
+    // copy the result owns, so the cell can be released here.
+    if inst.result_type == IrType::Str {
+        let cell = ctx.fresh_temp(super::wat::ValType::I32);
+        let sptr = ctx.fresh_temp(super::wat::ValType::I32);
+        let slen = ctx.fresh_temp(super::wat::ValType::I32);
+        ctx.fb.ins(&format!("local.tee {cell}"), "the boxed answer");
+        ctx.fb.ins(
+            "call $__rt_mixed_cast_string",
+            "unbox the rendered string (persisted copy)",
+        );
+        ctx.fb.ins(&format!("local.set {slen}"), "rendered length");
+        ctx.fb.ins(&format!("local.set {sptr}"), "rendered pointer");
+        ctx.fb.ins(&format!("local.get {cell}"), "the now-redundant cell");
+        ctx.fb.ins("call $__rt_decref_any", "free it");
+        ctx.fb.ins(&format!("local.get {sptr}"), "rendered pointer");
+        ctx.fb.ins(&format!("local.get {slen}"), "rendered length");
+        ctx.fb
+            .ins("i64.extend_i32_u", "widen the length to the Str shape");
+    }
+    store_result(ctx, inst)
+}
+
+/// Validates the exact `print_r` subset the renderer implements: scalars, arrays and
+/// hashes (nested to any depth), null, and boxed Mixed values. An OBJECT — statically
+/// typed here, or hiding inside a Mixed container at runtime — is not rendered; the
+/// static shape refuses it and the runtime fails loudly (code 15) rather than printing
+/// a truncated form php would never emit.
+fn print_r_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if call.operands.is_empty() || call.operands.len() > 2 {
+        return Some(format!(
+            "print_r takes a value and an optional return flag, got {} operands",
+            call.operands.len()
+        ));
+    }
+    let Some(value) = call.operands.first().and_then(|id| function.value(*id)) else {
+        return Some("print_r value is missing from the value table".to_string());
+    };
+    if matches!(value.ir_type, IrType::Heap(IrHeapKind::Object))
+        || matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Object(_) | PhpType::Callable | PhpType::Resource(_)
+        )
+    {
+        return Some("print_r of an object is not implemented on wasm32-wasi".to_string());
+    }
+    if call.operands.len() == 2 {
+        let Some(flag) = call.operands.get(1).and_then(|id| function.value(*id)) else {
+            return Some("print_r return flag is missing from the value table".to_string());
+        };
+        if flag.ir_type != IrType::I64 {
+            return Some(format!(
+                "print_r return flag storage {:?} is not the expected I64",
+                flag.ir_type
+            ));
+        }
+    }
+    // Mixed is the contract; a site the checker narrowed to a BOOL (echo mode, proven)
+    // or a STRING (capture mode, literal flag) is served by the lowering's unbox
+    // adaptations.
+    if call.result.is_some()
+        && !matches!(
+            call.result_type,
+            IrType::Heap(IrHeapKind::Mixed) | IrType::I64 | IrType::Str
+        )
+    {
+        return Some(format!(
+            "print_r result storage {:?} is not the expected Heap(Mixed), I64 bool, or Str",
+            call.result_type
+        ));
+    }
+    None
+}
+
 /// Validates `define("NAME", $value)`.
 ///
 /// The name must be a LITERAL, because the duplicate flag is a global named after it. The value
@@ -3858,6 +3977,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Getenv
             | RuntimeFnId::GetResourceType
             | RuntimeFnId::Define
+            | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose
@@ -4085,6 +4205,9 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::Define {
         return define_shape_issue(module, function, call);
     }
+    if target == RuntimeFnId::PrintR {
+        return print_r_shape_issue(function, call);
+    }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
             "expected one operand, got {}",
@@ -4193,6 +4316,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Define {
         return lower_define(ctx, inst);
+    }
+    if target == RuntimeFnId::PrintR {
+        return lower_print_r(ctx, inst);
     }
     if let Some(helper) = file_builtin_helper(target) {
         return lower_file_builtin(ctx, inst, helper, target);

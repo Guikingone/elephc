@@ -135,6 +135,12 @@ const ERR_STR_PAD_EMPTY: &[u8] = b"PHP Fatal error: Uncaught ValueError: str_pad
 const ERR_EXPLODE_EMPTY_SEP: &[u8] = b"PHP Fatal error: Uncaught ValueError: explode(): Argument #1 ($separator) must not be empty\n";
 /// `str_split()` with a non-positive chunk length is a PHP `ValueError`.
 const ERR_STR_SPLIT_LENGTH: &[u8] = b"PHP Fatal error: Uncaught ValueError: str_split(): Argument #2 ($length) must be greater than 0\n";
+/// Code 15 (its position in `fixed_messages`): `print_r` reached a tag its renderer
+/// does not implement (an object or a resource nested inside a container the audit
+/// could not see through). Failing LOUDLY here is the runtime counterpart of the
+/// compile-time refusal — never a truncated rendering php would not print.
+const ERR_PRINT_R_UNRENDERABLE: &[u8] =
+    b"print_r: rendering an object or resource is not implemented on wasm32-wasi\n";
 /// `chr()` outside `[0, 255]` still answers, wrapping modulo 256, but is deprecated since 8.5.
 const DEPRECATED_CHR_RANGE: &[u8] = b"Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256\n";
 /// `ord()` on anything but exactly one byte still answers, but is deprecated since 8.5.
@@ -259,6 +265,11 @@ const META_WRAPPER_PHP: &[u8] = b"PHP";
 const META_STREAM_MEMORY: &[u8] = b"MEMORY";
 const META_STREAM_TEMP: &[u8] = b"TEMP";
 
+/// `print_r`'s two multi-byte fragments; the parens, brackets, newlines and the
+/// bool's "1" are single bytes the renderer stores directly.
+const PRINT_R_ARRAY_HEAD: &[u8] = b"Array\n";
+const PRINT_R_ARROW: &[u8] = b"] => ";
+
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_DIV_ZERO.len() as u32
@@ -275,6 +286,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_STR_PAD_EMPTY.len() as u32
     + ERR_EXPLODE_EMPTY_SEP.len() as u32
     + ERR_STR_SPLIT_LENGTH.len() as u32
+    + ERR_PRINT_R_UNRENDERABLE.len() as u32
     + ERR_METHOD_CALL_PREFIX.len() as u32
     + ERR_METHOD_CALL_SUFFIX.len() as u32
     + PHP_TYPE_INT.len() as u32
@@ -376,7 +388,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + META_STREAM_STDIO.len() as u32
     + META_WRAPPER_PHP.len() as u32
     + META_STREAM_MEMORY.len() as u32
-    + META_STREAM_TEMP.len() as u32;
+    + META_STREAM_TEMP.len() as u32
+    + PRINT_R_ARRAY_HEAD.len() as u32
+    + PRINT_R_ARROW.len() as u32;
 
 /// PHP's `++`/`--` diagnostics, measured on php-src 8.5.6. A bool or null operand
 /// keeps its value and WARNS; a non-numeric string keeps (or perl-increments) its
@@ -692,6 +706,249 @@ const RT_GETENV: &str = r#"(func $__rt_getenv (param $name i32) (param $name_len
   (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))
 "#;
 
+/// Emits the `print_r` renderer and its heap string builder.
+///
+/// `offsets` carries the two multi-byte fragments ("Array\n", "] => ") laid out by
+/// `emit_failure_runtime`. The format is php-src 8.5.6's, measured byte-for-byte on
+/// nested arrays: a container at depth `d` renders `Array\n`, its parens indented
+/// `8*d`, each entry `4 + 8*d`, and the entry's own trailing newline lands right
+/// after a nested container's `)\n` — which is where php's blank line comes from.
+/// `print_r(true)` renders "1", `false` and `null` render nothing, an int/float
+/// render exactly as `echo` does. An OBJECT or resource reaching the renderer fails
+/// LOUDLY through `__rt_fail` (code 15) rather than printing a truncated form.
+fn emit_print_r_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    let [head, arrow] = offsets else {
+        unreachable!("emit_failure_runtime hands exactly the two print_r fragments");
+    };
+    // A tiny heap string builder: 12-byte descriptor (+0 buf, +4 cap, +8 len).
+    wm.add_raw_func(
+        r#"(func $__rt_sb_reserve (param $sb i32) (param $extra i32)
+  (local $len i32) (local $cap i32) (local $buf i32) (local $want i32) (local $new i32)
+  (local.set $len (i32.load (i32.add (local.get $sb) (i32.const 8))))
+  (local.set $cap (i32.load (i32.add (local.get $sb) (i32.const 4))))
+  (local.set $want (i32.add (local.get $len) (local.get $extra)))
+  (if (i32.le_u (local.get $want) (local.get $cap))
+    (then (return)))
+  (if (i32.lt_u (local.get $cap) (i32.const 64))
+    (then (local.set $cap (i32.const 64))))
+  (block $sized (loop $double
+    (br_if $sized (i32.ge_u (local.get $cap) (local.get $want)))
+    (local.set $cap (i32.shl (local.get $cap) (i32.const 1)))
+    (br $double)))
+  (local.set $new (call $__rt_heap_alloc (local.get $cap)))
+  (local.set $buf (i32.load (local.get $sb)))
+  (memory.copy (local.get $new) (local.get $buf) (local.get $len))
+  (if (local.get $buf)
+    (then (call $__rt_heap_free (local.get $buf))))
+  (i32.store (local.get $sb) (local.get $new))
+  (i32.store (i32.add (local.get $sb) (i32.const 4)) (local.get $cap)))
+"#,
+    );
+    wm.add_raw_func(
+        r#"(func $__rt_sb_append (param $sb i32) (param $ptr i32) (param $len i32)
+  (local $cur i32)
+  (call $__rt_sb_reserve (local.get $sb) (local.get $len))
+  (local.set $cur (i32.load (i32.add (local.get $sb) (i32.const 8))))
+  (memory.copy (i32.add (i32.load (local.get $sb)) (local.get $cur)) (local.get $ptr) (local.get $len))
+  (i32.store (i32.add (local.get $sb) (i32.const 8)) (i32.add (local.get $cur) (local.get $len))))
+"#,
+    );
+    wm.add_raw_func(
+        r#"(func $__rt_sb_byte (param $sb i32) (param $b i32)
+  (local $cur i32)
+  (call $__rt_sb_reserve (local.get $sb) (i32.const 1))
+  (local.set $cur (i32.load (i32.add (local.get $sb) (i32.const 8))))
+  (i32.store8 (i32.add (i32.load (local.get $sb)) (local.get $cur)) (local.get $b))
+  (i32.store (i32.add (local.get $sb) (i32.const 8)) (i32.add (local.get $cur) (i32.const 1))))
+"#,
+    );
+    wm.add_raw_func(
+        r#"(func $__rt_sb_spaces (param $sb i32) (param $n i32)
+  (local $cur i32)
+  (call $__rt_sb_reserve (local.get $sb) (local.get $n))
+  (local.set $cur (i32.load (i32.add (local.get $sb) (i32.const 8))))
+  (memory.fill (i32.add (i32.load (local.get $sb)) (local.get $cur)) (i32.const 32) (local.get $n))
+  (i32.store (i32.add (local.get $sb) (i32.const 8)) (i32.add (local.get $cur) (local.get $n))))
+"#,
+    );
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_print_r_render (param $tag i64) (param $lo i64) (param $hi i64) (param $level i64) (param $sb i32)
+  (local $p i32) (local $l i32) (local $arr i32) (local $len i64) (local $esz i64)
+  (local $vt i32) (local $i i64) (local $slot i32) (local $cell i32)
+  (local $ctag i64) (local $clo i64) (local $chi i64)
+  (local $cursor i64) (local $more i64) (local $entry i32) (local $klo i64) (local $khi i64)
+  (if (i64.eqz (local.get $tag))                                  ;; int: echo's own decimal form
+    (then
+      (call $__rt_itoa (local.get $lo) (global.get $__float_scratch))
+      (local.set $l)
+      (local.set $p)
+      (call $__rt_sb_append (local.get $sb) (local.get $p) (local.get $l))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; string: raw bytes
+    (then
+      (call $__rt_sb_append (local.get $sb)
+        (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float: echo's %.14G form
+    (then
+      (call $__rt_ftoa (local.get $lo)
+        (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80)
+        (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792)
+        (i32.add (global.get $__float_scratch) (i32.const 4096)))
+      (local.set $l)
+      (local.set $p)
+      (call $__rt_sb_append (local.get $sb) (local.get $p) (local.get $l))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; bool: "1" or nothing
+    (then
+      (if (i64.ne (local.get $lo) (i64.const 0))
+        (then (call $__rt_sb_byte (local.get $sb) (i32.const 49))))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null renders nothing
+    (then (return)))
+  (if (i64.eq (local.get $tag) (i64.const 7))                     ;; nested cell: unwrap and recurse
+    (then
+      (local.set $cell (i32.wrap_i64 (local.get $lo)))
+      (call $__rt_mixed_unbox (local.get $cell))
+      (local.set $chi)
+      (local.set $clo)
+      (local.set $ctag)
+      (call $__rt_print_r_render (local.get $ctag) (local.get $clo) (local.get $chi) (local.get $level) (local.get $sb))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 4))                     ;; indexed array
+    (then
+      (local.set $arr (i32.wrap_i64 (local.get $lo)))
+      (call $__rt_sb_append (local.get $sb) (i32.const {head_p}) (i32.const {head_l}))
+      (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64 (i64.mul (local.get $level) (i64.const 8))))
+      (call $__rt_sb_byte (local.get $sb) (i32.const 40))         ;; '('
+      (call $__rt_sb_byte (local.get $sb) (i32.const 10))
+      (local.set $len (i64.load (local.get $arr)))
+      (local.set $esz (i64.load (i32.add (local.get $arr) (i32.const 16))))
+      (local.set $vt (i32.and (i32.wrap_i64 (i64.shr_u
+        (i64.load (i32.sub (local.get $arr) (i32.const 8))) (i64.const 8))) (i32.const 127)))
+      (local.set $i (i64.const 0))
+      (block $done (loop $each
+        (br_if $done (i64.ge_s (local.get $i) (local.get $len)))
+        (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64
+          (i64.add (i64.mul (local.get $level) (i64.const 8)) (i64.const 4))))
+        (call $__rt_sb_byte (local.get $sb) (i32.const 91))       ;; '['
+        (call $__rt_itoa (local.get $i) (global.get $__float_scratch))
+        (local.set $l)
+        (local.set $p)
+        (call $__rt_sb_append (local.get $sb) (local.get $p) (local.get $l))
+        (call $__rt_sb_append (local.get $sb) (i32.const {arrow_p}) (i32.const {arrow_l}))
+        (local.set $slot (i32.add (i32.add (local.get $arr) (i32.const 24))
+                                  (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))
+        (if (i32.or (i32.eqz (local.get $vt))
+            (i32.or (i32.eq (local.get $vt) (i32.const 2)) (i32.eq (local.get $vt) (i32.const 3))))
+          (then                                                   ;; scalar slot: one i64 payload
+            (call $__rt_print_r_render (i64.extend_i32_u (local.get $vt))
+              (i64.load (local.get $slot)) (i64.const 0)
+              (i64.add (local.get $level) (i64.const 1)) (local.get $sb)))
+          (else (if (i32.eq (local.get $vt) (i32.const 1))        ;; string slot: (ptr, len)
+            (then
+              (call $__rt_print_r_render (i64.const 1)
+                (i64.load (local.get $slot)) (i64.load (i32.add (local.get $slot) (i32.const 8)))
+                (i64.add (local.get $level) (i64.const 1)) (local.get $sb)))
+            (else (if (i32.eq (local.get $vt) (i32.const 7))      ;; mixed-cell slot
+              (then
+                (call $__rt_mixed_unbox (i32.wrap_i64 (i64.load (local.get $slot))))
+                (local.set $chi)
+                (local.set $clo)
+                (local.set $ctag)
+                (call $__rt_print_r_render (local.get $ctag) (local.get $clo) (local.get $chi)
+                  (i64.add (local.get $level) (i64.const 1)) (local.get $sb)))
+              (else                                               ;; container slot: its pointer
+                (call $__rt_print_r_render (i64.extend_i32_u (local.get $vt))
+                  (i64.load (local.get $slot)) (i64.const 0)
+                  (i64.add (local.get $level) (i64.const 1)) (local.get $sb))))))))
+        (call $__rt_sb_byte (local.get $sb) (i32.const 10))       ;; the entry's own newline
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))
+        (br $each)))
+      (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64 (i64.mul (local.get $level) (i64.const 8))))
+      (call $__rt_sb_byte (local.get $sb) (i32.const 41))         ;; ')'
+      (call $__rt_sb_byte (local.get $sb) (i32.const 10))
+      (return)))
+  (if (i64.eq (local.get $tag) (i64.const 5))                     ;; hash, in insertion order
+    (then
+      (local.set $arr (i32.wrap_i64 (local.get $lo)))
+      (call $__rt_sb_append (local.get $sb) (i32.const {head_p}) (i32.const {head_l}))
+      (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64 (i64.mul (local.get $level) (i64.const 8))))
+      (call $__rt_sb_byte (local.get $sb) (i32.const 40))         ;; '('
+      (call $__rt_sb_byte (local.get $sb) (i32.const 10))
+      (local.set $cursor (i64.const -2))
+      (block $hdone (loop $heach
+        (call $__rt_hash_iter_next (local.get $arr) (local.get $cursor))
+        (local.set $more)
+        (local.set $cursor)
+        (br_if $hdone (i64.eqz (local.get $more)))
+        (local.set $entry (i32.add (i32.add (local.get $arr) (i32.const 40))
+                                   (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 72)))))
+        (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64
+          (i64.add (i64.mul (local.get $level) (i64.const 8)) (i64.const 4))))
+        (call $__rt_sb_byte (local.get $sb) (i32.const 91))       ;; '['
+        (local.set $klo (i64.load (i32.add (local.get $entry) (i32.const 8))))
+        (local.set $khi (i64.load (i32.add (local.get $entry) (i32.const 16))))
+        (if (i64.eq (local.get $khi) (i64.const -1))
+          (then                                                   ;; int key
+            (call $__rt_itoa (local.get $klo) (global.get $__float_scratch))
+            (local.set $l)
+            (local.set $p)
+            (call $__rt_sb_append (local.get $sb) (local.get $p) (local.get $l)))
+          (else                                                   ;; string key, raw bytes
+            (call $__rt_sb_append (local.get $sb)
+              (i32.wrap_i64 (local.get $klo)) (i32.wrap_i64 (local.get $khi)))))
+        (call $__rt_sb_append (local.get $sb) (i32.const {arrow_p}) (i32.const {arrow_l}))
+        (call $__rt_print_r_render
+          (i64.load (i32.add (local.get $entry) (i32.const 40)))  ;; value_tag
+          (i64.load (i32.add (local.get $entry) (i32.const 24)))  ;; value_lo
+          (i64.load (i32.add (local.get $entry) (i32.const 32)))  ;; value_hi
+          (i64.add (local.get $level) (i64.const 1)) (local.get $sb))
+        (call $__rt_sb_byte (local.get $sb) (i32.const 10))       ;; the entry's own newline
+        (br $heach)))
+      (call $__rt_sb_spaces (local.get $sb) (i32.wrap_i64 (i64.mul (local.get $level) (i64.const 8))))
+      (call $__rt_sb_byte (local.get $sb) (i32.const 41))         ;; ')'
+      (call $__rt_sb_byte (local.get $sb) (i32.const 10))
+      (return)))
+  (call $__rt_fail (i32.const 15))                                ;; object/resource: fail LOUDLY
+  unreachable)                                                    ;; elephc-trap:post-noreturn:print-r-unrenderable __rt_fail exits the process
+"#,
+        head_p = head.0,
+        head_l = head.1,
+        arrow_p = arrow.0,
+        arrow_l = arrow.1,
+    ));
+    wm.add_raw_func(
+        r#"(func $__rt_print_r (param $cell i32) (param $ret i64) (result i32)
+  (local $sb i32) (local $tag i64) (local $lo i64) (local $hi i64)
+  (local $buf i32) (local $len i32) (local $out i32)
+  (local.set $sb (call $__rt_heap_alloc (i32.const 12)))
+  (i32.store (local.get $sb) (i32.const 0))
+  (i32.store (i32.add (local.get $sb) (i32.const 4)) (i32.const 0))
+  (i32.store (i32.add (local.get $sb) (i32.const 8)) (i32.const 0))
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (call $__rt_print_r_render (local.get $tag) (local.get $lo) (local.get $hi) (i64.const 0) (local.get $sb))
+  (local.set $buf (i32.load (local.get $sb)))
+  (local.set $len (i32.load (i32.add (local.get $sb) (i32.const 8))))
+  (if (result i32) (i64.ne (local.get $ret) (i64.const 0))
+    (then                                                         ;; capture mode: the rendered string
+      (call $__rt_mixed_from_value (i64.const 1)
+        (i64.extend_i32_u (local.get $buf)) (i64.extend_i32_u (local.get $len))))
+    (else                                                         ;; echo mode: write, answer true
+      (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $buf) (local.get $len))
+      (call $__rt_mixed_from_value (i64.const 3) (i64.const 1) (i64.const 0))))
+  (local.set $out)
+  (if (local.get $buf)
+    (then (call $__rt_heap_free (local.get $buf))))
+  (call $__rt_heap_free (local.get $sb))
+  (local.get $out))
+"#,
+    );
+}
+
 /// `__rt_readline`: reads one line from stdin, WITHOUT its terminating newline.
 ///
 /// Two details come from measuring php-src 8.5.6 rather than from the native backend, which
@@ -753,6 +1010,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_STR_PAD_EMPTY,
         ERR_EXPLODE_EMPTY_SEP,
         ERR_STR_SPLIT_LENGTH,
+        ERR_PRINT_R_UNRENDERABLE,
     ];
     let method_messages = [
         ERR_METHOD_CALL_PREFIX,
@@ -869,6 +1127,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         META_WRAPPER_PHP,
         META_STREAM_MEMORY,
         META_STREAM_TEMP,
+        // Appended LAST for the same reason as every group above it.
+        PRINT_R_ARRAY_HEAD,
+        PRINT_R_ARROW,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -940,6 +1201,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     // values above, so it is emitted here where their offsets are known — like the
     // boxed-key getter, not in the file runtime a partial test module may emit alone.
     super::files::emit_stream_meta_runtime(wm, &warning_offsets[69..83]);
+    emit_print_r_runtime(wm, &warning_offsets[83..85]);
     emit_arithmetic_coercion_runtime(
         wm,
         &warning_offsets[55..57],

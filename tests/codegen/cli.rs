@@ -17454,6 +17454,89 @@ echo $u->name, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `print_r` on wasm32-wasi renders php's exact bytes in both modes.
+///
+/// The fixture is the corpus example's own shape — a hash holding a string, an int,
+/// and a nested indexed array — and the expected bytes are `php -n`'s, measured on
+/// php-src 8.5.6: capture mode answers the 151-byte rendering (nested parens
+/// indented by 8, entries by 12, a blank line after the nested close), and echo
+/// mode writes the same text and answers true.
+#[test]
+fn test_cli_wasm_print_r_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_print_r");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$data = [
+    "name" => "elephc",
+    "version" => 1,
+    "features" => ["codegen", "optimizer"],
+];
+$rendered = print_r($data, true);
+echo "captured " . strlen($rendered) . " bytes:\n";
+echo $rendered;
+$ok = print_r($data);
+echo "echo mode returned: ";
+echo $ok ? "true\n" : "false\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile print_r to WASM");
+    assert!(
+        output.status.success(),
+        "print_r failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run print_r under Node");
+    let rendered = "Array\n(\n    [name] => elephc\n    [version] => 1\n    [features] => Array\n        (\n            [0] => codegen\n            [1] => optimizer\n        )\n\n)\n";
+    let expected = format!(
+        "captured {} bytes:\n{rendered}{rendered}echo mode returned: true\n",
+        rendered.len()
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        expected,
+        "php -n's own bytes ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `stream_get_meta_data` on wasm32-wasi answers php's nine-key array for
 /// both stream kinds.
 ///

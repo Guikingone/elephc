@@ -344,6 +344,17 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             "codegen_wasm::inst::lower_array_reduce",
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
+        // Scalars, arrays, and hashes to any depth, php's measured byte format; an
+        // object refuses statically and fails loudly (code 15) when it hides in a
+        // Mixed container at runtime.
+        RuntimeFnId::PrintR => (
+            "codegen_wasm::runtime",
+            "codegen_wasm::builtins::lower_print_r",
+            &[
+                "codegen_wasm::tests::print_r_renders_php_bytes_for_nested_containers",
+                "codegen::cli::test_cli_wasm_print_r_matches_php",
+            ][..],
+        ),
         // Only the audited float-to-"integer" narrowing of a plain local; the shape check
         // (`settype_shape_issue`) refuses every other target type, source type, or origin.
         RuntimeFnId::Settype => (

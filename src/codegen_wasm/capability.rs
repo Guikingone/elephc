@@ -7648,6 +7648,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::Settype
         | RuntimeFnId::Getenv
+        | RuntimeFnId::PrintR
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define
         | RuntimeFnId::FileExists
@@ -7897,7 +7898,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Pclose
         | RuntimeFnId::Pfsockopen
         | RuntimeFnId::Popen
-        | RuntimeFnId::PrintR
         | RuntimeFnId::Readdir
         | RuntimeFnId::Readfile
         | RuntimeFnId::Readlink

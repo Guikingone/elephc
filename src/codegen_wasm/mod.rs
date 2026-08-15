@@ -3942,6 +3942,61 @@ mod tests {
         assert!(wat.contains("settype answers true"), "{wat}");
     }
 
+    /// Verifies `print_r` lowers through the runtime renderer.
+    ///
+    /// A WAT pin only: hand-built EIR skips pipeline invariants the real front end
+    /// establishes (the same reason the boxed-key test above pins text instead of
+    /// executing), so byte-level truth is held by
+    /// `codegen::cli::test_cli_wasm_print_r_matches_php`, which compiles real PHP and
+    /// runs it — capture mode, echo mode, nested containers, php's own 151 bytes.
+    #[test]
+    fn print_r_renders_php_bytes_for_nested_containers() {
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let arr = b
+                .emit(Op::ArrayNew, vec![], Some(Immediate::Capacity(2)),
+                      IrType::Heap(IrHeapKind::Array),
+                      PhpType::Array(Box::new(PhpType::Int)), Ownership::Owned)
+                .unwrap();
+            let seven = b.emit_const_i64(7);
+            let arr = b
+                .emit(Op::ArrayPush, vec![arr, seven], None, IrType::Heap(IrHeapKind::Array),
+                      PhpType::Array(Box::new(PhpType::Int)), Ownership::Owned)
+                .unwrap();
+            let nine = b.emit_const_i64(9);
+            let arr = b
+                .emit(Op::ArrayPush, vec![arr, nine], None, IrType::Heap(IrHeapKind::Array),
+                      PhpType::Array(Box::new(PhpType::Int)), Ownership::Owned)
+                .unwrap();
+            let flag = b.emit_const_i64(0);
+            let _true_result = b
+                .emit(
+                    Op::RuntimeCall,
+                    vec![arr, flag],
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::PrintR,
+                    ))),
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let _ = b.emit(Op::Release, vec![arr], None, IrType::Void, PhpType::Void,
+                           Ownership::NonHeap);
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        let wat = generate(&module, Emit::Executable).expect("print_r should lower");
+        assert!(wat.contains("call $__rt_print_r"), "{wat}");
+        assert!(wat.contains("render php's print_r form"), "{wat}");
+    }
+
     /// Verifies `++` on strings carries and wraps the way php does: `"z"` wraps to a
     /// prepended `"aa"`, `"9"` converts numerically to int 10, and `"Zz9"` carries
     /// through all three character classes to `"AAa0"`.
