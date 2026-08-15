@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, Visibility};
+use crate::parser::ast::{Expr, ExprKind, Visibility};
 use crate::types::{EnumInfo, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -34,6 +34,30 @@ pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
 }
 
 impl Checker {
+    /// Reports whether a direct construction names a class deliberately left for runtime lookup.
+    ///
+    /// Function-like scopes allow unresolved nominal classes because executing the construction
+    /// raises the ordinary catchable class-not-found `Error`. A surrounding `throw` must not
+    /// reject that expression earlier: construction either yields a real runtime object or never
+    /// reaches the throw boundary.
+    pub(crate) fn unresolved_new_object_defers_to_runtime(
+        &self,
+        expr: &Expr,
+        type_name: &str,
+    ) -> bool {
+        if self.classes.contains_key(type_name) || self.interfaces.contains_key(type_name) {
+            return false;
+        }
+        let ExprKind::NewObject { class_name, .. } = &expr.kind else {
+            return false;
+        };
+        self.allows_absent_runtime_class()
+            && class_name
+                .as_str()
+                .trim_start_matches('\\')
+                .eq_ignore_ascii_case(type_name.trim_start_matches('\\'))
+    }
+
     /// Checks whether the current class context can access a member with the given visibility
     /// declared in `declaring_class`. Public members are always accessible; protected members
     /// are accessible throughout the same inheritance family; private members are only

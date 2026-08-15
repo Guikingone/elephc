@@ -38,6 +38,26 @@ fn test_exception_try_catch_same_function() {
     assert_eq!(out, "42");
 }
 
+/// Verifies throwing a direct construction whose class is unavailable at AOT time preserves
+/// PHP's runtime ordering: class lookup raises a catchable `Error` before the throw consumes it.
+#[test]
+fn test_throw_runtime_only_class_reports_class_not_found_error() {
+    let out = compile_and_run(
+        r#"<?php
+function fail_at_runtime(): void {
+    throw new RuntimeOnlyFailure();
+}
+
+try {
+    fail_at_runtime();
+} catch (Error $error) {
+    echo get_class($error), ":", $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Error:Class \"RuntimeOnlyFailure\" not found");
+}
+
 /// Verifies builtin exception try catch.
 #[test]
 fn test_builtin_exception_try_catch() {

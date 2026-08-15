@@ -442,7 +442,8 @@ impl Checker {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
                 match thrown_ty {
                     PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name) =>
+                        if self.object_type_implements_throwable(&type_name)
+                            || self.unresolved_new_object_defers_to_runtime(expr, &type_name) =>
                     {
                         Ok(())
                     }
