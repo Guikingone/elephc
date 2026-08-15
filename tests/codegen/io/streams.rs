@@ -1316,6 +1316,176 @@ unlink("meta_order.txt");
     assert_eq!(out, expected.repeat(3));
 }
 
+/// Verifies `seekable` names the descriptor's TYPE rather than whether `lseek` happened to work.
+///
+/// php-src decides it once, at open: `php_stream_fopen_from_fd` sets `is_pipe` from
+/// `!S_ISREG(sb.st_mode)` and that becomes `PHP_STREAM_FLAG_NO_SEEK`, which is what
+/// `_php_stream_get_metadata` reports. elephc asked a different question — `lseek(fd, 0,
+/// SEEK_CUR)` — and the two answers only agree for regular files, sockets and FIFOs. They part
+/// company on a CHARACTER DEVICE, which is seekable to the kernel and not a file to PHP.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// fopen('/dev/null', 'r')  seekable => bool(false)   elephc said bool(true)
+/// fopen('/dev/zero', 'r')  seekable => bool(false)   elephc said bool(true)
+/// popen('echo hi', 'r')    seekable => bool(false)   elephc agreed
+/// ```
+///
+/// The same divergence is what made `php://stdin` answer `true` under `< /dev/null` where php
+/// answers `false`; a regular file on stdin makes BOTH answer `true`, so the descriptor kind —
+/// not the wrapper name — is the thing under test.
+#[test]
+fn test_stream_get_meta_data_seekable_follows_the_descriptor_kind() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("seekable_probe.txt", "hi");
+foreach (["seekable_probe.txt", "/dev/null", "/dev/zero"] as $path) {
+    $h = fopen($path, "r");
+    echo $path, "=", var_export(stream_get_meta_data($h)["seekable"], true), "\n";
+    fclose($h);
+}
+unlink("seekable_probe.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "seekable_probe.txt=true\n/dev/null=false\n/dev/zero=false\n"
+    );
+}
+
+/// Verifies the three fallback flags appear only on the streams php puts them on.
+///
+/// `timed_out`, `blocked` and `eof` are not unconditional in php-src: `_php_stream_get_metadata`
+/// emits them only when the stream answers `PHP_STREAM_OPTION_META_DATA_API`, and the `php://`
+/// wrapper answers it for `memory` but not for `temp`. `data:` never answers it at all. elephc
+/// wrote all three onto every stream, so `php://temp` reported nine keys where php reports six.
+///
+/// Measured with `php -n` 8.5.6 — `implode(",", array_keys(...))`:
+///
+/// ```text
+/// php://memory   timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// php://temp     wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// data://...     mediatype,base64,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+/// ```
+///
+/// `php://temp/maxmemory:1024` is included because it is the same sub-wrapper reached through a
+/// longer URI, and a check that only looked at the exact string `php://temp` would miss it.
+#[test]
+fn test_stream_get_meta_data_omits_the_fallback_flags_php_omits() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    fopen("php://memory", "r+"),
+    fopen("php://temp", "r+"),
+    fopen("php://temp/maxmemory:1024", "r+"),
+] as $h) {
+    $keys = array_keys(stream_get_meta_data($h));
+    echo implode(",", $keys), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n"
+    );
+}
+
+/// Verifies a `php://filter` stream names PHP as its wrapper, not the resource it wraps.
+///
+/// The URL is resolved by `php_stream_url_wrap_php`, so the stream php hands back belongs to the
+/// `php` wrapper however ordinary the thing behind it is. elephc opened the inner resource and
+/// left ITS identity on the handle, so a filter over a plain file called itself `plainfile`.
+///
+/// Measured with `php -n` 8.5.6 on `php://filter/read=string.toupper/resource=<file>`:
+///
+/// ```text
+/// wrapper_type => "PHP"          elephc said "plainfile"
+/// stream_type  => "STDIO"        (the INNER identity, which php keeps)
+/// uri          => the whole php://filter/... URL
+/// ```
+///
+/// `stream_type` is asserted alongside because it is the half php does NOT move: the two names
+/// disagree on purpose, and a fix that dragged both to `PHP` would trade one divergence for
+/// another. That is also why only a plain-path resource is re-stamped — a filter over
+/// `php://memory` reports `MEMORY`, and the name is derived from the recorded URI.
+///
+/// Scope: the LITERAL URL route. A URL computed at run time still reports the inner wrapper,
+/// because the dynamic route swaps the URL for its resource before the open and stamps the
+/// resource opener's own id; that half is measured and unfixed.
+#[test]
+fn test_stream_get_meta_data_names_php_as_the_filter_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("filter_meta.txt", "hi\n");
+$m = stream_get_meta_data(fopen("php://filter/read=string.toupper/resource=filter_meta.txt", "r"));
+echo $m["wrapper_type"], "|", $m["stream_type"], "|", $m["uri"], "\n";
+unlink("filter_meta.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "PHP|STDIO|php://filter/read=string.toupper/resource=filter_meta.txt\n"
+    );
+}
+
+/// Verifies a `data:` stream's metadata carries the URI's own media type, its parameters and the
+/// base64 flag, each as its own key ahead of `wrapper_type`.
+///
+/// php-src's `php_stream_url_wrap_rfc2397` builds the metadata array while it PARSES the URI, so
+/// every `name=value` before the comma lands as a separate key in the order it was written, the
+/// media type lands under `mediatype`, and `base64` is a bool that is present even when false.
+/// elephc reported none of them.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// data://text/plain,hello                 mediatype=text/plain base64=false
+/// data://text/plain;charset=utf-8,x       mediatype=text/plain charset=utf-8 base64=false
+/// data://text/plain;base64,aGVsbG8=       mediatype=text/plain base64=true
+/// data://text/plain;charset=utf-8;foo=bar,x
+///                                         mediatype/charset/foo then base64=false
+/// data:,justtext                          no mediatype key at all, base64=false
+/// ```
+///
+/// The bare `data:,justtext` row is the one that pins the key as OPTIONAL: php emits `base64`
+/// unconditionally but `mediatype` only when the URI spells one.
+#[test]
+fn test_stream_get_meta_data_exposes_the_data_uri_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([
+    "data://text/plain,hello",
+    "data://text/plain;charset=utf-8,x",
+    "data://text/plain;base64,aGVsbG8=",
+    "data://text/plain;charset=utf-8;foo=bar,x",
+    "data:,justtext",
+] as $uri) {
+    $m = stream_get_meta_data(fopen($uri, "r"));
+    $parts = [];
+    foreach ($m as $key => $value) {
+        if ($key === "wrapper_type") {
+            break;
+        }
+        $parts[] = $key . "=" . var_export($value, true);
+    }
+    echo implode(" ", $parts), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "mediatype='text/plain' base64=false\n\
+         mediatype='text/plain' charset='utf-8' base64=false\n\
+         mediatype='text/plain' base64=true\n\
+         mediatype='text/plain' charset='utf-8' foo='bar' base64=false\n\
+         base64=false\n"
+    );
+}
+
 /// Verifies the eval interpreter accepts every `fopen()` mode php accepts.
 ///
 /// `EvalOpenMode::parse` refused any mode carrying a byte outside `rwaxc+bte`. php has no such

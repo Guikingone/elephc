@@ -1040,6 +1040,19 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     // prints the failed-open line and nothing else.
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&opened);
+    // The URL was resolved by `php_stream_url_wrap_php`, so the stream belongs to the `php`
+    // wrapper however ordinary the resource behind it is: measured on `php -n` 8.5.6, a filter
+    // over a plain file reports `wrapper_type` `PHP`. elephc left the INNER opener's identity on
+    // the handle and called it `plainfile`.
+    //
+    // Only a plain-path resource is re-stamped. `stream_type` is derived from the wrapper id and
+    // the recorded URI, and php keeps the INNER one there — a filter over `php://memory` still
+    // reports `MEMORY`. Those resources already record wrapper id 6 themselves, so re-stamping
+    // them would buy nothing and would rewrite the URI the namer reads. What stays divergent for
+    // them is `uri`, which php reports as the whole filter URL and elephc as the inner one.
+    if !parsed.resource.contains("://") && !parsed.resource.starts_with("data:") {
+        emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
+    }
     if parsed.mode_bits != 0 {
         emit_php_filter_table_stamps(ctx, parsed.mode_bits, &parsed.filter_ids);
     }

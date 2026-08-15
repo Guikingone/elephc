@@ -1576,6 +1576,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_key_mode\n_meta_key_mode:\n    .ascii \"mode\"\n");
     out.push_str(".globl _meta_key_seekable\n_meta_key_seekable:\n    .ascii \"seekable\"\n");
     out.push_str(".globl _meta_key_uri\n_meta_key_uri:\n    .ascii \"uri\"\n");
+    // A `data:` URI contributes its own metadata keys: the media type, every `name=value`
+    // parameter under its own name, and `base64` — which php emits even when it is false.
+    out.push_str(".globl _meta_key_mediatype\n_meta_key_mediatype:\n    .ascii \"mediatype\"\n");
+    out.push_str(".globl _meta_key_base64\n_meta_key_base64:\n    .ascii \"base64\"\n");
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
     // The names php-src gives the stream kinds elephc can produce. They are wrapper and
