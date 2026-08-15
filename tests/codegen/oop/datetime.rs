@@ -1032,6 +1032,24 @@ echo ($bad === false) ? "false" : "??";
     assert_eq!(out, "false");
 }
 
+/// Verifies the declared literal-false failure type narrows an assignment-bound parse result.
+#[test]
+fn test_create_from_format_assignment_guard_narrows_success_type() {
+    let out = compile_and_run(
+        r#"<?php
+date_default_timezone_set("UTC");
+function parseRequired(string $value): DateTimeImmutable {
+    if (false === $date = DateTimeImmutable::createFromFormat("!Y-m-d", $value)) {
+        throw new RuntimeException("invalid date");
+    }
+    return $date;
+}
+echo parseRequired("2024-03-15")->format("Y-m-d");
+"#,
+    );
+    assert_eq!(out, "2024-03-15");
+}
+
 /// Verifies the timezone format specifiers `O` (`+hhmm`), `P` (`+hh:mm`), `Z` (offset in seconds),
 /// `T` (3- or 4-letter abbreviation, matched greedily), and `e` (IANA name) parse and validate the subject substring
 /// against the rendered `date("X", $ts)` output of the constructed instant. A mismatch (e.g. `O`

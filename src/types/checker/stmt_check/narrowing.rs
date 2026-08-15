@@ -542,6 +542,34 @@ fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
     )
 }
 
+/// Returns the stable place compared by a strict guard, including a simple local assignment.
+///
+/// PHP commonly binds a fallible result inside the comparison (`false === $value = call()`).
+/// Once the condition has been inferred, the environment already contains the assigned type, so
+/// the comparison can narrow that local exactly like a following `false === $value` guard. Keep
+/// synthetic/non-local assignment forms excluded because their expression result may use a
+/// stabilized temporary rather than the written place.
+fn strict_guard_receiver(expr: &Expr) -> Option<&Expr> {
+    if is_guard_receiver_shape(&expr.kind) {
+        return Some(expr);
+    }
+    let ExprKind::Assignment {
+        target,
+        result_target: None,
+        prelude,
+        conditional_value_temp: None,
+        ..
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) {
+        Some(target)
+    } else {
+        None
+    }
+}
+
 /// Extracts the guarded receiver, the target, and whether the guard is self-negating from a
 /// (syntactically non-negated) guard expression.
 ///
@@ -639,13 +667,13 @@ fn guard_receiver_and_target<'a>(
             right,
         } => {
             let negates = matches!(op, BinOp::StrictNotEq);
-            // `is_guard_receiver_shape` rather than an inline `Variable | PropertyAccess`
-            // match: it also accepts a static property, which is what lets the singleton
-            // shape `if (self::$inst === null) { self::$inst = new S(); }` narrow.
-            let (receiver, lit) = if is_guard_receiver_shape(&left.kind) {
-                (left.as_ref(), &right.kind)
-            } else if is_guard_receiver_shape(&right.kind) {
-                (right.as_ref(), &left.kind)
+            // `strict_guard_receiver` accepts ordinary property places and a simple local bound
+            // by the comparison itself, while retaining the static-property singleton shape
+            // `if (self::$inst === null) { self::$inst = new S(); }`.
+            let (receiver, lit) = if let Some(receiver) = strict_guard_receiver(left) {
+                (receiver, &right.kind)
+            } else if let Some(receiver) = strict_guard_receiver(right) {
+                (receiver, &left.kind)
             } else {
                 return None;
             };

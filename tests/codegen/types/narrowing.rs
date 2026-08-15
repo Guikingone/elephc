@@ -837,6 +837,23 @@ echo bounded(null), ':', bounded(2);
     assert_eq!(out, "0:1");
 }
 
+/// Verifies a strict-false guard narrows the local assigned inside the comparison itself.
+#[test]
+fn test_strict_false_guard_narrows_assignment_target() {
+    let out = compile_and_run(
+        r#"<?php
+function maybeIndex(bool $ok): int|false { return $ok ? 7 : false; }
+function requireIndex(bool $ok): int {
+    if (false === $index = maybeIndex($ok)) { return -1; }
+    return $index;
+}
+
+echo requireIndex(true), ':', requireIndex(false);
+"#,
+    );
+    assert_eq!(out, "7:-1");
+}
+
 /// Verifies nullsafe method dispatch short-circuits a boxed gradual null receiver.
 #[test]
 fn test_nullsafe_method_call_on_mixed_receiver() {
