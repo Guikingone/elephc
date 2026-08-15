@@ -1336,8 +1336,8 @@ fn gradual_array_union_result_type() -> PhpType {
 
 /// Returns `true` if `ty` is a valid operand type for numeric binary operators
 /// (addition, subtraction, multiplication, division, modulo, comparison, spaceship).
-/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union
-/// with mixed integer dispatch behavior.
+/// Numeric operands include `Int`, `Float`, `Bool`, `Void`, `Mixed`, or a union whose members
+/// are all numeric-coercible. Gradual unions use boxed runtime dispatch.
 fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     matches!(
         ty,
@@ -1348,6 +1348,9 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             | PhpType::Void
             | PhpType::Mixed
     ) || checker.is_union_with_mixed_int_dispatch(ty)
+        || matches!(ty, PhpType::Union(members) if members
+            .iter()
+            .all(|member| is_numeric_operand_type(checker, member)))
 }
 
 /// Returns `true` if `ty` is a valid operand type for bitwise binary operators.

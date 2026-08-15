@@ -41,6 +41,20 @@ fn test_division() {
     assert_eq!(out, "42");
 }
 
+/// Verifies arithmetic accepts a nullable numeric operand through boxed runtime dispatch.
+#[test]
+fn test_nullable_float_arithmetic_without_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function offset(?float $value): float {
+    return $value - 1.0;
+}
+echo offset(4.5), ":", offset(null);
+"#,
+    );
+    assert_eq!(out, "3.5:-1");
+}
+
 
 /// Verifies arithmetic with variables: loads two integers from memory and adds them.
 #[test]

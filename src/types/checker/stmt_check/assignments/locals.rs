@@ -15,6 +15,7 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CallableTarget, Expr, ExprKind, StaticReceiver, TypeExpr,
 };
 use crate::span::Span;
+use crate::types::checker::builtins::array_arg_is_gradually_acceptable;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -1016,9 +1017,9 @@ pub(super) fn check_const_decl(
 /// Type-checks a list unpacking assignment (`[$a, $b, ...] = $arr`).
 ///
 /// Infers the right-hand side and accepts homogeneous indexed arrays, associative arrays, or a
-/// fully gradual `Mixed` value guarded by the runtime reader. Indexed arrays propagate their
-/// element type, while associative and gradual values bind adaptively as `Mixed`. Returns an
-/// error for known non-array types, including unresolved nullable unions.
+/// gradual value that may contain an array and is guarded by the runtime reader. Indexed arrays
+/// propagate their element type, while associative and gradual values bind adaptively as `Mixed`.
+/// Returns an error for types that cannot contain an array.
 pub(super) fn check_list_unpack(
     checker: &mut Checker,
     vars: &[String],
@@ -1044,6 +1045,9 @@ pub(super) fn check_list_unpack(
         // lowering already routes boxed Mixed sources through `__rt_mixed_array_get`, which
         // validates the runtime tag before reading the positional keys.
         PhpType::Mixed => PhpType::Mixed,
+        // A union containing an array remains representation-boxed. The runtime reader applies
+        // PHP's missing/non-array element semantics to whichever member arrives at execution.
+        PhpType::Union(_) if array_arg_is_gradually_acceptable(&arr_ty) => PhpType::Mixed,
         _ => {
             for var in vars {
                 poison_unbound_local(env, var);

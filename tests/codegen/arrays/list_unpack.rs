@@ -87,6 +87,24 @@ echo $app . ":" . $args;
     assert_eq!(out, "app:args");
 }
 
+/// Verifies a nullable array can be destructured without prior narrowing and that a null value
+/// follows PHP's missing-element behavior instead of being rejected statically.
+#[test]
+fn test_list_unpack_nullable_array_without_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function row(bool $present): ?array {
+    return $present ? ["left", "right"] : null;
+}
+[$left, $right] = row(true);
+echo $left . ":" . $right . ";";
+[$missingLeft, $missingRight] = row(false);
+var_dump($missingLeft, $missingRight);
+"#,
+    );
+    assert_eq!(out, "left:right;NULL\nNULL\n");
+}
+
 /// Verifies destructuring is valid inside a condition, evaluates its RHS once, and yields that
 /// original array before the surrounding boolean operators inspect it.
 #[test]
