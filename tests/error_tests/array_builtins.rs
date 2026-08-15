@@ -945,3 +945,16 @@ fn test_error_array_pointer_literal_receiver() {
         "reset parameter $array must be passed a variable",
     );
 }
+
+/// Verifies a gradual union with no array branch remains a compile-time type error.
+#[test]
+fn test_error_array_pointer_scalar_union_receiver() {
+    expect_error(
+        r#"<?php
+function maybe_scalar(bool $flag): int|string { return $flag ? 1 : "x"; }
+$value = maybe_scalar(true);
+reset($value);
+"#,
+        "reset() argument must be array",
+    );
+}

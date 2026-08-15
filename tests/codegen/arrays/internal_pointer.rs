@@ -313,3 +313,19 @@ eval('$h = ["x"=>1,"y"=>2]; echo current($h), key($h); next($h); echo current($h
     );
     assert_eq!(out, "10|0|20|1|30|2|bool(false)\nNULL\n10|0\n1x2y");
 }
+
+/// Verifies gradual array unions are normalized before pointer seeks and reads.
+#[test]
+fn test_array_internal_pointer_gradual_array_union() {
+    let out = compile_and_run(
+        r#"<?php
+function maybe_list(bool $flag): array|string { return [11, 22]; }
+function maybe_map(bool $flag): array|string { return ["first" => 3, "second" => 4]; }
+$list = maybe_list($argc > 1);
+$map = maybe_map($argc > 1);
+echo reset($list), ":", key($list), "|";
+echo reset($map), ":", key($map);
+"#,
+    );
+    assert_eq!(out, "11:0|3:first");
+}
