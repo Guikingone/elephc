@@ -329,14 +329,18 @@ pub(super) fn require_array_like_operand(ty: PhpType, name: &str) -> Result<()> 
 
 /// Validates a two-input hash builtin operand and reports whether it must be converted to a hash.
 ///
-/// Associative arrays are used directly; scalar indexed arrays (`int`/`float`/`bool` elements) are
-/// converted to integer-keyed hashes at runtime. Any other shape is unsupported.
-pub(super) fn two_hash_operand_needs_conversion(ty: PhpType, name: &str) -> Result<bool> {
+/// Associative arrays are used directly. Indexed arrays are converted to integer-keyed hashes at
+/// runtime when their element representation is supported by the selected operation.
+pub(super) fn two_hash_operand_needs_conversion(
+    ty: PhpType,
+    name: &str,
+    allow_heap_indexed: bool,
+) -> Result<bool> {
     match ty.codegen_repr() {
         PhpType::AssocArray { .. } => Ok(false),
-        PhpType::Array(elem) if matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => {
-            Ok(true)
-        }
+        PhpType::Array(elem)
+            if allow_heap_indexed
+                || matches!(*elem, PhpType::Int | PhpType::Float | PhpType::Bool) => Ok(true),
         other => Err(CodegenIrError::unsupported(format!(
             "{} hash operand PHP type {:?}",
             name, other
@@ -453,6 +457,8 @@ pub(super) fn lower_gradual_two_hash_arg_builtin(
 ///
 /// `mode` is loaded into the third argument register for `array_diff_assoc` (0) /
 /// `array_intersect_assoc` (1). The result hash pointer is left in the integer result register.
+/// `allow_heap_indexed` permits indexed arrays whose elements own runtime storage when the helper
+/// preserves those values rather than comparing them through scalar-only paths.
 /// Mirrors the legacy two-hash choreography but sources operands from EIR values.
 pub(super) fn lower_two_hash_arg_builtin(
     ctx: &mut FunctionContext<'_>,
@@ -460,12 +466,21 @@ pub(super) fn lower_two_hash_arg_builtin(
     name: &str,
     runtime_label: &str,
     mode: Option<i64>,
+    allow_heap_indexed: bool,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
-    let conv0 = two_hash_operand_needs_conversion(ctx.value_php_type(first)?, name)?;
-    let conv1 = two_hash_operand_needs_conversion(ctx.value_php_type(second)?, name)?;
+    let conv0 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(first)?,
+        name,
+        allow_heap_indexed,
+    )?;
+    let conv1 = two_hash_operand_needs_conversion(
+        ctx.value_php_type(second)?,
+        name,
+        allow_heap_indexed,
+    )?;
     let result_reg = abi::int_result_reg(ctx.emitter);
 
     // -- materialize first operand into the result register, convert if indexed, then spill --
@@ -567,7 +582,7 @@ pub(crate) fn lower_array_replace(ctx: &mut FunctionContext<'_>, inst: &Instruct
             None,
         );
     }
-    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None)
+    lower_two_hash_arg_builtin(ctx, inst, "array_replace", "__rt_array_replace", None, false)
 }
 
 /// Lowers `array_replace_recursive()` (recursive right-wins hash merge).
@@ -575,12 +590,29 @@ pub(crate) fn lower_array_replace_recursive(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
+    if inst.operands.iter().any(|operand| {
+        ctx.value_php_type(*operand).is_ok_and(|ty| {
+            matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        })
+    }) || matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return lower_gradual_two_hash_arg_builtin(
+            ctx,
+            inst,
+            "array_replace_recursive",
+            "__rt_array_replace_recursive",
+            None,
+        );
+    }
     lower_two_hash_arg_builtin(
         ctx,
         inst,
         "array_replace_recursive",
         "__rt_array_replace_recursive",
         None,
+        true,
     )
 }
 
@@ -595,6 +627,7 @@ pub(crate) fn lower_array_diff_assoc(
         "array_diff_assoc",
         "__rt_assoc_diff_intersect",
         Some(0),
+        false,
     )
 }
 
@@ -609,6 +642,7 @@ pub(crate) fn lower_array_intersect_assoc(
         "array_intersect_assoc",
         "__rt_assoc_diff_intersect",
         Some(1),
+        false,
     )
 }
 
@@ -623,5 +657,6 @@ pub(crate) fn lower_array_merge_recursive(
         "array_merge_recursive",
         "__rt_array_merge_recursive",
         None,
+        false,
     )
 }

@@ -266,6 +266,47 @@ echo $c["z"];
     assert_eq!(out, "193");
 }
 
+/// Verifies recursive replacement merges nested indexed arrays by their numeric keys.
+#[test]
+fn test_array_replace_recursive_nested_indexed_merge() {
+    let out = compile_and_run(
+        r#"<?php
+$base = ["cfg" => [1, 2]];
+$over = ["cfg" => [9]];
+$result = array_replace_recursive($base, $over);
+echo $result["cfg"][0], $result["cfg"][1];
+"#,
+    );
+    assert_eq!(out, "92");
+}
+
+/// Verifies recursive replacement accepts heap-valued indexed top-level arrays.
+#[test]
+fn test_array_replace_recursive_string_indexed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+$result = array_replace_recursive(["a", "keep"], ["b"]);
+echo $result[0], $result[1];
+"#,
+    );
+    assert_eq!(out, "bkeep");
+}
+
+/// Verifies recursive replacement descends into arrays crossing a gradual Mixed boundary.
+#[test]
+fn test_array_replace_recursive_nested_mixed_inputs() {
+    let out = compile_and_run(
+        r#"<?php
+function replace_nested(mixed $base, mixed $over): mixed {
+    return array_replace_recursive($base, $over);
+}
+$result = replace_nested(["cfg" => [1, 2]], ["cfg" => [9]]);
+echo $result["cfg"][0], $result["cfg"][1];
+"#,
+    );
+    assert_eq!(out, "92");
+}
+
 /// Verifies array_replace_recursive() overwrites non-array values like array_replace.
 /// Fixture: {a:1,b:2} replaced by {b:9} → a kept, b overwritten.
 #[test]
