@@ -799,6 +799,10 @@ pub(crate) fn lower_stream_context_get_params(
     store_if_result(ctx, inst)
 }
 
+/// php-src's verbatim `ValueError` wording for a `stream_get_contents()` `$length` below `-1`.
+const STREAM_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE: &str =
+    "stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1";
+
 /// Lowers `stream_get_contents(stream, length?, offset?)` to `string|false`.
 pub(crate) fn lower_stream_get_contents(
     ctx: &mut FunctionContext<'_>,
@@ -861,6 +865,18 @@ pub(crate) fn lower_stream_get_contents(
         ctx.load_value_to_result(length)?.codegen_repr(),
         "stream_get_contents length",
     )?;
+    // php-src accepts exactly one negative `$length`: `-1`, its documented "read to EOF"
+    // sentinel. Anything below that is a catchable ValueError raised BEFORE a byte is read,
+    // where this used to silently fall into the read-all path and answer the whole stream.
+    // A null `$length` carries NULL_SENTINEL, a large positive, so it clears the bound.
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(
+            abi::int_result_reg(ctx.emitter),
+            -1,
+        ),
+        STREAM_GET_CONTENTS_NEGATIVE_LENGTH_MESSAGE,
+    );
     emit_stream_get_contents_save_length(ctx);
 
     if inst.operands.len() == 3 {

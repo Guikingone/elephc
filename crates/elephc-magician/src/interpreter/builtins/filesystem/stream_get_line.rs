@@ -10,6 +10,10 @@
 /// php-src reads `PHP_SOCK_CHUNK_SIZE` bytes when the caller passes `$length` as zero.
 const STREAM_GET_LINE_DEFAULT_CHUNK: usize = 8192;
 
+/// php-src's verbatim `ValueError` wording for a negative `stream_get_line()` `$length`.
+const STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE: &str =
+    "stream_get_line(): Argument #2 ($length) must be greater than or equal to 0";
+
 eval_builtin! {
     contract: "stream_get_line",
     area: Filesystem,
@@ -71,6 +75,16 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
+    // php-src rejects a negative budget outright with a catchable ValueError. The compiled
+    // backend has raised it since the guard landed in `lower_stream_get_line`; eval reached
+    // `usize::try_from` instead and died as an UNCATCHABLE runtime fatal.
+    if eval_int_value(length, values)? < 0 {
+        return eval_stream_value_error(
+            STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE,
+            context,
+            values,
+        );
+    }
     // php-src reads its default chunk when the caller passes zero; zero does NOT mean
     // "read nothing".
     let length = match eval_nonnegative_usize(length, values)? {

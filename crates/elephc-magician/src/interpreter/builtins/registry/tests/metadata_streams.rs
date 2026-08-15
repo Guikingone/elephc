@@ -113,9 +113,11 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_declared_builtin_default_value("stream_copy_to_stream", 2),
             Some(EvalBuiltinDefaultValue::Null)
         );
+        // php-src's stub is `int $offset = 0`, and `streamsfuncs.c` only seeks for `pos > 0`,
+        // so the default reads "keep the source where it is" rather than "rewind".
         assert_eq!(
             eval_declared_builtin_default_value("stream_copy_to_stream", 3),
-            Some(EvalBuiltinDefaultValue::Int(-1))
+            Some(EvalBuiltinDefaultValue::Int(0))
         );
         assert_eq!(
             eval_declared_builtin_param_names("stream_get_contents"),

@@ -180,6 +180,12 @@ pub(crate) fn lower_stream_socket_get_name(
     store_if_result(ctx, inst)
 }
 
+/// php-src's verbatim `ValueError` wording for a `stream_socket_shutdown()` `$mode` outside
+/// the three `STREAM_SHUT_*` constants.
+const STREAM_SOCKET_SHUTDOWN_BAD_MODE_MESSAGE: &str =
+    "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+     STREAM_SHUT_WR, or STREAM_SHUT_RDWR";
+
 /// Lowers `stream_socket_shutdown(stream, mode)`.
 pub(crate) fn lower_stream_socket_shutdown(
     ctx: &mut FunctionContext<'_>,
@@ -191,6 +197,15 @@ pub(crate) fn lower_stream_socket_shutdown(
     load_stream_fd_to_result(ctx, stream, "stream_socket_shutdown")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     ctx.load_value_to_result(mode)?;
+    // php-src accepts only the three `STREAM_SHUT_*` constants (0, 1, 2) and raises a
+    // catchable ValueError for anything else. Every other mode used to reach the runtime
+    // helper, whose failed `shutdown(2)` answered a plain `false` — indistinguishable from a
+    // legal mode that the kernel refused.
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedInRange(abi::int_result_reg(ctx.emitter), 0, 2),
+        STREAM_SOCKET_SHUTDOWN_BAD_MODE_MESSAGE,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // pass the shutdown mode as the second runtime argument
@@ -279,6 +294,11 @@ pub(crate) fn lower_stream_socket_enable_crypto(
         }
     }
     ctx.emitter.label(&done_label);
+    // php-src declares `int|bool` here: a non-blocking socket mid-handshake answers `0`. Every
+    // arm above produces a boolean, and elephc's TLS attach is synchronous, so the `0` is not
+    // reachable from this runtime — but the DECLARED type admits it, so the boolean must be
+    // boxed into the wider slot the contract now promises.
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     store_if_result(ctx, inst)
 }
 

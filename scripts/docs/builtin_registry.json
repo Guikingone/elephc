@@ -63923,7 +63923,7 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "context",
+          "name": "stream_or_context",
           "optional": false,
           "type": "mixed"
         }
@@ -63950,7 +63950,7 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "context",
+          "name": "stream_or_context",
           "optional": false,
           "type": "mixed"
         }
@@ -64041,7 +64041,7 @@
         {
           "by_ref": false,
           "default": null,
-          "name": "context",
+          "name": "stream_or_context",
           "optional": false,
           "type": "resource"
         }
@@ -64861,7 +64861,7 @@
         },
         {
           "by_ref": false,
-          "default": -1,
+          "default": 0,
           "name": "offset",
           "optional": true,
           "type": "int"
@@ -64909,7 +64909,7 @@
         },
         {
           "by_ref": false,
-          "default": "-1",
+          "default": "0",
           "name": "offset",
           "optional": true,
           "type": "int"
@@ -65021,7 +65021,7 @@
         },
         {
           "by_ref": false,
-          "default": "-1",
+          "default": "0",
           "name": "offset",
           "optional": true,
           "type": "int"
@@ -67167,7 +67167,7 @@
         },
         {
           "by_ref": false,
-          "default": 0,
+          "default": null,
           "name": "microseconds",
           "optional": true,
           "type": "int"
@@ -67221,7 +67221,7 @@
         },
         {
           "by_ref": false,
-          "default": "0",
+          "default": "null",
           "name": "microseconds",
           "optional": true,
           "type": "int"
@@ -67339,13 +67339,13 @@
         },
         {
           "by_ref": false,
-          "default": "0",
+          "default": "null",
           "name": "microseconds",
           "optional": true,
           "type": "int"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "stream_select",
@@ -68770,7 +68770,7 @@
           "type": "resource"
         }
       ],
-      "return_type": "bool",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "stream_socket_enable_crypto",
@@ -69137,7 +69137,7 @@
         },
         {
           "by_ref": true,
-          "default": "",
+          "default": null,
           "name": "address",
           "optional": true,
           "type": "string"
@@ -69184,7 +69184,7 @@
         },
         {
           "by_ref": true,
-          "default": "\"\"",
+          "default": "null",
           "name": "address",
           "optional": true,
           "type": "string"
@@ -69296,7 +69296,7 @@
         },
         {
           "by_ref": true,
-          "default": "''",
+          "default": "null",
           "name": "address",
           "optional": true,
           "type": "string"

@@ -28,6 +28,70 @@ pub(in crate::interpreter) fn eval_nonnegative_usize(
     usize::try_from(value).map_err(|_| EvalStatus::RuntimeFatal)
 }
 
+/// Raises one of php-src's catchable `ValueError`s for an out-of-range stream argument.
+///
+/// The compiled backend emits these through `emit_value_error_unless()`; eval needs the same
+/// outcome, or a `try`/`catch` that works compiled dies as an uncatchable runtime fatal under
+/// `eval()`. Callers pass php-src's own verbatim wording.
+pub(in crate::interpreter) fn eval_stream_value_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_stream_throwable("ValueError", message, context, values)
+}
+
+/// Raises php-src's catchable `TypeError` for a stream argument of the wrong TYPE.
+pub(in crate::interpreter) fn eval_stream_type_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    eval_stream_throwable("TypeError", message, context, values)
+}
+
+/// Constructs one built-in throwable and hands it to the interpreter's pending-throw slot.
+fn eval_stream_throwable<T>(
+    class_name: &str,
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object(class_name)?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Names a runtime cell's PHP type the way php-src's `TypeError` spells it.
+///
+/// php reports the VALUE's own spelling, not its declared type: a boolean is `true` or
+/// `false`, never `bool`. MEASURED on `php -n` 8.5.6 through
+/// `stream_context_get_options()`'s own diagnostic.
+pub(in crate::interpreter) fn eval_stream_php_type_name(
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<&'static str, EvalStatus> {
+    Ok(match values.type_tag(value)? {
+        EVAL_TAG_INT => "int",
+        EVAL_TAG_STRING => "string",
+        EVAL_TAG_FLOAT => "float",
+        EVAL_TAG_BOOL => {
+            if values.truthy(value)? {
+                "true"
+            } else {
+                "false"
+            }
+        }
+        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => "array",
+        EVAL_TAG_OBJECT => "object",
+        EVAL_TAG_NULL => "null",
+        _ => "unknown",
+    })
+}
+
 /// Converts an optional stream length where null and -1 mean "read all".
 pub(in crate::interpreter) fn eval_optional_stream_length(
     value: Option<RuntimeCellHandle>,
@@ -48,7 +112,11 @@ pub(in crate::interpreter) fn eval_optional_stream_length(
     ))
 }
 
-/// Converts an optional absolute stream offset where null and -1 mean no seek.
+/// Converts an optional absolute stream offset where null and any negative value mean no seek.
+///
+/// `stream_get_contents()` and `stream_copy_to_stream()` disagree on ZERO, so each caller
+/// applies its own rule on top of this one: php-src's `stream_get_contents()` seeks whenever
+/// `desiredpos >= 0`, while `stream_copy_to_stream()` guards its seek with `pos > 0`.
 pub(in crate::interpreter) fn eval_optional_stream_offset(
     value: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,

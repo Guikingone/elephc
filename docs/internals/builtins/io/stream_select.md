@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = null): mixed
 ```
 
 ## What the type checker enforces

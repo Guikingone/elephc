@@ -259,6 +259,13 @@ pub(super) fn materialize_stream_copy_length(
 }
 
 /// Applies the optional `stream_copy_to_stream` source seek before copying.
+///
+/// php-src guards the seek with `pos > 0`, so a ZERO offset — the documented default — copies
+/// from the source's CURRENT position rather than rewinding it. MEASURED on `php -n` 8.5.6 with
+/// the source parked at byte 4 of `"0123456789"`: `$offset` of `0`, `-1`, and the omitted
+/// default all copy 6 bytes (`"456789"`), while `2` copies 8. Treating `0` as "seek to the
+/// start" — what this used to do, in a lowering whose contract default was still `-1` — rewound
+/// a partially consumed source.
 pub(super) fn lower_stream_copy_seek(
     ctx: &mut FunctionContext<'_>,
     skip_seek: &str,
@@ -268,8 +275,8 @@ pub(super) fn lower_stream_copy_seek(
     let native_success = ctx.next_label("scs_native_seek_success");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // a negative offset means no seek is requested
-            ctx.emitter.instruction(&format!("b.lt {}", skip_seek));            // keep the current source position for negative offsets
+            ctx.emitter.instruction("cmp x0, #1");                              // only a strictly positive offset seeks, like php-src's `pos > 0`
+            ctx.emitter.instruction(&format!("b.lt {}", skip_seek));            // keep the current source position for zero and negative offsets
             ctx.emitter.instruction("str x0, [sp, #40]");                       // preserve the requested offset across handle resolution
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque source handle
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
@@ -297,8 +304,8 @@ pub(super) fn lower_stream_copy_seek(
             ctx.emitter.label(skip_seek);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 0");                              // a negative offset means no seek is requested
-            ctx.emitter.instruction(&format!("jl {}", skip_seek));              // keep the current source position for negative offsets
+            ctx.emitter.instruction("cmp rax, 1");                              // only a strictly positive offset seeks, like php-src's `pos > 0`
+            ctx.emitter.instruction(&format!("jl {}", skip_seek));              // keep the current source position for zero and negative offsets
             ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // preserve the requested offset across handle resolution
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the opaque source handle
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");

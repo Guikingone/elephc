@@ -76,6 +76,18 @@ pub(crate) fn lower_stream_set_blocking(
     store_if_result(ctx, inst)
 }
 
+/// php-src's verbatim `ValueError` wording for a non-positive `stream_set_chunk_size()` `$size`.
+const STREAM_SET_CHUNK_SIZE_NON_POSITIVE_MESSAGE: &str =
+    "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0";
+
+/// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$seconds`.
+const STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE: &str =
+    "stream_select(): Argument #4 ($seconds) must be greater than or equal to 0";
+
+/// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.
+const STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =
+    "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0";
+
 /// Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
 pub(crate) fn lower_stream_set_chunk_size(
     ctx: &mut FunctionContext<'_>,
@@ -90,6 +102,13 @@ pub(crate) fn lower_stream_set_chunk_size(
         ctx.load_value_to_result(size)?.codegen_repr(),
         "stream_set_chunk_size size",
     )?;
+    // php-src rejects a non-positive chunk size outright; the call used to answer the
+    // PREVIOUS size and leave the stream untouched, which reads as success.
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(abi::int_result_reg(ctx.emitter), 1),
+        STREAM_SET_CHUNK_SIZE_NON_POSITIVE_MESSAGE,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // pass the requested chunk size as the second runtime argument
@@ -284,11 +303,26 @@ pub(crate) fn lower_stream_select(
     for idx in 0..4 {
         let value = expect_operand(inst, idx)?;
         ctx.load_value_to_result(value)?;
+        // php-src rejects both negative timeout components before it builds a single fd set.
+        // `$seconds` is `?int`, and a null one carries NULL_SENTINEL — a large positive that
+        // clears the bound on its own, so "block forever" still reaches the runtime helper.
+        if idx == 3 {
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, 0),
+                STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE,
+            );
+        }
         abi::emit_push_reg(ctx.emitter, result_reg);
     }
     if inst.operands.len() == 5 {
         let microseconds = expect_operand(inst, 4)?;
         ctx.load_value_to_result(microseconds)?;
+        super::super::exceptions::emit_value_error_unless(
+            ctx,
+            super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, 0),
+            STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE,
+        );
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -316,6 +350,30 @@ pub(crate) fn lower_stream_select(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_select");
+    // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying
+    // `poll`/`select` itself failed. `__rt_stream_select` reports that failure as a negative
+    // count, so the sign picks the branch.
+    let false_label = ctx.next_label("stream_select_failed");
+    let boxed_label = ctx.next_label("stream_select_boxed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // did poll report a failure?
+            ctx.emitter.instruction(&format!("b.lt {}", false_label));          // a negative count is php's false
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // did poll report a failure?
+            ctx.emitter.instruction(&format!("jl {}", false_label));            // a negative count is php's false
+        }
+    }
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", boxed_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", boxed_label)),
+    }
+    ctx.emitter.label(&false_label);
+    emit_bool_result(ctx, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    ctx.emitter.label(&boxed_label);
     store_if_result(ctx, inst)
 }
 

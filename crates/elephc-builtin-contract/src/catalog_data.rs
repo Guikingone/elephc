@@ -15176,8 +15176,12 @@ writes: None,
         area: Area::Io,
         kind: BuiltinKind::Function,
         params: &[
+            // php-src's stub spells this parameter `$stream_or_context`, and its own TypeError
+            // quotes that spelling: `stream_context_get_options(): Argument #1
+            // ($stream_or_context) must be of type resource, string given`. The name is not
+            // cosmetic — codegen reads it back out of this catalog to build that message.
             ParamSpec {
-                name: "context",
+                name: "stream_or_context",
                 ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
@@ -15406,10 +15410,14 @@ writes: None,
                 by_ref: false,
 writes: None,
             },
+            // php-src's stub declares `int $offset = 0`, and `streamsfuncs.c` guards the seek
+            // with `pos > 0` — so the default does NOT rewind a partially consumed source, and
+            // `0` behaves exactly like the `-1` this used to declare. The lowering enforces the
+            // same `> 0` rule, so both spellings still skip the seek.
             ParamSpec {
                 name: "offset",
                 ty: TypeSpec::Int,
-                default: Some(DefaultSpec::Int(-1)),
+                default: Some(DefaultSpec::Int(0)),
                 by_ref: false,
 writes: None,
             },
@@ -15939,10 +15947,14 @@ writes: None,
                 by_ref: false,
 writes: None,
             },
+            // php-src's stub is `?int $microseconds = null`, NOT `int $microseconds = 0`. The
+            // distinction is real: `stream_select($r, $w, $e, null)` blocks forever because
+            // there is no timeout at all, while `stream_select($r, $w, $e, 0, 0)` polls. A
+            // declared `0` default would spell the second one for a caller who wrote neither.
             ParamSpec {
                 name: "microseconds",
                 ty: TypeSpec::Int,
-                default: Some(DefaultSpec::Int(0)),
+                default: Some(DefaultSpec::Null),
                 by_ref: false,
 writes: None,
             },
@@ -15951,7 +15963,9 @@ writes: None,
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Int,
+        // php-src returns `int|false`: the ready-descriptor count, or `false` when the
+        // underlying `poll`/`select` itself failed.
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Runs the equivalent of the select() system call on the given arrays of streams.",
         examples: &[
@@ -16295,7 +16309,12 @@ writes: None,
         min_args: None,
         max_args: None,
         arity_error: None,
-        returns: TypeSpec::Bool,
+        // php-src returns `int|bool`, not `bool`: a NON-BLOCKING socket whose TLS handshake has
+        // not finished yet answers `0`, which the caller is expected to retry. `true` and
+        // `false` are the terminal outcomes. elephc's TLS attach is synchronous today, so the
+        // `0` is not reachable from its own runtime, but the DECLARED type must still admit it —
+        // a `bool` contract makes `if ($r === 0)` unreachable code for the checker.
+        returns: TypeSpec::Mixed,
         by_ref_return: false,
         summary: "Turns encryption on/off on an already connected socket.",
         examples: &[
@@ -16412,10 +16431,13 @@ writes: None,
                 by_ref: false,
                 writes: None,
             },
+            // php-src's stub is `&$address = null` — an OUTPUT parameter whose pre-call value is
+            // never read. Declaring `""` claimed a starting value the function does not have,
+            // and made the default disagree with the one reflection reports.
             ParamSpec {
                 name: "address",
                 ty: TypeSpec::Str,
-                default: Some(DefaultSpec::Str("")),
+                default: Some(DefaultSpec::Null),
                 by_ref: true,
                 writes: Some(TypeSpec::Str),
             },

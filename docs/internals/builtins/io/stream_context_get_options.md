@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_context_get_options(resource $context): array
+function stream_context_get_options(resource $stream_or_context): array
 ```
 
 ## What the type checker enforces

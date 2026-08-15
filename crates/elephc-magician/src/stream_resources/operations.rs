@@ -301,8 +301,12 @@ impl EvalStreamResources {
     }
 
     /// Accepts read/write buffer settings for local file streams.
-    pub(crate) fn set_buffer(&self, id: i64, _size: i64) -> Option<i64> {
-        self.streams.get(&id).map(|_| 0)
+    ///
+    /// Answers only whether the id resolves to a live stream. The php-visible RESULT is not the
+    /// same for both setters — the write buffer reports `-1` and the read buffer `0` — so it
+    /// belongs to the caller that knows which of the two it is serving, not here.
+    pub(crate) fn set_buffer(&self, id: i64, _size: i64) -> Option<()> {
+        self.streams.get(&id).map(|_| ())
     }
 
     /// Applies an advisory lock operation to a stream's backing file descriptor.

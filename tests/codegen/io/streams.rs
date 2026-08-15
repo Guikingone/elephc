@@ -12150,3 +12150,193 @@ var_dump(file_exists($p));
         "eleven readers report the failure and the four predicates stay silent"
     );
 }
+
+/// Verifies the argument-range `ValueError`s php-src raises across the `stream_*` surface.
+///
+/// Each wording below was MEASURED against `php -n` 8.5.6 before this test was written:
+///
+/// ```text
+/// stream_get_contents($f, -5)     ValueError: stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1
+/// stream_get_contents($f, -1)     reads to EOF — -1 is the documented "read all" sentinel, NOT an error
+/// stream_set_chunk_size($f, 0)    ValueError: stream_set_chunk_size(): Argument #2 ($size) must be greater than 0
+/// stream_socket_shutdown($f, 9)   ValueError: stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, STREAM_SHUT_WR, or STREAM_SHUT_RDWR
+/// ```
+///
+/// All three are catchable `ValueError`s, so a `try`/`catch` observes the message instead
+/// of the process dying; each used to answer a VALUE (`""`, `int(8192)`, `false`).
+#[test]
+fn test_stream_builtins_raise_php_argument_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(callable $c): string {
+    try { $v = $c(); return "no-throw:" . var_export($v, true); }
+    catch (ValueError $e) { return $e->getMessage(); }
+}
+$m = fopen("php://memory", "r+");
+fwrite($m, "payload");
+rewind($m);
+echo probe(fn() => stream_get_contents($m, -5)), "\n";
+echo probe(fn() => stream_set_chunk_size($m, 0)), "\n";
+echo probe(fn() => stream_set_chunk_size($m, -3)), "\n";
+echo probe(fn() => stream_socket_shutdown($m, 9)), "\n";
+echo probe(fn() => stream_socket_shutdown($m, -1)), "\n";
+rewind($m);
+echo stream_get_contents($m, -1), "\n";
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1\n",
+            "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0\n",
+            "stream_set_chunk_size(): Argument #2 ($size) must be greater than 0\n",
+            "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+             STREAM_SHUT_WR, or STREAM_SHUT_RDWR\n",
+            "stream_socket_shutdown(): Argument #2 ($mode) must be one of STREAM_SHUT_RD, \
+             STREAM_SHUT_WR, or STREAM_SHUT_RDWR\n",
+            "payload\n",
+        )
+    );
+}
+
+/// Verifies `stream_socket_shutdown()` still accepts every mode php-src enumerates.
+///
+/// The `ValueError` guard sits between the argument and the runtime helper, so the three
+/// legal modes must keep reaching it. MEASURED: php answers `true` for all three on a
+/// connected socket pair.
+#[test]
+fn test_stream_socket_shutdown_accepts_the_three_php_modes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([STREAM_SHUT_RD, STREAM_SHUT_WR, STREAM_SHUT_RDWR] as $mode) {
+    $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    echo stream_socket_shutdown($pair[0], $mode) ? "y" : "n";
+    fclose($pair[0]);
+    fclose($pair[1]);
+}
+"#,
+    );
+    assert_eq!(out, "yyy");
+}
+
+/// Verifies `stream_context_get_options()` names php-src's own parameter in its `TypeError`,
+/// and that the error is CATCHABLE rather than an immediate fatal.
+///
+/// MEASURED on `php -n` 8.5.6 — the parameter is `$stream_or_context`, not `$stream`:
+///
+/// ```text
+/// stream_context_get_options("nope") TypeError: stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, string given
+/// stream_context_get_options(1)      TypeError: stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, int given
+/// ```
+#[test]
+fn test_stream_context_get_options_type_error_is_catchable_and_names_its_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["nope", 1, 1.5, null, []];
+foreach ($values as $value) {
+    try { stream_context_get_options($value); echo "no-throw\n"; }
+    catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, string given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, int given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, float given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, null given\n",
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, array given\n",
+        )
+    );
+}
+
+/// Verifies `stream_copy_to_stream()` only seeks for a STRICTLY POSITIVE `$offset`.
+///
+/// php-src's `streamsfuncs.c` guards the seek with `pos > 0`, so its documented default
+/// (`$offset = 0`) copies from the source's CURRENT position — it does not rewind.
+/// MEASURED on `php -n` 8.5.6 with the source parked at byte 4 of `"0123456789"`:
+///
+/// ```text
+/// stream_copy_to_stream($src, $dst)          6 bytes, "456789"
+/// stream_copy_to_stream($src, $dst, null,  0) 6 bytes, "456789"   <- 0 does NOT rewind
+/// stream_copy_to_stream($src, $dst, null, -1) 6 bytes, "456789"
+/// stream_copy_to_stream($src, $dst, null,  2) 8 bytes, "23456789"
+/// ```
+#[test]
+fn test_stream_copy_to_stream_zero_offset_keeps_the_source_position() {
+    let out = compile_and_run(
+        r#"<?php
+function run(int $offset): string {
+    $src = fopen("php://memory", "r+");
+    fwrite($src, "0123456789");
+    fseek($src, 4);
+    $dst = fopen("php://memory", "r+");
+    $n = stream_copy_to_stream($src, $dst, null, $offset);
+    rewind($dst);
+    $payload = stream_get_contents($dst);
+    fclose($src);
+    fclose($dst);
+    return $n . ":" . $payload;
+}
+function run_default(): string {
+    $src = fopen("php://memory", "r+");
+    fwrite($src, "0123456789");
+    fseek($src, 4);
+    $dst = fopen("php://memory", "r+");
+    $n = stream_copy_to_stream($src, $dst);
+    rewind($dst);
+    $payload = stream_get_contents($dst);
+    fclose($src);
+    fclose($dst);
+    return $n . ":" . $payload;
+}
+echo run_default(), "\n";
+echo run(0), "\n";
+echo run(-1), "\n";
+echo run(2), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "6:456789\n6:456789\n6:456789\n8:23456789\n",
+        "only a strictly positive offset seeks, exactly like php-src's `pos > 0`"
+    );
+}
+
+/// Verifies `stream_select()` rejects php-src's two negative timeout components.
+///
+/// MEASURED on `php -n` 8.5.6 against a live `stream_socket_pair()`:
+///
+/// ```text
+/// stream_select($r, $w, $e, -1)     ValueError: stream_select(): Argument #4 ($seconds) must be greater than or equal to 0
+/// stream_select($r, $w, $e, 0, -1)  ValueError: stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0
+/// ```
+#[test]
+fn test_stream_select_rejects_negative_timeout_components() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+fwrite($pair[1], "hi");
+$w = null;
+$x = null;
+$r = [$pair[0]];
+try { stream_select($r, $w, $x, -1); echo "no-throw\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$r = [$pair[0]];
+try { stream_select($r, $w, $x, 0, -1); echo "no-throw\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$r = [$pair[0]];
+echo stream_select($r, $w, $x, 0), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "stream_select(): Argument #4 ($seconds) must be greater than or equal to 0\n",
+            "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0\n",
+            "1\n",
+        )
+    );
+}

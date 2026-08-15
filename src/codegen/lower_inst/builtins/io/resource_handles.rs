@@ -381,7 +381,34 @@ pub(super) fn emit_stream_type_error(ctx: &mut FunctionContext<'_>, function_nam
     emit_stream_type_error_case(ctx, function_name, "unknown", &unknown_label);
 }
 
-/// Emits one concrete stream TypeError branch and terminates the process.
+/// Names argument #1 the way php-src's own `TypeError` spells it for this builtin.
+///
+/// php reads the wording out of the function's stub, so the spelling is NOT always
+/// `$stream`. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// stream_context_get_options("x") ... Argument #1 ($stream_or_context) ...
+/// stream_context_get_params("x")  ... Argument #1 ($context) ...
+/// stream_socket_recvfrom("x", 5)  ... Argument #1 ($socket) ...
+/// stream_filter_remove("x")       ... Argument #1 ($stream_filter) ...
+/// stream_copy_to_stream("x", "y") ... Argument #1 ($from) ...
+/// fread("x", 5)                   ... Argument #1 ($stream) ...
+/// ```
+///
+/// The shared builtin contract already carries that name, so it is read from there rather
+/// than duplicated in a codegen table that would drift away from the catalog. Builtins with
+/// no contract entry (internal lowering helpers) keep php's most common spelling.
+fn first_parameter_name(function_name: &str) -> &'static str {
+    crate::builtins::registry::lookup(function_name)
+        .and_then(|def| def.spec.params.first())
+        .map_or("stream", |param| param.name)
+}
+
+/// Emits one concrete stream `TypeError` branch as a CATCHABLE throw.
+///
+/// php raises a real `TypeError` here, so `catch (TypeError $e)` observes the message and an
+/// unhandled one leaves the interpreter with status 255. This used to write the diagnostic and
+/// `exit(1)` directly, which no `try` block could intercept and which reported the wrong status.
 pub(super) fn emit_stream_type_error_case(
     ctx: &mut FunctionContext<'_>,
     function_name: &str,
@@ -390,34 +417,11 @@ pub(super) fn emit_stream_type_error_case(
 ) {
     ctx.emitter.label(case_label);
     let message = format!(
-        "Fatal error: Uncaught TypeError: {}(): Argument #1 ($stream) must be of type resource, {} given\n",
-        function_name, given_type
+        "{}(): Argument #1 (${}) must be of type resource, {} given",
+        function_name,
+        first_parameter_name(function_name),
+        given_type
     );
-    let (label, len) = ctx.data.add_string(message.as_bytes());
-    emit_stream_type_error_and_exit(ctx, &label, len);
+    super::super::exceptions::emit_type_error(ctx, &message);
 }
 
-/// Emits a fatal stream TypeError diagnostic and terminates with exit status 1.
-pub(super) fn emit_stream_type_error_and_exit(ctx: &mut FunctionContext<'_>, label: &str, len: usize) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // write the stream TypeError diagnostic to stderr
-            ctx.emitter.adrp("x1", label);                                      // load the diagnostic string page
-            ctx.emitter.add_lo12("x1", "x1", label);                            // resolve the diagnostic string address within the page
-            ctx.emitter.instruction(&format!("mov x2, #{}", len));              // pass the diagnostic byte length to write()
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #1");                              // exit with status 1 after reporting the TypeError
-            ctx.emitter.syscall(1);
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rsi", label);
-            ctx.emitter.instruction(&format!("mov edx, {}", len));              // pass the diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2");                              // write the stream TypeError diagnostic to stderr
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux x86_64 write syscall
-            ctx.emitter.instruction("syscall");                                 // emit the stream TypeError diagnostic
-            ctx.emitter.instruction("mov edi, 1");                              // exit with status 1 after reporting the TypeError
-            ctx.emitter.instruction("mov eax, 231");                            // select Linux x86_64 exit_group syscall
-            ctx.emitter.instruction("syscall");                                 // terminate the process after the fatal TypeError
-        }
-    }
-}
