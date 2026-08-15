@@ -285,7 +285,18 @@ fn unary_string_builtin_coerces_mixed_operand_before_runtime_call() {
     );
 }
 
-/// Verifies descriptor result contracts override checker precision when runtime layouts differ.
+/// Verifies a descriptor result contract carries the RUNTIME's layout, in both directions.
+///
+/// `json_encode` shows the flattening direction: the descriptor widens the checker's
+/// `string|false` to a plain boxed `mixed`, because that is the cell its helper builds.
+///
+/// `getenv` shows the direction that matters just as much — the descriptor must NOT narrow a
+/// union the runtime can express. It used to override the result to a concrete `Str`, and this
+/// test pinned that as intended; it was a BUG. A missing variable and one set to `""` are both
+/// zero-length, so the narrowed result made them indistinguishable and
+/// `getenv("ABSENT") === false` answered "present" where php-src 8.5.6 says "missing". The
+/// helper always carried the distinction (libc's NULL versus a pointer to `""`), so the honest
+/// `string|false` stands and the lowering boxes on the pointer.
 #[test]
 fn builtin_runtime_calls_use_descriptor_result_representations() {
     let module = lower_source(
@@ -300,9 +311,9 @@ fn builtin_runtime_calls_use_descriptor_result_representations() {
     );
     assert!(
         text.lines().any(|line| {
-            line.contains("Str php=string") && line.contains("runtime.getenv")
+            line.contains("Heap(Mixed) php=string|false") && line.contains("runtime.getenv")
         }),
-        "getenv must retain the backend's concrete string EIR result: {text}"
+        "getenv must carry php's own string|false, not a narrowed string: {text}"
     );
 }
 

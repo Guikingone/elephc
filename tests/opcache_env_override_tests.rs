@@ -189,9 +189,13 @@ fn no_env_reports_the_compile_time_values() {
     assert_eq!(line(&out, "status_is_array"), "false");
 }
 
-/// An empty environment variable is treated as UNSET: `getenv` cannot distinguish "set to the
-/// empty string" from "missing" (elephc's `__rt_getenv` returns an empty string for a libc NULL),
-/// so the compile-time value survives. Documented floor, asserted so it cannot regress silently.
+/// An empty environment variable is treated as UNSET, so the compile-time value survives.
+///
+/// This is now the OVERRIDE HELPER's own rule, not a limitation of `getenv`: the prelude reads
+/// `$v = (string) getenv($u); if ($v !== '') { ... }`, and an empty value fails that test the
+/// same way a missing one does. `getenv` itself does distinguish them — it answers `false` for
+/// absent and `""` for `FOO=`, which php-src does too — so this assertion pins a deliberate
+/// choice about overrides rather than something the runtime could not express.
 #[test]
 fn empty_env_value_is_treated_as_unset() {
     let (_dir, binary) = probe_binary("opcache_env_empty", &[]);

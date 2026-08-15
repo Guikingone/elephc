@@ -7,10 +7,12 @@
 //! Key details:
 //! - `check` returns `Union(Str, Bool)` to reflect PHP's behaviour where `getenv`
 //!   returns the value string on success or `false` if the variable is unset.
+//! - The EIR result is that SAME union. It used to be overridden to a raw `Str` to match
+//!   the backend helper's string registers, which made `false` indistinguishable from `""`
+//!   — `getenv("ABSENT") === false` answered "present" (measured against php-src 8.5.6).
+//!   `__rt_getenv` always did carry the distinction, as libc's NULL versus a pointer to
+//!   `""`, so the lowering boxes on the POINTER and the checker's honest type stands.
 
-use crate::builtins::semantics::{
-    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
-};
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
@@ -21,20 +23,10 @@ builtin! {
     params: [name: Str],
     returns: Mixed,
     check: check,
-    semantics: getenv_semantics(),
+    semantics: crate::builtins::semantics::runtime_fn_semantics(
+        crate::ir::RuntimeFnId::Getenv,
+    ),
     summary: "Gets the value of an environment variable.",
-}
-
-/// Builds semantics whose EIR result matches the backend's string representation.
-const fn getenv_semantics() -> BuiltinSemantics {
-    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Getenv);
-    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
-    semantics
-}
-
-/// Returns the concrete EIR string layout produced for present and missing variables.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Str
 }
 
 /// Returns `Union(Str, Bool)` reflecting that `getenv` can return a string or `false`.

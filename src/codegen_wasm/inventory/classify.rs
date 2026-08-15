@@ -224,7 +224,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::StreamGetMetaData
         | RuntimeFnId::StreamCopyToStream
         // Not a file, but the same WASI forwarding through the same contract table:
-        // `getenv` reads `environ_get` fresh on every call and answers `string|false`.
+        // `getenv` reads `environ_get` fresh on every call and answers `string|false`
+        // — a boxed cell, since a missing name and an empty value are both zero-length.
         | RuntimeFnId::Getenv
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define => (

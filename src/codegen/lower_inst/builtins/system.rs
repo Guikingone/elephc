@@ -695,7 +695,52 @@ pub(crate) fn lower_getenv(
     let name = expect_operand(inst, 0)?;
     require_string(ctx.load_value_to_result(name)?.codegen_repr(), "getenv name")?;
     abi::emit_call_label(ctx.emitter, "__rt_getenv");
+    box_getenv_string_or_false(ctx);
     store_if_result(ctx, inst)
+}
+
+/// Boxes `__rt_getenv`'s answer as PHP's `string|false`, keyed on the POINTER.
+///
+/// A missing variable and an empty one are BOTH zero-length, so the length cannot tell
+/// them apart — which is why the stream helper's length test would be wrong here. libc's
+/// `getenv` answers NULL for absent and a pointer to `""` for `FOO=`, and `__rt_getenv`
+/// forwards that distinction untouched, so the null pointer is the whole test.
+///
+/// Measured on php-src 8.5.6: `getenv("ABSENT") === false` is true and
+/// `getenv("EMPTY") === ""` is true. Before this, the EIR result was narrowed to a raw
+/// string and the absent case answered `""`, so the identity check said "present".
+fn box_getenv_string_or_false(ctx: &mut FunctionContext<'_>) {
+    let false_label = ctx.next_label("getenv_false");
+    let done_label = ctx.next_label("getenv_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", false_label));       // a NULL pointer is php's absent variable
+            ctx.emitter.instruction("mov x0, #1");                              // select runtime tag 1 for the environment string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false boxing
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // false carries a zero payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did libc answer a real environment pointer?
+            ctx.emitter.instruction(&format!("je {}", false_label));            // a NULL pointer is php's absent variable
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the environment string pointer as the Mixed low word
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass its length as the Mixed high word
+            ctx.emitter.instruction("mov eax, 1");                              // select runtime tag 1 for the environment string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false boxing
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // false carries a zero payload
+            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
 }
 
 /// Lowers `putenv(assignment)` by copying the environment string into persistent heap storage.
