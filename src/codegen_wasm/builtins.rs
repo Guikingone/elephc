@@ -3483,6 +3483,10 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             &[STREAM, IrType::I64, IrType::Str],
             STREAM,
         ),
+        // Not a FILE, but the same WASI-forwarding pattern: the environment is process
+        // state `environ_get` serves. Answers `string|false`, so the result is a boxed
+        // cell; the registry's single form always carries the one Str operand.
+        RuntimeFnId::Getenv => ("$__rt_getenv", &[IrType::Str], STREAM),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3817,7 +3821,9 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Rewind
             | RuntimeFnId::Fseek
             | RuntimeFnId::StreamGetContents
+            | RuntimeFnId::StreamGetLine
             | RuntimeFnId::StreamCopyToStream
+            | RuntimeFnId::Getenv
             | RuntimeFnId::GetResourceType
             | RuntimeFnId::Define
             | RuntimeFnId::Fwrite

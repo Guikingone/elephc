@@ -220,6 +220,9 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         // the registry contract widens — no wasm-side change needed then.
         | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamCopyToStream
+        // Not a file, but the same WASI forwarding through the same contract table:
+        // `getenv` reads `environ_get` fresh on every call and answers `string|false`.
+        | RuntimeFnId::Getenv
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define => (
             "codegen_wasm::files",

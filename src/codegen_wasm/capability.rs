@@ -7646,6 +7646,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::Settype
+        | RuntimeFnId::Getenv
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define
         | RuntimeFnId::FileExists
@@ -8062,7 +8063,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Exec
         | RuntimeFnId::ExtensionLoaded
         | RuntimeFnId::Getdate
-        | RuntimeFnId::Getenv
         | RuntimeFnId::Gmdate
         | RuntimeFnId::Gmmktime
         | RuntimeFnId::Header

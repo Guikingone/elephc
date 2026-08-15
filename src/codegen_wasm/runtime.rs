@@ -554,6 +554,22 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "environ_sizes_get".to_string(),
+        internal: "wasi_environ_sizes_get".to_string(),
+        // count_ptr, buf_size_ptr -> errno
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "environ_get".to_string(),
+        internal: "wasi_environ_get".to_string(),
+        // environ_ptr_array, environ_buf -> errno
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
     emit_failure_runtime(wm);
     wm.add_raw_func(RT_WASI_WRITE_ALL);
     wm.add_raw_func(RT_WASI_WRITE_OR_FAIL);
@@ -566,8 +582,79 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARGV);
     wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
     wm.add_raw_func(RT_READLINE);
+    wm.add_raw_func(RT_GETENV);
     super::files::emit_file_runtime(wm);
 }
+
+/// `__rt_getenv`: PHP's single-argument `getenv`, boxed as `string|false`.
+///
+/// The environment is read fresh on every call through `environ_sizes_get`/`environ_get`
+/// into two transient heap blocks, scanned as NUL-terminated `NAME=value` entries, and
+/// freed before returning — `__rt_mixed_from_value` persists a tag-1 string internally,
+/// so boxing the value slice before the free is safe. The comparison is byte-exact and
+/// case-SENSITIVE, php's unix rule. A variable set to the empty string answers `""`
+/// (tag 1), never `false`; only a missing name — or a host that provides no environment
+/// at all — answers the boxed `false`. The sizes land in the same transient low-scratch
+/// words `__rt_readline` uses for its iovec.
+const RT_GETENV: &str = r#"(func $__rt_getenv (param $name i32) (param $name_len i64) (result i32)
+  (local $count i32) (local $bufsz i32) (local $ptrs i32) (local $buf i32)
+  (local $i i32) (local $entry i32) (local $p i32) (local $c i32) (local $j i32)
+  (local $klen i32) (local $vlen i32) (local $m i32) (local $out i32)
+  (if (i32.ne (call $wasi_environ_sizes_get (i32.const 0) (i32.const 4)) (i32.const 0))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (local.set $count (i32.load (i32.const 0)))
+  (local.set $bufsz (i32.load (i32.const 4)))
+  (if (i32.eqz (local.get $count))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (local.set $ptrs (call $__rt_heap_alloc (i32.mul (local.get $count) (i32.const 4))))
+  (local.set $buf (call $__rt_heap_alloc (local.get $bufsz)))
+  (if (i32.ne (call $wasi_environ_get (local.get $ptrs) (local.get $buf)) (i32.const 0))
+    (then
+      (call $__rt_heap_free (local.get $buf))
+      (call $__rt_heap_free (local.get $ptrs))
+      (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (block $done (loop $each
+    (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+    (local.set $entry (i32.load (i32.add (local.get $ptrs) (i32.mul (local.get $i) (i32.const 4)))))
+    (local.set $klen (i32.const 0))
+    (block $kdone (loop $kscan                                    ;; key = bytes before '='
+      (local.set $c (i32.load8_u (i32.add (local.get $entry) (local.get $klen))))
+      (br_if $kdone (i32.or (i32.eq (local.get $c) (i32.const 61)) (i32.eqz (local.get $c))))
+      (local.set $klen (i32.add (local.get $klen) (i32.const 1)))
+      (br $kscan)))
+    (if (i32.and (i64.eq (i64.extend_i32_u (local.get $klen)) (local.get $name_len))
+                 (i32.eq (local.get $c) (i32.const 61)))          ;; a NUL-ended entry has no value
+      (then
+        (local.set $m (i32.const 1))
+        (local.set $j (i32.const 0))
+        (block $cdone (loop $cmp
+          (br_if $cdone (i32.ge_u (local.get $j) (local.get $klen)))
+          (if (i32.ne (i32.load8_u (i32.add (local.get $entry) (local.get $j)))
+                      (i32.load8_u (i32.add (local.get $name) (local.get $j))))
+            (then
+              (local.set $m (i32.const 0))
+              (br $cdone)))
+          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+          (br $cmp)))
+        (if (local.get $m)
+          (then
+            (local.set $p (i32.add (i32.add (local.get $entry) (local.get $klen)) (i32.const 1)))
+            (local.set $vlen (i32.const 0))
+            (block $vdone (loop $vscan                            ;; value = bytes before the NUL
+              (br_if $vdone (i32.eqz (i32.load8_u (i32.add (local.get $p) (local.get $vlen)))))
+              (local.set $vlen (i32.add (local.get $vlen) (i32.const 1)))
+              (br $vscan)))
+            (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+              (i64.extend_i32_u (local.get $p)) (i64.extend_i32_u (local.get $vlen))))
+            (call $__rt_heap_free (local.get $buf))
+            (call $__rt_heap_free (local.get $ptrs))
+            (return (local.get $out))))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $each)))
+  (call $__rt_heap_free (local.get $buf))
+  (call $__rt_heap_free (local.get $ptrs))
+  (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))
+"#;
 
 /// `__rt_readline`: reads one line from stdin, WITHOUT its terminating newline.
 ///
