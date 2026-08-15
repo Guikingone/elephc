@@ -5407,6 +5407,16 @@ fn lower_array_slice(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let (tag, elem_size) = array_slice_element_shape(&element).ok_or_else(|| {
         WasmError::Unsupported(format!("array_slice has no element copy for {element:?}"))
     })?;
+    // The audit decided which shape the EIR's result type demands; -2 is the verbatim copy.
+    let tag = match array_slice_result_mode(ctx.function, inst) {
+        Some(true) => -2,
+        Some(false) => tag,
+        None => {
+            return Err(WasmError::Unsupported(
+                "array_slice result element type matches neither shape".to_string(),
+            ))
+        }
+    };
     ctx.emit_load_value(array)?;
     ctx.emit_load_value(operand(inst, 1)?)?;
     match inst.operands.len() {
@@ -5932,7 +5942,56 @@ fn array_slice_shape_issue(function: &Function, call: &Instruction) -> Option<St
             ));
         }
     }
+    // THE RESULT, which used to go unchecked entirely. The lowering builds either a boxed
+    // `array<mixed>` or a verbatim copy of the source's own slots, and the EIR's element type
+    // has to be the one it actually builds — a call whose result the checker refined to
+    // something else read back as raw cell ADDRESSES, silently.
+    if array_slice_result_mode(function, call).is_none() {
+        let result = call.result_type;
+        return Some(format!(
+            "array_slice answers array<mixed> or a verbatim copy of a non-owning element type; \
+             a {result:?}/{:?} result matches neither",
+            call.result_php_type.codegen_repr()
+        ));
+    }
     None
+}
+
+/// How `array_slice` must build its result: `true` for the VERBATIM copy, `false` for boxing.
+///
+/// The verbatim copy is admitted only when the result carries the SOURCE's own element type and
+/// that type owns nothing — an int, float or bool slot is a flat word, so copying the window is
+/// a `memory.copy` with no refcount to adjust. A `Str` or container element would need per-slot
+/// persisting or increfs, so those keep the boxing path and therefore require a `mixed` result.
+fn array_slice_result_mode(function: &Function, call: &Instruction) -> Option<bool> {
+    if call.result.is_none() {
+        // A discarded result has nothing to decode, so either shape is harmless.
+        return Some(false);
+    }
+    if call.result_type != IrType::Heap(IrHeapKind::Array) {
+        return None;
+    }
+    let PhpType::Array(result_element) = call.result_php_type.codegen_repr() else {
+        return None;
+    };
+    if result_element.codegen_repr() == PhpType::Mixed {
+        return Some(false);
+    }
+    let source_element = call
+        .operands
+        .first()
+        .and_then(|id| function.value(*id))
+        .map(|value| value.php_type.codegen_repr())
+        .and_then(|php| match php {
+            PhpType::Array(element) => Some(element.codegen_repr()),
+            _ => None,
+        })?;
+    let verbatim = source_element == result_element.codegen_repr()
+        && matches!(
+            source_element,
+            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Void
+        );
+    verbatim.then_some(true)
 }
 
 /// Validates `implode`: a glue string and an indexed array of strings, a string out.

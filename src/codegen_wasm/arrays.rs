@@ -863,10 +863,15 @@ const RT_ARRAY_WIDEN_TO_MIXED: &str = r#"(func $__rt_array_widen_to_mixed (param
 /// cannot wrap an i64 — negating it would.
 ///
 /// `$tag` selects how a source slot becomes a cell: 0/1/2/3 box the payload with that tag (an
-/// `$esz` of 16 means the slot is a (pointer, length) pair), and a NEGATIVE tag means the slot
-/// already holds a cell, which is shared with an incref rather than copied. Sharing is sound only
+/// `$esz` of 16 means the slot is a (pointer, length) pair), and `-1` means the slot already
+/// holds a cell, which is shared with an incref rather than copied. Sharing is sound only
 /// while cells are immutable once stored, which is true as long as no lowered setter rewrites one
 /// in place.
+///
+/// `-2` is the VERBATIM copy: the caller's result type is the source's own concrete element type
+/// rather than `array<mixed>`, so boxing would build an array whose slots no later read decodes
+/// the way the EIR promises. `implode(",", array_slice([10,20,30], 1))` printed cell ADDRESSES
+/// for exactly that reason. The audit admits it only for element types that own nothing.
 const RT_ARRAY_SLICE: &str = r#"(func $__rt_array_slice (param $src i32) (param $off i64) (param $len i64) (param $has_len i32) (param $tag i64) (param $esz i64) (result i32)
   (local $n i64)
   (local $start i64)
@@ -903,6 +908,26 @@ const RT_ARRAY_SLICE: &str = r#"(func $__rt_array_slice (param $src i32) (param 
         (then (local.set $end (local.get $n))))))
   (if (i64.lt_s (local.get $end) (local.get $start))        ;; never run backwards
     (then (local.set $end (local.get $start))))
+  ;; Tag -2: the caller's RESULT type is the source's own concrete element type, so the window
+  ;; is copied VERBATIM instead of boxed. Admitted only for slots that own nothing (int, float,
+  ;; bool), which is what makes a flat byte copy sound — no refcount to adjust, and freeing the
+  ;; copy cannot touch the source. The destination inherits the source's value_type so every
+  ;; later read decodes the slots the same way the source's would.
+  (if (i64.eq (local.get $tag) (i64.const -2))
+    (then
+      (local.set $out (call $__rt_array_new (i64.sub (local.get $end) (local.get $start))
+                                            (local.get $esz)))
+      (i64.store (i32.sub (local.get $out) (i32.const 8))
+        (i64.or
+          (i64.and (i64.load (i32.sub (local.get $out) (i32.const 8))) (i64.const -32513))
+          (i64.and (i64.load (i32.sub (local.get $src) (i32.const 8))) (i64.const 32512))))
+      (memory.copy
+        (i32.add (local.get $out) (i32.const 24))
+        (i32.add (i32.add (local.get $src) (i32.const 24))
+                 (i32.wrap_i64 (i64.mul (local.get $start) (local.get $esz))))
+        (i32.wrap_i64 (i64.mul (i64.sub (local.get $end) (local.get $start)) (local.get $esz))))
+      (i64.store (local.get $out) (i64.sub (local.get $end) (local.get $start)))
+      (return (local.get $out))))
   (local.set $out (call $__rt_array_new (i64.sub (local.get $end) (local.get $start)) (i64.const 16)))
   (local.set $i (local.get $start))
   (block $done (loop $next
