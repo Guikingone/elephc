@@ -13,6 +13,57 @@
 
 use super::*;
 
+/// Verifies a breaking switch case cannot leak assignments into a sibling default branch.
+#[test]
+fn test_switch_break_keeps_sibling_type_environments_isolated() {
+    let out = compile_and_run(
+        r#"<?php
+function requireString(string $value): string {
+    return strtoupper($value);
+}
+
+function choose(bool $first): string {
+    $value = 'ok';
+    switch (true) {
+        case $first:
+            $value = [1, 2];
+            break;
+        default:
+            return requireString($value);
+    }
+
+    return 'first';
+}
+
+echo choose(false), ':', choose(true);
+"#,
+    );
+    assert_eq!(out, "OK:first");
+}
+
+/// Verifies a switch without a default preserves its unmatched nullable path for list unpacking.
+#[test]
+fn test_switch_without_default_preserves_nullable_fallthrough() {
+    let out = compile_and_run(
+        r#"<?php
+function consume(?array $entry, int $mode): string {
+    if ($entry === null) {
+        switch ($mode) {
+            case 1:
+                return 'returned';
+        }
+    }
+
+    [$key, $value] = $entry;
+    return ($key === null ? 'null' : $key).':'.($value === null ? 'null' : $value);
+}
+
+echo consume(null, 0), '|', consume(['k', 'v'], 0);
+"#,
+    );
+    assert_eq!(out, "null:null|k:v");
+}
+
 /// Verifies the literal `false` subtype remains callable and uses the normal boolean runtime
 /// representation while `int|false` narrows to int after a divergent strict-false guard.
 #[test]

@@ -76,16 +76,6 @@ fn test_no_narrow_when_nested_branch_falls_through() {
     );
 }
 
-/// Verifies the narrowing is NOT kept when a nested `switch` in the null guard has no `default`, so
-/// a subject matching no case falls through to the code after the guard.
-#[test]
-fn test_no_narrow_when_switch_has_no_default() {
-    expect_error(
-        "<?php function consume(?array $entry, int $mode): void { if ($entry === null) { switch ($mode) { case 1: return; } } [$key, $value] = $entry; }",
-        "List unpacking requires an array",
-    );
-}
-
 /// Verifies a nested diverging call in only one arm does not make the enclosing `if` terminal.
 #[test]
 fn test_no_narrow_when_nested_exit_branch_falls_through() {

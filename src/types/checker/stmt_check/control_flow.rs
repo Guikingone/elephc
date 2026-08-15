@@ -17,6 +17,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
+use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -309,14 +310,55 @@ impl Checker {
                         self.infer_type_with_assignment_effects(v, env)?;
                     }
                 }
+                let direct_entry_env = env.clone();
+                let mut switch_exit_envs = Vec::new();
+                let mut fallthrough_env = None;
                 self.break_continue_depth += 1;
                 for (_, body) in cases {
-                    errors.extend(self.check_body(body, env));
+                    let mut entry_envs = vec![direct_entry_env.clone()];
+                    if let Some(previous) = fallthrough_env.take() {
+                        entry_envs.push(previous);
+                    }
+                    let mut branch_env = join_fallthrough_type_envs(self, &entry_envs)
+                        .unwrap_or_else(|| direct_entry_env.clone());
+                    errors.extend(self.check_body(body, &mut branch_env));
+                    match block_terminal_effect_with_divergence(body, &|expr| {
+                        self.expr_is_declared_never_call(expr)
+                    }) {
+                        TerminalEffect::FallsThrough => fallthrough_env = Some(branch_env),
+                        TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => {
+                            switch_exit_envs.push(branch_env);
+                        }
+                        TerminalEffect::ExitsCurrentBlock => {}
+                    }
                 }
                 if let Some(body) = default {
-                    errors.extend(self.check_body(body, env));
+                    let mut entry_envs = vec![direct_entry_env.clone()];
+                    if let Some(previous) = fallthrough_env.take() {
+                        entry_envs.push(previous);
+                    }
+                    let mut branch_env = join_fallthrough_type_envs(self, &entry_envs)
+                        .unwrap_or_else(|| direct_entry_env.clone());
+                    errors.extend(self.check_body(body, &mut branch_env));
+                    match block_terminal_effect_with_divergence(body, &|expr| {
+                        self.expr_is_declared_never_call(expr)
+                    }) {
+                        TerminalEffect::FallsThrough => switch_exit_envs.push(branch_env),
+                        TerminalEffect::Breaks | TerminalEffect::TerminatesMixed => {
+                            switch_exit_envs.push(branch_env);
+                        }
+                        TerminalEffect::ExitsCurrentBlock => {}
+                    }
+                } else {
+                    switch_exit_envs.push(direct_entry_env);
+                    if let Some(previous) = fallthrough_env.take() {
+                        switch_exit_envs.push(previous);
+                    }
                 }
                 self.break_continue_depth -= 1;
+                if let Some(joined) = join_fallthrough_type_envs(self, &switch_exit_envs) {
+                    *env = joined;
+                }
                 if errors.is_empty() {
                     Ok(())
                 } else {
