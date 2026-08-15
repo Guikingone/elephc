@@ -19,6 +19,7 @@ mod cli;
 mod codegen;
 mod codegen_support;
 mod conditional;
+mod dom_prelude;
 mod errors;
 mod eval_aot;
 mod exports;

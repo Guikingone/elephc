@@ -43,6 +43,8 @@ mod abstract_properties;
 mod property_hooks;
 #[path = "oop/datetime.rs"]
 mod datetime;
+#[path = "oop/dom.rs"]
+mod dom;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]

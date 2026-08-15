@@ -23,8 +23,8 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
+    autoload, codegen, debug_info, dom_prelude, errors, exports, func_args, ir, ir_lower, ir_passes,
+    lexer, linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
     resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
@@ -156,6 +156,10 @@ pub(crate) fn compile(config: CliConfig) {
     // statement lists that can host a hoisted declaration, so it is cheap on every build; it is
     // consumed only when `opcache.preload` is set (see `opcache_prelude::preload_statistics`).
     let opcache_preload_symbols = opcache_prelude::collect_preload_symbols(&ast);
+
+    // Standard DOM classes are ordinary PHP declarations so they participate in name
+    // resolution, type checking, EIR lowering, and closed-world pruning like user classes.
+    let ast = dom_prelude::inject(ast);
 
     // Inject the PDO standard-library prelude (extern bridge + PDO classes,
     // written in elephc-PHP) only when the program references PDO, so non-PDO

@@ -231,6 +231,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
+    let resolved = elephc::dom_prelude::inject(resolved);
     let resolved =
         elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version);
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false);

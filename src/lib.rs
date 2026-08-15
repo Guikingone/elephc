@@ -30,6 +30,8 @@ pub mod codegen;
 pub mod codegen_support;
 /// Conditional compilation directives.
 pub mod conditional;
+/// Standard DOM class-surface prelude injection.
+pub mod dom_prelude;
 /// Error and warning reporting.
 pub mod errors;
 mod eval_aot;
