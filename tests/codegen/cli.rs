@@ -17453,3 +17453,124 @@ echo $u->name, "\n";
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `empty()` on wasm32-wasi answers php's exact truthiness negation per type.
+///
+/// The expected string is `php -n`'s own answer for these ten values, measured on
+/// php-src 8.5.6 — including the two classic traps: `empty("0")` is TRUE (the falsy
+/// strings are exactly `""` and `"0"`), and `empty("x")` is false.
+#[test]
+fn test_cli_wasm_empty_construct_matches_php() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_empty_construct");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$a = 0; $b = 1; $c = ""; $d = "0"; $e = "x";
+$f = 0.0; $g = null; $h = false; $i = true; $j = 3.14;
+echo empty($a) ? "1" : "0";
+echo empty($b) ? "1" : "0";
+echo empty($c) ? "1" : "0";
+echo empty($d) ? "1" : "0";
+echo empty($e) ? "1" : "0";
+echo empty($f) ? "1" : "0";
+echo empty($g) ? "1" : "0";
+echo empty($h) ? "1" : "0";
+echo empty($i) ? "1" : "0";
+echo empty($j) ? "1" : "0";
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile empty() to WASM");
+    assert!(
+        output.status.success(),
+        "empty() failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if Command::new("wasmer").arg("--version").output().is_ok() {
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run empty() under Wasmer");
+        assert!(
+            run.status.success(),
+            "empty() trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "1011011100\n",
+            "php -n's own answers for [0, 1, \"\", \"0\", \"x\", 0.0, null, false, true, 3.14]"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the audited `settype($float, "integer")` subset on wasm32-wasi.
+///
+/// The variable is a float-then-int local (a BOXED slot), the conversion is the `(int)`
+/// cast's own truncation toward zero, and the answer is `true`. The expected bytes are
+/// `php -n`'s own output for this fixture, measured on php-src 8.5.6. One call uses the
+/// result, one ignores it — the void form used to be the easy way to leave a stray
+/// constant on the operand stack.
+#[test]
+fn test_cli_wasm_settype_float_to_integer_matches_php() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_settype_float_int");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$y = 3.14;
+$ok = settype($y, "integer");
+echo $y, " ", gettype($y), " ", $ok ? "T" : "F", "\n";
+$n = -7.9;
+settype($n, "integer");
+echo $n, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile settype to WASM");
+    assert!(
+        output.status.success(),
+        "settype float-to-integer failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    if Command::new("wasmer").arg("--version").output().is_ok() {
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run settype under Wasmer");
+        assert!(
+            run.status.success(),
+            "settype narrowing trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "3 integer T\n-7\n",
+            "php -n's own answers"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}

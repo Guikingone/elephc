@@ -3881,6 +3881,67 @@ mod tests {
         assert!(wat.contains("$__rt_str_canonical_int"), "{wat}");
     }
 
+    /// Verifies `settype($float, "integer")` lowers to the `(int)` cast's own conversion
+    /// plus a slot write-back, on the shape the real EIR produces: the checker retypes
+    /// post-settype loads to int, so the local merges to a BOXED Mixed slot while the
+    /// pre-call load is flow-typed float.
+    ///
+    /// Execution truth is held by `codegen::cli::test_cli_wasm_settype_float_to_integer_matches_php`
+    /// (byte-identical to `php -n`); this pins the emitted lowering — including the
+    /// float unbox's `f64.reinterpret_i64`, which `__rt_mixed_cast_float`'s raw-bits
+    /// return made mandatory and the transfer layer used to drop.
+    #[test]
+    fn settype_float_to_integer_narrows_the_slot_in_place() {
+        let mut module = Module::new(Target::wasm());
+        let type_name = module.data.intern_string("integer");
+        let mut f = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        f.flags.is_main = true;
+        let slot = f.add_local(
+            Some("y".to_string()),
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let init = b.emit_const_f64(3.14);
+            b.emit_store_local(slot, init);
+            let var = b.emit_load_local(slot, IrType::F64, PhpType::Float);
+            let name = b.emit_const_str(type_name);
+            let _ok = b
+                .emit(
+                    Op::RuntimeCall,
+                    vec![var, name],
+                    Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                        RuntimeFnId::Settype,
+                    ))),
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(f);
+        let wat = generate(&module, Emit::Executable).expect("settype should lower");
+        assert!(
+            wat.contains("unbox f64 payload from mixed cell"),
+            "the flow-typed float load must unbox the Mixed slot: {wat}"
+        );
+        assert!(
+            wat.contains("reinterpret cast bits as f64"),
+            "`__rt_mixed_cast_float` answers RAW BITS; dropping the reinterpret fails validation: {wat}"
+        );
+        assert!(
+            wat.contains("release the slot's previous cell (null-safe)"),
+            "a boxed slot's previous cell must be released before the write-back: {wat}"
+        );
+        assert!(wat.contains("settype answers true"), "{wat}");
+    }
+
     /// Verifies `++` on strings carries and wraps the way php does: `"z"` wraps to a
     /// prepended `"aa"`, `"9"` converts numerically to int 10, and `"Zz9"` carries
     /// through all three character classes to `"AAa0"`.

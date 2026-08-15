@@ -2711,11 +2711,136 @@ fn lower_language_construct_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<
             ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
             store_result(ctx, inst)
         }
+        "empty" => lower_empty_construct(ctx, inst),
         other => Err(WasmError::Unsupported(format!(
             "language construct {}",
             other
         ))),
     }
+}
+
+/// Lowers `empty($x)` for a DEFINED operand: the negation of PHP truthiness.
+///
+/// Measured on php-src 8.5.6: `empty` IS a bool-coercion context — `empty(NAN)` carries the
+/// same "unexpected NAN value was coerced to bool" warning an `if` does — so the float and
+/// Mixed arms run the truthiness helpers that own that diagnostic, never a bare zero test.
+/// `empty("0")` is TRUE ("" and the single byte "0" are the two falsy strings), `-0.0` is
+/// empty like `+0.0`, and a bool slot's in-band NULL sentinel reads as PHP null, which is
+/// empty. Operand kinds outside these arms are refused by the capability audit's matching
+/// shape rule (`empty_construct_shape_issue`), so the two lists cannot drift apart silently.
+fn lower_empty_construct(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let (ir_type, php_type) = ctx
+        .function
+        .value(value)
+        .map(|v| (v.ir_type, v.php_type.codegen_repr()))
+        .ok_or_else(|| WasmError::Unsupported("empty operand is missing".to_string()))?;
+    match (ir_type, &php_type) {
+        (_, PhpType::Void) => {
+            ctx.fb.ins("i64.const 1", "empty(null) is true");
+        }
+        (IrType::I64, PhpType::Int) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins("i64.eqz", "empty(int) is the zero test");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (IrType::I64, PhpType::Bool | PhpType::False) => {
+            // A one-word bool slot's missed read leaves the in-band NULL sentinel, and PHP
+            // null is empty; a genuine bool is only ever 0 or 1, so the extra test cannot
+            // misfire on a real value (the native arm makes the same two checks).
+            let word = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.tee {}", word), "bool payload word");
+            ctx.fb.ins("i64.eqz", "false is empty");
+            ctx.fb.ins(&format!("local.get {}", word), "bool payload word");
+            ctx.fb.ins(
+                "i64.const 9223372036854775806",
+                "null sentinel (0x7fff_ffff_ffff_fffe)",
+            );
+            ctx.fb.ins("i64.eq", "a sentinel-null bool is empty");
+            ctx.fb.ins("i32.or", "either way empty");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (IrType::F64, PhpType::Float) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins("i64.reinterpret_f64", "float bits for the truthiness helper");
+            ctx.fb.ins(
+                "call $__rt_float_truthy",
+                "PHP float truthiness, with the NaN warning empty carries too",
+            );
+            ctx.fb.ins("i64.eqz", "empty is the negation of truthy");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (IrType::Str, PhpType::Str) => {
+            // The two falsy strings: "" and the single byte "0".
+            let ptr = ctx.fresh_temp(ValType::I32);
+            let len = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.set {}", len), "string length");
+            ctx.fb.ins(&format!("local.set {}", ptr), "string pointer");
+            ctx.fb.ins(&format!("local.get {}", len), "string length");
+            ctx.fb.ins("i64.eqz", "\"\" is empty");
+            ctx.fb.ins(&format!("local.get {}", len), "string length");
+            ctx.fb.ins("i64.const 1", "single-byte candidate");
+            ctx.fb.ins("i64.eq", "one byte long?");
+            ctx.fb.ins(&format!("local.get {}", ptr), "string pointer");
+            ctx.fb.ins("i32.load8_u", "first byte");
+            ctx.fb.ins("i32.const 48", "the byte '0'");
+            ctx.fb.ins("i32.eq", "is it '0'?");
+            ctx.fb.ins("i32.and", "exactly \"0\"");
+            ctx.fb.ins("i32.or", "\"\" or \"0\"");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed | PhpType::Union(_)) => {
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(
+                "call $__rt_mixed_truthy",
+                "PHP truthiness of the boxed value, with its NaN warning",
+            );
+            ctx.fb.ins("i64.eqz", "empty is the negation of truthy");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (IrType::TaggedScalar, _) => {
+            // Tag 8 is null (empty); tag 2 holds float BITS in the payload; the int and bool
+            // tags are the plain zero test.
+            let payload = ctx.fresh_temp(ValType::I64);
+            let tag = ctx.fresh_temp(ValType::I32);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.set {}", tag), "tagged tag");
+            ctx.fb.ins(&format!("local.set {}", payload), "tagged payload");
+            ctx.fb.ins(&format!("local.get {}", tag), "tagged tag");
+            ctx.fb.ins("i32.const 8", "null tag");
+            ctx.fb.ins("i32.eq", "tagged null?");
+            ctx.fb.ins("if (result i64)", "null arm");
+            ctx.fb.ins("i64.const 1", "null is empty");
+            ctx.fb.ins("else", "concrete scalar arm");
+            ctx.fb.ins(&format!("local.get {}", tag), "tagged tag");
+            ctx.fb.ins("i32.const 2", "float tag");
+            ctx.fb.ins("i32.eq", "tagged float?");
+            ctx.fb.ins("if (result i64)", "float arm");
+            ctx.fb.ins(&format!("local.get {}", payload), "float bits payload");
+            ctx.fb.ins(
+                "call $__rt_float_truthy",
+                "PHP float truthiness, with its NaN warning",
+            );
+            ctx.fb.ins("i64.eqz", "empty is the negation of truthy");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+            ctx.fb.ins("else", "int/bool arm");
+            ctx.fb.ins(&format!("local.get {}", payload), "scalar payload");
+            ctx.fb.ins("i64.eqz", "zero is empty");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+            ctx.fb.ins("end", "end float arm");
+            ctx.fb.ins("end", "end null arm");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "empty for operand {:?} on wasm32-wasi",
+                other
+            )));
+        }
+    }
+    store_result(ctx, inst)
 }
 
 /// Lowers the typed runtime-call subset currently implemented by the WASM backend.
@@ -2780,11 +2905,43 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         RuntimeFnId::Uksort => lower_user_sort(ctx, inst, "uksort"),
         RuntimeFnId::ArrayReduce => lower_array_reduce(ctx, inst),
         RuntimeFnId::ArrayWalk => lower_array_walk(ctx, inst),
+        RuntimeFnId::Settype => lower_settype(ctx, inst),
         other => Err(WasmError::Unsupported(format!(
             "runtime function {:?}",
             other
         ))),
     }
+}
+
+/// Lowers the audited `settype($var, "integer")` subset: a FLOAT local narrowed in place.
+///
+/// The conversion is the `(int)` cast's own — `emit_float_to_php_int`, php's modulo-2^64
+/// rule with the 8.5 diagnostic — and the write-back goes through the shared transfer
+/// layer, so the slot's representation (boxed for a float-then-int local, raw otherwise)
+/// is the transfer's decision, not a second copy of the rule. A BOXED slot's previous
+/// cell is released first: the EIR emits no release around the call, because natively
+/// the helper writes the variable in place.
+fn lower_settype(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let slot = value_source_slot(ctx, value).ok_or_else(|| {
+        WasmError::Unsupported("settype variable has no local slot to write back".to_string())
+    })?;
+    if matches!(ctx.slot_repr(slot)?, WasmRepr::Ptr(_)) {
+        ctx.emit_load_slot(slot)?;
+        ctx.fb.ins(
+            "call $__rt_decref_any",
+            "release the slot's previous cell (null-safe)",
+        );
+    }
+    ctx.emit_load_value(value)?;
+    emit_float_to_php_int(ctx);
+    super::transfer::emit_store_stack_value_into_slot(ctx, IrType::I64, PhpType::Int, slot)?;
+    if inst.result.is_some() {
+        // This narrowing cannot fail; php's settype answers true for every float.
+        ctx.fb.ins("i64.const 1", "settype answers true");
+        store_result(ctx, inst)?;
+    }
+    Ok(())
 }
 
 /// Lowers the untyped one-operand runtime call that narrows a boxed value to a declared class.

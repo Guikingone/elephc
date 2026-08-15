@@ -338,6 +338,16 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             "codegen_wasm::inst::lower_array_reduce",
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
+        // Only the audited float-to-"integer" narrowing of a plain local; the shape check
+        // (`settype_shape_issue`) refuses every other target type, source type, or origin.
+        RuntimeFnId::Settype => (
+            "codegen_wasm::inst",
+            "codegen_wasm::inst::lower_settype",
+            &[
+                "codegen_wasm::tests::settype_float_to_integer_narrows_the_slot_in_place",
+                "codegen::cli::test_cli_wasm_settype_float_to_integer_matches_php",
+            ][..],
+        ),
         RuntimeFnId::Abs | RuntimeFnId::Floor | RuntimeFnId::Ceil | RuntimeFnId::Sqrt
         | RuntimeFnId::Count | RuntimeFnId::ArrayIsList | RuntimeFnId::ArrayKeys
         | RuntimeFnId::ArrayValues | RuntimeFnId::InArray | RuntimeFnId::ArrayReverse
@@ -761,6 +771,8 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "strict_compare_shape_issue",
         "str_inc_dec_shape_issue",
         "truthiness_shape_issue",
+        "empty_construct_shape_issue",
+        "settype_shape_issue",
         "array_store_shape_issue",
         "iter_start_shape_issue",
         "iter_current_value_ref_shape_issue",

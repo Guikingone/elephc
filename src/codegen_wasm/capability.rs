@@ -248,7 +248,8 @@ fn scan_function(
                 ));
             }
             // `exit`/`die` cannot unwind a caller's WASM frames, so they stay confined to
-            // main. `isset` has no such constraint — it only reads a tag — so it is exempt.
+            // main. `isset` and `empty` have no such constraint — they only read their
+            // operand — so they are exempt.
             let construct_name = if instruction.op == Op::LanguageConstructCall {
                 instruction.immediate.as_ref().and_then(|immediate| match immediate {
                     Immediate::Data(data) => {
@@ -260,8 +261,20 @@ fn scan_function(
                 None
             };
             if instruction.op == Op::LanguageConstructCall
+                && construct_name.as_deref() == Some("empty")
+            {
+                if let Some(issue) = empty_construct_shape_issue(function, instruction) {
+                    issues.push(format!(
+                        "{collection}::{} block#{} instruction#{}: {issue}",
+                        function.name,
+                        block.id.as_raw(),
+                        inst_id.as_raw()
+                    ));
+                }
+            }
+            if instruction.op == Op::LanguageConstructCall
                 && !function.flags.is_main
-                && construct_name.as_deref() != Some("isset")
+                && !matches!(construct_name.as_deref(), Some("isset") | Some("empty"))
             {
                 issues.push(format!(
                     "{collection}::{} block#{} instruction#{}: exit/die outside main cannot unwind caller-owned WASM frames",
@@ -6636,8 +6649,155 @@ fn runtime_function_shape_issue(
         RuntimeFnId::ArrayMap => array_map_shape_issue(module, function, call),
         RuntimeFnId::Usort => usort_shape_issue(module, function, call),
         RuntimeFnId::ArrayReduce => array_reduce_shape_issue(module, function, call),
+        RuntimeFnId::Settype => settype_shape_issue(module, function, call),
         _ => Some("the runtime function has no audited WASM shape contract".to_string()),
     }
+}
+
+/// Returns the literal string the call's `index`-th operand carries, when it is one.
+///
+/// Same resolution as `define_constant_name`, generalized to any operand position: the
+/// defining instruction must be a `ConstStr` whose data id names a real interned literal.
+fn literal_string_operand<'a>(
+    module: &'a Module,
+    function: &Function,
+    call: &Instruction,
+    index: usize,
+) -> Option<&'a str> {
+    let name_value = *call.operands.get(index)?;
+    let defining = function
+        .instructions
+        .iter()
+        .find(|inst| inst.result == Some(name_value))?;
+    if defining.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(data_id)) = defining.immediate else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .map(String::as_str)
+}
+
+/// Returns the slot a value reads through a PLAIN `LoadLocal` — never a ref-cell load.
+///
+/// `settype` writes the variable's slot back directly, and a ref-cell-backed local must be
+/// written THROUGH its cell or the by-ref aliases keep the old value; excluding `LoadRefCell`
+/// here keeps that shape refused instead of silently splitting the alias.
+fn plain_local_slot_origin(function: &Function, mut value: ValueId) -> Option<u32> {
+    for _ in 0..=function.values.len() {
+        let value_data = function.value(value)?;
+        let ValueDef::Instruction { inst, .. } = value_data.def else {
+            return None;
+        };
+        let instruction = function.instruction(inst)?;
+        match instruction.op {
+            Op::LoadLocal => {
+                let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+                    return None;
+                };
+                return Some(slot.as_raw());
+            }
+            Op::Move | Op::Borrow | Op::Acquire => {
+                value = *instruction.operands.first()?;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Validates `empty($x)` against exactly the operand kinds its lowering answers.
+///
+/// The admitted arms mirror `lower_empty_construct`: null, int, bool (sentinel-aware),
+/// float and Mixed (both through the warning-carrying truthiness helpers), string
+/// ("" and "0" are the falsy pair), and the tagged int|null scalar. Containers and
+/// objects stay refused until their arms are implemented with php's exact answers.
+fn empty_construct_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [value] = call.operands.as_slice() else {
+        return Some(format!(
+            "empty expects one operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(source) = function.value(*value) else {
+        return Some("empty operand is missing from the value table".to_string());
+    };
+    let php = source.php_type.codegen_repr();
+    let supported = matches!(
+        (source.ir_type, &php),
+        (_, PhpType::Void)
+            | (IrType::I64, PhpType::Int | PhpType::Bool | PhpType::False)
+            | (IrType::F64, PhpType::Float)
+            | (IrType::Str, PhpType::Str)
+            | (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed | PhpType::Union(_))
+            | (IrType::TaggedScalar, _)
+    );
+    if !supported {
+        return Some(format!(
+            "empty for a {:?}/{:?} operand is not yet implemented on wasm32-wasi",
+            source.ir_type, php
+        ));
+    }
+    None
+}
+
+/// Validates the exact `settype($var, "integer")` subset the lowering implements.
+///
+/// One narrowing is admitted — a FLOAT variable to "integer"/"int" — because it is the one
+/// whose conversion this backend already performs with php's exact semantics and diagnostic
+/// (`__rt_float_to_int_warn`, the same helper the `(int)` cast uses). The variable must read
+/// through a plain `LoadLocal`: the write-back goes to the slot, and a ref-cell alias or a
+/// property/element source has no slot to write. Every other target type or source stays
+/// refused until its conversion is implemented with exact per-type PHP values.
+fn settype_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    let [value, _type_name] = call.operands.as_slice() else {
+        return Some(format!(
+            "settype expects the variable and the type name, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(type_name) = literal_string_operand(module, function, call, 1) else {
+        return Some(
+            "settype needs a LITERAL type name; a computed one cannot pick the conversion at compile time"
+                .to_string(),
+        );
+    };
+    if !matches!(type_name, "integer" | "int") {
+        return Some(format!(
+            "settype to {type_name:?}: only the float-to-\"integer\" narrowing is implemented"
+        ));
+    }
+    let Some(source) = function.value(*value) else {
+        return Some("settype variable is missing from the value table".to_string());
+    };
+    if source.ir_type != IrType::F64 || source.php_type.codegen_repr() != PhpType::Float {
+        return Some(format!(
+            "settype to integer reads a {:?}/{:?} variable; only a FLOAT source is implemented",
+            source.ir_type,
+            source.php_type.codegen_repr()
+        ));
+    }
+    if plain_local_slot_origin(function, *value).is_none() {
+        return Some(
+            "settype variable must read through a plain LoadLocal; ref-cell and non-local sources have no slot to write back"
+                .to_string(),
+        );
+    }
+    if call.result.is_some() && call.result_type != IrType::I64 {
+        return Some(format!(
+            "settype result storage {:?} is not the expected I64 bool",
+            call.result_type
+        ));
+    }
+    None
 }
 
 /// Validates the exact supported `get_class(object): string` form.
@@ -7485,6 +7645,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamGetContents
         | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamCopyToStream
+        | RuntimeFnId::Settype
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define
         | RuntimeFnId::FileExists
@@ -7937,7 +8098,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::IsInfinite
         | RuntimeFnId::IsNan
         | RuntimeFnId::IsNumeric
-        | RuntimeFnId::Settype
         => false,
     }
 }
