@@ -51,7 +51,7 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::emit_call_label(ctx.emitter, "__rt_mixed_count");
             store_if_result(ctx, inst)
         }
-        PhpType::Iterable => lower_guarded_iterable_count(ctx, inst, value),
+        PhpType::Iterable => lower_iterable_count(ctx, inst, value),
         PhpType::Object(class_name)
             if super::class_implements_interface(ctx, &class_name, "Countable") =>
         {
@@ -68,12 +68,12 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     }
 }
 
-/// Lowers `count()` for an `iterable` storage value proven countable by a surrounding guard.
+/// Lowers `count()` for a type-erased `iterable` storage value.
 ///
 /// The raw pointer may denote an indexed array, an associative hash, or an object. Arrays expose
 /// their length in the shared header; objects dispatch the `Countable::count` method through the
 /// existing interface-vtable path. Any other heap kind preserves PHP's runtime TypeError boundary.
-fn lower_guarded_iterable_count(
+fn lower_iterable_count(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     value: ValueId,
@@ -111,7 +111,13 @@ fn lower_guarded_iterable_count(
 
     ctx.emitter.label(&object_case);
     abi::emit_pop_reg(ctx.emitter, result_reg);
-    super::lower_narrowed_interface_method_call(ctx, inst, "Countable", "count")?;
+    super::lower_narrowed_interface_method_call_or_type_error(
+        ctx,
+        inst,
+        "Countable",
+        "count",
+        "count(): Argument #1 ($value) must be of type Countable|array, Traversable given",
+    )?;
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&hash_case);

@@ -902,3 +902,23 @@ echo guarded_count(new CountedSequence());
     );
     assert_eq!(out, "3|NULL\n9");
 }
+
+/// Verifies an unguarded iterable remains runtime-checked: a non-Countable Traversable raises a
+/// catchable TypeError instead of being rejected statically or silently counted by iteration.
+#[test]
+fn test_count_non_countable_iterable_raises_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+final class StreamValues implements IteratorAggregate {
+    public function getIterator(): Traversable { yield 1; }
+}
+function unguarded_count(iterable $values): int { return count($values); }
+try {
+    echo unguarded_count(new StreamValues());
+} catch (TypeError $error) {
+    echo "type-error";
+}
+"#,
+    );
+    assert_eq!(out, "type-error");
+}

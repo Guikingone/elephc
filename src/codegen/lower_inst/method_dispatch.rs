@@ -284,10 +284,50 @@ pub(super) fn lower_narrowed_interface_method_call(
     interface_name: &str,
     method_name: &str,
 ) -> Result<()> {
+    lower_narrowed_interface_method_call_with_failure(
+        ctx,
+        inst,
+        interface_name,
+        method_name,
+        None,
+    )
+}
+
+/// Lowers an interface receiver call and raises the supplied TypeError when no implementation
+/// matches the runtime class.
+pub(super) fn lower_narrowed_interface_method_call_or_type_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+    type_error: &str,
+) -> Result<()> {
+    lower_narrowed_interface_method_call_with_failure(
+        ctx,
+        inst,
+        interface_name,
+        method_name,
+        Some(type_error),
+    )
+}
+
+/// Implements raw interface dispatch with either the ordinary missing-method fatal or a
+/// caller-selected TypeError at the no-match boundary.
+fn lower_narrowed_interface_method_call_with_failure(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    interface_name: &str,
+    method_name: &str,
+    type_error: Option<&str>,
+) -> Result<()> {
     let candidates =
         narrowed_interface_candidates(ctx, interface_name, method_name, inst.operands.len())?;
     if candidates.is_empty() {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        if let Some(message) = type_error {
+            exceptions::emit_type_error(ctx, message);
+        } else {
+            emit_method_call_on_null_fatal(ctx, method_name);
+        }
         return Ok(());
     }
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
@@ -306,7 +346,11 @@ pub(super) fn lower_narrowed_interface_method_call(
     )?;
 
     ctx.emitter.label(&no_match_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    if let Some(message) = type_error {
+        exceptions::emit_type_error(ctx, message);
+    } else {
+        emit_method_call_on_null_fatal(ctx, method_name);
+    }
     ctx.emitter.label(&done_label);
     Ok(())
 }

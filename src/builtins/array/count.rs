@@ -5,8 +5,8 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the argument type (Array, AssocArray, Mixed, an array-capable Union, or
-//!   Countable Object) and returns `Int`. The Countable interface check delegates to
+//! - `check` validates the argument type (Array, AssocArray, Iterable, Mixed, an array-capable
+//!   Union, or Countable Object) and returns `Int`. The Countable interface check delegates to
 //!   `cx.checker.class_implements_interface`.
 //! - `$mode` accepts `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`); anything else raises
 //!   PHP's catchable `ValueError`. The guard lives in the backend
@@ -55,15 +55,19 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
 
 /// Validates the argument type and returns `Int`.
 ///
-/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union with at least one
-/// countable array member, or an Object that implements the `Countable` interface. Arity
+/// Accepts Array, AssocArray, Iterable (runtime-checked for arrays/Countable objects), Mixed
+/// (heterogeneous arrays), a Union with at least one countable array member, or an Object that
+/// implements the `Countable` interface. Arity
 /// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
 /// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
 /// Returns a `CompileError` for non-countable types or non-Countable objects.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Mixed => Ok(PhpType::Int),
         PhpType::Union(members) if members.iter().any(union_member_is_countable_array) => {
             Ok(PhpType::Int)
         }
