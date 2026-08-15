@@ -59,6 +59,24 @@ echo $b[1];
     assert_eq!(out, "2,4");
 }
 
+/// Verifies object elements reach typed callbacks and object results remain owned by the map.
+#[test]
+fn test_array_map_object_elements_and_results() {
+    let out = compile_and_run(
+        r#"<?php
+final class MapBox {
+    public function __construct(public string $value) {}
+}
+$boxes = [new MapBox("left"), new MapBox("right")];
+$labels = array_map(static fn (MapBox $box): string => $box->value, $boxes);
+$identity = array_map(static fn (MapBox $box): MapBox => $box, $boxes);
+unset($boxes);
+echo implode(",", $labels), "|", $identity[0]->value, ",", $identity[1]->value;
+"#,
+    );
+    assert_eq!(out, "left,right|left,right");
+}
+
 /// Verifies runtime string builtin callback variables dispatch through descriptor-backed array_map.
 #[test]
 fn test_array_map_dynamic_string_builtin_callback_uses_descriptor_invoker() {

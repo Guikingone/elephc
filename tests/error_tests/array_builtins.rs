@@ -588,15 +588,6 @@ fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
     );
 }
 
-/// Verifies `array_map()` rejects object elements until its callback runtime supports them.
-#[test]
-fn test_error_array_map_rejects_object_elements() {
-    expect_error(
-        "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): Box => $box, $items);",
-        "array_map() does not yet support object array elements",
-    );
-}
-
 /// Verifies contextual callback checking still rejects declarations incompatible with known elements.
 #[test]
 fn test_error_array_callback_rejects_known_element_mismatch() {

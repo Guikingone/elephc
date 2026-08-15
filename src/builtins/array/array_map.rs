@@ -83,22 +83,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     match arr_ty {
         PhpType::Array(elem_ty) => {
-            if matches!(elem_ty.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
-            }
             let callback_ret_ty = check_map_callback(cx, elem_ty.as_ref())?;
             Ok(PhpType::Array(Box::new(mapped_element_type(callback_ret_ty))))
         }
         PhpType::AssocArray { key, value } => {
-            if matches!(value.as_ref(), PhpType::Object(_)) {
-                return Err(CompileError::new(
-                    cx.span,
-                    "array_map() does not yet support object array elements",
-                ));
-            }
             let callback_ret_ty = check_map_callback(cx, value.as_ref())?;
             Ok(PhpType::AssocArray {
                 key,
