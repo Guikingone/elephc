@@ -2065,6 +2065,16 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .value(value)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("cast source {:?} is missing", value)))?;
+    // EVERY `(bool)` cast is php's truthiness, whatever the source holds — measured on 8.5.6,
+    // `(bool)$x` and `if ($x)` agree on all of it, the NaN warning included. One rule for both
+    // spellings: the storage-by-storage arms below would otherwise each need their own copy,
+    // and the ones that had none refused outright (`(bool)$int`, `(bool)$float`, `(bool)$str`,
+    // `(bool)$array`) while the Mixed one that existed was the SILENT cast helper, which
+    // swallowed the NaN warning php emits here.
+    if target == IrType::I64 && inst.result_php_type.codegen_repr() == PhpType::Bool {
+        emit_truthiness(ctx, value)?;
+        return store_result(ctx, inst);
+    }
     // A string conversion of a statically known object is PHP's `__toString`, and the EIR
     // already carries the class, so it lowers to an ordinary direct call rather than any
     // dispatch. The callee's `(ptr i32, len i64)` result IS this backend's string storage.
@@ -2416,9 +2426,54 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Pushes PHP's truthiness of the string held in `(ptr, len)` as an i64 boolean.
+///
+/// PHP has exactly TWO falsy strings — `""` and the single byte `"0"` — so `"00"`,
+/// `"0.0"` and `" "` are all true. Shared by `Op::IsTruthy` and the explicit
+/// `(bool) $string` cast: a second copy of this rule is how one spelling ends up
+/// disagreeing with the other (the native backend's `empty()` did exactly that,
+/// testing only the length).
+fn emit_string_truthiness(ctx: &mut FnCtx, ptr: &str, len: &str) {
+    ctx.fb.ins(&format!("local.get {}", len), "string length");
+    ctx.fb.ins("i64.eqz", "empty string?");
+    ctx.fb.ins(
+        "if (result i64)",
+        "empty string is false; otherwise check PHP's special string zero",
+    );
+    ctx.fb.ins("i64.const 0", "empty string is false");
+    ctx.fb.ins("else", "non-empty string");
+    ctx.fb.ins(&format!("local.get {}", len), "string length");
+    ctx.fb.ins("i64.const 1", "single-byte string length");
+    ctx.fb.ins("i64.eq", "single-byte string?");
+    ctx.fb
+        .ins("if (result i64)", "only the exact string \"0\" is false");
+    ctx.fb
+        .ins(&format!("local.get {}", ptr), "single-byte string pointer");
+    ctx.fb.ins("i32.load8_u", "load the only byte");
+    ctx.fb.ins("i32.const 48", "ASCII zero");
+    ctx.fb.ins("i32.ne", "single-byte string is not \"0\"");
+    ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+    ctx.fb.ins("else", "multi-byte non-empty string");
+    ctx.fb.ins("i64.const 1", "non-empty non-\"0\" string is true");
+    ctx.fb.ins("end", "end single-byte string check");
+    ctx.fb.ins("end", "end string truthiness");
+}
+
 /// Lowers PHP truthiness for every scalar and heap representation used by EIR.
 fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let op0 = operand(inst, 0)?;
+    emit_truthiness(ctx, operand(inst, 0)?)?;
+    store_result(ctx, inst)
+}
+
+/// Pushes PHP's truthiness of `op0` as an i64 boolean, for every representation EIR uses.
+///
+/// Shared by `Op::IsTruthy` — `if ($x)`, `!$x`, `$a && $b` — and the explicit `(bool) $x`
+/// cast, which php-src answers IDENTICALLY, diagnostics included: measured on 8.5.6,
+/// `(bool)$nan` emits the same `unexpected NAN value was coerced to bool` warning `if ($nan)`
+/// does. Routing both spellings here is what keeps them from drifting; a boxed value goes
+/// through `__rt_mixed_truthy` (which warns) rather than the silent `__rt_mixed_cast_bool`
+/// for exactly that reason.
+fn emit_truthiness(ctx: &mut FnCtx, op0: ValueId) -> Result<()> {
     let repr = ctx.value_repr(op0)?.clone();
     let value = ctx
         .function
@@ -2446,33 +2501,7 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 "PHP's truthiness, warning on a NaN",
             );
         }
-        WasmRepr::Str { ptr, len } => {
-            ctx.fb
-                .ins(&format!("local.get {}", len), "string length");
-            ctx.fb.ins("i64.eqz", "empty string?");
-            ctx.fb.ins(
-                "if (result i64)",
-                "empty string is false; otherwise check PHP's special string zero",
-            );
-            ctx.fb.ins("i64.const 0", "empty string is false");
-            ctx.fb.ins("else", "non-empty string");
-            ctx.fb
-                .ins(&format!("local.get {}", len), "string length");
-            ctx.fb.ins("i64.const 1", "single-byte string length");
-            ctx.fb.ins("i64.eq", "single-byte string?");
-            ctx.fb
-                .ins("if (result i64)", "only the exact string \"0\" is false");
-            ctx.fb
-                .ins(&format!("local.get {}", ptr), "single-byte string pointer");
-            ctx.fb.ins("i32.load8_u", "load the only byte");
-            ctx.fb.ins("i32.const 48", "ASCII zero");
-            ctx.fb.ins("i32.ne", "single-byte string is not \"0\"");
-            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
-            ctx.fb.ins("else", "multi-byte non-empty string");
-            ctx.fb.ins("i64.const 1", "non-empty non-\"0\" string is true");
-            ctx.fb.ins("end", "end single-byte string check");
-            ctx.fb.ins("end", "end string truthiness");
-        }
+        WasmRepr::Str { ptr, len } => emit_string_truthiness(ctx, &ptr, &len),
         WasmRepr::Ptr(local) => match value.ir_type {
             IrType::Heap(IrHeapKind::Array)
             | IrType::Heap(IrHeapKind::Hash)
@@ -2520,7 +2549,7 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("i64.const 0", "void is false");
         }
     }
-    store_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers `Op::LoadGlobal` for supported superglobals.

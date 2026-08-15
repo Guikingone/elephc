@@ -2124,6 +2124,34 @@ fn cast_shape_issue(
             }
         }
     }
+    // A `(bool)` cast is php's TRUTHINESS of whatever the source holds, and the lowering
+    // routes every one of them through the same emitter `Op::IsTruthy` uses — so the
+    // admissible sources are exactly the ones that emitter handles, and no per-storage
+    // conversion rule applies. Object is in the list because php calls every object truthy.
+    if target == IrType::I64 && result_php == PhpType::Bool {
+        let handled = matches!(
+            source.ir_type,
+            IrType::I64
+                | IrType::F64
+                | IrType::Str
+                | IrType::TaggedScalar
+                | IrType::Void
+                | IrType::Heap(
+                    IrHeapKind::Array
+                        | IrHeapKind::Hash
+                        | IrHeapKind::Iterable
+                        | IrHeapKind::Mixed
+                        | IrHeapKind::Union
+                        | IrHeapKind::Object
+                )
+        );
+        return (!handled).then(|| {
+            format!(
+                "(bool) of a {:?}/{source_php:?} source has no truthiness rule on wasm32-wasi",
+                source.ir_type
+            )
+        });
+    }
     let supported = match (source.ir_type, target) {
         (IrType::TaggedScalar, IrType::I64) => {
             source_php == PhpType::TaggedScalar
@@ -2143,9 +2171,11 @@ fn cast_shape_issue(
         }
         // `(int) $string` parses the LEADING numeric prefix and answers 0 for anything else,
         // silently — the same `__rt_str_to_int` a boxed string already casts through, so the
-        // two spellings agree.
+        // two spellings agree. `(bool) $string` shares the storage and NOTHING else: it is
+        // php's truthiness, where the only falsy strings are `""` and `"0"`, and the lowering
+        // routes it through the same predicate `Op::IsTruthy` uses.
         (IrType::Str, IrType::I64) => {
-            source_php == PhpType::Str && result_php == PhpType::Int
+            source_php == PhpType::Str && matches!(result_php, PhpType::Int | PhpType::Bool)
         }
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float

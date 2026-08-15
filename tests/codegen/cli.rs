@@ -17454,6 +17454,86 @@ echo $u->name, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies every `(bool)` cast on wasm32-wasi is php's truthiness, whatever the source.
+///
+/// The cast lowering used to answer this storage by storage, so `(bool)$int`,
+/// `(bool)$float`, `(bool)$string` and `(bool)$array` had no rule at all and refused,
+/// while the boxed one that existed ran the SILENT helper. Every spelling now routes
+/// through the emitter `Op::IsTruthy` uses, so the expected string is `php -n`'s own
+/// and `(bool)$x` cannot drift from `if ($x)`. The `"0"` and `"0.0"` pair is the trap:
+/// exactly one of them is falsy. Values arrive through arrays so nothing folds.
+#[test]
+fn test_cli_wasm_bool_casts_are_php_truthiness() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_bool_cast");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+foreach ([0, 1, -3] as $v) { echo (bool)$v ? "T" : "F"; }
+echo "\n";
+foreach ([0.0, 2.5, -0.0] as $v) { echo (bool)$v ? "T" : "F"; }
+echo "\n";
+foreach (["", "0", "00", "0.0", "x"] as $v) { echo (bool)$v ? "T" : "F"; }
+echo "\n";
+foreach ([[], [1, 2]] as $v) { echo (bool)$v ? "T" : "F"; }
+echo "\n";
+foreach ([0, "0", "x", 2.5] as $v) { echo (bool)$v ? "T" : "F"; }
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the bool-cast matrix to WASM");
+    assert!(
+        output.status.success(),
+        "bool casts failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the bool-cast matrix under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        // php -n's own answers. Row 3: "" and "0" are the only falsy strings, so "0.0"
+        // is TRUE. Row 5 is the same values BOXED, which must not answer differently.
+        "FTT\nFTF\nFFTTT\nFT\nFFTT\n",
+        "php -n's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `print_r` on wasm32-wasi renders php's exact bytes in both modes.
 ///
 /// The fixture is the corpus example's own shape — a hash holding a string, an int,
