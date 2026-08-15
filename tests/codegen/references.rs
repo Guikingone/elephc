@@ -288,6 +288,26 @@ fn test_closure_bind_by_reference_return_writes_through() {
     assert_eq!(out, "RouteA\n0\n");
 }
 
+/// Verifies an immediate by-reference bind inside an unrelated method resolves `$this` against
+/// the receiver object and writes through the returned property cell.
+#[test]
+fn test_closure_bind_by_reference_inside_method_uses_bound_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class BoundStore { public array $items = []; }
+class StoreWriter {
+    public function write(BoundStore $store): string {
+        $items = &\Closure::bind(fn &() => $this->items, $store, $store)();
+        $items[] = "written";
+        return implode(",", $store->items);
+    }
+}
+echo (new StoreWriter())->write(new BoundStore());
+"#,
+    );
+    assert_eq!(out, "written");
+}
+
 /// `$x = &$obj->prop` aliases a `string` property: the cell pointer is one word, so the
 /// write-through works despite the string ABI normally using a `{ptr,len}` register pair.
 #[test]

@@ -24,6 +24,7 @@ pub(super) fn lower_static_method_call(
             && !args.is_empty()
         {
             let closure = lower_expr(ctx, &args[0]);
+            ctx.take_pending_static_callable_result();
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),

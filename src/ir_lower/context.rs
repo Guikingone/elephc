@@ -119,6 +119,7 @@ pub(crate) struct LoweringSnapshot {
     array_conversions: HashMap<String, PhpType>,
     speculating: bool,
     closure_count: usize,
+    bound_closure_this_class: Option<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -250,6 +251,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub web: bool,
     owner_name: String,
     closures: Vec<Function>,
+    /// Class of the object temporarily installed as `$this` while lowering a bound closure body.
+    bound_closure_this_class: Option<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -345,6 +348,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             web,
             owner_name,
             closures: Vec::new(),
+            bound_closure_this_class: None,
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
@@ -384,6 +388,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             array_conversions: self.array_conversions.clone(),
             speculating: self.speculating,
             closure_count: self.closures.len(),
+            bound_closure_this_class: self.bound_closure_this_class.clone(),
             pending_static_callable_result: self.pending_static_callable_result.clone(),
             closure_counter: self.closure_counter,
             hidden_temp_counter: self.hidden_temp_counter,
@@ -421,6 +426,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.array_conversions = snapshot.array_conversions;
         self.speculating = snapshot.speculating;
         self.closures.truncate(snapshot.closure_count);
+        self.bound_closure_this_class = snapshot.bound_closure_this_class;
         self.pending_static_callable_result = snapshot.pending_static_callable_result;
         self.closure_counter = snapshot.closure_counter;
         self.hidden_temp_counter = snapshot.hidden_temp_counter;
@@ -1108,6 +1114,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Takes any statically known callable result recorded by the last direct expression.
     pub(crate) fn take_pending_static_callable_result(&mut self) -> Option<StaticCallableBinding> {
         self.pending_static_callable_result.take()
+    }
+
+    /// Records the class of the receiver that a bound closure will expose as `$this`.
+    pub(crate) fn set_bound_closure_this_class(&mut self, class_name: String) {
+        self.bound_closure_this_class = Some(class_name);
+    }
+
+    /// Takes and clears the pending bound-closure receiver class so it cannot leak to another body.
+    pub(crate) fn take_bound_closure_this_class(&mut self) -> Option<String> {
+        self.bound_closure_this_class.take()
     }
 
     /// Clears stale callable-result metadata before lowering a new independent expression.

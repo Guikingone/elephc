@@ -21,7 +21,7 @@ use std::collections::HashSet;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
     CallableTarget, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, InstanceOfTarget,
-    Program, Stmt, StmtKind,
+    Program, StaticReceiver, Stmt, StmtKind,
 };
 
 /// Function-reference summary for one AST subtree.
@@ -35,6 +35,8 @@ pub(crate) struct Usage {
     /// Prelude pruning runs before include/autoload resolution, so includes must be treated as
     /// an unknown-code boundary until the resolver has expanded them.
     pub(crate) dynamic_code_load: bool,
+    /// Whether this subtree reads the runtime called class through a `static::` receiver.
+    pub(crate) uses_late_static: bool,
     /// Global names the program reaches through `$GLOBALS['name']`, without the
     /// alias spelling — `$GLOBALS['app']` contributes `app`.
     ///
@@ -51,6 +53,7 @@ impl Usage {
         self.classes.extend(other.classes);
         self.dynamic_function_call |= other.dynamic_function_call;
         self.dynamic_code_load |= other.dynamic_code_load;
+        self.uses_late_static |= other.uses_late_static;
         self.globals_keys.extend(other.globals_keys);
     }
 
@@ -81,6 +84,13 @@ pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     usage
 }
 
+/// Returns whether a statement list needs the runtime called-class identity.
+pub(crate) fn uses_late_static(statements: &[Stmt]) -> bool {
+    let mut usage = Usage::default();
+    scan_program(statements, &mut usage);
+    usage.uses_late_static
+}
+
 /// Records a variable name when it is a `$GLOBALS['…']` alias.
 ///
 /// Called for every position that names a variable with a bare `String` rather
@@ -105,6 +115,11 @@ fn record_class_name(usage: &mut Usage, name: &str) {
     usage
         .classes
         .insert(php_symbol_key(name.trim_start_matches('\\')));
+}
+
+/// Records whether a static receiver requires the runtime called-class identity.
+fn record_static_receiver(usage: &mut Usage, receiver: &StaticReceiver) {
+    usage.uses_late_static |= matches!(receiver, StaticReceiver::Static);
 }
 
 /// Records a literal callback/probe target when it denotes a free function.
@@ -181,9 +196,16 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::Return(Some(expr))
-        | StmtKind::StaticPropertyAssign { value: expr, .. }
-        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => scan_expr(expr, usage),
+        | StmtKind::Return(Some(expr)) => scan_expr(expr, usage),
+        StmtKind::StaticPropertyAssign {
+            receiver, value, ..
+        }
+        | StmtKind::StaticPropertyArrayPush {
+            receiver, value, ..
+        } => {
+            record_static_receiver(usage, receiver);
+            scan_expr(value, usage);
+        }
         StmtKind::Include { path, .. } => {
             usage.dynamic_code_load = true;
             scan_expr(path, usage);
@@ -213,20 +235,34 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             scan_expr(index, usage);
             scan_expr(value, usage);
         }
-        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+        StmtKind::StaticPropertyArrayAssign {
+            receiver,
+            index,
+            value,
+            ..
+        } => {
+            record_static_receiver(usage, receiver);
             scan_expr(index, usage);
             scan_expr(value, usage);
         }
-        StmtKind::StaticPropertyElementRefAssign { index, source, .. } => {
+        StmtKind::StaticPropertyElementRefAssign {
+            receiver,
+            index,
+            source,
+            ..
+        } => {
+            record_static_receiver(usage, receiver);
             scan_expr(index, usage);
             scan_expr(source, usage);
         }
         StmtKind::DynamicStaticPropertyWrite {
+            receiver,
             property,
             index,
             value,
             ..
         } => {
+            record_static_receiver(usage, receiver);
             scan_expr(property, usage);
             if let Some(index) = index {
                 scan_expr(index, usage);
@@ -429,7 +465,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         ExprKind::FirstClassCallable(CallableTarget::Method { object, .. }) => {
             scan_expr(object, usage);
         }
-        ExprKind::FirstClassCallable(CallableTarget::StaticMethod { .. }) => {}
+        ExprKind::FirstClassCallable(CallableTarget::StaticMethod { receiver, .. }) => {
+            record_static_receiver(usage, receiver);
+        }
         ExprKind::ExprCall { callee, args } => {
             usage.dynamic_function_call = true;
             scan_expr(callee, usage);
@@ -540,7 +578,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::StaticMethodCall { args, .. } | ExprKind::NewScopedObject { args, .. } => {
+        ExprKind::StaticMethodCall { receiver, args, .. }
+        | ExprKind::NewScopedObject { receiver, args } => {
+            record_static_receiver(usage, receiver);
             for arg in args {
                 scan_expr(arg, usage);
             }
@@ -566,7 +606,10 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
             scan_expr(object, usage);
             scan_expr(property, usage);
         }
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
+        ExprKind::DynamicStaticPropertyAccess {
+            receiver, property, ..
+        } => {
+            record_static_receiver(usage, receiver);
             scan_expr(property, usage);
         }
         ExprKind::MethodCall { object, args, .. }
@@ -608,10 +651,12 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This
-        | ExprKind::StaticPropertyAccess { .. }
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
+        ExprKind::StaticPropertyAccess { receiver, .. }
+        | ExprKind::ClassConstant { receiver }
+        | ExprKind::ScopedConstantAccess { receiver, .. } => {
+            record_static_receiver(usage, receiver);
+        }
         ExprKind::ObjectClassName { object } => scan_expr(object, usage),
         ExprKind::DynamicScopedConstantAccess { receiver, .. } => scan_expr(receiver, usage),
     }

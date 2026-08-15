@@ -947,12 +947,22 @@ impl Checker {
         // `Closure::bind($closure, $newThis [, $scope])` is the static form of
         // `$closure->bindTo(...)`: it returns a new closure with `$this` rebound.
         if class_name.trim_start_matches('\\') == "Closure" && php_symbol_key(method) == "bind" {
-            let rebound_scope = closure_bind_visibility_scope(self, args);
+            let rebound_this = closure_bind_property_receiver_type(self, args, env);
+            let rebound_scope = closure_bind_visibility_scope(self, args, env);
             for (index, arg) in args.iter().enumerate() {
-                if index == 0 && rebound_scope.is_some() {
+                if index == 0 {
                     let saved_class = self.current_class.clone();
-                    self.current_class = rebound_scope.clone();
-                    let result = self.infer_type(arg, env);
+                    if rebound_scope.is_some() {
+                        self.current_class = rebound_scope.clone();
+                    }
+                    let mut closure_env = env.clone();
+                    if let Some(rebound_this) = &rebound_this {
+                        closure_env.insert(
+                            Self::narrowed_this_env_key().to_string(),
+                            rebound_this.clone(),
+                        );
+                    }
+                    let result = self.infer_type(arg, &closure_env);
                     self.current_class = saved_class;
                     result?;
                 } else {
@@ -1395,13 +1405,20 @@ impl Checker {
     }
 }
 
-/// Resolves the literal visibility scope supplied to `Closure::bind()`.
+/// Resolves the visibility scope supplied to `Closure::bind()`.
 ///
-/// PHP checks private and protected accesses in the bound closure against its third argument.
-/// Only literal `::class` scopes can be established at compile time; dynamic or null scopes stay
-/// gradual and therefore do not grant extra visibility during closure-body checking.
-fn closure_bind_visibility_scope(checker: &Checker, args: &[Expr]) -> Option<String> {
-    match &args.get(2)?.kind {
+/// PHP accepts a class name or an object as the third argument. When omitted, the closure keeps
+/// its lexical class scope. Dynamic values whose class is not statically known remain gradual and
+/// do not grant additional private or protected access during closure-body checking.
+fn closure_bind_visibility_scope(
+    checker: &mut Checker,
+    args: &[Expr],
+    env: &TypeEnv,
+) -> Option<String> {
+    let Some(scope) = args.get(2) else {
+        return checker.current_class.clone();
+    };
+    match &scope.kind {
         ExprKind::StringLiteral(name) => Some(name.trim_start_matches('\\').to_string()),
         ExprKind::ClassConstant { receiver } => match receiver {
             StaticReceiver::Named(name) => {
@@ -1414,8 +1431,44 @@ fn closure_bind_visibility_scope(checker: &Checker, args: &[Expr]) -> Option<Str
                 .and_then(|class| checker.classes.get(class))
                 .and_then(|class| class.parent.clone()),
         },
-        _ => None,
+        _ => checker
+            .infer_type(scope, env)
+            .ok()
+            .as_ref()
+            .and_then(crate::types::checker::single_object_class_name),
     }
+}
+
+/// Resolves the rebound `$this` type for the directly lowered bound-property closure shape.
+///
+/// The specialized lowering supports a closure whose body is exactly `return $this->property`;
+/// all other bodies keep their existing gradual/runtime path.
+fn closure_bind_property_receiver_type(
+    checker: &mut Checker,
+    args: &[Expr],
+    env: &TypeEnv,
+) -> Option<PhpType> {
+    let ExprKind::Closure { body, .. } = &args.first()?.kind else {
+        return None;
+    };
+    let [stmt] = body.as_slice() else {
+        return None;
+    };
+    let crate::parser::ast::StmtKind::Return(Some(value)) = &stmt.kind else {
+        return None;
+    };
+    let ExprKind::PropertyAccess { object, .. } = &value.kind else {
+        return None;
+    };
+    if !matches!(object.kind, ExprKind::This) {
+        return None;
+    }
+    checker
+        .infer_type(args.get(1)?, env)
+        .ok()
+        .as_ref()
+        .and_then(crate::types::checker::single_object_class_name)
+        .map(PhpType::Object)
 }
 
 /// Returns true when a method variadic parameter must keep runtime key information.

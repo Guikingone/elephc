@@ -230,7 +230,7 @@ pub(super) fn closure_bind_property_return_type(
 }
 
 /// Lowers `Closure::bind(fn &() => $this->prop, $newThis, scope)()` as a direct call to the
-/// closure with `$newThis` boxed as its `$this` capture.
+/// closure with `$newThis` as its typed `$this` capture.
 ///
 /// `Closure::bind` rebinds the closure's receiver; invoking the result through the generic
 /// runtime descriptor invoker boxes the closure's return value as Mixed, which cannot carry a
@@ -244,13 +244,13 @@ pub(super) fn lower_bound_closure_immediate_call(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let (bound, _closure_value) = build_bound_closure_binding(ctx, callee, expr)?;
+    let (bound, _closure_value) = build_bound_closure_binding(ctx, callee)?;
     lower_static_callable_call(ctx, bound, args, expr)
 }
 
 /// Builds the static-callable binding for `Closure::bind(fn &() => $this->prop, $newThis, scope)`.
 ///
-/// Lowers the closure literal (once), boxes `$newThis` as the closure's `$this` capture, and
+/// Lowers the closure literal (once), passes `$newThis` as the closure's typed `$this` capture, and
 /// overrides the binding's return type with the bound receiver's property type so a
 /// by-reference return binds correctly. Returns the binding together with the lowered closure
 /// descriptor value (the still-unbound `closure_new`), which callers may store in the assigned
@@ -260,7 +260,6 @@ pub(super) fn lower_bound_closure_immediate_call(
 pub(super) fn build_bound_closure_binding(
     ctx: &mut LoweringContext<'_, '_>,
     callee: &Expr,
-    expr: &Expr,
 ) -> Option<(StaticCallableBinding, LoweredValue)> {
     let result_type = closure_bind_property_return_type(ctx, callee)?;
     let ExprKind::StaticMethodCall { args: bind_args, .. } = &callee.kind else {
@@ -271,8 +270,12 @@ pub(super) fn build_bound_closure_binding(
         return None;
     }
     let new_this = bind_args.get(1)?.clone();
+    if let Some(new_this_class) = instance_callable_object_class(ctx, &new_this) {
+        ctx.set_bound_closure_this_class(new_this_class);
+    }
     // Lower the closure literal to obtain its static binding (function name + captures).
     let closure_value = lower_expr(ctx, closure_lit);
+    ctx.take_bound_closure_this_class();
     let Some(StaticCallableBinding::Closure {
         name,
         mut signature,
@@ -286,13 +289,12 @@ pub(super) fn build_bound_closure_binding(
         return None;
     }
     let new_this_value = lower_expr(ctx, &new_this);
-    let boxed_this = ctx.box_value_as_mixed(new_this_value, PhpType::Mixed, Some(expr.span));
     signature.return_type = result_type;
     let bound = StaticCallableBinding::Closure {
         name,
         signature,
         captures: vec![ClosureCapture {
-            value: boxed_this.value,
+            value: new_this_value.value,
         }],
     };
     Some((bound, closure_value))
@@ -321,7 +323,7 @@ pub(crate) fn lower_bound_closure_for_assignment(
     ctx: &mut LoweringContext<'_, '_>,
     value: &Expr,
 ) -> Option<LoweredValue> {
-    let (bound, closure_value) = build_bound_closure_binding(ctx, value, value)?;
+    let (bound, closure_value) = build_bound_closure_binding(ctx, value)?;
     ctx.set_pending_static_callable_result(bound);
     Some(closure_value)
 }

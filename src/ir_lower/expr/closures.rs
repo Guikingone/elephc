@@ -121,6 +121,7 @@ pub(super) fn lower_closure_with_context(
     let body_contains_eval = body_contains_eval_call(body);
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
+    let mut rebound_this_capture = false;
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
         let (captured, php_type) = if capture == "this" && !ctx.local_slots.contains_key("this") {
@@ -144,6 +145,10 @@ pub(super) fn lower_closure_with_context(
                 // the case where the written type cannot be seen at all.
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if capture == "this" {
+                let rebound_class = ctx.take_bound_closure_this_class();
+                rebound_this_capture = rebound_class.is_some();
+                rebound_class.map(PhpType::Object)
             } else {
                 None
             };
@@ -167,6 +172,8 @@ pub(super) fn lower_closure_with_context(
     // same hidden value because their parent closure owns this slot too.
     let called_class_param = function::CALLED_CLASS_ID_PARAM;
     if ctx.current_class.is_some()
+        && !rebound_this_capture
+        && crate::ast_usage::uses_late_static(body)
         && (ctx.local_slots.contains_key(called_class_param)
             || ctx.local_slots.contains_key("this"))
         && !capture_params
