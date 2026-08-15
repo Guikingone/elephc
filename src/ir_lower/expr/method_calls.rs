@@ -108,9 +108,16 @@ pub(super) fn lower_method_call(
         }
     }
     if op == Op::MethodCall {
-        if let Some(value) =
-            lower_reflection_property_value_call(ctx, Some(object_expr), method, args, expr)
+        if let Some(value) = lower_reflection_property_value_call(
+            ctx,
+            Some(object_expr),
+            object,
+            method,
+            args,
+            expr,
+        )
         {
+            release_owning_receiver_temporary(ctx, object, expr.span);
             return value;
         }
     }

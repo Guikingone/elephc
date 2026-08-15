@@ -94,6 +94,7 @@ pub(in crate::ir_lower) use nested_unset::{
     nested_property_hash_unset_supported, nested_static_property_hash_unset_supported,
 };
 pub(in crate::ir_lower) use property_array_writes::release_rewritten_property_value_after_retaining_store;
+pub(in crate::ir_lower) use instance_property_writes::lower_raw_property_assign;
 pub(in crate::ir_lower) use static_property_helpers::object_property_type;
 pub(super) use array_write_storage::{
     finish_indexed_array_local_write, prepare_indexed_array_local_write,

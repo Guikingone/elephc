@@ -336,6 +336,12 @@ pub(super) fn builtin_reflection_owner_class(
         ));
     }
     if name == "ReflectionProperty" {
+        properties.push(builtin_property(
+            "__class",
+            Visibility::Private,
+            Some(TypeExpr::Str),
+            empty_string(),
+        ));
         methods.push(builtin_reflection_set_accessible_method());
     }
     properties.push(builtin_property(

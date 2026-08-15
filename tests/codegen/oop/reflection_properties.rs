@@ -394,6 +394,49 @@ echo ":" . $target->label;
     assert_eq!(out, "4:8:label:old:new");
 }
 
+/// Verifies public ReflectionProperty metadata and raw accessors share the reflected backing slot.
+#[test]
+fn test_reflection_property_public_metadata_and_raw_value_accessors() {
+    let out = compile_and_run(
+        r#"<?php
+class ReflectRawValueAccessTarget {
+    private int $count = 4;
+
+    public function count(): int { return $this->count; }
+}
+
+class ReflectRawHookAccessTarget {
+    public int $value {
+        get => $this->value * 10;
+        set { $this->value = $value + 1; }
+    }
+
+    public function __construct() { $this->value = 1; }
+}
+
+$target = new ReflectRawValueAccessTarget();
+$property = new ReflectionProperty(ReflectRawValueAccessTarget::class, "count");
+echo $property->class . ":" . $property->name . ":" . $property->getRawValue($target);
+$property->setRawValue($target, 8);
+echo ":" . $target->count();
+$property->setRawValueWithoutLazyInitialization($target, 12);
+echo ":" . $target->count();
+
+$hookedTarget = new ReflectRawHookAccessTarget();
+$hookedProperty = new ReflectionProperty(ReflectRawHookAccessTarget::class, "value");
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+$hookedProperty->setRawValue($hookedTarget, 4);
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+$hookedProperty->setRawValueWithoutLazyInitialization($hookedTarget, 5);
+echo ":" . $hookedTarget->value . ":" . $hookedProperty->getRawValue($hookedTarget);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ReflectRawValueAccessTarget:count:4:8:12:20:2:40:4:50:5"
+    );
+}
+
 /// Verifies ReflectionProperty value access bypasses visibility for private
 /// and protected instance properties, matching PHP's Reflection behavior.
 #[test]

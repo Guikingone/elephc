@@ -11,16 +11,35 @@ use super::*;
 
 /// Returns `ReflectionProperty::getValue()` for dynamic public instance reflectors.
 pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
+    builtin_reflection_property_get_method("getValue", mixed_type(), null_expr())
+}
+
+/// Returns `ReflectionProperty::getRawValue()` for direct backing-slot reads.
+pub(super) fn builtin_reflection_property_get_raw_value_method() -> ClassMethod {
+    builtin_reflection_property_get_method("getRawValue", object_type(), None)
+}
+
+/// Builds a ReflectionProperty value reader with the requested object-argument default.
+fn builtin_reflection_property_get_method(
+    method_name: &str,
+    object_type_expr: TypeExpr,
+    object_default: Option<Expr>,
+) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let object = variable_expr("object", dummy_span);
     ClassMethod {
-        name: "getValue".to_string(),
+        name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
         is_final: false,
         has_body: true,
-        params: vec![("object".to_string(), Some(mixed_type()), null_expr(), false)],
+        params: vec![(
+            "object".to_string(),
+            Some(object_type_expr),
+            object_default,
+            false,
+        )],
         param_attributes: Vec::new(),
         variadic: None,
         variadic_by_ref: false,
@@ -29,7 +48,7 @@ pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
         by_ref_return: false,
         body: vec![
             reflection_property_static_get_value_return(dummy_span),
-            reflection_property_object_required_guard("getValue", dummy_span),
+            reflection_property_object_required_guard(method_name, dummy_span),
             Stmt::new(
                 StmtKind::Return(Some(reflection_dynamic_object_property(object, dummy_span))),
                 dummy_span,
@@ -42,18 +61,40 @@ pub(super) fn builtin_reflection_property_get_value_method() -> ClassMethod {
 
 /// Returns `ReflectionProperty::setValue()` for dynamic public instance reflectors.
 pub(super) fn builtin_reflection_property_set_value_method() -> ClassMethod {
+    builtin_reflection_property_set_method("setValue", mixed_type())
+}
+
+/// Returns `ReflectionProperty::setRawValue()` for direct backing-slot writes.
+pub(super) fn builtin_reflection_property_set_raw_value_method() -> ClassMethod {
+    builtin_reflection_property_set_method("setRawValue", object_type())
+}
+
+/// Returns the raw write variant that suppresses lazy-object initialization.
+pub(super) fn builtin_reflection_property_set_raw_value_without_lazy_initialization_method(
+) -> ClassMethod {
+    builtin_reflection_property_set_method(
+        "setRawValueWithoutLazyInitialization",
+        object_type(),
+    )
+}
+
+/// Builds a ReflectionProperty value writer with method-specific diagnostics.
+fn builtin_reflection_property_set_method(
+    method_name: &str,
+    object_type_expr: TypeExpr,
+) -> ClassMethod {
     let dummy_span = crate::span::Span::dummy();
     let object = variable_expr("object", dummy_span);
     let value = variable_expr("value", dummy_span);
     ClassMethod {
-        name: "setValue".to_string(),
+        name: method_name.to_string(),
         visibility: Visibility::Public,
         is_static: false,
         is_abstract: false,
         is_final: false,
         has_body: true,
         params: vec![
-            ("object".to_string(), Some(mixed_type()), None, false),
+            ("object".to_string(), Some(object_type_expr), None, false),
             ("value".to_string(), Some(mixed_type()), None, false),
         ],
         param_attributes: Vec::new(),
@@ -63,8 +104,8 @@ pub(super) fn builtin_reflection_property_set_value_method() -> ClassMethod {
         return_type: Some(TypeExpr::Void),
         by_ref_return: false,
         body: vec![
-            reflection_property_static_value_guard("setValue", dummy_span),
-            reflection_property_object_required_guard("setValue", dummy_span),
+            reflection_property_static_value_guard(method_name, dummy_span),
+            reflection_property_object_required_guard(method_name, dummy_span),
             Stmt::new(
                 StmtKind::ExprStmt(Expr::new(
                     ExprKind::Assignment {

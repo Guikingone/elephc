@@ -177,6 +177,26 @@ pub(super) fn lower_property_get_from_value(
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
 }
 
+/// Lowers a direct backing-slot read without invoking a declared property get hook.
+pub(super) fn lower_raw_property_get_from_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    let data = ctx.intern_string(property);
+    let result_type = property_get_result_type(ctx, object.value, property, Op::PropGet, expr);
+    let result = ctx.emit_value(
+        Op::PropGet,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        result_type,
+        Op::PropGet.default_effects(),
+        Some(expr.span),
+    );
+    stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
 /// Returns true when value metadata proves the runtime value is PHP null.
 pub(super) fn value_is_definitely_null(ctx: &LoweringContext<'_, '_>, value: crate::ir::ValueId) -> bool {
     matches!(ctx.builder.value_php_type(value), PhpType::Void | PhpType::Never)
@@ -450,6 +470,7 @@ pub(super) fn lower_dynamic_property_get_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_property_get_result_type(ctx, object.value, property, expr);
+    let object = box_generic_object_for_dynamic_property(ctx, object, expr.span);
     let property = lower_expr(ctx, property);
     let property = coerce_to_string_at_span(ctx, property, Some(expr.span));
     let result = ctx.emit_value(
@@ -464,6 +485,22 @@ pub(super) fn lower_dynamic_property_get_from_value(
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(expr.span));
     }
     stabilize_borrowed_result_and_release_receiver(ctx, object, result, expr.span)
+}
+
+/// Boxes a bare `object` receiver so runtime-name property dispatch can inspect its class id.
+pub(super) fn box_generic_object_for_dynamic_property(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if matches!(
+        ctx.builder.value_php_type(object.value).codegen_repr(),
+        PhpType::Object(class_name) if class_name.trim_start_matches('\\').is_empty()
+    ) {
+        ctx.box_value_as_mixed(object, PhpType::Mixed, Some(span))
+    } else {
+        object
+    }
 }
 
 /// Returns precise metadata for dynamic property reads when class slots are statically known.

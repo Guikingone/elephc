@@ -369,6 +369,32 @@ echo (($row instanceof Row) ? "Row" : "not-row") . ":" . $row->id . ":" . $row->
     assert_eq!(out, "Row:1:Ada");
 }
 
+/// Verifies runtime-named reads and writes dispatch across concrete classes hidden by `object`.
+#[test]
+fn test_dynamic_property_read_write_through_generic_object_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class FirstDynamicPropertyTarget {
+    public int $value = 1;
+}
+
+class SecondDynamicPropertyTarget {
+    public int $value = 2;
+}
+
+function replaceDynamicProperty(object $object, string $name, int $value): int {
+    $object->{$name} = $value;
+    return $object->{$name};
+}
+
+echo replaceDynamicProperty(new FirstDynamicPropertyTarget(), "value", 3);
+echo ":";
+echo replaceDynamicProperty(new SecondDynamicPropertyTarget(), "value", 4);
+"#,
+    );
+    assert_eq!(out, "3:4");
+}
+
 /// Verifies that an untyped `public $headers = []` property (array default)
 /// accepts a string-keyed assignment (`$r->headers["Host"] = ...`) and the
 /// value is retrievable via the same key.

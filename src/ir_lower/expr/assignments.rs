@@ -263,6 +263,7 @@ pub(super) fn lower_dynamic_property_assign(
     span: Span,
 ) {
     let object = lower_expr(ctx, object);
+    let object = box_generic_object_for_dynamic_property(ctx, object, span);
     let property = lower_expr(ctx, property);
     let property = coerce_to_string_at_span(ctx, property, Some(span));
     let value = lower_expr(ctx, value);
@@ -275,6 +276,9 @@ pub(super) fn lower_dynamic_property_assign(
     );
     if ctx.value_is_owning_temporary(property) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+    }
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
     }
 }
 

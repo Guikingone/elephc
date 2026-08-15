@@ -332,6 +332,12 @@ pub(super) fn emit_reflection_owner_object(
         emit_reflection_method_prototype_property(ctx, metadata.prototype_member.as_deref())?;
     }
     if class_name == "ReflectionProperty" {
+        emit_reflection_owner_string_property_by_name(
+            ctx,
+            class_name,
+            "__class",
+            metadata.parent_class_name.as_deref().unwrap_or(""),
+        )?;
         emit_reflection_owner_int_property(ctx, class_name, "__modifiers", metadata.modifiers)?;
         emit_reflection_owner_type_property(ctx, class_name, metadata.type_metadata.as_ref())?;
         emit_reflection_owner_type_property_by_name(

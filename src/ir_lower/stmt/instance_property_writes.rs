@@ -80,6 +80,47 @@ pub(super) fn lower_property_assign(
     }
 }
 
+/// Lowers a direct backing-slot write without invoking magic methods or property set hooks.
+pub(in crate::ir_lower) fn lower_raw_property_assign(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    span: Span,
+) {
+    let object = lower_expr(ctx, object);
+    let lowered_value = lower_expr(ctx, value);
+    let lowered_value = contextualize_property_array_assignment(
+        ctx,
+        object.value,
+        property,
+        lowered_value,
+        value,
+        span,
+    );
+    let property_ty = object_property_type(ctx, object.value, property);
+    let lowered_value = match property_ty {
+        Some(ref ty) => coerce_typed_assign_value(ctx, lowered_value, ty, span),
+        None => lowered_value,
+    };
+    let data = ctx.intern_string(property);
+    ctx.emit_void(
+        Op::PropSet,
+        vec![object.value, lowered_value.value],
+        Some(Immediate::Data(data)),
+        Op::PropSet.default_effects(),
+        Some(span),
+    );
+    if let Some(property_ty) = property_ty {
+        release_property_assignment_source_after_retaining_store(
+            ctx,
+            &property_ty,
+            lowered_value,
+            span,
+        );
+    }
+}
+
 /// Lowers a declared-property reference bind while preserving the source cell identity.
 pub(super) fn lower_property_ref_assign(
     ctx: &mut LoweringContext<'_, '_>,
