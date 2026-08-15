@@ -15,11 +15,39 @@
 
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_APPEND_SKIP_OFFSET, STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER,
-    STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
+    STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
+    STREAM_WRAPPER_ID_OFFSET,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 const FILTER_BUF_SIZE: i64 = 65536;
+
+/// Wrapper id 6 is `php://`, whose sub-wrappers each answer writes their own way.
+const WRAPPER_ID_PHP: u64 = 6;
+
+/// Classification stored in the frame: an ordinary stream, whose recorded mode gates the write.
+const PHP_WRITE_ORDINARY: i64 = 0;
+
+/// `php://output`: php sends these bytes down the OUTPUT-BUFFER stack, not to a descriptor.
+///
+/// php-src gives the target its own `php_stream_output_ops`, whose write is `php_output_write` —
+/// the same sink `echo` uses — so `ob_start()` captures it and `ob_get_clean()` hands it back.
+/// Measured on `php -n` 8.5.6:
+///   `ob_start(); $h=fopen("php://output","w"); fwrite($h,"X"); var_dump(ob_get_clean());`
+///   answers `string(1) "X"`, and the same script with `php://stdout` answers `string(0) ""`
+///   after printing `X` — the two targets are NOT aliases, which is exactly what elephc's
+///   `dup(1)` made them.
+const PHP_WRITE_OUTPUT_BUFFER: i64 = 1;
+
+/// A descriptor-backed `php://` target: `stdin`, `stdout`, `stderr`, `fd/N`.
+///
+/// php-src's `_php_stream_write` refuses a write only when the stream's ops have NO write
+/// function; it never reads the mode string back. So `fopen("php://stdout","r")` writes happily,
+/// and so does `php://fd/1` opened `"rb"` — measured on `php -n` 8.5.6, both answer `2` for a
+/// two-byte `fwrite`. Only the descriptor itself can refuse. The in-memory targets are a
+/// different story and keep the gate: php builds them read-only when the mode names none of
+/// `w`, `a`, `+`, and `__rt_stream_record_mode` already normalises their recorded mode to match.
+const PHP_WRITE_DESCRIPTOR: i64 = 2;
 
 /// fwrite: write a payload to a descriptor, applying a write filter if present.
 /// Input:  AArch64 x0 = fd, x1 = pointer, x2 = length
@@ -60,6 +88,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
     emitter.instruction("mov x9, #-1");                                         // no append accounting unless the mode says otherwise
     emitter.instruction("str x9, [sp, #40]");
+    emitter.instruction(&format!("mov x9, #{PHP_WRITE_ORDINARY}"));             // until the URI says otherwise, the mode gates this write
+    emitter.instruction("str x9, [sp, #56]");
 
     // -- a read-only stream refuses the write, before anything is attempted --
     emitter.instruction("bl __rt_stream_state");                                // x0 = the owning state, zero for a raw descriptor
@@ -67,6 +97,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
     emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_USER_WRAPPER}"));
     emitter.instruction("b.eq __rt_fwrite_mode_ok");                            // a user wrapper's stream_write() decides for itself
+    emit_php_sub_wrapper_classify_aarch64(emitter);
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_MODE_PTR_OFFSET}]"));   // the recorded mode string
     emitter.instruction(&format!("ldr x10, [x0, #{STREAM_MODE_LEN_OFFSET}]"));  // and its length
     emitter.instruction("cbz x9, __rt_fwrite_mode_ok");                         // no mode recorded: nothing to refuse on
@@ -238,6 +269,19 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.syscall(199);
     emitter.instruction("str x0, [sp, #40]");                                   // where PHP's position stood
     emitter.label("__rt_fwrite_write_now");
+    // -- php://output writes to the OUTPUT-BUFFER stack, not to a descriptor --
+    // The bytes take the same road `echo` takes, so an enclosing `ob_start()` captures them and
+    // a user output handler sees them. Everything upstream still ran: an attached write filter
+    // has already transformed the payload in place, and this reads the filtered slots.
+    emitter.instruction("ldr x9, [sp, #56]");                                   // the php:// classification made at entry
+    emitter.instruction(&format!("cmp x9, #{PHP_WRITE_OUTPUT_BUFFER}"));
+    emitter.instruction("b.ne __rt_fwrite_write_syscall");                      // every other stream writes to its descriptor
+    emitter.instruction("ldr x0, [sp, #8]");                                    // payload pointer
+    emitter.instruction("ldr x1, [sp, #16]");                                   // payload length
+    emitter.instruction("bl __rt_stdout_write");                                // print_r capture, ob stack, --web capture, then fd 1
+    emitter.instruction("ldr x0, [sp, #16]");                                   // php answers the whole byte count for this sink
+    emitter.instruction("b __rt_fwrite_wrote");
+    emitter.label("__rt_fwrite_write_syscall");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the write arguments: the probe clobbered them
     emitter.instruction("ldr x1, [sp, #8]");
     emitter.instruction("ldr x2, [sp, #16]");
@@ -260,6 +304,49 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the byte count from write
+}
+
+/// Classifies the `php://` sub-wrapper backing this stream, parking the answer at `[sp, #56]`.
+///
+/// Takes the resolved StreamState in `x0` and LEAVES IT THERE: the read-only gate that follows
+/// still needs it. Clobbers `x9`-`x12` only, which the gate reloads anyway.
+///
+/// The sub-wrapper is told apart by the byte after `php://`, exactly as `__rt_stream_type_name`
+/// does. `fd` is matched in full rather than by its initial, because `filter` shares it and a
+/// `php://filter/...` URL must keep whatever rule its INNER resource has.
+fn emit_php_sub_wrapper_classify_aarch64(emitter: &mut Emitter) {
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
+    emitter.instruction("b.ne __rt_fwrite_php_classified");                     // every other wrapper keeps the mode gate
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_URI_PTR_OFFSET}]"));   // the recorded URI
+    emitter.instruction(&format!("ldr x11, [x0, #{STREAM_URI_LEN_OFFSET}]"));   // and its length
+    emitter.instruction("cbz x10, __rt_fwrite_php_classified");                 // no URI: nothing to classify on
+    emitter.instruction("cmp x11, #7");                                         // "php://" plus the byte that names the sub-wrapper
+    emitter.instruction("b.lt __rt_fwrite_php_classified");
+    emitter.instruction("ldrb w12, [x10, #6]");                                 // the first byte of the php:// sub-wrapper name
+    emitter.instruction("cmp w12, #0x6F");                                      // 'o' as in output
+    emitter.instruction("b.eq __rt_fwrite_php_output_sink");
+    emitter.instruction("cmp w12, #0x73");                                      // 's' as in stdin, stdout, stderr
+    emitter.instruction("b.eq __rt_fwrite_php_descriptor_sink");
+    emitter.instruction("cmp w12, #0x66");                                      // 'f' — either "fd/" or "filter"
+    emitter.instruction("b.ne __rt_fwrite_php_classified");
+    emitter.instruction("cmp x11, #9");                                         // "php://fd/" is the shortest spelling
+    emitter.instruction("b.lt __rt_fwrite_php_classified");
+    emitter.instruction("ldrb w12, [x10, #7]");
+    emitter.instruction("cmp w12, #0x64");                                      // 'd' — "filter" has 'i' here
+    emitter.instruction("b.ne __rt_fwrite_php_classified");
+    emitter.instruction("ldrb w12, [x10, #8]");
+    emitter.instruction("cmp w12, #0x2F");                                      // '/' closes "php://fd/"
+    emitter.instruction("b.ne __rt_fwrite_php_classified");
+    emitter.label("__rt_fwrite_php_descriptor_sink");
+    emitter.instruction(&format!("mov x9, #{PHP_WRITE_DESCRIPTOR}"));           // the descriptor decides, never the mode string
+    emitter.instruction("str x9, [sp, #56]");
+    emitter.instruction("b __rt_fwrite_mode_ok");                               // skip the read-only gate entirely
+    emitter.label("__rt_fwrite_php_output_sink");
+    emitter.instruction(&format!("mov x9, #{PHP_WRITE_OUTPUT_BUFFER}"));        // the write travels the output-buffer stack
+    emitter.instruction("str x9, [sp, #56]");
+    emitter.instruction("b __rt_fwrite_mode_ok");                               // php://output is always writable
+    emitter.label("__rt_fwrite_php_classified");
 }
 
 /// Adds what `O_APPEND` jumped over to the stream's running total, so `ftell()` can subtract it.
@@ -324,6 +411,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
     emitter.instruction("mov QWORD PTR [rbp - 48], -1");                        // no append accounting unless the mode says otherwise
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 64], {PHP_WRITE_ORDINARY}")); // until the URI says otherwise, the mode gates this write
 
     // -- a read-only stream refuses the write, before anything is attempted --
     emitter.instruction("call __rt_stream_state");                              // rax = the owning state, zero for a raw descriptor
@@ -332,6 +420,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
     emitter.instruction(&format!("cmp r9, {STREAM_BACKEND_USER_WRAPPER}"));
     emitter.instruction("je __rt_fwrite_mode_ok_x86");                          // a user wrapper's stream_write() decides for itself
+    emit_php_sub_wrapper_classify_x86_64(emitter);
     emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_MODE_PTR_OFFSET}]")); // the recorded mode string
     emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_MODE_LEN_OFFSET}]")); // and its length
     emitter.instruction("test r9, r9");
@@ -500,17 +589,76 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call lseek");                                          // rax = where PHP's position stood
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");
     emitter.label("__rt_fwrite_write_now_x86");
+    // See the AArch64 counterpart: php://output writes to the OUTPUT-BUFFER stack, not to a
+    // descriptor, so the bytes take the road `echo` takes and `ob_start()` captures them.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 64]");                       // the php:// classification made at entry
+    emitter.instruction(&format!("cmp r10, {PHP_WRITE_OUTPUT_BUFFER}"));
+    emitter.instruction("jne __rt_fwrite_write_syscall_x86");                   // every other stream writes to its descriptor
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // payload pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // payload length
+    emitter.instruction("call __rt_stdout_write");                              // print_r capture, ob stack, --web capture, then fd 1
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // php answers the whole byte count for this sink
+    emitter.instruction("jmp __rt_fwrite_wrote_x86");
+    emitter.label("__rt_fwrite_write_syscall_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the write arguments: the probe clobbered them
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");
     emitter.instruction("call write");                                          // write the payload through libc write()
     emitter.instruction("cmp rax, 0");
     emitter.instruction("jl __rt_fwrite_return_x86");                           // a failed write moved nothing to account for
+    emitter.label("__rt_fwrite_wrote_x86");
     emit_append_skip_update_x86_64(emitter);
     emitter.label("__rt_fwrite_return_x86");
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write
+}
+
+/// The x86_64 counterpart of [`emit_php_sub_wrapper_classify_aarch64`].
+///
+/// Takes the resolved StreamState in `rax` and LEAVES IT THERE. Clobbers `r9`-`r11` only.
+fn emit_php_sub_wrapper_classify_x86_64(emitter: &mut Emitter) {
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
+    ));                                                                         // which wrapper opened it
+    emitter.instruction(&format!("cmp r9, {WRAPPER_ID_PHP}"));
+    emitter.instruction("jne __rt_fwrite_php_classified_x86");                  // every other wrapper keeps the mode gate
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {STREAM_URI_PTR_OFFSET}]"
+    ));                                                                         // the recorded URI
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [rax + {STREAM_URI_LEN_OFFSET}]"
+    ));                                                                         // and its length
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_fwrite_php_classified_x86");                   // no URI: nothing to classify on
+    emitter.instruction("cmp r11, 7");                                          // "php://" plus the byte that names the sub-wrapper
+    emitter.instruction("jl __rt_fwrite_php_classified_x86");
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + 6]");                       // the first byte of the php:// sub-wrapper name
+    emitter.instruction("cmp r9b, 0x6F");                                       // 'o' as in output
+    emitter.instruction("je __rt_fwrite_php_output_sink_x86");
+    emitter.instruction("cmp r9b, 0x73");                                       // 's' as in stdin, stdout, stderr
+    emitter.instruction("je __rt_fwrite_php_descriptor_sink_x86");
+    emitter.instruction("cmp r9b, 0x66");                                       // 'f' — either "fd/" or "filter"
+    emitter.instruction("jne __rt_fwrite_php_classified_x86");
+    emitter.instruction("cmp r11, 9");                                          // "php://fd/" is the shortest spelling
+    emitter.instruction("jl __rt_fwrite_php_classified_x86");
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + 7]");
+    emitter.instruction("cmp r9b, 0x64");                                       // 'd' — "filter" has 'i' here
+    emitter.instruction("jne __rt_fwrite_php_classified_x86");
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + 8]");
+    emitter.instruction("cmp r9b, 0x2F");                                       // '/' closes "php://fd/"
+    emitter.instruction("jne __rt_fwrite_php_classified_x86");
+    emitter.label("__rt_fwrite_php_descriptor_sink_x86");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rbp - 64], {PHP_WRITE_DESCRIPTOR}"
+    ));                                                                         // the descriptor decides, never the mode string
+    emitter.instruction("jmp __rt_fwrite_mode_ok_x86");                         // skip the read-only gate entirely
+    emitter.label("__rt_fwrite_php_output_sink_x86");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rbp - 64], {PHP_WRITE_OUTPUT_BUFFER}"
+    ));                                                                         // the write travels the output-buffer stack
+    emitter.instruction("jmp __rt_fwrite_mode_ok_x86");                         // php://output is always writable
+    emitter.label("__rt_fwrite_php_classified_x86");
 }
 
 /// The x86_64 counterpart of [`emit_append_skip_update_aarch64`].

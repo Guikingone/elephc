@@ -2864,11 +2864,101 @@ echo "after\n";
     assert_eq!(out, "before\nvia-handle\nafter\n");
 }
 
-/// Verifies compiled PHP output for fopen php output is stdout alias.
+/// Verifies `php://output` reaches the terminal when no output buffer is active.
+///
+/// Renamed from `..._is_stdout_alias`: the old name asserted a relationship that php does not
+/// have. `php://output` and `php://stdout` agree ONLY while the output-buffer stack is empty,
+/// which is all this case exercises; the two tests below pin where they part company.
 #[test]
-fn test_fopen_php_output_is_stdout_alias() {
+fn test_fopen_php_output_reaches_the_terminal_unbuffered() {
     let out = compile_and_run(r#"<?php $h = fopen("php://output", "w"); fwrite($h, "aliased");"#);
     assert_eq!(out, "aliased");
+}
+
+/// Verifies `php://output` writes travel the OUTPUT-BUFFER stack, and `php://stdout` does not.
+///
+/// php-src gives `php://output` its own `php_stream_output_ops`, whose write is `php_output_write`
+/// — the sink `echo` uses — while `php://stdout` is a `dup()` of descriptor 1. elephc aliased both
+/// onto descriptor 1, so `ob_start()` never saw a `php://output` write.
+///
+/// RED before the fix (`php -n` 8.5.6 on the left, elephc on the right):
+///   A: `string(15) "CAPTURED-OUTPUT"`  vs  `CAPTURED-OUTPUT` printed, then `string(0) ""`
+///   D: `string(13) "BEFORE-HANDLE"`    vs  `BEFORE-HANDLE`   printed, then `string(0) ""`
+/// `php://stdout` (B) already matched and must keep matching, which is why it is asserted here
+/// rather than in a test of its own: the fix has to move ONE of the two.
+#[test]
+fn test_php_output_is_captured_by_ob_and_php_stdout_is_not() {
+    let out = compile_and_run(
+        r#"<?php
+ob_start();
+$o = fopen("php://output", "w");
+fwrite($o, "CAPTURED");
+fclose($o);
+echo "[out=" . ob_get_clean() . "]";
+
+ob_start();
+$s = fopen("php://stdout", "w");
+fwrite($s, "DIRECT");
+fclose($s);
+echo "[std=" . ob_get_clean() . "]";
+"#,
+    );
+    assert_eq!(out, "[out=CAPTURED]DIRECT[std=]");
+}
+
+/// Verifies a `php://output` handle opened BEFORE `ob_start()` is still captured.
+///
+/// The sink is a property of the stream, not of the moment it was opened, so php captures a
+/// handle that predates the buffer. Measured: `string(13) "BEFORE-HANDLE"`. A fix that only
+/// consulted the buffer depth at open time would pass the test above and fail this one.
+#[test]
+fn test_php_output_handle_opened_before_ob_start_is_still_captured() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://output", "w");
+ob_start();
+fwrite($h, "BEFORE-HANDLE");
+echo "[" . ob_get_clean() . "]";
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "[BEFORE-HANDLE]");
+}
+
+/// Verifies php never gates a write on a DESCRIPTOR-backed `php://` target's mode string.
+///
+/// php-src's `_php_stream_write` refuses only when the stream's ops have no write function; the
+/// mode is never read back. So `fopen("php://stdout","r")` writes, and so does `php://fd/1`
+/// opened `"rb"`. elephc's read-only gate refused both.
+///
+/// RED before the fix: `php -n` 8.5.6 answers `2` for every line below; elephc answered
+/// `false` for the two `r`-flavoured opens and printed nothing for them.
+///
+/// The in-memory targets deliberately keep the gate — php builds `php://memory` read-only when
+/// the mode names none of `w`, `a`, `+` — and the last two lines pin that they still do.
+#[test]
+fn test_read_mode_does_not_gate_writes_to_descriptor_backed_php_targets() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["r", "rb", "w"] as $m) {
+    $h = fopen("php://stdout", $m);
+    echo "[", var_export(fwrite($h, "S"), true), "]";
+    fclose($h);
+}
+foreach (["r", "rb"] as $m) {
+    $h = fopen("php://fd/1", $m);
+    echo "[", var_export(fwrite($h, "F"), true), "]";
+    fclose($h);
+}
+$mem = fopen("php://memory", "r");
+echo "[", var_export(fwrite($mem, "M"), true), "]";
+fclose($mem);
+$t = fopen("php://temp", "rb");
+echo "[", var_export(fwrite($t, "T"), true), "]";
+fclose($t);
+"#,
+    );
+    assert_eq!(out, "[S1][S1][S1][F1][F1][false][false]");
 }
 
 /// Verifies compiled PHP output for fopen php stream yields resource.
