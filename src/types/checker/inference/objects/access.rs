@@ -579,9 +579,9 @@ impl Checker {
 
     /// Infers the type of `$this` inside a class method.
     ///
-    /// Errors if called from a static method or outside a class context.
+    /// Errors for a direct static-method use or outside an object-capable closure context.
     /// Returns the flow-narrowed receiver type when an `instanceof` guard proves one, otherwise
-    /// `PhpType::Object(current_class)` for valid contexts.
+    /// a concrete current class or a gradual receiver for closures that may be bound later.
     pub(crate) fn infer_this_type(
         &mut self,
         expr: &Expr,
@@ -591,10 +591,16 @@ impl Checker {
             return Ok(narrowed.clone());
         }
         if self.current_method_is_static {
-            return Err(CompileError::new(
-                expr.span,
-                "Cannot use $this inside a static method",
-            ));
+            if self.closure_depth == 0 {
+                return Err(CompileError::new(
+                    expr.span,
+                    "Cannot use $this inside a static method",
+                ));
+            }
+            // A non-static closure created by a static method can receive `$this`
+            // later through `Closure::bind`, `bindTo`, or `call`. Its eventual
+            // receiver class is unrelated to the lexical class.
+            return Ok(PhpType::Mixed);
         }
         if let Some(class_name) = &self.current_class {
             Ok(PhpType::Object(class_name.clone()))

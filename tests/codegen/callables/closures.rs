@@ -1420,6 +1420,31 @@ echo $f->call(new Greeter(), "?");
     assert_eq!(out, "Hi Ada!|Hi Ada?");
 }
 
+/// Verifies a non-static closure created in a static method can receive `$this` when bound later.
+#[test]
+fn test_static_method_returns_bindable_closure_using_this() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticClosureFactory {
+    public static function make(): Closure {
+        return function(string $suffix): string { return $this->label . $suffix; };
+    }
+}
+
+class StaticClosureReceiver {
+    public string $label = "bound";
+}
+
+$closure = StaticClosureFactory::make();
+$bound = $closure->bindTo(new StaticClosureReceiver());
+echo $bound("!");
+echo ":";
+echo $closure->call(new StaticClosureReceiver(), "?");
+"#,
+    );
+    assert_eq!(out, "bound!:bound?");
+}
+
 /// Verifies that `isset($this)` inside a `static` closure evaluates to `false`
 /// because static closures have no `$this` binding (issue #359).
 #[test]
