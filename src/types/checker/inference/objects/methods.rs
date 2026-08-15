@@ -230,10 +230,28 @@ impl Checker {
         }
     }
 
+    /// Infers a method return through the interface or concrete-class checker for a resolved
+    /// receiver name.
+    fn infer_method_return_on_class_or_interface(
+        &mut self,
+        class_name: &str,
+        method: &str,
+        args: &[Expr],
+        expr: &Expr,
+        env: &TypeEnv,
+    ) -> Result<PhpType, CompileError> {
+        if self.interfaces.contains_key(class_name) {
+            self.infer_method_call_on_interface_type(class_name, method, args, expr, env)
+        } else {
+            self.infer_method_call_on_class_type(class_name, method, args, expr, env)
+        }
+    }
+
     /// Infers the type of a nullsafe method call expression (`$obj?->method(...)`).
     ///
-    /// Returns `PhpType::Void` for invalid receivers. For valid nullable object
-    /// unions, returns a union of the method's return type with `void`.
+    /// A union with one object class keeps that class available for method validation even when
+    /// gradual scalar members are also present. A nullable receiver adds `Void` to the result;
+    /// non-object runtime members retain PHP's runtime failure behavior.
     pub(crate) fn infer_nullsafe_method_call_type(
         &mut self,
         object: &Expr,
@@ -248,16 +266,39 @@ impl Checker {
         {
             return Ok(PhpType::Mixed);
         }
+        if matches!(&obj_ty, PhpType::Union(_)) {
+            if let Some(class_name) = self.union_single_object_class(&obj_ty) {
+                let return_ty = self.infer_method_return_on_class_or_interface(
+                    &class_name,
+                    method,
+                    args,
+                    expr,
+                    env,
+                )?;
+                let return_ty = self
+                    .tracked_reflection_attribute_new_instance_return_type(object, method)
+                    .unwrap_or(return_ty);
+                let nullable = matches!(&obj_ty, PhpType::Union(members)
+                    if members.iter().any(|member| *member == PhpType::Void));
+                return if nullable {
+                    Ok(self.normalize_union_type(vec![return_ty, PhpType::Void]))
+                } else {
+                    Ok(return_ty)
+                };
+            }
+        }
         let Some((class_name, nullable)) =
             self.nullsafe_object_receiver(&obj_ty, expr, "method call")?
         else {
             return Ok(PhpType::Void);
         };
-        let return_ty = if self.interfaces.contains_key(&class_name) {
-            self.infer_method_call_on_interface_type(&class_name, method, args, expr, env)?
-        } else {
-            self.infer_method_call_on_class_type(&class_name, method, args, expr, env)?
-        };
+        let return_ty = self.infer_method_return_on_class_or_interface(
+            &class_name,
+            method,
+            args,
+            expr,
+            env,
+        )?;
         let return_ty = self
             .tracked_reflection_attribute_new_instance_return_type(object, method)
             .unwrap_or(return_ty);
@@ -718,7 +759,11 @@ impl Checker {
                     .unwrap_or_else(|| sig.return_type.clone()));
             }
         }
-        Ok(PhpType::Int)
+        // PHP permits unresolved nominal types in declarations. When such a receiver reaches a
+        // method call, no declaration is available to determine its return representation, so a
+        // boxed gradual result is the only sound fallback. The historical integer fallback could
+        // corrupt a nullable chain into `int|null` and reject the following member access.
+        Ok(PhpType::Mixed)
     }
 
     /// Returns preserved late-static return syntax for an instance method.

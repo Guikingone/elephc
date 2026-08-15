@@ -116,6 +116,22 @@ pub(super) fn lower_nullable_receiver_method_call(
             method_name,
         );
     }
+    let normalized_class = class_name.trim_start_matches('\\');
+    if !ctx.module.class_infos.contains_key(normalized_class)
+        && !ctx.module.extern_class_infos.contains_key(normalized_class)
+        && !ctx.module.packed_class_infos.contains_key(normalized_class)
+    {
+        let null_label = ctx.next_label("unknown_method_receiver_null");
+        let done_label = ctx.next_label("unknown_method_receiver_done");
+        let receiver_reg = abi::nested_call_reg(ctx.emitter);
+        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, receiver_reg)?;
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", normalized_class));
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        emit_method_call_on_null_fatal(ctx, method_name);
+        ctx.emitter.label(&done_label);
+        return Ok(());
+    }
     if !class_declares_method(ctx, class_name, method_name)
         && !narrowed_interface_candidates(ctx, class_name, method_name, inst.operands.len())?
             .is_empty()

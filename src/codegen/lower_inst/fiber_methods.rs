@@ -452,6 +452,23 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FunctionContext<'_>, inst: &I
     if !nullable {
         return lower_method_call(ctx, inst);
     }
+    let normalized_class = class_name.trim_start_matches('\\');
+    if !ctx.module.class_infos.contains_key(normalized_class)
+        && !ctx.module.interface_infos.contains_key(normalized_class)
+        && !ctx.module.extern_class_infos.contains_key(normalized_class)
+        && !ctx.module.packed_class_infos.contains_key(normalized_class)
+    {
+        let null_label = ctx.next_label("nullsafe_unknown_method_null");
+        let done_label = ctx.next_label("nullsafe_unknown_method_done");
+        let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+        objects::emit_nullable_receiver_object_payload(ctx, object, &null_label, object_reg)?;
+        exceptions::emit_error(ctx, &format!("Class \"{}\" not found", normalized_class));
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        objects::emit_boxed_null(ctx);
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
+    }
     let target = resolve_method_call_target(ctx, &class_name, &method_name, inst.operands.len())?;
     let null_label = ctx.next_label("nullsafe_method_null");
     let done_label = ctx.next_label("nullsafe_method_done");

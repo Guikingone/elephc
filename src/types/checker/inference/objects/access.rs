@@ -368,8 +368,8 @@ impl Checker {
                                 return Err(CompileError::new(
                                     expr.span,
                                     &format!(
-                                        "Nullsafe {} requires a single nullable object type",
-                                        context
+                                        "Nullsafe {} requires a single nullable object type, got {}",
+                                        context, obj_ty
                                     ),
                                 ));
                             }
@@ -378,7 +378,10 @@ impl Checker {
                         _ => {
                             return Err(CompileError::new(
                                 expr.span,
-                                &format!("Nullsafe {} requires an object or null", context),
+                                &format!(
+                                    "Nullsafe {} requires an object or null, got {}",
+                                    context, obj_ty
+                                ),
                             ));
                         }
                     }
@@ -387,7 +390,10 @@ impl Checker {
             }
             _ => Err(CompileError::new(
                 expr.span,
-                &format!("Nullsafe {} requires an object or null", context),
+                &format!(
+                    "Nullsafe {} requires an object or null, got {}",
+                    context, obj_ty
+                ),
             )),
         }
     }
