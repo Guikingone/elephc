@@ -7644,6 +7644,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fseek
         | RuntimeFnId::StreamGetContents
         | RuntimeFnId::StreamGetLine
+        | RuntimeFnId::StreamGetMetaData
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::Settype
         | RuntimeFnId::Getenv
@@ -7924,7 +7925,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamFilterRegister
         | RuntimeFnId::StreamFilterRemove
         | RuntimeFnId::StreamGetFilters
-        | RuntimeFnId::StreamGetMetaData
         | RuntimeFnId::StreamGetTransports
         | RuntimeFnId::StreamGetWrappers
         | RuntimeFnId::StreamIsLocal

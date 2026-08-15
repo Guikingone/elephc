@@ -40,8 +40,11 @@ pub(super) const FLOAT_SCRATCH_BASE: u32 = RT_SCRATCH_END;
 
 /// Size of the float<->string scratch region. The strtod path uses offsets
 /// 0..0x1200 (four 96-limb bignums at +0/+1024/+2048/+3072 and the digit buffer at
-/// +4096); the ftoa/itoa scratch lands at +0x2000..+0x3000. 16 KiB bounds both.
-pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x4000;
+/// +4096); the ftoa/itoa scratch lands at +0x2000..+0x3000; syscall scratch and the
+/// per-fd stream tables sit at +0x3000..+0x4000; the per-fd stream METADATA table
+/// (16 bytes per fd, 256 fds — mode and uri as persisted-string ptr/len pairs
+/// recorded by `fopen`) fills +0x4000..+0x5000.
+pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x5000;
 
 /// First byte reserved for command-runtime fatal diagnostics.
 const COMMAND_DATA_BASE: u32 = FLOAT_SCRATCH_BASE + FLOAT_SCRATCH_SIZE;
@@ -237,6 +240,25 @@ const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
 const WARN_NAN_TO_STRING: &[u8] = b"Warning: unexpected NAN value was coerced to string\n";
 const WARN_NAN_TO_BOOL: &[u8] = b"Warning: unexpected NAN value was coerced to bool\n";
 
+/// `stream_get_meta_data`'s nine keys and its constant values, php-src 8.5.6's own
+/// spellings and ORDER (the array is insertion-ordered, so print_r shows these
+/// exactly as laid out here). `plainfile`/`STDIO` describe a real file; `PHP` with
+/// `MEMORY` or `TEMP` describe the two in-memory streams.
+const META_KEY_TIMED_OUT: &[u8] = b"timed_out";
+const META_KEY_BLOCKED: &[u8] = b"blocked";
+const META_KEY_EOF: &[u8] = b"eof";
+const META_KEY_WRAPPER_TYPE: &[u8] = b"wrapper_type";
+const META_KEY_STREAM_TYPE: &[u8] = b"stream_type";
+const META_KEY_MODE: &[u8] = b"mode";
+const META_KEY_UNREAD_BYTES: &[u8] = b"unread_bytes";
+const META_KEY_SEEKABLE: &[u8] = b"seekable";
+const META_KEY_URI: &[u8] = b"uri";
+const META_WRAPPER_PLAINFILE: &[u8] = b"plainfile";
+const META_STREAM_STDIO: &[u8] = b"STDIO";
+const META_WRAPPER_PHP: &[u8] = b"PHP";
+const META_STREAM_MEMORY: &[u8] = b"MEMORY";
+const META_STREAM_TEMP: &[u8] = b"TEMP";
+
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_DIV_ZERO.len() as u32
@@ -340,7 +362,21 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + DEPRECATED_DEC_EMPTY.len() as u32
     + DEPRECATED_FLOAT_KEY_PREFIX.len() as u32
     + DEPRECATED_FLOAT_KEY_SUFFIX.len() as u32
-    + DEPRECATED_NULL_KEY.len() as u32;
+    + DEPRECATED_NULL_KEY.len() as u32
+    + META_KEY_TIMED_OUT.len() as u32
+    + META_KEY_BLOCKED.len() as u32
+    + META_KEY_EOF.len() as u32
+    + META_KEY_WRAPPER_TYPE.len() as u32
+    + META_KEY_STREAM_TYPE.len() as u32
+    + META_KEY_MODE.len() as u32
+    + META_KEY_UNREAD_BYTES.len() as u32
+    + META_KEY_SEEKABLE.len() as u32
+    + META_KEY_URI.len() as u32
+    + META_WRAPPER_PLAINFILE.len() as u32
+    + META_STREAM_STDIO.len() as u32
+    + META_WRAPPER_PHP.len() as u32
+    + META_STREAM_MEMORY.len() as u32
+    + META_STREAM_TEMP.len() as u32;
 
 /// PHP's `++`/`--` diagnostics, measured on php-src 8.5.6. A bool or null operand
 /// keeps its value and WARNS; a non-numeric string keeps (or perl-increments) its
@@ -818,6 +854,21 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         DEPRECATED_FLOAT_KEY_PREFIX,
         DEPRECATED_FLOAT_KEY_SUFFIX,
         DEPRECATED_NULL_KEY,
+        // Appended LAST for the same reason as every group above it.
+        META_KEY_TIMED_OUT,
+        META_KEY_BLOCKED,
+        META_KEY_EOF,
+        META_KEY_WRAPPER_TYPE,
+        META_KEY_STREAM_TYPE,
+        META_KEY_MODE,
+        META_KEY_UNREAD_BYTES,
+        META_KEY_SEEKABLE,
+        META_KEY_URI,
+        META_WRAPPER_PLAINFILE,
+        META_STREAM_STDIO,
+        META_WRAPPER_PHP,
+        META_STREAM_MEMORY,
+        META_STREAM_TEMP,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -885,6 +936,10 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     // The boxed-key getter calls those two deprecations, so it is emitted with them.
     wm.add_raw_func(super::arrays::RT_STR_CANONICAL_INT);
     wm.add_raw_func(&super::arrays::rt_array_get_mixed_index());
+    // stream_get_meta_data builds its hash from the nine keys and four constant
+    // values above, so it is emitted here where their offsets are known — like the
+    // boxed-key getter, not in the file runtime a partial test module may emit alone.
+    super::files::emit_stream_meta_runtime(wm, &warning_offsets[69..83]);
     emit_arithmetic_coercion_runtime(
         wm,
         &warning_offsets[55..57],

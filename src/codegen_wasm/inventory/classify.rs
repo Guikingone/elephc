@@ -219,6 +219,9 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         // site refuses today at the result-storage shape check. It lights up the moment
         // the registry contract widens — no wasm-side change needed then.
         | RuntimeFnId::StreamGetLine
+        // `stream_get_meta_data` builds php's nine-key array from the per-fd record
+        // `fopen` writes (mode, uri) plus the live eof flag and a seekability probe.
+        | RuntimeFnId::StreamGetMetaData
         | RuntimeFnId::StreamCopyToStream
         // Not a file, but the same WASI forwarding through the same contract table:
         // `getenv` reads `environ_get` fresh on every call and answers `string|false`.

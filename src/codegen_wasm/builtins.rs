@@ -3487,6 +3487,12 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
         // state `environ_get` serves. Answers `string|false`, so the result is a boxed
         // cell; the registry's single form always carries the one Str operand.
         RuntimeFnId::Getenv => ("$__rt_getenv", &[IrType::Str], STREAM),
+        // Answers php's nine-key metadata array, boxed as a hash-tagged cell.
+        RuntimeFnId::StreamGetMetaData => (
+            "$__rt_stream_get_meta_data",
+            &[STREAM],
+            STREAM,
+        ),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3600,7 +3606,12 @@ fn file_builtin_shape_issue(
             ));
         }
     }
-    if call.result_type != file.result {
+    // `stream_get_meta_data` always answers a hash; a site the checker NARROWED to raw
+    // hash storage is served by the lowering's unbox adaptation, so both storages pass.
+    // Keyed on the helper symbol because this validator does not carry the target id.
+    let narrowed_meta_hash = file.helper == "$__rt_stream_get_meta_data"
+        && call.result_type == IrType::Heap(IrHeapKind::Hash);
+    if call.result_type != file.result && !narrowed_meta_hash {
         return Some(format!(
             "result storage {:?} is not the expected {:?}",
             call.result_type, file.result
@@ -3672,6 +3683,26 @@ fn lower_file_builtin(
         ctx.fb.ins("i32.add", "");
         ctx.fb.ins("i64.const -1", "closed sentinel");
         ctx.fb.ins("i64.store", "mark the handle closed for get_resource_type");
+    }
+    // A site the checker narrowed to RAW hash storage takes the hash out of the fresh
+    // cell: both pointers are i32, so a plain store would VALIDATE while storing the
+    // cell as the hash and corrupting every later read — the unbox is not optional.
+    if target == RuntimeFnId::StreamGetMetaData
+        && inst.result_type == IrType::Heap(IrHeapKind::Hash)
+    {
+        let cell = ctx.fresh_temp(super::wat::ValType::I32);
+        let hash = ctx.fresh_temp(super::wat::ValType::I32);
+        ctx.fb
+            .ins(&format!("local.set {cell}"), "the fresh metadata cell");
+        ctx.fb.ins(&format!("local.get {cell}"), "the metadata cell");
+        ctx.fb.ins("i64.load offset=8", "the hash pointer is the cell's lo word");
+        ctx.fb.ins("i32.wrap_i64", "narrow to the hash pointer");
+        ctx.fb.ins(&format!("local.tee {hash}"), "the hash itself");
+        ctx.fb.ins("call $__rt_incref", "the result owns the hash");
+        ctx.fb
+            .ins(&format!("local.get {cell}"), "the now-redundant cell");
+        ctx.fb.ins("call $__rt_decref_any", "release it (frees its hash ref)");
+        ctx.fb.ins(&format!("local.get {hash}"), "the raw hash result");
     }
     store_result(ctx, inst)
 }
@@ -3822,6 +3853,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Fseek
             | RuntimeFnId::StreamGetContents
             | RuntimeFnId::StreamGetLine
+            | RuntimeFnId::StreamGetMetaData
             | RuntimeFnId::StreamCopyToStream
             | RuntimeFnId::Getenv
             | RuntimeFnId::GetResourceType

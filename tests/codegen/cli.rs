@@ -17454,6 +17454,94 @@ echo $u->name, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `stream_get_meta_data` on wasm32-wasi answers php's nine-key array for
+/// both stream kinds.
+///
+/// The real-file half reads mode/stream_type/seekable/blocked/eof and then flips eof
+/// by reading past the end — the per-fd flag the read-that-finds-nothing sets. The
+/// in-memory half pins the measured php-src 8.5.6 normalization: `php://memory`
+/// opened "r" reports mode "rb" (binary is implicit there), while a real file keeps
+/// its mode exactly as given.
+#[test]
+fn test_cli_wasm_stream_get_meta_data_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_stream_meta");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+file_put_contents("notes.txt", "first\nsecond\n");
+$f = fopen("notes.txt", "r");
+$meta = stream_get_meta_data($f);
+echo $meta["wrapper_type"], " ", $meta["stream_type"], " ", $meta["mode"], " ", $meta["uri"], "\n";
+echo $meta["seekable"] ? "seekable" : "pipe", " ", $meta["blocked"] ? "blocked" : "free", " ", $meta["eof"] ? "eof" : "more", "\n";
+fread($f, 1024);
+fread($f, 1024);
+$meta = stream_get_meta_data($f);
+echo $meta["eof"] ? "eof" : "more", "\n";
+fclose($f);
+unlink("notes.txt");
+$m = fopen("php://memory", "r");
+$md = stream_get_meta_data($m);
+echo $md["wrapper_type"], " ", $md["stream_type"], " ", $md["mode"], " ", $md["uri"], "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile stream_get_meta_data to WASM");
+    assert!(
+        output.status.success(),
+        "stream_get_meta_data failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({
+  version: "preview1",
+  args: ["m"],
+  env: {},
+  preopens: { ".": process.cwd() },
+  returnOnExit: true,
+});
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run stream_get_meta_data under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "plainfile STDIO r notes.txt\nseekable blocked more\neof\nPHP MEMORY rb php://memory\n",
+        "php -n's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `empty()` on wasm32-wasi answers php's exact truthiness negation per type.
 ///
 /// The expected string is `php -n`'s own answer for these ten values, measured on

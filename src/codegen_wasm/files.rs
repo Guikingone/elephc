@@ -34,6 +34,15 @@ const IO_SCRATCH: u32 = 0x3000;
 /// "not at EOF"; `fclose` clears the byte because WASI recycles fd numbers.
 const FD_EOF_FLAGS: u32 = IO_SCRATCH + 0x50;
 
+/// Offset of the per-fd stream-metadata table: 16 bytes per fd, 256 fds.
+///
+/// `stream_get_meta_data` reports the MODE and URI `fopen` was called with, and a
+/// bare WASI fd remembers neither — so `fopen` records them here as persisted-string
+/// (ptr, len) pairs: mode at +0/+4, uri at +8/+12. `fclose` releases both strings
+/// and zeroes the record, because WASI recycles fd numbers. A never-recorded fd
+/// (a stream this runtime did not open) reads as two empty strings.
+const FD_STREAM_META: u32 = 0x4000;
+
 /// Adds the file-I/O runtime to `wm`. Requires the WASI path imports and the heap
 /// and string runtimes, all of which the command runtime emits alongside it.
 pub(super) fn emit_file_runtime(wm: &mut WatModule) {
@@ -63,6 +72,8 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&rt_fd_eof_get());
     wm.add_raw_func(&rt_fd_eof_set());
     wm.add_raw_func(&rt_fd_eof_clear());
+    wm.add_raw_func(&rt_fd_meta_record());
+    wm.add_raw_func(&rt_fd_meta_clear());
     wm.add_raw_func(RT_FEOF);
     wm.add_raw_func(RT_FTELL);
     wm.add_raw_func(RT_FSEEK);
@@ -70,6 +81,51 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_STREAM_COPY_TO_STREAM);
     wm.add_raw_func(RT_REWIND);
     wm.add_raw_func(&rt_stream_get_line());
+}
+
+/// `__rt_fd_meta_record`: remembers a real fd's fopen MODE and URI for
+/// `stream_get_meta_data`, releasing any stale record the recycled fd left behind.
+fn rt_fd_meta_record() -> String {
+    format!(
+        r#"(func $__rt_fd_meta_record (param $fd i32) (param $mode i32) (param $mode_len i64) (param $uri i32) (param $uri_len i64)
+  (local $slot i32) (local $p i32) (local $l i64)
+  (if (i32.ge_u (local.get $fd) (i32.const 256))
+    (then (return)))
+  (call $__rt_fd_meta_clear (local.get $fd))
+  (local.set $slot (i32.add (i32.add (global.get $__float_scratch) (i32.const {meta}))
+                            (i32.shl (local.get $fd) (i32.const 4))))
+  (call $__rt_str_persist (local.get $mode) (local.get $mode_len))
+  (local.set $l)
+  (local.set $p)
+  (i32.store (local.get $slot) (local.get $p))
+  (i32.store (i32.add (local.get $slot) (i32.const 4)) (i32.wrap_i64 (local.get $l)))
+  (call $__rt_str_persist (local.get $uri) (local.get $uri_len))
+  (local.set $l)
+  (local.set $p)
+  (i32.store (i32.add (local.get $slot) (i32.const 8)) (local.get $p))
+  (i32.store (i32.add (local.get $slot) (i32.const 12)) (i32.wrap_i64 (local.get $l))))
+"#,
+        meta = FD_STREAM_META
+    )
+}
+
+/// `__rt_fd_meta_clear`: releases a closed fd's recorded mode/uri strings and zeroes
+/// the record — the next `fopen` may be handed the same fd number back.
+fn rt_fd_meta_clear() -> String {
+    format!(
+        r#"(func $__rt_fd_meta_clear (param $fd i32)
+  (local $slot i32)
+  (if (i32.ge_u (local.get $fd) (i32.const 256))
+    (then (return)))
+  (local.set $slot (i32.add (i32.add (global.get $__float_scratch) (i32.const {meta}))
+                            (i32.shl (local.get $fd) (i32.const 4))))
+  (call $__rt_decref_any (i32.load (local.get $slot)))
+  (call $__rt_decref_any (i32.load (i32.add (local.get $slot) (i32.const 8))))
+  (i64.store (local.get $slot) (i64.const 0))
+  (i64.store (i32.add (local.get $slot) (i32.const 8)) (i64.const 0)))
+"#,
+        meta = FD_STREAM_META
+    )
 }
 
 /// `__rt_fd_eof_get`: the EOF flag a real fd's reads have set, 0 for out-of-table fds.
@@ -225,21 +281,33 @@ const MEMSTREAM_FLAG: u32 = 0x4000_0000;
 
 /// `__rt_memstream_new`: opens an empty in-memory stream and answers its handle.
 ///
-/// The descriptor is a fixed 40-byte block whose ADDRESS is the handle, so it never moves; the
+/// The descriptor is a fixed 56-byte block whose ADDRESS is the handle, so it never moves; the
 /// bytes live in a separate block it points at, which is what lets a write grow the stream
 /// without invalidating the handle the script is holding.
 ///
-/// Layout: +0 length, +8 capacity, +16 position, +24 eof, +32 buffer pointer.
+/// Layout: +0 length, +8 capacity, +16 position, +24 eof, +32 buffer pointer, then the
+/// `stream_get_meta_data` record — +40/+44 the fopen MODE as a persisted-string (ptr, len)
+/// and +48/+52 the URI the stream was opened as, both released by `__rt_memstream_close`.
 fn rt_memstream_new() -> String {
     format!(
-        r#"(func $__rt_memstream_new (result i32)
-  (local $d i32)
-  (local.set $d (call $__rt_heap_alloc (i32.const 40)))
+        r#"(func $__rt_memstream_new (param $mode i32) (param $mode_len i64) (param $uri i32) (param $uri_len i64) (result i32)
+  (local $d i32) (local $p i32) (local $l i64)
+  (local.set $d (call $__rt_heap_alloc (i32.const 56)))
   (i64.store (local.get $d) (i64.const 0))                        ;; length
   (i64.store (i32.add (local.get $d) (i32.const 8)) (i64.const 0)) ;; capacity
   (i64.store (i32.add (local.get $d) (i32.const 16)) (i64.const 0)) ;; position
   (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 0)) ;; eof
   (i32.store (i32.add (local.get $d) (i32.const 32)) (i32.const 0)) ;; no buffer yet
+  (call $__rt_str_persist (local.get $mode) (local.get $mode_len))
+  (local.set $l)
+  (local.set $p)
+  (i32.store (i32.add (local.get $d) (i32.const 40)) (local.get $p))               ;; mode ptr
+  (i32.store (i32.add (local.get $d) (i32.const 44)) (i32.wrap_i64 (local.get $l))) ;; mode len
+  (call $__rt_str_persist (local.get $uri) (local.get $uri_len))
+  (local.set $l)
+  (local.set $p)
+  (i32.store (i32.add (local.get $d) (i32.const 48)) (local.get $p))               ;; uri ptr
+  (i32.store (i32.add (local.get $d) (i32.const 52)) (i32.wrap_i64 (local.get $l))) ;; uri len
   (i32.or (local.get $d) (i32.const {flag})))
 "#,
         flag = MEMSTREAM_FLAG
@@ -303,13 +371,16 @@ const RT_MEMSTREAM_EOF: &str = r#"(func $__rt_memstream_eof (param $h i32) (resu
   (i64.load (i32.add (i32.and (local.get $h) (i32.const 1073741823)) (i32.const 24))))
 "#;
 
-/// `__rt_memstream_close`: frees the buffer and the descriptor, answering PHP's true.
+/// `__rt_memstream_close`: frees the buffer, the metadata strings, and the
+/// descriptor, answering PHP's true.
 const RT_MEMSTREAM_CLOSE: &str = r#"(func $__rt_memstream_close (param $h i32) (result i64)
   (local $d i32) (local $buf i32)
   (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
   (local.set $buf (i32.load (i32.add (local.get $d) (i32.const 32))))
   (if (local.get $buf)
     (then (call $__rt_heap_free (local.get $buf))))
+  (call $__rt_decref_any (i32.load (i32.add (local.get $d) (i32.const 40))))  ;; mode string (null-safe)
+  (call $__rt_decref_any (i32.load (i32.add (local.get $d) (i32.const 48))))  ;; uri string (null-safe)
   (call $__rt_heap_free (local.get $d))
   (i64.const 1))
 "#;
@@ -514,13 +585,19 @@ fn rt_fopen() -> String {
   (local $writable i32)
   (local.set $first (call $__rt_std_stream_fd (local.get $path) (local.get $path_len)))
   (if (i32.ge_s (local.get $first) (i32.const 0))                ;; a standard stream needs no path
-    (then (return (call $__rt_mixed_from_value (i64.const 9)
-      (i64.extend_i32_u (local.get $first)) (i64.const 0)))))
+    (then
+      (call $__rt_fd_meta_record (local.get $first)
+        (local.get $mode) (local.get $mode_len)
+        (local.get $path) (local.get $path_len))
+      (return (call $__rt_mixed_from_value (i64.const 9)
+        (i64.extend_i32_u (local.get $first)) (i64.const 0)))))
   ;; `php://memory` and `php://temp` have no host file behind them at all, so they are opened
   ;; before the preopen probe: they work with no filesystem authority whatsoever.
   (if (call $__rt_is_memstream_path (local.get $path) (local.get $path_len))
     (then (return (call $__rt_mixed_from_value (i64.const 9)
-      (i64.extend_i32_u (call $__rt_memstream_new)) (i64.const 0)))))
+      (i64.extend_i32_u (call $__rt_memstream_new
+        (local.get $mode) (local.get $mode_len)
+        (local.get $path) (local.get $path_len))) (i64.const 0)))))
   (local.set $first (i32.const 0))
   (local.set $dirfd (call $__rt_wasi_dirfd))
   (if (i32.lt_s (local.get $dirfd) (i32.const 0))                ;; no preopen -> no filesystem
@@ -572,6 +649,10 @@ fn rt_fopen() -> String {
         (i32.add (global.get $__float_scratch) (i32.const {opened})))
       (i32.const 0))
     (then (return (call $__rt_fopen_failed (local.get $warn)))))
+  (call $__rt_fd_meta_record
+    (i32.load (i32.add (global.get $__float_scratch) (i32.const {opened})))
+    (local.get $mode) (local.get $mode_len)
+    (local.get $path) (local.get $path_len))
   (call $__rt_mixed_from_value (i64.const 9)                      ;; tag 9 = PHP resource
     (i64.extend_i32_u (i32.load (i32.add (global.get $__float_scratch) (i32.const {opened}))))
     (i64.const 0)))
@@ -800,6 +881,7 @@ fn rt_fclose() -> String {
   (if (i32.and (local.get $fd) (i32.const 1073741824))
     (then (return (call $__rt_memstream_close (local.get $fd)))))
   (call $__rt_fd_eof_clear (local.get $fd))                       ;; the next fopen may reuse this fd number
+  (call $__rt_fd_meta_clear (local.get $fd))                      ;; and must not inherit this stream's mode/uri
   (if (i32.lt_s (local.get $fd) (i32.const 3))                    ;; stdin/stdout/stderr survive
     (then (return (i64.const 1))))
   (if (i32.ne (call $wasi_fd_close (local.get $fd)) (i32.const 0))
@@ -959,6 +1041,153 @@ fn rt_file_put_contents() -> String {
 "#,
         mode = IO_SCRATCH + 0x30
     )
+}
+
+/// Emits `__rt_stream_get_meta_data`, whose nine keys and four constant values live in
+/// the command data region — which is why it is emitted from the failure runtime's
+/// tail, where their offsets are known, and not from `emit_file_runtime`.
+///
+/// `offsets` is the 14-entry (offset, len) slice laid out by `emit_failure_runtime`:
+/// the nine keys in php's own insertion order (timed_out, blocked, eof, wrapper_type,
+/// stream_type, mode, unread_bytes, seekable, uri) then plainfile, STDIO, PHP, MEMORY,
+/// TEMP.
+///
+/// Measured on php-src 8.5.6:
+///   * a real file answers wrapper_type "plainfile" / stream_type "STDIO", the MODE
+///     exactly as `fopen` received it ("rb" stays "rb"), and the URI as given;
+///   * `php://memory` and `php://temp` answer "PHP" with "MEMORY"/"TEMP", and their
+///     mode is NORMALIZED to binary — "r" reports "rb", "w+" reports "w+b";
+///   * `blocked` is true and `timed_out` false for both; `unread_bytes` is 0;
+///   * `seekable` is asked of the fd itself here — a zero-length SEEK_CUR succeeds
+///     only on a seekable fd, so pipes and ttys answer false the way php does.
+///
+/// A stream this runtime never recorded (a bare std fd) reads as two empty strings
+/// for mode/uri rather than fabricated values.
+pub(super) fn emit_stream_meta_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    let [k_to, k_bl, k_eof, k_wt, k_st, k_mode, k_ub, k_seek, k_uri, v_plain, v_stdio, v_php, v_mem, v_temp] =
+        offsets
+    else {
+        unreachable!("emit_failure_runtime hands exactly the fourteen meta fragments");
+    };
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_stream_get_meta_data (param $h i32) (result i32)
+  (local $hash i32) (local $d i32) (local $slot i32) (local $eof i64)
+  (local $mode_p i32) (local $mode_l i64) (local $uri_p i32) (local $uri_l i64)
+  (local $wrap_p i32) (local $wrap_l i64) (local $st_p i32) (local $st_l i64)
+  (local $seek i64) (local $mb i32) (local $i i64) (local $hasb i32) (local $out i32)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (if (i32.and (local.get $h) (i32.const {flag}))
+    (then
+      ;; In-memory stream: the descriptor carries everything.
+      (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+      (local.set $eof (i64.extend_i32_u
+        (i64.ne (i64.load (i32.add (local.get $d) (i32.const 24))) (i64.const 0))))
+      (local.set $mode_p (i32.load (i32.add (local.get $d) (i32.const 40))))
+      (local.set $mode_l (i64.extend_i32_u (i32.load (i32.add (local.get $d) (i32.const 44)))))
+      (local.set $uri_p (i32.load (i32.add (local.get $d) (i32.const 48))))
+      (local.set $uri_l (i64.extend_i32_u (i32.load (i32.add (local.get $d) (i32.const 52)))))
+      (local.set $wrap_p (i32.const {php_p}))
+      (local.set $wrap_l (i64.const {php_l}))
+      ;; The two memstream uris differ in LENGTH: "php://temp" is 10, "php://memory" 12.
+      (if (i64.eq (local.get $uri_l) (i64.const 10))
+        (then
+          (local.set $st_p (i32.const {temp_p}))
+          (local.set $st_l (i64.const {temp_l})))
+        (else
+          (local.set $st_p (i32.const {mem_p}))
+          (local.set $st_l (i64.const {mem_l}))))
+      (local.set $seek (i64.const 1))
+      ;; php reports a memory stream's mode in BINARY: append 'b' when absent.
+      (local.set $hasb (i32.const 0))
+      (local.set $i (i64.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i64.ge_u (local.get $i) (local.get $mode_l)))
+        (if (i32.eq (i32.load8_u (i32.add (local.get $mode_p) (i32.wrap_i64 (local.get $i)))) (i32.const 98))
+          (then
+            (local.set $hasb (i32.const 1))
+            (br $scanned)))
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))
+        (br $scan)))
+      (if (i32.eqz (local.get $hasb))
+        (then
+          (local.set $mb (call $__rt_heap_alloc (i32.add (i32.wrap_i64 (local.get $mode_l)) (i32.const 1))))
+          (local.set $i (i64.const 0))
+          (block $copied (loop $copy
+            (br_if $copied (i64.ge_u (local.get $i) (local.get $mode_l)))
+            (i32.store8
+              (i32.add (local.get $mb) (i32.wrap_i64 (local.get $i)))
+              (i32.load8_u (i32.add (local.get $mode_p) (i32.wrap_i64 (local.get $i)))))
+            (local.set $i (i64.add (local.get $i) (i64.const 1)))
+            (br $copy)))
+          (i32.store8 (i32.add (local.get $mb) (i32.wrap_i64 (local.get $mode_l))) (i32.const 98))
+          (local.set $mode_p (local.get $mb))
+          (local.set $mode_l (i64.add (local.get $mode_l) (i64.const 1))))))
+    (else
+      ;; Real fd: the fopen record plus the live eof flag and a seekability probe.
+      (local.set $slot (i32.add (i32.add (global.get $__float_scratch) (i32.const {meta}))
+                                (i32.shl (local.get $h) (i32.const 4))))
+      (if (i32.ge_u (local.get $h) (i32.const 256))
+        (then (local.set $slot (i32.add (global.get $__float_scratch) (i32.const {meta})))))  ;; out-of-table fd reads slot 0 (never recorded)
+      (local.set $mode_p (i32.load (local.get $slot)))
+      (local.set $mode_l (i64.extend_i32_u (i32.load (i32.add (local.get $slot) (i32.const 4)))))
+      (local.set $uri_p (i32.load (i32.add (local.get $slot) (i32.const 8))))
+      (local.set $uri_l (i64.extend_i32_u (i32.load (i32.add (local.get $slot) (i32.const 12)))))
+      (local.set $eof (call $__rt_fd_eof_get (local.get $h)))
+      (local.set $wrap_p (i32.const {plain_p}))
+      (local.set $wrap_l (i64.const {plain_l}))
+      (local.set $st_p (i32.const {stdio_p}))
+      (local.set $st_l (i64.const {stdio_l}))
+      (local.set $seek (i64.extend_i32_u (i32.eqz (call $wasi_fd_seek
+        (local.get $h) (i64.const 0) (i32.const 1)
+        (i32.add (global.get $__float_scratch) (i32.const 12352))))))))
+  (local.set $hash (call $__rt_hash_new (i64.const 32) (i64.const 7)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_to_p}) (i64.const {k_to_l}) (i64.const 0) (i64.const 0) (i64.const 3)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_bl_p}) (i64.const {k_bl_l}) (i64.const 1) (i64.const 0) (i64.const 3)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_eof_p}) (i64.const {k_eof_l}) (local.get $eof) (i64.const 0) (i64.const 3)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_wt_p}) (i64.const {k_wt_l})
+    (i64.extend_i32_u (local.get $wrap_p)) (local.get $wrap_l) (i64.const 1)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_st_p}) (i64.const {k_st_l})
+    (i64.extend_i32_u (local.get $st_p)) (local.get $st_l) (i64.const 1)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_mode_p}) (i64.const {k_mode_l})
+    (i64.extend_i32_u (local.get $mode_p)) (local.get $mode_l) (i64.const 1)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_ub_p}) (i64.const {k_ub_l}) (i64.const 0) (i64.const 0) (i64.const 0)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_seek_p}) (i64.const {k_seek_l}) (local.get $seek) (i64.const 0) (i64.const 3)))
+  (local.set $hash (call $__rt_hash_set (local.get $hash)
+    (i64.const {k_uri_p}) (i64.const {k_uri_l})
+    (i64.extend_i32_u (local.get $uri_p)) (local.get $uri_l) (i64.const 1)))
+  (if (local.get $mb)
+    (then (call $__rt_heap_free (local.get $mb))))                ;; hash_set copied the normalized mode
+  (local.set $out (call $__rt_mixed_from_value (i64.const 5)
+    (i64.extend_i32_u (local.get $hash)) (i64.const 0)))
+  (call $__rt_decref_any (local.get $hash))                       ;; the cell is the hash's sole owner
+  (local.get $out))
+"#,
+        flag = MEMSTREAM_FLAG,
+        meta = FD_STREAM_META,
+        php_p = v_php.0, php_l = v_php.1,
+        temp_p = v_temp.0, temp_l = v_temp.1,
+        mem_p = v_mem.0, mem_l = v_mem.1,
+        plain_p = v_plain.0, plain_l = v_plain.1,
+        stdio_p = v_stdio.0, stdio_l = v_stdio.1,
+        k_to_p = k_to.0, k_to_l = k_to.1,
+        k_bl_p = k_bl.0, k_bl_l = k_bl.1,
+        k_eof_p = k_eof.0, k_eof_l = k_eof.1,
+        k_wt_p = k_wt.0, k_wt_l = k_wt.1,
+        k_st_p = k_st.0, k_st_l = k_st.1,
+        k_mode_p = k_mode.0, k_mode_l = k_mode.1,
+        k_ub_p = k_ub.0, k_ub_l = k_ub.1,
+        k_seek_p = k_seek.0, k_seek_l = k_seek.1,
+        k_uri_p = k_uri.0, k_uri_l = k_uri.1,
+    ));
 }
 
 /// `__rt_stream_get_line`: PHP's `stream_get_line`, boxed as `string|false`.
