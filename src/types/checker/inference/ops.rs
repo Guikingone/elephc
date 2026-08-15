@@ -1353,13 +1353,10 @@ fn is_numeric_operand_type(checker: &Checker, ty: &PhpType) -> bool {
             .all(|member| is_numeric_operand_type(checker, member)))
 }
 
-/// Returns `true` if `ty` is a valid operand type for bitwise binary operators.
-/// Accepts `Int`, `Bool`, `Void`, `Mixed`, or a union with mixed integer dispatch.
+/// Returns whether an operand can be coerced to an integer for bitwise and shift operators.
+/// PHP truncates floats for these operations; gradual numeric unions use the existing boxed cast.
 fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
-    matches!(
-        ty,
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void | PhpType::Mixed
-    ) || checker.is_union_with_mixed_int_dispatch(ty)
+    is_numeric_operand_type(checker, ty)
 }
 
 /// Returns whether a type can participate in PHP's value-dependent bitwise operators.

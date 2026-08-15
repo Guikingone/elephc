@@ -1023,6 +1023,22 @@ gradual_bits('3', 1);
     );
 }
 
+/// Verifies bitwise and shift operators apply PHP's integer coercion to concrete floats and
+/// boxed numeric unions.
+#[test]
+fn test_runtime_float_bitwise_and_shift_operators() {
+    let out = compile_and_run(
+        r#"<?php
+function numericUnion(bool $fractional): int|float {
+    return $fractional ? 8.9 : 3;
+}
+echo (3.9 & 1), ":", (8.9 >> 1), ":", (1.9 << 2), "|";
+echo (numericUnion(true) >> 1), ":", (numericUnion(false) & 1);
+"#,
+    );
+    assert_eq!(out, "1:4:4|4:1");
+}
+
 /// Verifies PHP byte-string offset assignment uses copy-on-write, relative negative offsets,
 /// positive-offset space extension, numeric string offsets, and the first replacement byte.
 #[test]
