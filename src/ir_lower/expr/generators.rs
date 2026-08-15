@@ -31,7 +31,14 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext<'_, '_>, key: Option<&Expr>,
 pub(super) fn lower_yield_from(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
-    if matches!(source_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable)
+    if matches!(
+        source_ty,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Iterable
+            | PhpType::Mixed
+            | PhpType::Union(_)
+    )
         || matches!(&source_ty, PhpType::Object(name) if name.trim_start_matches('\\') != "Generator")
     {
         return lower_yield_from_array(ctx, value, expr);

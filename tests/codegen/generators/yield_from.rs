@@ -394,3 +394,16 @@ foreach (relay(new YieldFromAggregate()) as $key => $value) {
     );
     assert_eq!(out, "array=2;null|object=3;null");
 }
+
+/// Verifies a source crossing a `mixed` boundary uses dynamic iterable dispatch.
+#[test]
+fn test_generator_yield_from_mixed_array_source() {
+    let out = compile_and_run(
+        r#"<?php
+function dynamic_rows(): mixed { return ["first" => 7, "second" => 8]; }
+function relay_dynamic(): Generator { yield from dynamic_rows(); }
+foreach (relay_dynamic() as $key => $value) { echo $key, "=", $value, ";"; }
+"#,
+    );
+    assert_eq!(out, "first=7;second=8;");
+}

@@ -368,9 +368,7 @@ impl Checker {
                 // ordinary iterator protocol. A concrete Generator keeps its
                 // dedicated delegation path so sent values and its return value are
                 // forwarded exactly as PHP requires.
-                let supported = matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable)
-                    || self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
-                    || self.type_accepts(&PhpType::Object("Traversable".to_string()), &inner_ty);
+                let supported = self.yield_from_source_supported(&inner_ty);
                 if !supported {
                     return Err(CompileError::new(
                         inner.span,
@@ -386,6 +384,22 @@ impl Checker {
                 unreachable!("MagicConstant must be lowered before type inference")
             }
             _ => unreachable!("basic expression routed to call/object inference"),
+        }
+    }
+
+    /// Returns whether a static or gradual value can carry a valid `yield from` source.
+    fn yield_from_source_supported(&self, ty: &PhpType) -> bool {
+        match ty {
+            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Mixed => {
+                true
+            }
+            PhpType::Union(members) => members
+                .iter()
+                .any(|member| self.yield_from_source_supported(member)),
+            _ => {
+                self.type_accepts(&PhpType::Object("Generator".to_string()), ty)
+                    || self.type_accepts(&PhpType::Object("Traversable".to_string()), ty)
+            }
         }
     }
 }
