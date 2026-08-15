@@ -75,7 +75,10 @@ impl Checker {
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
         let class_name = self.resolve_static_receiver_class(receiver, expr.span)?;
-        if !self.scoped_constant_receiver_is_known(&class_name) && self.eval_barrier_active {
+        if !self.scoped_constant_receiver_is_known(&class_name) {
+            // PHP resolves classes lazily when this expression executes. Keep an unknown
+            // receiver gradual so optional integrations in unexecuted paths remain compilable;
+            // the EIR backend emits the runtime class-not-found fatal for an executed read.
             return Ok(PhpType::Mixed);
         }
         // First: enum case access (`Color::Red`). Enums shadow classes for

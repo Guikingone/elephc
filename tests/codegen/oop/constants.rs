@@ -156,6 +156,32 @@ if (probe() || !defined('FeatureFlags::MISSING')) {
     assert_eq!(out, "PY");
 }
 
+/// Verifies a scoped constant on an unavailable class remains legal in a runtime-skipped branch,
+/// matching PHP's lazy class resolution instead of rejecting the whole source during checking.
+#[test]
+fn test_unknown_class_constant_in_skipped_branch_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+if ($argc < 0) {
+    echo OptionalConstantProvider::VALUE;
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies executing the same unresolved scoped constant terminates through a class-not-found
+/// runtime fatal rather than producing an undefined backend feature diagnostic.
+#[test]
+fn test_unknown_class_constant_access_fails_at_runtime() {
+    let err = compile_and_run_expect_failure("<?php echo OptionalConstantProvider::VALUE;");
+    assert!(
+        err.contains("Class \"OptionalConstantProvider\" not found"),
+        "unexpected stderr: {err:?}",
+    );
+}
+
 /// Verifies class constant expression can reference self constant.
 #[test]
 fn test_class_constant_expression_can_reference_self_constant() {
