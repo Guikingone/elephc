@@ -409,6 +409,39 @@ fn emit_default_stream_context(
     Ok(())
 }
 
+/// php-src's `E_DEPRECATED` text for the two-argument `stream_context_set_option()` form.
+///
+/// The notice fires on the ARITY, not on the argument's type: `stream_context_set_option($c,
+/// $array, null)` is a THREE-argument call and stays quiet, which MEASURED on `php -n` 8.5.6.
+/// It was added in php 8.3, so it is version-gated like the rest of the diagnostic surface.
+const STREAM_CONTEXT_SET_OPTION_TWO_ARG_DEPRECATION: &str =
+    "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
+     use stream_context_set_options() instead\n";
+
+/// php-src's `ValueError` when a STRING wrapper reaches the three-argument form.
+///
+/// The stub's `mixed $value` carries no default at all — it is `UNKNOWN`, not `null` — so an
+/// absent fourth argument is a refusal rather than "pass null".
+const STREAM_CONTEXT_SET_OPTION_VALUE_REQUIRED: &str =
+    "stream_context_set_option(): Argument #4 ($value) must be provided when argument #2 \
+     ($wrapper_or_options) is a string";
+
+/// php-src's `ValueError` when an ARRAY wrapper is paired with a fourth `$value` argument.
+const STREAM_CONTEXT_SET_OPTION_VALUE_FORBIDDEN: &str =
+    "stream_context_set_option(): Argument #4 ($value) cannot be provided when argument #2 \
+     ($wrapper_or_options) is an array";
+
+/// php-src's `ValueError` when an ARRAY wrapper is paired with a non-null `$option_name`.
+const STREAM_CONTEXT_SET_OPTION_NAME_MUST_BE_NULL: &str =
+    "stream_context_set_option(): Argument #3 ($option_name) must be null when argument #2 \
+     ($wrapper_or_options) is an array";
+
+/// Reports whether an operand's declared type is an array, the shape php's `array|string`
+/// `$wrapper_or_options` takes when the caller means "merge this whole options map".
+fn stream_context_wrapper_is_array(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
 /// Lowers `stream_context_set_option(context, options)` and the four-argument form.
 pub(crate) fn lower_stream_context_set_option(
     ctx: &mut FunctionContext<'_>,
@@ -419,6 +452,18 @@ pub(crate) fn lower_stream_context_set_option(
         2 => {
             let context = expect_operand(inst, 0)?;
             let options = expect_operand(inst, 1)?;
+            emit_stream_context_set_option_two_arg_deprecation(ctx);
+            // php prints the deprecation from the ARITY and only then judges the shape, so a
+            // two-argument call with a STRING wrapper gets the notice AND the refusal. Only a
+            // DECLARED string takes that branch: a `Mixed` operand is almost always an options
+            // array behind a variable, and guessing "string" there would refuse a legal call.
+            if matches!(ctx.raw_value_php_type(options)?, PhpType::Str) {
+                super::super::exceptions::emit_value_error(
+                    ctx,
+                    STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL,
+                );
+                return store_if_result(ctx, inst);
+            }
             clear_stream_context_options(ctx);
             restore_stream_context_from_handle(ctx, context)?;
             retain_stream_context_options_scratch(ctx);
@@ -426,7 +471,34 @@ pub(crate) fn lower_stream_context_set_option(
             update_stream_context_state_from_handle(ctx, context)?;
             emit_bool_result(ctx, true);
         }
+        3 => lower_stream_context_set_option_3(ctx, inst)?,
         4 => {
+            let wrapper = expect_operand(inst, 1)?;
+            // php refuses an array wrapper here outright, so the refusal replaces the store —
+            // this used to be a compile-time "unsupported EIR backend feature" instead.
+            if stream_context_wrapper_is_array(&ctx.raw_value_php_type(wrapper)?) {
+                super::super::exceptions::emit_value_error(
+                    ctx,
+                    STREAM_CONTEXT_SET_OPTION_VALUE_FORBIDDEN,
+                );
+                return store_if_result(ctx, inst);
+            }
+            // A string wrapper still needs a real option name: php refuses an explicit null
+            // `$option_name` even when the fourth argument IS present. MEASURED — the wording
+            // is the same one the three-argument string form raises.
+            let option_name = expect_operand(inst, 2)?;
+            if !matches!(ctx.raw_value_php_type(option_name)?, PhpType::Str) {
+                let refuse = ctx.next_label("sctx_set_option_4_null_name");
+                let named = ctx.next_label("sctx_set_option_4_named");
+                emit_branch_on_stream_context_option_name_null(ctx, option_name, &refuse)?;
+                abi::emit_jump(ctx.emitter, &named);
+                ctx.emitter.label(&refuse);
+                super::super::exceptions::emit_value_error(
+                    ctx,
+                    STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL,
+                );
+                ctx.emitter.label(&named);
+            }
             let context = expect_operand(inst, 0)?;
             clear_stream_context_options(ctx);
             restore_stream_context_from_handle(ctx, context)?;
@@ -439,6 +511,134 @@ pub(crate) fn lower_stream_context_set_option(
         _ => emit_bool_result(ctx, true),
     }
     store_if_result(ctx, inst)
+}
+
+/// Lowers the three-argument `stream_context_set_option()` form, which php mostly REFUSES.
+///
+/// MEASURED on `php -n` 8.5.6 — three of the four shapes are a `ValueError`, and the fourth is
+/// the two-argument merge spelled with an explicit `null`:
+///
+/// ```text
+/// stream_context_set_option($c, ['http' => [...]], null)  bool(true), and no deprecation
+/// stream_context_set_option($c, ['http' => [...]], 'x')   ValueError: Argument #3 ($option_name) must be null when argument #2 ($wrapper_or_options) is an array
+/// stream_context_set_option($c, 'http', 'header')         ValueError: Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a string
+/// stream_context_set_option($c, 'http', null)             ValueError: Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string
+/// ```
+///
+/// This used to answer a silent `bool(true)` for all four and store nothing, so a caller who
+/// forgot the value read the refusal as a successful write.
+///
+/// The wrapper's DECLARED type picks the family, and a wrapper that is neither — a `Mixed`
+/// local — is resolved by the one thing that does not depend on it: a non-null `$option_name`
+/// is a ValueError for BOTH families, so only the wording is a guess there, and it takes the
+/// string wording. A null `$option_name` behind a `Mixed` wrapper stays on the old permissive
+/// path rather than refusing what may well be the legal array shape.
+fn lower_stream_context_set_option_3(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let wrapper = expect_operand(inst, 1)?;
+    let option_name = expect_operand(inst, 2)?;
+    let wrapper_ty = ctx.raw_value_php_type(wrapper)?;
+    if stream_context_wrapper_is_array(&wrapper_ty) || !matches!(wrapper_ty, PhpType::Str) {
+        // An array wrapper only survives with an explicit null `$option_name`, and then it is
+        // the two-argument merge — WITHOUT the deprecation, which counts arguments.
+        let merge = ctx.next_label("sctx_set_option_3_merge");
+        emit_branch_on_stream_context_option_name_null(ctx, option_name, &merge)?;
+        super::super::exceptions::emit_value_error(
+            ctx,
+            if stream_context_wrapper_is_array(&wrapper_ty) {
+                STREAM_CONTEXT_SET_OPTION_NAME_MUST_BE_NULL
+            } else {
+                STREAM_CONTEXT_SET_OPTION_VALUE_REQUIRED
+            },
+        );
+        ctx.emitter.label(&merge);
+        let context = expect_operand(inst, 0)?;
+        let options = expect_operand(inst, 1)?;
+        clear_stream_context_options(ctx);
+        restore_stream_context_from_handle(ctx, context)?;
+        retain_stream_context_options_scratch(ctx);
+        merge_stream_context_options_into_scratch(ctx, options)?;
+        update_stream_context_state_from_handle(ctx, context)?;
+        emit_bool_result(ctx, true);
+        return Ok(());
+    }
+    let null_name = ctx.next_label("sctx_set_option_3_null_name");
+    emit_branch_on_stream_context_option_name_null(ctx, option_name, &null_name)?;
+    super::super::exceptions::emit_value_error(ctx, STREAM_CONTEXT_SET_OPTION_VALUE_REQUIRED);
+    ctx.emitter.label(&null_name);
+    super::super::exceptions::emit_value_error(ctx, STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL);
+    Ok(())
+}
+
+/// php-src's `ValueError` when a STRING wrapper is paired with a null `$option_name`.
+const STREAM_CONTEXT_SET_OPTION_NAME_CANNOT_BE_NULL: &str =
+    "stream_context_set_option(): Argument #3 ($option_name) cannot be null when argument #2 \
+     ($wrapper_or_options) is a string";
+
+/// Branches to `null_label` when the loaded `$option_name` operand is PHP null.
+///
+/// A declared-`Str` operand can never be null, so the branch is resolved at emit time there
+/// rather than testing a register that cannot hold the sentinel.
+fn emit_branch_on_stream_context_option_name_null(
+    ctx: &mut FunctionContext<'_>,
+    option_name: ValueId,
+    null_label: &str,
+) -> Result<()> {
+    let ty = ctx.raw_value_php_type(option_name)?;
+    if matches!(ty, PhpType::Str) {
+        return Ok(());
+    }
+    if matches!(ty, PhpType::Void | PhpType::Never) {
+        abi::emit_jump(ctx.emitter, null_label);
+        return Ok(());
+    }
+    ctx.load_value_to_result(option_name)?;
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x9",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, scratch, NULL_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scratch));        // is the option name php null?
+            ctx.emitter.instruction(&format!("b.eq {}", null_label));             // a null name selects php's other wording
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, null_label)); // an unboxed null pointer is the same absence
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, scratch));        // is the option name php null?
+            ctx.emitter.instruction(&format!("je {}", null_label));               // a null name selects php's other wording
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg));    // an unboxed null pointer is the same absence
+            ctx.emitter.instruction(&format!("jz {}", null_label));
+        }
+    }
+    Ok(())
+}
+
+/// Emits php 8.3+'s `E_DEPRECATED` notice for the two-argument form.
+fn emit_stream_context_set_option_two_arg_deprecation(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php83 {
+        return;
+    }
+    let (label, len) = ctx
+        .data
+        .add_string(STREAM_CONTEXT_SET_OPTION_TWO_ARG_DEPRECATION.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // stderr, and `@` suppresses it
 }
 
 /// Lowers `stream_context_set_params(context, params)` onto the addressed ContextState.

@@ -12305,6 +12305,82 @@ echo run(2), "\n";
     );
 }
 
+/// Verifies every shape of `stream_context_set_option()` php refuses, plus its 8.3 notice.
+///
+/// The stub's fourth parameter carries NO default — it is `UNKNOWN`, not `null` — and the
+/// second is `array|string`, so the arity alone does not decide: what php accepts depends on
+/// whether `$wrapper_or_options` is an array or a string. MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// ($c, ['http' => [...]])          E_DEPRECATED, then bool(true)
+/// ($c, ['http' => [...]], null)    bool(true), and NO deprecation — the notice counts arguments
+/// ($c, ['http' => [...]], 'x')     ValueError: Argument #3 ($option_name) must be null when argument #2 ($wrapper_or_options) is an array
+/// ($c, 'http')                     E_DEPRECATED, then ValueError: Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', 'header')           ValueError: Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', null)               ValueError: Argument #3 ($option_name) cannot be null when argument #2 ($wrapper_or_options) is a string
+/// ($c, 'http', 'header', 'X: 1')   bool(true)
+/// ```
+///
+/// The three-argument form used to answer a silent `bool(true)` and store nothing, so a caller
+/// who forgot the value read the refusal as a successful write.
+#[test]
+fn test_stream_context_set_option_refuses_phps_invalid_shapes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c1 = stream_context_create();
+try { echo stream_context_set_option($c1, ['http' => ['a' => 1]]) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c2 = stream_context_create();
+try { echo stream_context_set_option($c2, ['http' => ['a' => 1]], null) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c3 = stream_context_create();
+try { echo stream_context_set_option($c3, ['http' => ['a' => 1]], 'x') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c4 = stream_context_create();
+try { echo stream_context_set_option($c4, 'http') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c5 = stream_context_create();
+try { echo stream_context_set_option($c5, 'http', 'header') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c6 = stream_context_create();
+try { echo stream_context_set_option($c6, 'http', null) === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+$c7 = stream_context_create();
+try { echo stream_context_set_option($c7, 'http', 'header', 'X: 1') === true ? "true" : "other", "\n"; }
+catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+echo json_encode(stream_context_get_options($c7)), "\n";
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "true\n",
+            "true\n",
+            "stream_context_set_option(): Argument #3 ($option_name) must be null when \
+             argument #2 ($wrapper_or_options) is an array\n",
+            "stream_context_set_option(): Argument #3 ($option_name) cannot be null when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "stream_context_set_option(): Argument #4 ($value) must be provided when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "stream_context_set_option(): Argument #3 ($option_name) cannot be null when \
+             argument #2 ($wrapper_or_options) is a string\n",
+            "true\n",
+            "{\"http\":{\"header\":\"X: 1\"}}\n",
+        )
+    );
+    assert_eq!(
+        out.stderr,
+        concat!(
+            "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
+             use stream_context_set_options() instead\n",
+            "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
+             use stream_context_set_options() instead\n",
+        ),
+        "the notice fires on the ARITY, so the three-argument array form stays quiet"
+    );
+}
+
 /// Verifies `stream_select()` rejects php-src's two negative timeout components.
 ///
 /// MEASURED on `php -n` 8.5.6 against a live `stream_socket_pair()`:
