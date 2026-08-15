@@ -17,6 +17,28 @@ use crate::errors::EvalParseError;
 use crate::eval_ir::EvalMagicConst;
 use std::num::IntErrorKind;
 
+/// Every word PHP's grammar reserves. A numeric literal butted straight against one of
+/// them ends at the keyword, because PHP's own lexer stops a number at the first
+/// character that cannot continue it and hands the rest to the parser:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1and 2);'  => bool(true)
+/// $ php -n -r 'var_dump(1xor 2);'  => bool(false)
+/// ```
+///
+/// Mirrors `elephc::lexer::literals::numbers::RESERVED_WORDS_AFTER_NUMBER` so a literal
+/// means the same thing compiled ahead of time and evaluated inside `eval()`.
+const RESERVED_WORDS_AFTER_NUMBER: &[&str] = &[
+    "abstract", "and", "array", "as", "break", "callable", "case", "catch", "class", "clone",
+    "const", "continue", "declare", "default", "die", "do", "echo", "else", "elseif", "empty",
+    "enddeclare", "endfor", "endforeach", "endif", "endswitch", "endwhile", "enum", "eval",
+    "exit", "extends", "final", "finally", "fn", "for", "foreach", "function", "global", "goto",
+    "if", "implements", "include", "include_once", "instanceof", "insteadof", "interface",
+    "isset", "list", "match", "namespace", "new", "or", "print", "private", "protected",
+    "public", "readonly", "require", "require_once", "return", "static", "switch", "throw",
+    "trait", "try", "unset", "use", "var", "while", "xor", "yield",
+];
+
 /// Tokenizes a complete source fragment and appends an EOF sentinel.
 pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     Lexer::new(source).tokenize()
@@ -385,13 +407,29 @@ impl<'a> Lexer<'a> {
     /// This is what turns `0o78`, `0xfg`, `0b12`, `1_` and `1__0` into refusals instead
     /// of silently truncating the literal at the first out-of-range character and lexing
     /// the remainder as a separate token.
+    ///
+    /// A following PHP reserved word is the one case that is NOT malformed: PHP's lexer
+    /// stops a number at the first character that cannot continue it, so `1and 2` is the
+    /// expression `1 and 2` and `php -n -r 'var_dump(1and 2);'` prints `bool(true)`.
     fn reject_trailing_alnum(&self) -> Result<(), EvalParseError> {
         match self.peek_char() {
-            Some(ch) if ch.is_ascii_alphanumeric() || ch == '_' => {
+            Some(ch) if (ch.is_ascii_alphanumeric() || ch == '_') && !self.next_word_is_reserved() => {
                 Err(EvalParseError::InvalidNumber)
             }
             _ => Ok(()),
         }
+    }
+
+    /// Returns true when the identifier starting at the cursor is a PHP reserved word, so
+    /// the numeric literal just scanned ends here rather than being refused.
+    fn next_word_is_reserved(&self) -> bool {
+        let word: String = self.source[self.pos..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+            .collect();
+        RESERVED_WORDS_AFTER_NUMBER
+            .iter()
+            .any(|keyword| word.eq_ignore_ascii_case(keyword))
     }
 
     /// Converts `digits` to an `i64`, promoting to a float on positive overflow the way

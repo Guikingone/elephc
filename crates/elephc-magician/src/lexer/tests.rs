@@ -216,6 +216,63 @@ fn misplaced_separator_is_refused() {
     assert_eq!(error("1__0;"), EvalParseError::InvalidNumber);
 }
 
+/// Verifies a numeric literal butted straight against a PHP reserved word ends at the
+/// keyword instead of being refused, so `eval('return 1and 2;')` means what it means in
+/// PHP rather than raising a parse error.
+///
+/// Measured with `php -n` 8.5.6:
+///
+/// ```text
+/// $ php -n -r 'var_dump(1and 2);'                => bool(true)
+/// $ php -n -r 'var_dump(1or 2);'                 => bool(true)
+/// $ php -n -r 'var_dump(1xor 2);'                => bool(false)
+/// $ php -n -r 'var_dump(1instanceof stdClass);'  => bool(false)
+/// $ php -n -r 'var_dump(1.5and 2);'              => bool(true)
+/// $ php -n -r 'var_dump(1e2and 2);'              => bool(true)
+/// $ php -n -r 'var_dump(0b11and 2);'             => bool(true)
+/// $ php -n -r 'var_dump(1_000and 2);'            => bool(true)
+/// ```
+///
+/// Before this test the eval lexer answered `InvalidNumber` for every one of them, in
+/// lockstep with the AOT lexer — the two agreed with each other and diverged from PHP.
+#[test]
+fn numeric_literal_ends_at_a_reserved_word() {
+    let ident = |name: &str| TokenKind::Ident(name.to_string());
+
+    assert_eq!(
+        kinds("1and 2;")[..3],
+        [TokenKind::Int(1), ident("and"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("1or 2;")[..3],
+        [TokenKind::Int(1), ident("or"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("1xor 2;")[..3],
+        [TokenKind::Int(1), ident("xor"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("1instanceof stdClass;")[..3],
+        [TokenKind::Int(1), ident("instanceof"), ident("stdClass")]
+    );
+    assert_eq!(
+        kinds("1.5and 2;")[..3],
+        [TokenKind::Float(1.5), ident("and"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("1e2and 2;")[..3],
+        [TokenKind::Float(100.0), ident("and"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("0b11and 2;")[..3],
+        [TokenKind::Int(3), ident("and"), TokenKind::Int(2)]
+    );
+    assert_eq!(
+        kinds("1_000and 2;")[..3],
+        [TokenKind::Int(1000), ident("and"), TokenKind::Int(2)]
+    );
+}
+
 /// Verifies a double-quoted literal without interpolation stays exactly ONE string token.
 ///
 /// This is the invariant that keeps constant initializers, property defaults, enum
