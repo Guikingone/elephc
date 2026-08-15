@@ -131,3 +131,24 @@ echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
     );
     assert_eq!(out, "stable:unique");
 }
+
+/// Verifies gradual object identity values are runtime-checked and preserve catchable TypeErrors.
+#[test]
+fn test_spl_object_identity_runtime_checks_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class IdentityBox {}
+function object_id(mixed $value): int { return spl_object_id($value); }
+function object_hash(mixed $value): string { return spl_object_hash($value); }
+$box = new IdentityBox();
+echo object_id($box) === object_id($box) ? "stable" : "drift";
+echo ":", object_hash($box) === object_hash($box) ? "stable" : "drift";
+try {
+    object_hash(42);
+} catch (TypeError $error) {
+    echo ":type-error";
+}
+"#,
+    );
+    assert_eq!(out, "stable:stable:type-error");
+}

@@ -21,7 +21,8 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::super::{
-    callables, direct_call_stack_pad_bytes, iterators, materialize_direct_call_args, predicates,
+    callables, direct_call_stack_pad_bytes, exceptions, iterators, materialize_direct_call_args,
+    predicates,
 };
 use super::{expect_operand, store_if_result};
 
@@ -728,15 +729,50 @@ fn iterator_apply_array_items(
 }
 
 /// Loads the single object operand into the canonical integer result register.
+///
+/// Boxed gradual values are unwrapped and checked at runtime so callers retain PHP's catchable
+/// `TypeError` behavior without weakening definite-scalar diagnostics.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.load_value_to_result(value)?;
+    let ty = ctx.value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
     match ty {
         PhpType::Object(_) => Ok(()),
+        PhpType::Mixed => {
+            let object_label = ctx.next_label("spl_object_operand_object");
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // require the boxed value to contain an object
+                    ctx.emitter.instruction(&format!("b.eq {}", object_label)); // preserve PHP's runtime object check
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // require the boxed value to contain an object
+                    ctx.emitter.instruction(&format!("je {}", object_label));   // preserve PHP's runtime object check
+                }
+            }
+            exceptions::emit_type_error(
+                ctx,
+                &format!(
+                    "{}(): Argument #1 ($object) must be of type object",
+                    name
+                ),
+            );
+            ctx.emitter.label(&object_label);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, x1");                      // expose the unboxed object pointer to the runtime helper
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rax, rdi");                    // expose the unboxed object pointer to the runtime helper
+                }
+            }
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,
