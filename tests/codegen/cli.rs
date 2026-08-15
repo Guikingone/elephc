@@ -17467,6 +17467,102 @@ echo $u->name, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies RFC 2397 `data:` URIs decode into ordinary readable streams on wasm32-wasi.
+///
+/// Every line is `php -n`'s own answer, measured on php-src 8.5.6 — including the four that
+/// FAIL, which is where the rules actually live: `;BASE64` is not a base64 marker (php compares
+/// that literal case-sensitively) AND not a valid parameter, because every `;` parameter must
+/// carry an `=` — `;charset=utf-8` opens, `;foo` does not. Base64 here is STRICT, unlike the
+/// `base64_decode` builtin: whitespace and padding are skipped but a stray byte fails the open.
+/// A plain payload is `urldecode`, so `+` is a space and a `%` without two hex digits is literal.
+#[test]
+fn test_cli_wasm_data_uris_decode_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_data_uri");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function show(string $uri): void {
+    $h = @fopen($uri, "r");
+    if ($h === false) { echo "FALSE\n"; return; }
+    $body = stream_get_contents($h);
+    echo strlen($body), ":", $body, "\n";
+    fclose($h);
+}
+show("data://text/plain;base64,SGVsbG8sIHdvcmxkIQ==");
+show("data://text/plain,inline%20text%2C+decoded");
+show("data:,bare-no-slashes");
+show("data://text/plain,100%");
+show("data://text/plain;base64,SGVs bG8");
+show("data://text/plain;charset=utf-8,hi");
+show("data://text/plain;base64,####");
+show("data://text/plain;BASE64,SGVsbG8=");
+show("data://text/plain;foo,hi");
+show("data://text/plain");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the data: URI probe to WASM");
+    assert!(
+        output.status.success(),
+        "data: URIs failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the data: URI probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "13:Hello, world!\n",
+            "20:inline text, decoded\n",
+            "15:bare-no-slashes\n",
+            "4:100%\n",
+            "5:Hello\n",
+            "2:hi\n",
+            "FALSE\n",
+            "FALSE\n",
+            "FALSE\n",
+            "FALSE\n",
+        ),
+        "php -n's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `getenv` answers php's `string|false` on wasm32-wasi, reading WASI's environment.
 ///
 /// The runner pins the environment, so the expected bytes are deterministic. The pair that

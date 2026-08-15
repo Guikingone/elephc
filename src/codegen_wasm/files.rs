@@ -61,6 +61,8 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&rt_file_get_contents());
     wm.add_raw_func(&rt_file_put_contents());
     wm.add_raw_func(RT_IS_MEMSTREAM_PATH);
+    wm.add_raw_func(RT_IS_DATA_URI);
+    wm.add_raw_func(RT_DATA_URI_OPEN);
     wm.add_raw_func(&rt_memstream_new());
     wm.add_raw_func(RT_MEMSTREAM_GROW);
     wm.add_raw_func(&rt_memstream_write());
@@ -598,6 +600,16 @@ fn rt_fopen() -> String {
       (i64.extend_i32_u (call $__rt_memstream_new
         (local.get $mode) (local.get $mode_len)
         (local.get $path) (local.get $path_len))) (i64.const 0)))))
+  ;; A `data:` URI carries its own content, so it is decoded here rather than opened: no
+  ;; filesystem authority is involved at all. A malformed one answers php's `false`.
+  (if (call $__rt_is_data_uri (local.get $path) (local.get $path_len))
+    (then
+      (local.set $first (call $__rt_data_uri_open (local.get $path) (local.get $path_len)
+                                                  (local.get $mode) (local.get $mode_len)))
+      (if (i32.lt_s (local.get $first) (i32.const 0))
+        (then (return (call $__rt_fopen_failed (local.get $warn)))))
+      (return (call $__rt_mixed_from_value (i64.const 9)
+        (i64.extend_i32_u (local.get $first)) (i64.const 0)))))
   (local.set $first (i32.const 0))
   (local.set $dirfd (call $__rt_wasi_dirfd))
   (if (i32.lt_s (local.get $dirfd) (i32.const 0))                ;; no preopen -> no filesystem
@@ -1189,6 +1201,174 @@ pub(super) fn emit_stream_meta_runtime(wm: &mut WatModule, offsets: &[(u32, u32)
         k_uri_p = k_uri.0, k_uri_l = k_uri.1,
     ));
 }
+
+/// `__rt_is_data_uri`: whether a path is an RFC 2397 `data:` URI.
+///
+/// The `//` is OPTIONAL — measured on php-src 8.5.6, `data:,x` opens exactly like
+/// `data://,x` — so only the five-byte `data:` prefix is tested here.
+const RT_IS_DATA_URI: &str = r#"(func $__rt_is_data_uri (param $p i32) (param $len i64) (result i32)
+  (if (i64.lt_u (local.get $len) (i64.const 5))
+    (then (return (i32.const 0))))
+  (i32.and
+    (i32.and (i32.eq (i32.load8_u (local.get $p)) (i32.const 100))                     ;; 'd'
+             (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 1))) (i32.const 97)))  ;; 'a'
+    (i32.and
+      (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 2))) (i32.const 116))   ;; 't'
+               (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 3))) (i32.const 97)))   ;; 'a'
+      (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 4))) (i32.const 58)))))          ;; ':'
+"#;
+
+/// `__rt_data_uri_open`: decodes an RFC 2397 `data:` URI into an in-memory stream.
+///
+/// Answers the memstream handle, or -1 when the URI cannot be opened — which php reports as
+/// `fopen`'s `false`. Measured on php-src 8.5.6, every rule below came from a probe rather
+/// than from the RFC:
+///   * the `//` after `data:` is optional;
+///   * NO comma at all fails (`data://text/plain` is false);
+///   * the payload is base64 only when the media type ends with the LOWERCASE `;base64` —
+///     `;BASE64` fails, because php compares that literal case-sensitively;
+///   * base64 decoding is STRICT here, unlike the `base64_decode` builtin: whitespace and `=`
+///     are skipped but any other stray byte fails the open (`;base64,####` is false);
+///     padding is optional (`SGVsbG8` decodes like `SGVsbG8=`);
+///   * a plain payload is `urldecode`, NOT `rawurldecode`: `+` becomes a space. A `%` without
+///     two hex digits after it stays LITERAL (`100%` is `100%`, `%4` is `%4`, `%zz` is `%zz`);
+///   * an empty payload is a valid empty stream.
+const RT_DATA_URI_OPEN: &str = r#"(func $__rt_data_uri_open (param $p i32) (param $len i64) (param $mode i32) (param $mode_len i64) (result i32)
+  (local $i i32) (local $n i32) (local $comma i32) (local $meta i32)
+  (local $b64 i32) (local $buf i32) (local $w i32) (local $c i32)
+  (local $v i32) (local $acc i32) (local $bits i32) (local $hi i32) (local $lo i32)
+  (local $h i32) (local $mend i32) (local $seg i32)
+  (local.set $n (i32.wrap_i64 (local.get $len)))
+  (local.set $i (i32.const 5))                                    ;; past "data:"
+  (if (i32.and (i32.gt_s (i32.sub (local.get $n) (local.get $i)) (i32.const 1))
+       (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (local.get $i))) (i32.const 47))
+                (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 1))))
+                        (i32.const 47))))
+    (then (local.set $i (i32.add (local.get $i) (i32.const 2)))))  ;; the optional "//"
+  (local.set $meta (local.get $i))
+  (local.set $comma (i32.const -1))
+  (block $found (loop $scan                                        ;; the FIRST comma splits it
+    (br_if $found (i32.ge_s (local.get $i) (local.get $n)))
+    (if (i32.eq (i32.load8_u (i32.add (local.get $p) (local.get $i))) (i32.const 44))
+      (then
+        (local.set $comma (local.get $i))
+        (br $found)))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $scan)))
+  (if (i32.lt_s (local.get $comma) (i32.const 0))
+    (then (return (i32.const -1))))                                ;; no comma: php answers false
+  ;; base64 when the media type ends with the lowercase ";base64"
+  (local.set $b64 (i32.const 0))
+  (if (i32.ge_s (i32.sub (local.get $comma) (local.get $meta)) (i32.const 7))
+    (then
+      (local.set $i (i32.sub (local.get $comma) (i32.const 7)))
+      (if (i32.and
+            (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (local.get $i))) (i32.const 59))
+                     (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 1)))) (i32.const 98)))
+            (i32.and
+              (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 2)))) (i32.const 97))
+                       (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 3)))) (i32.const 115)))
+              (i32.and
+                (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 4)))) (i32.const 101))
+                         (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 5)))) (i32.const 54)))
+                (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 6)))) (i32.const 52)))))
+        (then (local.set $b64 (i32.const 1))))))
+  ;; Every remaining `;` parameter must be `key=value`. Measured: `;charset=utf-8`,
+  ;; `;CHARSET=utf-8` and `;foo=bar` all open, while `;foo`, `;base64x`, `;BASE64` and a bare
+  ;; `;` all answer FALSE — so the lowercase `base64` above is the ONLY parameter allowed to
+  ;; carry no `=`, and an uppercase spelling is not a base64 marker NOR a valid parameter.
+  (local.set $mend (local.get $comma))
+  (if (local.get $b64)
+    (then (local.set $mend (i32.sub (local.get $comma) (i32.const 7)))))
+  (local.set $i (local.get $meta))
+  (local.set $seg (i32.const -1))                                  ;; -1 until the first ';'
+  (block $mdone (loop $mscan
+    (if (i32.ge_s (local.get $i) (local.get $mend))
+      (then
+        (if (i32.eq (local.get $seg) (i32.const 0))                ;; a parameter closed with no '='
+          (then (return (i32.const -1))))                          ;; nothing allocated yet
+        (br $mdone)))
+    (local.set $c (i32.load8_u (i32.add (local.get $p) (local.get $i))))
+    (if (i32.eq (local.get $c) (i32.const 59))                     ;; ';' closes a segment
+      (then
+        (if (i32.eq (local.get $seg) (i32.const 0))
+          (then (return (i32.const -1))))
+        (local.set $seg (i32.const 0)))                            ;; the next one needs an '='
+      (else
+        (if (i32.and (i32.eq (local.get $c) (i32.const 61))        ;; '=' satisfies it
+                     (i32.eq (local.get $seg) (i32.const 0)))
+          (then (local.set $seg (i32.const 1))))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $mscan)))
+  (local.set $i (i32.add (local.get $comma) (i32.const 1)))        ;; the payload starts here
+  ;; Neither decoding ever grows the input, so the payload length bounds both.
+  (local.set $buf (call $__rt_heap_alloc (i32.add (i32.sub (local.get $n) (local.get $i)) (i32.const 1))))
+  (local.set $w (i32.const 0))
+  (if (local.get $b64)
+    (then
+      (block $bend (loop $b64loop
+        (br_if $bend (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $c (i32.load8_u (i32.add (local.get $p) (local.get $i))))
+        (local.set $v (call $__rt_b64_value (local.get $c)))
+        (if (i32.ge_s (local.get $v) (i32.const 0))
+          (then
+            (local.set $acc (i32.or (i32.shl (local.get $acc) (i32.const 6)) (local.get $v)))
+            (local.set $bits (i32.add (local.get $bits) (i32.const 6)))
+            (if (i32.ge_u (local.get $bits) (i32.const 8))
+              (then
+                (local.set $bits (i32.sub (local.get $bits) (i32.const 8)))
+                (i32.store8 (i32.add (local.get $buf) (local.get $w))
+                  (i32.and (i32.shr_u (local.get $acc) (local.get $bits)) (i32.const 255)))
+                (local.set $w (i32.add (local.get $w) (i32.const 1))))))
+          (else
+            ;; STRICT: only padding and whitespace may sit outside the alphabet.
+            (if (i32.eqz (i32.or
+                  (i32.eq (local.get $c) (i32.const 61))                       ;; '='
+                  (i32.or
+                    (i32.eq (local.get $c) (i32.const 32))                     ;; ' '
+                    (i32.and (i32.ge_u (local.get $c) (i32.const 9))
+                             (i32.le_u (local.get $c) (i32.const 13))))))      ;; \t \n \v \f \r
+              (then
+                (call $__rt_heap_free (local.get $buf))
+                (return (i32.const -1))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $b64loop))))
+    (else
+      (block $pend (loop $pctloop
+        (br_if $pend (i32.ge_s (local.get $i) (local.get $n)))
+        (local.set $c (i32.load8_u (i32.add (local.get $p) (local.get $i))))
+        (if (i32.eq (local.get $c) (i32.const 43))                             ;; '+' is a space
+          (then
+            (i32.store8 (i32.add (local.get $buf) (local.get $w)) (i32.const 32))
+            (local.set $w (i32.add (local.get $w) (i32.const 1))))
+          (else
+            (local.set $hi (i32.const -1))
+            (if (i32.and (i32.eq (local.get $c) (i32.const 37))                ;; '%'
+                         (i32.lt_s (i32.add (local.get $i) (i32.const 2)) (local.get $n)))
+              (then
+                (local.set $hi (call $__rt_hex_digit_value
+                  (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 1))))))
+                (local.set $lo (call $__rt_hex_digit_value
+                  (i32.load8_u (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 2))))))
+                (if (i32.lt_s (local.get $lo) (i32.const 0))
+                  (then (local.set $hi (i32.const -1))))))
+            (if (i32.ge_s (local.get $hi) (i32.const 0))
+              (then                                                            ;; a complete %HH
+                (i32.store8 (i32.add (local.get $buf) (local.get $w))
+                  (i32.add (i32.mul (local.get $hi) (i32.const 16)) (local.get $lo)))
+                (local.set $i (i32.add (local.get $i) (i32.const 2))))
+              (else                                                            ;; anything else is literal
+                (i32.store8 (i32.add (local.get $buf) (local.get $w)) (local.get $c))))
+            (local.set $w (i32.add (local.get $w) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $pctloop)))))
+  (local.set $h (call $__rt_memstream_new (local.get $mode) (local.get $mode_len)
+                                          (local.get $p) (local.get $len)))
+  (drop (call $__rt_memstream_write (local.get $h) (local.get $buf) (i64.extend_i32_u (local.get $w))))
+  (call $__rt_heap_free (local.get $buf))
+  (call $__rt_memstream_seek (local.get $h) (i64.const 0))         ;; reads start at the beginning
+  (local.get $h))
+"#;
 
 /// `__rt_stream_get_line`: PHP's `stream_get_line`, boxed as `string|false`.
 ///

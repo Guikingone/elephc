@@ -3562,7 +3562,10 @@ fn file_builtin_shape_issue(
             path.as_slice(),
             b"php://stdout" | b"php://stderr" | b"php://stdin" | b"php://output"
         ) || path == b"php://memory"
-            || path.starts_with(b"php://temp");
+            || path.starts_with(b"php://temp")
+            // An RFC 2397 `data:` URI is not a wrapper over anything: it CARRIES its payload,
+            // so `__rt_fopen` decodes it inline and never touches the filesystem.
+            || path.starts_with(b"data:");
         if let Some(scheme_end) = path.windows(3).position(|window| window == b"://") {
             if scheme_end > 0
                 && !names_a_standard_stream
