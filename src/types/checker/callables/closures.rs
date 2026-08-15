@@ -179,6 +179,7 @@ impl Checker {
                     &declared_ret,
                     &generator_ty,
                     true,
+                    true,
                     span,
                     "Closure return type",
                 )?;
@@ -211,6 +212,7 @@ impl Checker {
                     &declared_ret,
                     &return_info.ty,
                     return_info.has_value,
+                    return_info.strict_types,
                     span,
                     "Closure return type",
                 )?;

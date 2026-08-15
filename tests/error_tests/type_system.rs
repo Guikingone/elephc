@@ -1189,6 +1189,16 @@ fn test_error_strict_types_rejects_stringable_object_into_string_union() {
     );
 }
 
+/// Verifies `strict_types=1` also rejects `Stringable` object conversion at a declared string
+/// return boundary, where coercive PHP source would invoke `__toString()`.
+#[test]
+fn test_error_strict_types_rejects_stringable_object_string_return() {
+    expect_error(
+        "<?php declare(strict_types=1); class ReturnLabel { public function __toString(): string { return 'x'; } } function label(): string { return new ReturnLabel(); }",
+        "return type expects Str, got Object",
+    );
+}
+
 /// Verifies weak binding still rejects an arbitrary object that has no string conversion,
 /// rather than accepting every object merely because the declaration contains `string`.
 #[test]

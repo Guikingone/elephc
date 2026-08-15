@@ -108,7 +108,7 @@ impl Checker {
     /// Explicit `Stringable` implementation is authoritative. A public, string-returning
     /// `__toString` is checked directly as well because PHP grants `Stringable` implicitly,
     /// while the checker may validate a call before its final implicit-interface enrichment.
-    fn object_supports_weak_string_coercion(&self, class_name: &str) -> bool {
+    pub(crate) fn object_supports_weak_string_coercion(&self, class_name: &str) -> bool {
         if self.object_type_implements_interface(class_name, "Stringable") {
             return true;
         }

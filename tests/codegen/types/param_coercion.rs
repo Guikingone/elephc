@@ -1,6 +1,6 @@
 //! Purpose:
-//! End-to-end coverage for PHP's coercive parameter binding on declared user-defined
-//! parameters: scalars widening into `string`/`bool` parameters, `Stringable` objects selecting
+//! End-to-end coverage for PHP's coercive parameter and return binding on declared user-defined
+//! boundaries: scalars widening into `string`/`bool` parameters, `Stringable` objects selecting
 //! string declarations, and compile-time-constant numeric arguments binding to `int`/`float`.
 //!
 //! Called from:
@@ -137,6 +137,27 @@ fn test_stringable_objects_bind_to_string_parameter_members() {
         "#,
     );
     assert_eq!(out, "local|local|fresh|local,tail");
+}
+
+/// Verifies coercive methods convert a returned `Stringable` object at a declared `string`
+/// boundary, including the owning temporary returned by the method call chain.
+#[test]
+fn test_stringable_object_binds_to_coercive_string_return() {
+    let out = compile_and_run(
+        r#"<?php
+class ReturnLabel {
+    public function __construct(public string $text) {}
+    public function __toString(): string { return $this->text; }
+}
+class ReturnFormatter {
+    public static function format(string $text): string {
+        return new ReturnLabel($text);
+    }
+}
+echo ReturnFormatter::format("ready");
+"#,
+    );
+    assert_eq!(out, "ready");
 }
 
 /// Verifies union identity wins over weak coercion: an object satisfying `iterable` remains an

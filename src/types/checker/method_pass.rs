@@ -351,6 +351,7 @@ impl Checker {
                                 &declared,
                                 &return_info.ty,
                                 return_info.has_value,
+                                return_info.strict_types,
                                 method.span,
                                 &format!("Method '{}::{}' return type", class.name, method.name),
                             ) {
@@ -425,6 +426,7 @@ impl Checker {
                 self.require_compatible_return_type(
                     &declared,
                     &generator_ty,
+                    true,
                     true,
                     method.span,
                     &format!("Method '{}::{}' return type", class.name, method.name),

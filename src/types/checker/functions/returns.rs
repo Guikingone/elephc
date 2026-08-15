@@ -10,6 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Stmt, StmtKind};
+use crate::types::param_binding::param_accepts_weak_string_coercion;
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -20,6 +21,7 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    pub strict_types: bool,
 }
 
 /// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
@@ -75,6 +77,7 @@ impl Checker {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        strict_types: stmt.strict_types,
                     });
                 }
             }
@@ -82,6 +85,7 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    strict_types: stmt.strict_types,
                 });
             }
             StmtKind::If {
@@ -339,13 +343,15 @@ impl Checker {
     /// Checks that an actual return type is compatible with the declared return type.
     /// Handles three cases: void-returning functions (no value allowed), value-returning
     /// functions (value required and must be assignable to `expected`), and nullability
-    /// via `return_type_accepts_null`. Delegates to `require_compatible_arg_type` for
-    /// the final assignability check.
+    /// via `return_type_accepts_null`. In coercive source, a `Stringable` object may satisfy a
+    /// string return boundary; `strict_types` disables that PHP conversion. Delegates to
+    /// `require_compatible_arg_type` for the final assignability check.
     pub(crate) fn require_compatible_return_type(
         &self,
         expected: &PhpType,
         actual: &PhpType,
         has_value: bool,
+        strict_types: bool,
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
@@ -375,6 +381,14 @@ impl Checker {
 
         if generic_object_requires_nominal_return_guard(expected, actual) {
             return Ok(());
+        }
+
+        if !strict_types && param_accepts_weak_string_coercion(expected) {
+            if let PhpType::Object(class_name) = actual.codegen_repr() {
+                if self.object_supports_weak_string_coercion(&class_name) {
+                    return Ok(());
+                }
+            }
         }
 
         // Return lowering already normalizes a boxed gradual value into iterable storage.

@@ -190,6 +190,7 @@ impl Checker {
                         &declared_ret,
                         &generator_ty,
                         true,
+                        true,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
@@ -220,6 +221,7 @@ impl Checker {
                         &declared_ret,
                         &return_info.ty,
                         return_info.has_value,
+                        return_info.strict_types,
                         decl.span,
                         &format!("Function '{}' return type", name),
                     )?;
