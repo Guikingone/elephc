@@ -446,6 +446,22 @@ fn test_error_sscanf_wrong_args() {
     );
 }
 
+/// Regression: `sscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+///
+/// Measured with `php -n` (8.5.6): `$name = "unset"; $age = -1;
+/// $n = sscanf("alice 30", "%s %d", $name, $age);` yields `int(2)`, `"alice"`, `int(30)`.
+/// This backend compiled the call, returned the ARRAY `["alice", "30"]` as `$n`, and left both
+/// variables untouched — wrong on the return value AND on every assignment, with no diagnostic.
+/// The by-ref tail cannot be expressed today: `ParamSpec` carries `by_ref`, but the contract's
+/// `variadic: Some("vars")` is a bare NAME with no by-ref marker.
+#[test]
+fn test_error_sscanf_by_ref_vars_form_is_refused() {
+    expect_error(
+        r#"<?php $name = "unset"; $age = -1; sscanf("alice 30", "%s %d", $name, $age);"#,
+        "sscanf(): the by-ref $vars output form is not supported",
+    );
+}
+
 // --- v0.5: I/O function errors ---
 
 /// Verifies that `ptr_set()` rejects a string value, since ptr_set only accepts

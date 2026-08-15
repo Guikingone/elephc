@@ -157,6 +157,20 @@ fn test_error_formatted_stream_io_wrong_args() {
     }
 }
 
+/// Regression: `fscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+///
+/// Measured with `php -n` (8.5.6): `fscanf($f, "%s %d", $name, $age)` assigns both variables and
+/// returns `int(2)`. This backend compiled the call, returned the matched-fields ARRAY, and
+/// assigned nothing — the same silent double divergence `sscanf()` had, on the same cause: the
+/// contract's `variadic: Some("vars")` is a bare NAME carrying no by-ref marker.
+#[test]
+fn test_error_fscanf_by_ref_vars_form_is_refused() {
+    expect_error(
+        r#"<?php $name = "unset"; $age = -1; fscanf(STDIN, "%s %d", $name, $age);"#,
+        "fscanf(): the by-ref $vars output form is not supported",
+    );
+}
+
 /// Verifies tmpfile() produces correct error when called with an argument.
 #[test]
 fn test_error_tmpfile_wrong_args() {

@@ -10,8 +10,10 @@
 //!   `returns: Mixed` is used because `Array<Str>` cannot be expressed through the
 //!   scalar `returns:` field. Arguments are pre-inferred by the registry before the
 //!   hook runs.
-//! - The variadic `vars` parameter is accepted but the by-ref output form is not yet
-//!   supported (mirroring `sscanf()`).
+//! - The by-ref `$vars` output form is REFUSED rather than mis-executed, mirroring `sscanf()`.
+//!   php assigns each field through the reference and returns the field COUNT; this backend
+//!   cannot express that (`variadic: Some("vars")` is a bare NAME with no by-ref marker), and
+//!   left accepted the call silently returned the ARRAY and assigned nothing.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -26,6 +28,9 @@ builtin! {
 }
 
 /// Validates the stream argument and returns `Array<Str>` for the matched-fields result.
+///
+/// Also refuses the by-ref `$vars` output form, which this backend cannot express and
+/// previously mis-executed in silence.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -33,5 +38,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
+    crate::builtins::string::sscanf::reject_by_ref_vars(cx.name, cx.args.len(), cx.span)?;
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }

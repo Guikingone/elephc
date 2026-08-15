@@ -197,7 +197,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `vsprintf()` | `vsprintf($fmt, array $values): string` | Like `sprintf()`, with the arguments supplied as an array. Each element becomes one format argument — int/float/bool/string, including the elements of a mixed array. |
 | `vprintf()` | `vprintf($fmt, array $values): int` | Like `printf()`, with the arguments supplied as an array; prints the result and returns the byte count. |
-| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. |
+| `sscanf()` | `sscanf($str, $fmt): array` | Parse string with format (%d, %f, %s, %%). Matched fields are returned as substrings (e.g. `%f` yields `"3.14"`), mirroring the existing `%d` behavior. Only the two-argument array-returning form is supported: php's by-ref `...$vars` form, which assigns each field through the reference and returns the field count instead, is refused at compile time. |
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |

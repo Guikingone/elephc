@@ -5,8 +5,12 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Only the currently supported `%d`, `%f`, `%s`, and `%%` subset is parsed;
-//!   extra output variables are evaluated for side effects and ignored.
+//! - Only the currently supported `%d`, `%f`, `%s`, and `%%` subset is parsed.
+//! - The by-ref `$vars` output form is REFUSED, matching the compiled builtin. php assigns
+//!   each field through the reference and returns the field COUNT; this interpreter used to
+//!   evaluate the extra arguments for side effects and IGNORE them, so the call silently
+//!   returned the matched-fields array and assigned nothing. Refusing keeps `eval()` from
+//!   being a silent-wrong workaround for the compiled path's refusal.
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //!   the scanning implementation.
 
@@ -27,14 +31,11 @@ pub(in crate::interpreter) fn eval_builtin_sscanf(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if args.len() < 2 {
+    if args.len() != 2 {
         return Err(EvalStatus::RuntimeFatal);
     }
     let input = eval_expr(&args[0], context, scope, values)?;
     let format = eval_expr(&args[1], context, scope, values)?;
-    for arg in &args[2..] {
-        eval_expr(arg, context, scope, values)?;
-    }
     eval_sscanf_result(input, format, values)
 }
 
@@ -44,7 +45,9 @@ pub(in crate::interpreter) fn eval_sscanf_values_result(
     evaluated_args: &[RuntimeCellHandle],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [input, format, ..] = evaluated_args else {
+    // An exact two-element binding, not `[input, format, ..]`: a bound `$vars` tail is the
+    // unsupported by-ref output form, and swallowing it here returned the array in silence.
+    let [input, format] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
     eval_sscanf_result(*input, *format, values)
