@@ -2260,11 +2260,13 @@ fn test_cli_strict_types_refuses_scalar_argument_coercion() {
                 String::from_utf8_lossy(&output.stderr)
             );
             if !expected {
+                // The refusal has to NAME the cause. The wording has since grown to quote
+                // php's own TypeError and suggest the cast, so the assertion anchors on the
+                // two things that must never disappear rather than on one whole sentence.
+                let stderr = String::from_utf8_lossy(&output.stderr);
                 assert!(
-                    String::from_utf8_lossy(&output.stderr)
-                        .contains("strict_types=1 performs no coercion"),
-                    "strict={strict} {param_ty} <- {argument} must name the cause: {}",
-                    String::from_utf8_lossy(&output.stderr)
+                    stderr.contains("strict_types=1") && stderr.contains("performs no conversion"),
+                    "strict={strict} {param_ty} <- {argument} must name the cause: {stderr}"
                 );
             }
         }
@@ -17463,6 +17465,88 @@ echo $u->name, "\n";
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), "x\n");
     }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `abs(int)` answers php's `int|float` on wasm32-wasi.
+///
+/// `abs` is the one direct builtin whose result type is not decided by its argument type
+/// alone: PHP_INT_MIN has no positive counterpart, so php answers the FLOAT
+/// 9.2233720368548E+18 for that single argument and an int for every other — measured on
+/// php-src 8.5.6. The EIR says so with a boxed result, and the wasm lowering used to refuse
+/// it outright because its table expected a raw `I64`. The arguments come out of an array so
+/// none of them folds at compile time.
+#[test]
+fn test_cli_wasm_int_abs_overflows_to_float_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_int_abs");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function ints(int $n): void { $a = abs($n); echo gettype($a), "(", $a, ")\n"; }
+foreach ([-3, 3, 0, PHP_INT_MAX, PHP_INT_MIN, PHP_INT_MIN + 1] as $v) { ints($v); }
+function floats(float $x): void { $a = abs($x); echo gettype($a), "(", $a, ")\n"; }
+foreach ([-2.5, 0.0, -0.0] as $v) { floats($v); }
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the abs probe to WASM");
+    assert!(
+        output.status.success(),
+        "abs failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the abs probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "integer(3)\n",
+            "integer(3)\n",
+            "integer(0)\n",
+            "integer(9223372036854775807)\n",
+            "double(9.2233720368548E+18)\n",
+            "integer(9223372036854775807)\n",
+            "double(2.5)\n",
+            "double(0)\n",
+            "double(0)\n",
+        ),
+        "php -n's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }

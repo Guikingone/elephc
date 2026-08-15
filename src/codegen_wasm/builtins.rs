@@ -4232,9 +4232,18 @@ pub(super) fn direct_builtin_shape_issue(
             value.ir_type, signature.operand_ir, signature.operand_php
         ));
     }
+    // `abs(int)` is honestly `int|float` — PHP_INT_MIN has no positive counterpart, so php
+    // answers a float for it — and the EIR says so with a boxed result. The lowering carries
+    // both arms, so the boxed spelling is admitted alongside the raw one the EIR uses when it
+    // proved the argument cannot be PHP_INT_MIN.
+    let int_abs_may_overflow = target == RuntimeFnId::Abs
+        && operand_php == PhpType::Int
+        && call.result_type == IrType::Heap(IrHeapKind::Mixed)
+        && call.result_php_type.codegen_repr() == PhpType::Mixed;
     if call.result.is_none()
-        || call.result_type != signature.result_ir
-        || call.result_php_type.codegen_repr() != signature.result_php
+        || (!int_abs_may_overflow
+            && (call.result_type != signature.result_ir
+                || call.result_php_type.codegen_repr() != signature.result_php))
     {
         return Some(format!(
             "result {:?}/{:?} is not the expected {:?}/{:?}",
@@ -4553,7 +4562,13 @@ pub(super) fn lower_direct_builtin(
 /// a float could be returned in, and both backends therefore answer `PHP_INT_MIN` unchanged.
 /// Every other input is exact.
 fn lower_int_abs(ctx: &mut FnCtx, inst: &Instruction, argument: crate::ir::ValueId) -> Result<()> {
+    // `abs(int)` is `int|float`, not `int`: PHP_INT_MIN has no positive counterpart, so
+    // php answers the FLOAT 9.2233720368548E+18 for it and an int for everything else
+    // (measured on php-src 8.5.6). A boxed result carries both; a raw I64 result means the
+    // EIR proved the argument cannot be PHP_INT_MIN, and the branchless form stands alone.
+    let boxed = inst.result_type == IrType::Heap(IrHeapKind::Mixed);
     let mask = ctx.fresh_temp(super::wat::ValType::I64);
+    let magnitude = ctx.fresh_temp(super::wat::ValType::I64);
     ctx.emit_load_value(argument)?;
     ctx.fb.ins("i64.const 63", "sign-bit shift distance");
     ctx.fb
@@ -4563,6 +4578,33 @@ fn lower_int_abs(ctx: &mut FnCtx, inst: &Instruction, argument: crate::ir::Value
     ctx.fb.ins("i64.xor", "conditionally invert the argument");
     ctx.fb.ins(&format!("local.get {}", mask), "the sign mask again");
     ctx.fb.ins("i64.sub", "add one back for a negative argument");
+    if !boxed {
+        return store_result(ctx, inst);
+    }
+    ctx.fb
+        .ins(&format!("local.set {}", magnitude), "the magnitude, still wrapped for INT_MIN");
+    ctx.emit_load_value(argument)?;
+    ctx.fb.ins(
+        "i64.const -9223372036854775808",
+        "PHP_INT_MIN: the one argument whose magnitude does not fit",
+    );
+    ctx.fb.ins("i64.eq", "did the magnitude overflow?");
+    ctx.fb.ins("if (result i32)", "overflow answers a float");
+    ctx.fb.ins("i64.const 2", "mixed float tag");
+    ctx.fb.ins(
+        "i64.const 4890909195324358656",
+        "the f64 bits of 9223372036854775808.0",
+    );
+    ctx.fb.ins("i64.const 0", "float payloads use no high word");
+    ctx.fb
+        .ins("call $__rt_mixed_from_value", "box php's float answer");
+    ctx.fb.ins("else", "every other argument keeps its integer magnitude");
+    ctx.fb.ins("i64.const 0", "mixed int tag");
+    ctx.fb
+        .ins(&format!("local.get {}", magnitude), "the integer magnitude");
+    ctx.fb.ins("i64.const 0", "int payloads use no high word");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box the integer answer");
+    ctx.fb.ins("end", "end the abs overflow check");
     store_result(ctx, inst)
 }
 
