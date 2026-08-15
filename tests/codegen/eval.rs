@@ -28967,3 +28967,44 @@ echo ":"; echo intval("42");');
     );
     assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
 }
+
+/// Verifies `eval()` reads every PHP numeric literal form in the same base the AOT compiler
+/// does, so the two halves of elephc cannot disagree about what a literal means.
+///
+/// Measured against PHP 8.5.6 (`php -n`), which prints the same value for the direct and the
+/// `eval()`d spelling of each form:
+/// `0700`/`0o700`/`0O700`/`0_700`/`0o7_00` → `448`, `0x1F`/`0X1f`/`0x1_F` → `31`,
+/// `0b101`/`0B101`/`0b1_01` → `5`, `1_000` → `1000`, `0` and `00` → `0`,
+/// `0100644` → `33188`, `010` → `8`, `1e3` → `1000`, `1e-3` → `0.001`, `1.5e2` → `150`.
+///
+/// Before this test the eval lexer scanned decimal digits only, so `eval('echo 0700;')`
+/// printed `700` and `eval('echo 0100644;')` printed `100644` — a silent wrong answer that
+/// made every permission mask evaluated at runtime mean something else — while the prefixed
+/// forms split into an integer plus an identifier. The direct (AOT) column is asserted in the
+/// same test so a future divergence in EITHER lexer fails here.
+///
+/// The two columns are printed by `echo` rather than compared as returned arrays because
+/// `eval('return [1, 2];')` segfaults on its own — an unrelated, pre-existing defect that
+/// would mask this one.
+#[test]
+fn test_eval_numeric_literal_bases_match_the_aot_lexer() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";');
+echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";
+eval('echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";');
+echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";
+eval('echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";');
+echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "448,448,448,31,31,5,5,1000\n\
+         448,448,448,31,31,5,5,1000\n\
+         0,0,33188,448,448,31,5,8\n\
+         0,0,33188,448,448,31,5,8\n\
+         1000:0.001:150:1000.5\n\
+         1000:0.001:150:1000.5\n"
+    );
+}
