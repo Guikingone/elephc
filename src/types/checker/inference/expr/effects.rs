@@ -288,9 +288,19 @@ impl Checker {
                     else_env.insert(guard.var, guard.else_ty);
                 }
                 let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                let then_ty = if matches!(then_expr.kind, ExprKind::Throw(_)) {
+                    PhpType::Never
+                } else {
+                    then_ty
+                };
                 merge_conditional_storage_effects(env, &then_env);
                 merge_conditional_storage_effects(&mut else_env, &then_env);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                let else_ty = if matches!(else_expr.kind, ExprKind::Throw(_)) {
+                    PhpType::Never
+                } else {
+                    else_ty
+                };
                 merge_conditional_storage_effects(env, &else_env);
                 Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
@@ -324,6 +334,11 @@ impl Checker {
                     let mut result_env =
                         self.match_arm_narrowed_env(subject, conditions, &arm_env)?;
                     let ty = self.infer_type_with_assignment_effects(result, &mut result_env)?;
+                    let ty = if matches!(result.kind, ExprKind::Throw(_)) {
+                        PhpType::Never
+                    } else {
+                        ty
+                    };
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,
@@ -333,6 +348,11 @@ impl Checker {
                 if let Some(default) = default {
                     let mut default_env = fallthrough_env;
                     let ty = self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    let ty = if matches!(default.kind, ExprKind::Throw(_)) {
+                        PhpType::Never
+                    } else {
+                        ty
+                    };
                     result_ty = Some(match result_ty {
                         Some(acc) => merge_match_arm_result_type(self, acc, ty),
                         None => ty,

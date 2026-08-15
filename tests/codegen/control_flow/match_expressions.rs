@@ -348,6 +348,25 @@ echo pick(0), "|", pick(1);
     assert_eq!(out, "zero|one");
 }
 
+/// Tests that assignment-aware return inference also treats a throw-only match arm as
+/// non-yielding instead of widening an integer return to a nullable integer.
+#[test]
+fn test_match_throw_default_arm_keeps_declared_integer_return_type() {
+    let out = compile_and_run(
+        r#"<?php
+function choose_number(int $n): int {
+    return match($n) {
+        0 => 10,
+        1 => 20,
+        default => throw new Exception("no number"),
+    };
+}
+echo choose_number(0), "|", choose_number(1);
+"#,
+    );
+    assert_eq!(out, "10|20");
+}
+
 /// Regression test for the gettype() dispatch on a match-produced nullable
 /// int: the hidden temp is an inline tagged scalar (`null|int`), which the
 /// gettype() emitter previously unboxed as a boxed Mixed cell and crashed.
