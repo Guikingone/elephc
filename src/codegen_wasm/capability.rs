@@ -7483,6 +7483,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Rewind
         | RuntimeFnId::Fseek
         | RuntimeFnId::StreamGetContents
+        | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define
@@ -7761,7 +7762,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamFilterRegister
         | RuntimeFnId::StreamFilterRemove
         | RuntimeFnId::StreamGetFilters
-        | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamGetMetaData
         | RuntimeFnId::StreamGetTransports
         | RuntimeFnId::StreamGetWrappers

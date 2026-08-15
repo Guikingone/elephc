@@ -214,6 +214,11 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Rewind
         | RuntimeFnId::Fseek
         | RuntimeFnId::StreamGetContents
+        // `stream_get_line`'s helper and shape contract are complete, but the registry
+        // still declares `returns: Str` where PHP answers `string|false`, so every call
+        // site refuses today at the result-storage shape check. It lights up the moment
+        // the registry contract widens — no wasm-side change needed then.
+        | RuntimeFnId::StreamGetLine
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define => (

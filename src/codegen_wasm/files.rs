@@ -24,6 +24,16 @@ use super::wat::WatModule;
 /// Offset of this module's syscall scratch within the float-scratch region.
 const IO_SCRATCH: u32 = 0x3000;
 
+/// Offset of the per-fd EOF flag table: one byte per real WASI fd, 256 fds.
+///
+/// PHP's `feof` is a FLAG a read sets when it finds nothing, never a position
+/// comparison — reading exactly the last byte leaves it false, and only the next
+/// read flips it (measured on php-src 8.5.6, same rule `__rt_memstream_eof`
+/// documents). A real fd carries no descriptor block to hold that flag, so it
+/// lives here, indexed by fd. Linear memory starts zeroed, so every fd begins
+/// "not at EOF"; `fclose` clears the byte because WASI recycles fd numbers.
+const FD_EOF_FLAGS: u32 = IO_SCRATCH + 0x50;
+
 /// Adds the file-I/O runtime to `wm`. Requires the WASI path imports and the heap
 /// and string runtimes, all of which the command runtime emits alongside it.
 pub(super) fn emit_file_runtime(wm: &mut WatModule) {
@@ -50,12 +60,58 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MEMSTREAM_SEEK);
     wm.add_raw_func(RT_MEMSTREAM_EOF);
     wm.add_raw_func(RT_MEMSTREAM_CLOSE);
+    wm.add_raw_func(&rt_fd_eof_get());
+    wm.add_raw_func(&rt_fd_eof_set());
+    wm.add_raw_func(&rt_fd_eof_clear());
     wm.add_raw_func(RT_FEOF);
     wm.add_raw_func(RT_FTELL);
     wm.add_raw_func(RT_FSEEK);
     wm.add_raw_func(&rt_stream_get_contents());
     wm.add_raw_func(RT_STREAM_COPY_TO_STREAM);
     wm.add_raw_func(RT_REWIND);
+    wm.add_raw_func(&rt_stream_get_line());
+}
+
+/// `__rt_fd_eof_get`: the EOF flag a real fd's reads have set, 0 for out-of-table fds.
+fn rt_fd_eof_get() -> String {
+    format!(
+        r#"(func $__rt_fd_eof_get (param $fd i32) (result i64)
+  (if (i32.ge_u (local.get $fd) (i32.const 256))
+    (then (return (i64.const 0))))
+  (i64.extend_i32_u (i32.load8_u
+    (i32.add (i32.add (global.get $__float_scratch) (i32.const {eof})) (local.get $fd)))))
+"#,
+        eof = FD_EOF_FLAGS
+    )
+}
+
+/// `__rt_fd_eof_set`: records that a read on this fd found nothing.
+fn rt_fd_eof_set() -> String {
+    format!(
+        r#"(func $__rt_fd_eof_set (param $fd i32)
+  (if (i32.ge_u (local.get $fd) (i32.const 256))
+    (then (return)))
+  (i32.store8
+    (i32.add (i32.add (global.get $__float_scratch) (i32.const {eof})) (local.get $fd))
+    (i32.const 1)))
+"#,
+        eof = FD_EOF_FLAGS
+    )
+}
+
+/// `__rt_fd_eof_clear`: forgets the flag — a successful seek does, and `fclose` must,
+/// because the next `fopen` may be handed the same fd number back.
+fn rt_fd_eof_clear() -> String {
+    format!(
+        r#"(func $__rt_fd_eof_clear (param $fd i32)
+  (if (i32.ge_u (local.get $fd) (i32.const 256))
+    (then (return)))
+  (i32.store8
+    (i32.add (i32.add (global.get $__float_scratch) (i32.const {eof})) (local.get $fd))
+    (i32.const 0)))
+"#,
+        eof = FD_EOF_FLAGS
+    )
 }
 
 
@@ -260,15 +316,16 @@ const RT_MEMSTREAM_CLOSE: &str = r#"(func $__rt_memstream_close (param $h i32) (
 
 /// `__rt_feof`: PHP's `feof` for either kind of stream.
 ///
-/// A WASI fd has no cheap "have we read past the end" bit, so it answers false — which is what
-/// the native backend does for a stream it cannot ask. An in-memory stream carries the flag its
-/// own reads set.
+/// An in-memory stream carries the flag its own reads set; a real fd carries the same
+/// read-set flag in the `FD_EOF_FLAGS` table. Neither is a position comparison: the
+/// stream-lines corpus example needs the read AFTER the last line to run — it answers
+/// `false` and only then does `feof` turn true, exactly php's fourth `event:` line.
 const RT_FEOF: &str = r#"(func $__rt_feof (param $h i32) (result i64)
   (if (i32.lt_s (local.get $h) (i32.const 0))
     (then (return (i64.const 1))))                                ;; not a stream at all
   (if (i32.and (local.get $h) (i32.const 1073741824))
     (then (return (call $__rt_memstream_eof (local.get $h)))))
-  (i64.const 0))
+  (call $__rt_fd_eof_get (local.get $h)))
 "#;
 
 /// `__rt_ftell`: PHP's `ftell`, for either stream kind.
@@ -323,6 +380,7 @@ const RT_FSEEK: &str = r#"(func $__rt_fseek (param $h i32) (param $off i64) (par
         (i32.add (global.get $__float_scratch) (i32.const 12352)))
       (i32.const 0))
     (then (return (i64.const -1))))
+  (call $__rt_fd_eof_clear (local.get $h))                          ;; a successful seek clears eof
   (i64.const 0))
 "#;
 
@@ -338,6 +396,7 @@ const RT_REWIND: &str = r#"(func $__rt_rewind (param $h i32) (result i64)
         (i32.add (global.get $__float_scratch) (i32.const 12352)))
       (i32.const 0))
     (then (return (i64.const 0))))
+  (call $__rt_fd_eof_clear (local.get $h))                          ;; a successful seek clears eof
   (i64.const 1))
 "#;
 
@@ -605,6 +664,8 @@ fn rt_fread() -> String {
         (i32.const 1)
         (i32.add (global.get $__float_scratch) (i32.const {nread}))))
     (then (local.set $read (i32.load (i32.add (global.get $__float_scratch) (i32.const {nread}))))))
+  (if (i32.eqz (local.get $read))                                 ;; the read that finds nothing sets EOF
+    (then (call $__rt_fd_eof_set (local.get $fd))))
   (call $__rt_str_persist (local.get $buf) (i64.extend_i32_u (local.get $read)))
   (local.set $out_len)                                            ;; persisted length (on top)
   (local.set $out)                                                ;; persisted pointer
@@ -681,7 +742,10 @@ fn rt_stream_get_contents() -> String {
       (i32.const 1)
       (i32.add (global.get $__float_scratch) (i32.const {nread}))) (i32.const 0)))
     (local.set $chunk (i32.load (i32.add (global.get $__float_scratch) (i32.const {nread}))))
-    (br_if $done (i32.eqz (local.get $chunk)))                    ;; a short read means the end
+    (if (i32.eqz (local.get $chunk))                              ;; a short read means the end
+      (then
+        (call $__rt_fd_eof_set (local.get $h))                    ;; and the read that found it sets eof
+        (br $done)))
     (local.set $filled (i32.add (local.get $filled) (local.get $chunk)))
     (br $more)))
   (local.set $out (call $__rt_mixed_from_value (i64.const 1)
@@ -735,6 +799,7 @@ fn rt_fclose() -> String {
     (then (return (i64.const 0))))
   (if (i32.and (local.get $fd) (i32.const 1073741824))
     (then (return (call $__rt_memstream_close (local.get $fd)))))
+  (call $__rt_fd_eof_clear (local.get $fd))                       ;; the next fopen may reuse this fd number
   (if (i32.lt_s (local.get $fd) (i32.const 3))                    ;; stdin/stdout/stderr survive
     (then (return (i64.const 1))))
   (if (i32.ne (call $wasi_fd_close (local.get $fd)) (i32.const 0))
@@ -893,5 +958,155 @@ fn rt_file_put_contents() -> String {
   (local.get $written))
 "#,
         mode = IO_SCRATCH + 0x30
+    )
+}
+
+/// `__rt_stream_get_line`: PHP's `stream_get_line`, boxed as `string|false`.
+///
+/// Measured on php-src 8.5.6, the rules the two branches implement:
+///   * the delimiter is STRIPPED from the answer and consumed from the stream;
+///   * the length cap wins over the delimiter and consumes NOTHING past the cap —
+///     `stream_get_line($f, 3, "#")` on `abc#rest` answers `abc` with `ftell` at 3;
+///   * a length of 0 (PHP's default) reads up to the 8192-byte default chunk;
+///   * partial delimiter matches are data (`ab##` with `###` answers `ab##` whole);
+///   * EOF with no bytes answers `false`; either EOF sets the feof flag, but a read
+///     that stops at the cap — even on the last byte — does NOT.
+///
+/// The real-fd branch reads one byte at a time: WASI has no ungetc, so a byte read
+/// past the delimiter could not be handed back, and byte-wise reads make the
+/// stop-at-delimiter position exact by construction.
+fn rt_stream_get_line() -> String {
+    format!(
+        r#"(func $__rt_stream_get_line (param $h i32) (param $len i64) (param $dptr i32) (param $dlen i64) (result i32)
+  (local $eff i32) (local $d i32) (local $size i64) (local $pos i64) (local $buf i32)
+  (local $avail i64) (local $limit i32) (local $k i32) (local $j i32) (local $m i32)
+  (local $hit i32) (local $acc i32) (local $n i32) (local $out i32) (local $eof i32)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (local.set $eff (i32.const 8192))                               ;; PHP's default chunk for length 0
+  (if (i64.gt_s (local.get $len) (i64.const 0))
+    (then (local.set $eff (i32.wrap_i64 (local.get $len)))))
+  (if (i32.and (local.get $h) (i32.const {flag}))
+    (then
+      ;; In-memory stream: the bytes are already here, scan them in place.
+      (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+      (local.set $size (i64.load (local.get $d)))
+      (local.set $pos (i64.load (i32.add (local.get $d) (i32.const 16))))
+      (local.set $avail (i64.sub (local.get $size) (local.get $pos)))
+      (if (i64.le_s (local.get $avail) (i64.const 0))
+        (then
+          (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 1))  ;; the read found nothing
+          (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+      (local.set $buf (i32.add (i32.load (i32.add (local.get $d) (i32.const 32)))
+                               (i32.wrap_i64 (local.get $pos))))
+      (local.set $limit (i32.wrap_i64 (local.get $avail)))
+      (if (i32.gt_u (local.get $limit) (local.get $eff))
+        (then (local.set $limit (local.get $eff))))
+      (local.set $hit (i32.const -1))
+      (if (i64.gt_s (local.get $dlen) (i64.const 0))
+        (then
+          (local.set $k (i32.const 0))
+          (block $found (loop $scan
+            (br_if $found (i32.ge_u (local.get $k) (local.get $limit)))
+            ;; the delimiter must fit in the STREAM's remaining bytes, not the cap window
+            (if (i64.le_s (i64.add (i64.extend_i32_u (local.get $k)) (local.get $dlen)) (local.get $avail))
+              (then
+                (local.set $j (i32.const 0))
+                (local.set $m (i32.const 1))
+                (block $cmp_done (loop $cmp
+                  (br_if $cmp_done (i32.ge_u (local.get $j) (i32.wrap_i64 (local.get $dlen))))
+                  (if (i32.ne
+                        (i32.load8_u (i32.add (i32.add (local.get $buf) (local.get $k)) (local.get $j)))
+                        (i32.load8_u (i32.add (local.get $dptr) (local.get $j))))
+                    (then
+                      (local.set $m (i32.const 0))
+                      (br $cmp_done)))
+                  (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                  (br $cmp)))
+                (if (local.get $m)
+                  (then
+                    (local.set $hit (local.get $k))
+                    (br $found)))))
+            (local.set $k (i32.add (local.get $k) (i32.const 1)))
+            (br $scan)))))
+      (if (i32.ne (local.get $hit) (i32.const -1))
+        (then
+          (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+            (i64.extend_i32_u (local.get $buf)) (i64.extend_i32_u (local.get $hit))))
+          (i64.store (i32.add (local.get $d) (i32.const 16))      ;; consume data AND delimiter
+            (i64.add (local.get $pos)
+              (i64.add (i64.extend_i32_u (local.get $hit)) (local.get $dlen))))
+          (return (local.get $out))))
+      (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+        (i64.extend_i32_u (local.get $buf)) (i64.extend_i32_u (local.get $limit))))
+      (i64.store (i32.add (local.get $d) (i32.const 16))          ;; cap or end: consume only the data
+        (i64.add (local.get $pos) (i64.extend_i32_u (local.get $limit))))
+      ;; No delimiter and the DATA ran out before the cap: the fd branch would have
+      ;; attempted one more read and found nothing, so this stop is an EOF stop. A stop
+      ;; AT the cap never attempts that read — even when the cap lands on the last byte.
+      (if (i32.lt_u (local.get $limit) (local.get $eff))
+        (then (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 1))))
+      (return (local.get $out))))
+  ;; Real fd: one byte at a time, stopping on cap, delimiter, or the read that finds nothing.
+  (local.set $acc (call $__rt_heap_alloc (local.get $eff)))
+  (block $stop (loop $byte
+    (br_if $stop (i32.ge_u (local.get $n) (local.get $eff)))      ;; cap: eof stays untouched
+    (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov}))
+      (i32.add (local.get $acc) (local.get $n)))
+    (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov_len})) (i32.const 1))
+    (if (i32.ne (call $wasi_fd_read
+          (local.get $h)
+          (i32.add (global.get $__float_scratch) (i32.const {iov}))
+          (i32.const 1)
+          (i32.add (global.get $__float_scratch) (i32.const {nread}))) (i32.const 0))
+      (then
+        (local.set $eof (i32.const 1))
+        (br $stop)))
+    (if (i32.eqz (i32.load (i32.add (global.get $__float_scratch) (i32.const {nread}))))
+      (then
+        (local.set $eof (i32.const 1))
+        (br $stop)))
+    (local.set $n (i32.add (local.get $n) (i32.const 1)))
+    (if (i32.and (i64.gt_s (local.get $dlen) (i64.const 0))
+                 (i32.ge_u (local.get $n) (i32.wrap_i64 (local.get $dlen))))
+      (then
+        ;; does the accumulator now END WITH the delimiter?
+        (local.set $j (i32.const 0))
+        (local.set $m (i32.const 1))
+        (block $cmp_done (loop $cmp
+          (br_if $cmp_done (i32.ge_u (local.get $j) (i32.wrap_i64 (local.get $dlen))))
+          (if (i32.ne
+                (i32.load8_u (i32.add
+                  (i32.add (local.get $acc) (i32.sub (local.get $n) (i32.wrap_i64 (local.get $dlen))))
+                  (local.get $j)))
+                (i32.load8_u (i32.add (local.get $dptr) (local.get $j))))
+            (then
+              (local.set $m (i32.const 0))
+              (br $cmp_done)))
+          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+          (br $cmp)))
+        (if (local.get $m)
+          (then
+            (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+              (i64.extend_i32_u (local.get $acc))
+              (i64.extend_i32_u (i32.sub (local.get $n) (i32.wrap_i64 (local.get $dlen))))))
+            (call $__rt_heap_free (local.get $acc))
+            (return (local.get $out))))))
+    (br $byte)))
+  (if (local.get $eof)
+    (then (call $__rt_fd_eof_set (local.get $h))))
+  (if (i32.and (local.get $eof) (i32.eqz (local.get $n)))
+    (then
+      (call $__rt_heap_free (local.get $acc))
+      (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+    (i64.extend_i32_u (local.get $acc)) (i64.extend_i32_u (local.get $n))))
+  (call $__rt_heap_free (local.get $acc))
+  (local.get $out))
+"#,
+        flag = MEMSTREAM_FLAG,
+        iov = IO_SCRATCH,
+        iov_len = IO_SCRATCH + 4,
+        nread = IO_SCRATCH + 8
     )
 }

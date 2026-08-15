@@ -3475,6 +3475,14 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             &[STREAM, STREAM, IrType::I64, IrType::I64],
             STREAM,
         ),
+        // Answers `string|false`. The delimiter's PHP default is the STRING `""`,
+        // which the i64-only optional tail cannot spell — so all three operands are
+        // required here and a call that omits the delimiter keeps refusing fail-closed.
+        RuntimeFnId::StreamGetLine => (
+            "$__rt_stream_get_line",
+            &[STREAM, IrType::I64, IrType::Str],
+            STREAM,
+        ),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
