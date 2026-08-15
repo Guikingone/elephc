@@ -101,7 +101,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- parse mode string to derive open() flags --
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload mode ptr and len
     emitter.instruction("cmp x4, #0");                                          // reject an empty fopen() mode before reading the first byte
-    emitter.instruction("b.eq __rt_fopen_fail");                                // empty modes fail like PHP and return false
+    emitter.instruction("b.eq __rt_fopen_bad_mode");                            // php words the empty mode too: it prints `' as the value
     emitter.instruction("ldrb w9, [x3]");                                       // load first character of mode string
 
     // -- check for 'r' mode --
@@ -134,7 +134,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- check for 'x' mode (create exclusively) --
     emitter.label("__rt_fopen_check_x");
     emitter.instruction("cmp w9, #0x78");                                       // compare with 'x'
-    emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
+    emitter.instruction("b.ne __rt_fopen_bad_mode");                            // reject unsupported fopen() mode letters
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_excl())); // O_WRONLY|O_CREAT|O_EXCL
     // fall through to check_plus
 
@@ -191,6 +191,31 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
     emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
+
+    // -- a mode php refuses outright: no syscall ran, so there is no errno to describe --
+    // php-src's `_php_stream_fopen` reports this through `php_stream_wrapper_log_error`, which the
+    // generic caller prints after "Failed to open stream: ":
+    //   Warning: fopen(/tmp/x): Failed to open stream: `z' is not a valid mode for fopen
+    // Sharing `__rt_fopen_fail` fed it a PATH POINTER where it expected an errno, so the line read
+    // `Unknown error: 80792944`, and it also dragged in the unknown-wrapper line, which php does
+    // not print here: the wrapper resolved fine, the MODE did not.
+    emitter.label("__rt_fopen_bad_mode");
+    // php resolves the WRAPPER before it parses the mode, so an unknown scheme is still named
+    // first and the mode line follows it. Measured: `fopen("nosuch://host/x","z")` prints the
+    // missing-wrapper line AND the mode line, while `fopen("/tmp/x","z")` prints the mode line
+    // alone — the helper is silent for any path a wrapper claims, which is what keeps them apart.
+    emitter.instruction("stp x3, x4, [sp, #-16]!");                             // the mode survives the extra warning
+    emitter.instruction("ldr x2, [sp, #16]");                                   // the null-terminated path, one push further down
+    abi::emit_symbol_address(emitter, "x0", "_uww_name_fopen");
+    emitter.instruction(&format!("mov x1, #{}", "fopen".len()));                // bare callee name
+    emitter.instruction("bl __rt_unknown_wrapper_warning");
+    emitter.instruction("ldp x3, x4, [sp], #16");                               // restore the mode pair
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the NUL-terminated path
+    emitter.instruction("mov x1, x3");                                          // the mode php quotes straight back
+    emitter.instruction("mov x2, x4");
+    emitter.instruction("bl __rt_fopen_bad_mode_warning");
+    emitter.instruction("mov x0, #-1");                                         // the caller boxes PHP false
+    emitter.instruction("b __rt_fopen_return");
 
     // -- silent-fail entry for user-registered wrappers (no warning) --
     emitter.label("__rt_fopen_silent_fail");
@@ -452,7 +477,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_check_x_x86");
     emitter.instruction("cmp r11b, 0x78");                                      // does the mode string start with 'x' for exclusive creation?
-    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
+    emitter.instruction("jne __rt_fopen_bad_mode_x86");                         // reject unsupported fopen() mode letters, and an empty mode's NUL with them
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_excl())); // select O_WRONLY|O_CREAT|O_EXCL for the Linux exclusive-create fopen() path
 
     // See the AArch64 counterpart: PHP looks for '+' across the whole mode, so `rb+` upgrades
@@ -499,6 +524,23 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
     emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens
+    // See the AArch64 counterpart: a mode php refuses outright ran no syscall, so there is no
+    // errno to describe and the unknown-wrapper line does not belong to it either. The ELEPHC
+    // mode pair is still in the frame, which is what php quotes back — the `__rt_cstr2` copy has
+    // no length of its own.
+    emitter.label("__rt_fopen_bad_mode_x86");
+    // See the AArch64 counterpart: php names an unknown wrapper first, then the mode.
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_uww_name_fopen");
+    emitter.instruction(&format!("mov esi, {}", "fopen".len()));                // bare callee name
+    emitter.instruction("call __rt_unknown_wrapper_warning");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the NUL-terminated path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // the mode php quotes straight back
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");
+    emitter.instruction("call __rt_fopen_bad_mode_warning");
+    emitter.instruction("mov rax, -1");                                         // the caller boxes PHP false
+    emitter.instruction("jmp __rt_fopen_return_x86");
+
     emitter.label("__rt_fopen_silent_fail_x86");
     emitter.instruction("mov rax, -1");                                         // return -1 without emitting a warning (user wrapper match)
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path

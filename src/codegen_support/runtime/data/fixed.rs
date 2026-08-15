@@ -647,6 +647,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_filter_missing_append_prefix\n_diag_filter_missing_append_prefix:\n    .ascii \"Warning: stream_filter_append(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_filter_missing_prepend_prefix\n_diag_filter_missing_prepend_prefix:\n    .ascii \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_open_failed_middle\n_diag_open_failed_middle:\n    .ascii \"): Failed to open stream: \"\n");
+    // Closes php's quoting of the rejected fopen mode; `__rt_fopen_bad_mode_warning` writes the
+    // opening backtick and the mode itself in front of it.
+    out.push_str(&format!(
+        ".globl _diag_mode_not_valid_tail\n_diag_mode_not_valid_tail:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::BAD_MODE_TAIL
+    ));
     out.push_str(".globl _diag_open_failed_fopen_prefix\n_diag_open_failed_fopen_prefix:\n    .ascii \"Warning: fopen(\"\n");
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
     out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");
@@ -1351,6 +1357,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_filter_missing_msg", crate::codegen_support::runtime::io::FILTER_MISSING_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_str_offset_msg", crate::codegen_support::runtime::objects::STRING_OFFSET_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_open_failed_msg", crate::codegen_support::runtime::io::OPEN_FAILED_MSG_CAPACITY, target));
+    out.push_str(&comm_directive("_fopen_bad_mode_reason", crate::codegen_support::runtime::io::BAD_MODE_REASON_CAPACITY, target));
     out.push_str(&comm_directive("_unknown_wrapper_msg", crate::codegen_support::runtime::io::UNKNOWN_WRAPPER_MSG_CAPACITY, target));
     out.push_str(&format!(
         ".globl _gai_msg_prefix\n_gai_msg_prefix:\n    .ascii {GAI_MSG_PREFIX:?}\n"

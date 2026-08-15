@@ -257,7 +257,9 @@ pub(crate) use stream_transport::{emit_stream_record_transport, emit_stream_tran
 pub(crate) use stream_is_local::emit_stream_is_local_path;
 pub(crate) use stream_supports_lock::emit_stream_supports_lock;
 pub(crate) use filter_missing_warning::{emit_filter_missing_warning, FILTER_MISSING_MSG_CAPACITY};
-pub(crate) use open_failed_warning::{emit_open_failed_warning, OPEN_FAILED_MSG_CAPACITY};
+pub(crate) use open_failed_warning::{
+    emit_open_failed_warning, BAD_MODE_REASON_CAPACITY, BAD_MODE_TAIL, OPEN_FAILED_MSG_CAPACITY,
+};
 pub(crate) use unknown_wrapper_warning::{
     emit_unknown_wrapper_warning, UNKNOWN_WRAPPER_MSG_CAPACITY,
 };

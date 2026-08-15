@@ -1175,6 +1175,79 @@ echo $c === false ? "|false" : "|read";
     );
 }
 
+/// Verifies an invalid `fopen()` mode is reported in php's words, not as a bogus errno.
+///
+/// No syscall runs for a mode php refuses, so there is no errno to describe. The failure shared
+/// the errno path anyway, which read `x0`/`rax` — still carrying the PATH POINTER on that branch
+/// — and handed it to `strerror`.
+///
+/// RED before the fix, `php -n` 8.5.6 on the left and elephc on the right:
+///   fopen(F,"z")  ``Failed to open stream: `z' is not a valid mode for fopen``
+///                 vs `Failed to open stream: Unknown error: 80792944`
+///   fopen(F,"")   ``Failed to open stream: `' is not a valid mode for fopen``
+///                 vs the same garbage
+///
+/// The quoting is php-src's own and is NOT symmetrical: an opening backtick, a closing
+/// apostrophe. The empty mode is included because it takes a different branch in `__rt_fopen`
+/// (a length test, before the first byte is ever read) and shares only the wording.
+#[test]
+fn test_invalid_fopen_mode_is_reported_in_phps_words() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$f = "invalid_mode_probe.txt";
+file_put_contents($f, "hello");
+var_dump(fopen($f, "z"));
+var_dump(fopen($f, ""));
+$m = "br";
+var_dump(fopen($f, $m));
+unlink($f);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    for reason in ["`z'", "`'", "`br'"] {
+        assert!(
+            out.stderr.contains(&format!(
+                "Warning: fopen(invalid_mode_probe.txt): Failed to open stream: {reason} is not a valid mode for fopen"
+            )),
+            "missing php's wording for mode {reason}, got stderr={}",
+            out.stderr
+        );
+    }
+    assert!(
+        !out.stderr.contains("Unknown error"),
+        "the mode failure still went through the errno path, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies php validates only the FIRST byte of an `fopen()` mode, and the rest is free.
+///
+/// php-src's `php_stream_parse_fopen_modes` switches on `mode[0]` and then only ever asks
+/// `strchr(mode, '+')`. So `rz`, `rbz`, `rw`, `ra` and even `"r "` all open, while `br`, `tr`,
+/// `+r` and `" r"` do not — the letters are not a SET, they are a first character. Measured
+/// across 20 spellings on `php -n` 8.5.6; this pins the eight that make the rule visible.
+///
+/// It guards the fix above rather than the parse: rewording the failure must not move the line
+/// between accept and reject, and `rz`/`rw`/`ra` are exactly the spellings a "valid letters"
+/// reading would start rejecting.
+#[test]
+fn test_only_the_first_fopen_mode_byte_decides_validity() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "first_byte_mode_probe.txt";
+file_put_contents($f, "hello");
+foreach (["rz", "rbz", "rw", "ra", "r ", "br", "+r", " r"] as $m) {
+    $h = @fopen($f, $m);
+    echo $h === false ? "-" : "+";
+    if ($h) fclose($h);
+}
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "+++++---");
+}
+
 /// Verifies a filter name that resolves to nothing is REPORTED, naming the filter.
 ///
 /// Returning `false` silently left a misspelled filter indistinguishable from one that
