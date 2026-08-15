@@ -1,5 +1,5 @@
 //! Purpose:
-//! Builds named, union, and intersection Reflection type classes.
+//! Builds the Reflection type base class plus named, union, and intersection subtypes.
 //!
 //! Called from:
 //! - The Reflection checker metadata facade and sibling builders.
@@ -9,6 +9,54 @@
 
 use super::*;
 
+/// Builds the abstract `ReflectionType` parent shared by every concrete reflected type object.
+pub(super) fn builtin_reflection_type() -> FlattenedClass {
+    FlattenedClass {
+        name: "ReflectionType".to_string(),
+        span: dummy(),
+        extends: None,
+        implements: vec!["Stringable".to_string()],
+        is_abstract: true,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods: vec![
+            builtin_reflection_type_method("__toString", TypeExpr::Str, empty_string()),
+            builtin_reflection_type_method("allowsNull", TypeExpr::Bool, bool_lit(false)),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Builds one concrete no-argument fallback method for the `ReflectionType` base class.
+fn builtin_reflection_type_method(
+    name: &str,
+    return_type: TypeExpr,
+    value: Option<Expr>,
+) -> ClassMethod {
+    ClassMethod {
+        name: name.to_string(),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_abstract: false,
+        is_final: false,
+        has_body: true,
+        params: Vec::new(),
+        param_attributes: Vec::new(),
+        variadic: None,
+        variadic_by_ref: false,
+        variadic_type: None,
+        return_type: Some(return_type),
+        by_ref_return: false,
+        body: vec![Stmt::new(StmtKind::Return(value), dummy())],
+        span: dummy(),
+        attributes: Vec::new(),
+    }
+}
+
 /// Builds the `ReflectionNamedType` shell: a parameter/return type rendered as a
 /// runtime object with a name, nullability flag, and builtin flag. Populated at
 /// codegen from the declared type.
@@ -16,7 +64,7 @@ pub(super) fn builtin_reflection_named_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionNamedType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
@@ -56,7 +104,7 @@ pub(super) fn builtin_reflection_union_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionUnionType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,
@@ -106,7 +154,7 @@ pub(super) fn builtin_reflection_intersection_type() -> FlattenedClass {
     FlattenedClass {
         name: "ReflectionIntersectionType".to_string(),
         span: dummy(),
-        extends: None,
+        extends: Some("ReflectionType".to_string()),
         implements: Vec::new(),
         is_abstract: false,
         is_final: true,

@@ -182,4 +182,3 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         ))),
     }
 }
-

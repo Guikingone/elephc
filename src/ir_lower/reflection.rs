@@ -32,6 +32,7 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionEnumUnitCase",
     "ReflectionFunction",
     "ReflectionMethod",
+    "ReflectionType",
     "ReflectionNamedType",
     "ReflectionParameter",
     "ReflectionProperty",

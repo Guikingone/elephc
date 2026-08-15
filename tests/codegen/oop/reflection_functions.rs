@@ -82,6 +82,27 @@ echo $plain->getReturnType() === null ? "Q" : "q";
     assert_eq!(out, "T:int:N:B:int:2:intBstringB:never:n:B:p:Q");
 }
 
+/// Verifies every concrete reflection type is a subtype of the abstract ReflectionType parent.
+#[test]
+fn test_reflection_type_subclass_compatibility_and_runtime_metadata() {
+    let out = compile_and_run(
+        r#"<?php
+function reflected_named_type(int $value): int { return $value; }
+function reflected_union_type(int|string $value): int|string { return $value; }
+function render_reflection_type(ReflectionType $type): string { return "accepted"; }
+function render_named_type(ReflectionNamedType $type): string { return render_reflection_type($type); }
+function render_union_type(ReflectionUnionType $type): string { return render_reflection_type($type); }
+function render_intersection_type(ReflectionIntersectionType $type): string { return render_reflection_type($type); }
+$named = (new ReflectionFunction("reflected_named_type"))->getParameters()[0]->getType();
+$union = (new ReflectionFunction("reflected_union_type"))->getParameters()[0]->getType();
+echo render_named_type($named), "|", render_union_type($union), "|";
+echo $named instanceof ReflectionType ? "parent" : "missing";
+echo ":", $union instanceof ReflectionType ? "parent" : "missing";
+"#,
+    );
+    assert_eq!(out, "accepted|accepted|parent:parent");
+}
+
 /// Verifies `ReflectionFunction::isVariadic()` reports the function-level variadic flag.
 #[test]
 fn test_reflection_function_reports_aot_variadic_flag() {
