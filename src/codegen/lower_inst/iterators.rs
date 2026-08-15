@@ -1939,6 +1939,13 @@ fn object_iterator_source(
     ctx: &FunctionContext<'_>,
     class_name: &str,
 ) -> IteratorSourceKind {
+    let normalized = class_name.trim_start_matches('\\');
+    if normalized.eq_ignore_ascii_case("Traversable")
+        || (interface_extends_interface(ctx, normalized, "Traversable")
+            && !interface_extends_interface(ctx, normalized, "Iterator"))
+    {
+        return IteratorSourceKind::DynamicIterable;
+    }
     if ctx.module.interface_infos.contains_key(class_name) {
         return IteratorSourceKind::Interface {
             interface_name: class_name.to_string(),

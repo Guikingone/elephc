@@ -212,7 +212,11 @@ impl Checker {
                     let is_iter_agg = self
                         .class_implements_interface(class_name, "IteratorAggregate")
                         || self.interface_extends_interface(class_name, "IteratorAggregate");
-                    if !is_iter && !is_iter_agg {
+                    let is_traversable_marker = class_name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case("Traversable")
+                        || self.interface_extends_interface(class_name, "Traversable");
+                    if !is_iter && !is_iter_agg && !is_traversable_marker {
                         return Err(CompileError::new(
                             stmt.span,
                             &format!(
