@@ -1248,6 +1248,105 @@ unlink($f);
     assert_eq!(out, "+++++---");
 }
 
+/// Verifies every wrapper-refusal diagnostic still obeys `@`.
+///
+/// These lines reach stderr by four different routes — a compile-time literal interned whole, a
+/// run-time composition inside `__rt_data_stream_dynamic`, another inside `__rt_php_wrapper_open`,
+/// and three `__rt_diag_warning` fragments emitted by the `glob://` lowering — and only the last
+/// of those goes through the path the older diagnostics used. A route that reached `write(2)`
+/// without consulting the suppression depth would make `@fopen(...)` noisy, which is a silent
+/// break of the one thing `@` is for.
+///
+/// The unsuppressed line at the end is the control: without it, a fix that disabled the
+/// diagnostics entirely would pass.
+#[test]
+fn test_wrapper_refusal_diagnostics_obey_the_error_suppression_operator() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("sup_probe.txt", "x");
+var_dump(@fopen("php://bogus", "r"));
+var_dump(@fopen("glob://*.php", "r"));
+var_dump(@fopen("data://text/plain;base64,!!!bad!!!", "r"));
+var_dump(@fopen("sup_probe.txt", "z"));
+$u = "php://bogus"; var_dump(@fopen($u, "r"));
+$g = "glob://*.php"; var_dump(@fopen($g, "r"));
+$d = "data://nocomma"; var_dump(@fopen($d, "r"));
+var_dump(fopen("glob://*.php", "r"));
+unlink("sup_probe.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(8));
+    assert_eq!(
+        out.stderr.trim(),
+        "Warning: fopen(glob://*.php): Failed to open stream: wrapper does not support stream open",
+        "`@` let a wrapper-refusal line through, or the control line went missing"
+    );
+}
+
+/// Verifies `stream_get_meta_data()` returns php's keys in php's ORDER.
+///
+/// A PHP array remembers insertion order and this one is routinely dumped whole, so an array with
+/// identical contents in a different order still prints differently under `print_r()`,
+/// `var_export()`, `json_encode()` or `foreach`. php-src fills it in `_php_stream_get_metadata`:
+/// the three fallback flags, then `wrapper_type`, `stream_type`, `mode`, `unread_bytes`,
+/// `seekable`, and `uri` last.
+///
+/// RED before the fix — elephc put `unread_bytes` third and `stream_type` ahead of
+/// `wrapper_type`:
+///   php     timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri
+///   elephc  timed_out,blocked,eof,unread_bytes,stream_type,wrapper_type,mode,seekable,uri
+///
+/// Three stream kinds are checked because the order comes from one shared builder and a
+/// per-wrapper divergence would otherwise hide behind whichever one the test happened to pick.
+#[test]
+fn test_stream_get_meta_data_keys_are_in_phps_order() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("meta_order.txt", "hi");
+foreach ([fopen("meta_order.txt", "r"), fopen("php://memory", "w+"), fopen("php://stdout", "w")] as $h) {
+    echo implode(",", array_keys(stream_get_meta_data($h))), "\n";
+    fclose($h);
+}
+unlink("meta_order.txt");
+"#,
+    );
+    let expected =
+        "timed_out,blocked,eof,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n";
+    assert_eq!(out, expected.repeat(3));
+}
+
+/// Verifies the eval interpreter accepts every `fopen()` mode php accepts.
+///
+/// `EvalOpenMode::parse` refused any mode carrying a byte outside `rwaxc+bte`. php has no such
+/// rule: `php_stream_parse_fopen_modes` switches on `mode[0]` and afterwards only ever asks
+/// `strchr(mode, '+')`. So the interpreter refused three spellings that `php -n` 8.5.6 AND
+/// elephc's own AOT backend both open — the backend and the interpreter disagreeing about the
+/// same PHP is worse than either being wrong alone.
+///
+/// RED, over `["r","rb","rn","rz","r ","rt","w","x","br","+r","q",""]`:
+///   php / AOT backend  +++++++-----
+///   eval interpreter   ++---++-----
+/// (`x` is `-` on both because the file already exists.) The `_ => return None` arm on the first
+/// character is the whole of php's check, so the extra filter could only refuse too much.
+#[test]
+fn test_eval_fopen_accepts_every_mode_php_accepts() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("evalmode_probe.txt", "hello");
+eval('
+foreach (["r", "rb", "rn", "rz", "r ", "rt", "w", "x", "br", "+r", "q", ""] as $m) {
+    $h = @fopen("evalmode_probe.txt", $m);
+    echo $h === false ? "-" : "+";
+    if ($h) fclose($h);
+}
+');
+unlink("evalmode_probe.txt");
+"#,
+    );
+    assert_eq!(out, "+++++++-----");
+}
+
 /// Verifies a `data:` URI php refuses is refused, and named with php's own `rfc2397:` sentence.
 ///
 /// The `unable to decode` case was not just undiagnosed: the run-time opener asked

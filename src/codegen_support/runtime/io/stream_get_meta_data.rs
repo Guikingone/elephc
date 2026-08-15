@@ -136,14 +136,20 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_hash_new");                                    // allocate the hash; x0 = hash pointer
     emitter.instruction("str x0, [sp, #8]");                                    // save the hash pointer
 
+    // The ORDER is php's, not an arrangement of convenience: this array is routinely dumped whole
+    // with `print_r()` or `var_export()`, and a PHP array remembers insertion order, so a
+    // differently-ordered array with identical contents still prints differently. php-src fills it
+    // in `_php_stream_get_metadata` — the three fallback flags first, then wrapper_type,
+    // stream_type, mode, unread_bytes, seekable — and finally `uri`. elephc had `unread_bytes`
+    // third and `stream_type` ahead of `wrapper_type`. Measured key-by-key on `php -n` 8.5.6.
     emit_set_bool_const(emitter, "_meta_key_timed_out", 9, 0);
     emit_set_bool_slot(emitter, "_meta_key_blocked", 7, 24);
     emit_set_bool_slot(emitter, "_meta_key_eof", 3, 32);
-    emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
-    emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_aarch64(emitter);
+    emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
     emit_set_owned_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
+    emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_aarch64(emitter);
@@ -407,14 +413,15 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_new");                                  // allocate the hash; rax = hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the hash pointer
 
+    // See the AArch64 counterpart: the insertion ORDER is php's, and it is observable.
     emit_set_bool_const_x86(emitter, "_meta_key_timed_out", 9, 0);
     emit_set_bool_slot_x86(emitter, "_meta_key_blocked", 7, 32);
     emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
-    emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
-    emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_x86(emitter);
+    emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
     emit_set_owned_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
+    emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_x86(emitter);
