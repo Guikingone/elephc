@@ -210,6 +210,43 @@ echo $x;
     assert_eq!(out, "5:5");
 }
 
+/// Verifies `??=` neither evaluates nor type-checks an unreachable fallback as an ordinary
+/// local reassignment when the current value is statically non-null.
+#[test]
+fn test_null_coalesce_assignment_skips_unreachable_type_changing_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+function fallback(): float {
+    echo "unreachable";
+    return 2.5;
+}
+$value = 5;
+echo ($value ??= fallback());
+echo ":";
+echo gettype($value);
+"#,
+    );
+    assert_eq!(out, "5:integer");
+}
+
+/// Verifies a nullable callable local becomes non-null after `??=` and can satisfy a callable
+/// return contract for both the existing-value and fallback paths.
+#[test]
+fn test_null_coalesce_assignment_removes_nullable_callable_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function ensure(?callable $callback): callable {
+    $callback ??= fn(): string => "fallback";
+    return $callback;
+}
+echo ensure(null)();
+echo ":";
+echo ensure(fn(): string => "given")();
+"#,
+    );
+    assert_eq!(out, "fallback:given");
+}
+
 /// Verifies array-element assignment is an expression returning the assigned value.
 /// Fixture: `$items = [1, 2]; echo ($items[1] = 9);` expects both echo and `$items[1]` to be 9.
 #[test]

@@ -16,6 +16,7 @@ use crate::parser::ast::{
 };
 use crate::span::Span;
 use crate::types::checker::builtins::array_arg_is_gradually_acceptable;
+use crate::types::checker::inference::syntactic::null_coalesce_merge_type;
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
@@ -51,48 +52,51 @@ fn null_coalesce_assignment_default<'a>(name: &str, value: &'a Expr) -> Option<&
 
 /// Determines the resulting type of a null-coalescing assignment operation.
 ///
-/// Combines the existing type of `existing` with the inferred type of `default_ty`,
-/// returning the merged type or an error if the types are incompatible.
-/// Handles special cases: `Void` existing types, `Mixed`, and union types.
-///
-/// Returns `Ok(PhpType)` with the resolved type, or `Err` if the null-coalescing
-/// assignment would violate type constraints.
+/// A definitely non-null current value wins without evaluating the default. For a nullable
+/// union, removes the null arm before merging it with the default because the default replaces
+/// that arm at runtime. Explicit typed-local contracts remain enforced by
+/// [`merge_local_assignment_type`] after this flow-sensitive result has been computed; the
+/// reachable default is also checked directly so a heterogeneous merge cannot hide an invalid
+/// concrete write behind `Mixed`.
 fn null_coalesce_assignment_type(
     checker: &Checker,
     name: &str,
     existing: &PhpType,
     default_ty: &PhpType,
-    default: &Expr,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if *existing == PhpType::Void {
-        return Ok(default_ty.clone());
-    }
-    if *existing == PhpType::Mixed {
-        return Ok(PhpType::Mixed);
-    }
-    if matches!(existing, PhpType::Union(_)) {
-        if *default_ty == PhpType::Void || checker.type_accepts(existing, default_ty) {
-            return Ok(existing.clone());
+    let default_reachable = matches!(existing, PhpType::Void | PhpType::Mixed)
+        || Checker::union_contains_void(existing);
+    let declaration_key = (checker.current_loop_storage_scope.clone(), name.to_string());
+    if default_reachable {
+        if let Some(declared) = checker.declared_local_types.get(&declaration_key) {
+            if !checker.type_accepts(declared, default_ty) {
+                return Err(CompileError::new(
+                    span,
+                    &format!(
+                        "Type error: cannot reassign ${} from {} to {}",
+                        name, declared, default_ty
+                    ),
+                ));
+            }
         }
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Type error: null coalescing assignment for ${} must keep {}, got {}",
-                name, existing, default_ty
-            ),
-        ));
     }
-    if existing == default_ty || matches!(default.kind, ExprKind::Null) {
-        return Ok(existing.clone());
-    }
-    Err(CompileError::new(
-        span,
-        &format!(
-            "Type error: null coalescing assignment for ${} must keep {}, got {}",
-            name, existing, default_ty
-        ),
-    ))
+
+    let result = if *existing == PhpType::Void {
+        default_ty.clone()
+    } else if *existing == PhpType::Mixed {
+        PhpType::Mixed
+    } else if Checker::union_contains_void(existing) {
+        if *default_ty == PhpType::Void {
+            existing.clone()
+        } else {
+            let non_null = checker.strip_void_from_union(existing);
+            null_coalesce_merge_type(&non_null, default_ty)
+        }
+    } else {
+        existing.clone()
+    };
+    Ok(result)
 }
 
 /// Type-checks a simple variable assignment (`$name = value`).
@@ -184,7 +188,7 @@ pub(super) fn check_assign(
                     let mut default_env = env.clone();
                     checker.infer_type_with_assignment_effects(default, &mut default_env)?
                 };
-                null_coalesce_assignment_type(checker, name, &existing, &default_ty, default, span)
+                null_coalesce_assignment_type(checker, name, &existing, &default_ty, span)
             } else {
                 checker.infer_type_with_assignment_effects(value, env)
             }

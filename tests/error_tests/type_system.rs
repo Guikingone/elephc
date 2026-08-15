@@ -16,13 +16,13 @@ fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
 }
 
-/// Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
-/// Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
+/// Verifies that `??=` rejects a fallback outside an explicit nullable local contract.
+/// Input: `?int $x = null; $x ??= 2.5;` — the reachable float fallback cannot be stored as int.
 #[test]
 fn test_error_null_coalesce_assignment_type_change() {
     expect_error(
-        "<?php $x = 5; $x ??= 2.5;",
-        "null coalescing assignment for $x must keep int, got float",
+        "<?php ?int $x = null; $x ??= 2.5;",
+        "cannot reassign $x",
     );
 }
 
