@@ -852,3 +852,29 @@ echo (new Child())->describe();
     );
     assert_eq!(out, "child");
 }
+
+/// Verifies trait methods preserve `instanceof` syntax while narrowing their concrete `$this`
+/// receiver after trait composition.
+#[test]
+fn test_trait_this_instanceof_narrowing_passes_interface_argument() {
+    let out = compile_and_run(
+        r#"<?php
+interface Labeled { public function label(): string; }
+trait DescribesLabel {
+    public function describe(): string {
+        if ($this instanceof Labeled) {
+            return readLabel($this);
+        }
+        return "none";
+    }
+}
+final class LabeledValue implements Labeled {
+    use DescribesLabel;
+    public function label(): string { return "value"; }
+}
+function readLabel(Labeled $value): string { return $value->label(); }
+echo (new LabeledValue())->describe();
+"#,
+    );
+    assert_eq!(out, "value");
+}
