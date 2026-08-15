@@ -645,12 +645,15 @@ fn emit_access_aarch64(emitter: &mut Emitter) {
 /// x86_64 counterpart of [`emit_access_aarch64`]: rdi/rsi = path, rdx = which, rax = predicate.
 fn emit_access_x86_64(emitter: &mut Emitter) {
     let frame = 320;
-    let groups_neg = frame - 64;
+    // The buffer occupies the far end of the frame — rbp-320 .. rbp-65 — so its 256 bytes clear
+    // the spill slots at rbp-8 .. rbp-48. Anchoring it any nearer to rbp would run over them and
+    // over the saved rbp and return address.
+    let groups_neg = frame;
     emitter.blank();
     emitter.comment("--- runtime: user_wrapper_url_stat_access ---");
     emitter.label_global("__rt_user_wrapper_url_stat_access");
     // Frame: [rbp-8] which, [rbp-16] the stat box, [rbp-24] mode, [rbp-32] st_uid,
-    //   [rbp-40] st_gid, [rbp-48] the group count, [rbp-256..] the group buffer.
+    //   [rbp-40] st_gid, [rbp-48] the group count, [rbp-320 .. rbp-65] the group buffer.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction(&format!("sub rsp, {}", frame));                        // helper frame plus the group buffer
@@ -697,27 +700,27 @@ fn emit_access_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");
     emitter.instruction("cmp r10, r11");
     emitter.instruction("jge __rt_uwsq_other_x86");                             // no supplementary group matched
-    emitter.instruction(&format!("lea r12, [rbp - {}]", groups_neg));           // the group buffer
-    emitter.instruction("mov r13d, DWORD PTR [r12 + r10 * 4]");                 // gid_t entries are 32 bits wide
-    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");
-    emitter.instruction("cmp r13d, r9d");
+    emitter.instruction(&format!("lea rax, [rbp - {}]", groups_neg));           // the group buffer
+    emitter.instruction("mov r9d, DWORD PTR [rax + r10 * 4]");                  // gid_t entries are 32 bits wide
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");
+    emitter.instruction("cmp r9d, r11d");
     emitter.instruction("je __rt_uwsq_group_x86");                              // a supplementary group matched
     emitter.instruction("inc r10");
     emitter.instruction("jmp __rt_uwsq_scan_x86");
     emitter.label("__rt_uwsq_owner_x86");
-    emitter.instruction(&format!("mov r13, {}", ACCESS_OWNER_BASE));
+    emitter.instruction(&format!("mov r9, {}", ACCESS_OWNER_BASE));
     emitter.instruction("jmp __rt_uwsq_apply_x86");
     emitter.label("__rt_uwsq_group_x86");
-    emitter.instruction(&format!("mov r13, {}", ACCESS_GROUP_BASE));
+    emitter.instruction(&format!("mov r9, {}", ACCESS_GROUP_BASE));
     emitter.instruction("jmp __rt_uwsq_apply_x86");
     emitter.label("__rt_uwsq_other_x86");
-    emitter.instruction(&format!("mov r13, {}", ACCESS_OTHER_BASE));
+    emitter.instruction(&format!("mov r9, {}", ACCESS_OTHER_BASE));
     emitter.label("__rt_uwsq_apply_x86");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // read / write / execute
-    emitter.instruction("shr r13, cl");                                         // walk the triad's base bit to the asked-for one
-    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the mode
-    emitter.instruction("and r9, r13");
-    emitter.instruction("test r9, r9");
+    emitter.instruction("shr r9, cl");                                          // walk the triad's base bit to the asked-for one
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // the mode
+    emitter.instruction("and r10, r9");
+    emitter.instruction("test r10, r10");
     emitter.instruction("setne al");                                            // the bit is the whole answer
     emitter.instruction("movzx eax, al");
     emitter.instruction("jmp __rt_uwsq_ret_x86");
