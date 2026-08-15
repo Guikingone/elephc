@@ -203,6 +203,63 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Regression: `implode()` over an array whose STATIC type is `Mixed` SIGSEGVed on int elements.
+///
+/// A `Mixed` operand carries no compile-time element type, so `implode_runtime_label` sent it to
+/// `__rt_implode` — the renderer that reads 16-byte string `{ptr,len}` slots. An int array stores
+/// 8-byte payloads, so element 0 (`1`) was dereferenced as a string pointer and the process died
+/// with SIGSEGV (exit 139). Measured with `php -n` (8.5.6):
+/// `$r = eval('return [1,2];'); echo implode(",", $r);` prints `1,2`.
+#[test]
+fn test_implode_mixed_operand_int_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1, 2];');
+echo implode(",", $r), "\n";
+function h(): mixed { return [10, 20, 30]; }
+echo implode("-", h()), "\n";
+echo join(",", eval('return [7, 8];')), "\n";
+echo implode(eval('return [4, 5];')), "\n";
+"#,
+    );
+    assert_eq!(out, "1,2\n10-20-30\n7,8\n45\n");
+}
+
+/// Regression: `implode()` over a `Mixed` operand holding a BOOL array rendered the wrong bytes.
+///
+/// PHP stringifies `true` as `"1"` and `false` as the EMPTY string, which only `__rt_implode_bool`
+/// does. Reading the 8-byte bool payloads as 16-byte string pairs silently produced `","` instead.
+/// Measured with `php -n` (8.5.6): `implode(",", [true, false])` is `"1,"`.
+#[test]
+fn test_implode_mixed_operand_bool_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [true, false];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [true, true]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(out, "1,|\n1-1|\n");
+}
+
+/// Guard: the `Mixed`-operand dispatcher must leave the layouts that already worked untouched.
+///
+/// String slots (value_type tag 1), boxed Mixed cells (tag 7), and the empty array (unstamped, so
+/// it shares the int tag) all round-trip through `__rt_implode_dyn` unchanged. Measured with
+/// `php -n` (8.5.6): `"a,b"`, `"1,a"`, and the empty string.
+#[test]
+fn test_implode_mixed_operand_preserves_string_and_boxed_layouts() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["a", "b"];')), "|\n";
+echo implode(",", eval('return [1, "a"];')), "|\n";
+echo implode(",", eval('return [];')), "|\n";
+"#,
+    );
+    assert_eq!(out, "a,b|\n1,a|\n|\n");
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {

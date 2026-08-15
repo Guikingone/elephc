@@ -591,7 +591,13 @@ pub(super) fn implode_runtime_label(
                 other
             ))),
         },
-        PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode"),
+        // A `Mixed` operand carries NO compile-time element type, so the renderer cannot be picked
+        // here: `$r = eval('return [1,2];'); implode(",", $r)` reaches this arm with an array whose
+        // runtime slots are 8-byte ints, and `__rt_implode` reads 16-byte string pointer/length
+        // pairs — it dereferenced the payload `1` as a string pointer and SIGSEGVed. The layout is
+        // only knowable from the array's runtime value_type tag, so the choice moves to
+        // `__rt_implode_dyn`, which reads that tag and tail-branches to the right renderer.
+        PhpType::Mixed | PhpType::Union(_) => Ok("__rt_implode_dyn"),
         // php's `implode()` reads only the VALUES, in insertion order, so a hash joins exactly
         // like the indexed array of its values — which is what the key-preserving builtins
         // (`array_diff`, `array_intersect`, `array_unique`, `array_slice($a,$o,$l,true)`) return.
