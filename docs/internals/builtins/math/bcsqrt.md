@@ -2,7 +2,7 @@
 title: "bcsqrt() — internals"
 description: "Compiler internals for bcsqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 289
 ---
 
 ## `bcsqrt()` — internals

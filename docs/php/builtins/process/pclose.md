@@ -2,7 +2,7 @@
 title: "pclose()"
 description: "Closes process file pointer."
 sidebar:
-  order: 367
+  order: 368
 ---
 
 ## pclose()

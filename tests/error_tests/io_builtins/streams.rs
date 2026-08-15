@@ -863,9 +863,12 @@ fn test_error_pclose_requires_resource() {
 }
 
 /// Verifies the invalid-call diagnostic for error opendir wrong args.
+///
+/// The wording follows the signature: php declares `opendir(string $directory, $context = null)`,
+/// so since `$context` landed the range is 1 or 2, not exactly 1.
 #[test]
 fn test_error_opendir_wrong_args() {
-    expect_error("<?php opendir();", "opendir() takes exactly 1 argument");
+    expect_error("<?php opendir();", "opendir() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error readdir wrong args.

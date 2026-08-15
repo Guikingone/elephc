@@ -2,7 +2,7 @@
 title: "ob_get_clean()"
 description: "Gets the current buffer contents and deletes the current output buffer."
 sidebar:
-  order: 204
+  order: 205
 ---
 
 ## ob_get_clean()

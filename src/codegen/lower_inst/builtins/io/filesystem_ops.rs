@@ -106,7 +106,7 @@ pub(crate) fn lower_chdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 
 /// Lowers `copy(source, dest)` through the target-aware runtime helper.
 pub(crate) fn lower_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_binary_path_call(ctx, inst, "copy", "__rt_copy")
+    lower_binary_path_call_with_context(ctx, inst, "copy", "__rt_copy")
 }
 
 /// Lowers `rename(from, to)` through the target-aware runtime helper.
@@ -126,7 +126,8 @@ pub(crate) fn lower_tempnam(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// PHP false — which is what lets `scandir($d) === false`, the manual's own failure test,
 /// finally fire. The success side boxes the indexed array as a tag-4 Mixed payload.
 pub(crate) fn lower_scandir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count_between(inst, "scandir", 1, 2)?;
+    // `$context` is the third parameter, accepted and ignored (see `lower_unlink`).
+    super::super::ensure_arg_count_between(inst, "scandir", 1, 3)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "scandir")?;
     // $sorting_order rides beside the path pair, defaulting to SCANDIR_SORT_ASCENDING —

@@ -2,7 +2,7 @@
 title: "fputs()"
 description: "Binary-safe file write (alias of fwrite)."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## fputs()

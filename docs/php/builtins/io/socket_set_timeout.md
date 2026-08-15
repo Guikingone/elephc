@@ -2,7 +2,7 @@
 title: "socket_set_timeout()"
 description: "Set timeout period on a socket stream (alias of stream_set_timeout)."
 sidebar:
-  order: 221
+  order: 222
 ---
 
 ## socket_set_timeout()

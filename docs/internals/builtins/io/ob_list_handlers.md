@@ -2,7 +2,7 @@
 title: "ob_list_handlers() — internals"
 description: "Compiler internals for ob_list_handlers(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 211
+  order: 212
 ---
 
 ## `ob_list_handlers()` — internals

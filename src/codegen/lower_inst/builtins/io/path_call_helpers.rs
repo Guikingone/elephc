@@ -101,6 +101,31 @@ pub(super) fn lower_binary_path_call(
     runtime_label: &str,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 2)?;
+    emit_binary_path_call(ctx, inst, name, runtime_label)
+}
+
+/// The same, for a builtin whose third parameter is php's `$context`.
+///
+/// `$context` is accepted and IGNORED, the way `unlink()`/`mkdir()`/`rmdir()` already accept it:
+/// elephc has no context plumbing on this route, and refusing the argument outright was worse —
+/// it made `copy($a, $b, $ctx)` a compile error on a signature php documents.
+pub(super) fn lower_binary_path_call_with_context(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    super::super::ensure_arg_count_between(inst, name, 2, 3)?;
+    emit_binary_path_call(ctx, inst, name, runtime_label)
+}
+
+/// Emits the two-path call itself, once the arity has been checked.
+fn emit_binary_path_call(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
     let first = expect_operand(inst, 0)?;
     let second = expect_operand(inst, 1)?;
     match ctx.emitter.target.arch {

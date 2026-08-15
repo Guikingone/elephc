@@ -18968,6 +18968,13 @@
           "name": "to",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -19002,6 +19009,13 @@
           "name": "to",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -19099,6 +19113,13 @@
           "name": "to",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -21505,6 +21526,81 @@
     },
     "slug": "die",
     "sub_area": "Process"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "directory",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "dir",
+    "description": "Opens a directory and returns a Directory object, or false.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/hash_prelude.rs",
+      "codegen_function": "dir",
+      "codegen_line": 1,
+      "notes": [
+        "Implemented by a compiler-injected PHP prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_surfaces.rs",
+      "sig_line": null
+    },
+    "name": "dir",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "directory",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "dir",
+    "sub_area": "IO"
   },
   {
     "aot": {
@@ -33691,7 +33787,7 @@
       "codegen_function": "hash_copy",
       "codegen_line": 103,
       "notes": [
-        "Implemented by the compiler-injected hash prelude."
+        "Implemented by a compiler-injected PHP prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -34108,7 +34204,7 @@
       "codegen_function": "hash_final",
       "codegen_line": 98,
       "notes": [
-        "Implemented by the compiler-injected hash prelude."
+        "Implemented by a compiler-injected PHP prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -34413,7 +34509,7 @@
       "codegen_function": "hash_init",
       "codegen_line": 89,
       "notes": [
-        "Implemented by the compiler-injected hash prelude."
+        "Implemented by a compiler-injected PHP prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -34508,7 +34604,7 @@
       "codegen_function": "hash_update",
       "codegen_line": 93,
       "notes": [
-        "Implemented by the compiler-injected hash prelude."
+        "Implemented by a compiler-injected PHP prelude."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -47764,6 +47860,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -47791,6 +47894,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -47882,6 +47992,13 @@
           "name": "directory",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -57193,6 +57310,13 @@
           "name": "sorting_order",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -57227,6 +57351,13 @@
           "name": "sorting_order",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -57325,6 +57456,13 @@
           "name": "sorting_order",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",

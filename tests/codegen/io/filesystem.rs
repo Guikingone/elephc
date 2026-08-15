@@ -881,3 +881,169 @@ fn test_disk_free_space_invalid_path_is_false() {
     let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
     assert_eq!(out, "bool(false)\n");
 }
+
+/// `dir()` and the `Directory` it returns were both ABSENT; a program calling either failed to
+/// compile with "Undefined function"/"Undefined class".
+///
+/// php's `dir(string $directory, $context = null): Directory|false` is the only way to obtain a
+/// `Directory`, whose surface is `$path`, `$handle`, `read(): string|false`, `rewind(): void` and
+/// `close(): void`. Measured on php 8.5.6, including the three shapes a naive implementation gets
+/// wrong: the listing is `readdir()`'s own order and NOT sorted, `rewind()`/`close()` answer null
+/// rather than a boolean, and the class refuses direct construction with `Error: Cannot directly
+/// construct Directory, use dir() instead` — a wording a private constructor cannot produce.
+///
+/// `$context` is accepted and ignored, as `mkdir()`/`opendir()` already accept it.
+#[test]
+fn test_dir_returns_a_directory_object_matching_php() {
+    let out = compile_and_run(
+        r#"<?php
+$base = "elephc_dir_surface";
+@mkdir($base);
+file_put_contents("$base/a.txt", "x");
+
+$d = dir($base);
+var_dump($d instanceof Directory);
+var_dump(get_class($d));
+echo "path=", $d->path, "\n";
+var_dump(is_resource($d->handle));
+
+$viaObj = [];
+while (($e = $d->read()) !== false) { $viaObj[] = $e; }
+$d->close();
+$h = opendir($base);
+$viaFn = [];
+while (($e = readdir($h)) !== false) { $viaFn[] = $e; }
+closedir($h);
+var_dump($viaObj === $viaFn);
+var_dump(count($viaObj));
+
+$d = dir($base);
+$first = $d->read();
+$d->read();
+var_dump($d->rewind());
+var_dump($d->read() === $first);
+var_dump($d->close());
+
+var_dump(@dir("$base/nope"));
+
+try { new Directory(); } catch (Throwable $t) { echo get_class($t), ": ", $t->getMessage(), "\n"; }
+
+$ctx = stream_context_create([]);
+$d = dir($base, $ctx);
+var_dump($d instanceof Directory);
+$d->close();
+$d = dir($base, null);
+var_dump($d instanceof Directory);
+$d->close();
+
+unlink("$base/a.txt");
+rmdir($base);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nstring(9) \"Directory\"\npath=elephc_dir_surface\nbool(true)\n\
+         bool(true)\nint(3)\n\
+         NULL\nbool(true)\nNULL\n\
+         bool(false)\n\
+         Error: Cannot directly construct Directory, use dir() instead\n\
+         bool(true)\nbool(true)\n",
+        "the whole Directory surface, readdir-ordered and with php's void returns"
+    );
+}
+
+/// A program that owns the names itself keeps them — a DELIBERATE divergence, pinned as one.
+///
+/// php refuses: `Fatal error: Cannot redeclare function dir()`, because `dir` and `Directory` are
+/// its own. elephc accepts, because the prelude is pay-for-use and injecting it unconditionally is
+/// the only way to reproduce php's fatal — which would also break every program that today owns
+/// these very ordinary names and compiles fine. Over-acceptance was judged the safer half of the
+/// trade, and this test exists so the choice is visible rather than incidental: if the prelude ever
+/// becomes unconditional, this test fails and the divergence note has to be revisited.
+#[test]
+fn test_user_declared_dir_and_directory_keep_their_own_definitions() {
+    let out = compile_and_run(
+        r#"<?php
+class Directory {
+    public string $label;
+    public function __construct(string $label) { $this->label = $label; }
+    public function describe(): string { return "user:" . $this->label; }
+}
+function dir(string $path): string { return "mine:" . $path; }
+echo dir("/tmp"), "\n";
+$d = new Directory("own");
+echo $d->describe(), "\n";
+var_dump(function_exists("dir"), class_exists("Directory"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "mine:/tmp\nuser:own\nbool(true)\nbool(true)\n",
+        "the user's own dir()/Directory win; php would have refused the program outright"
+    );
+}
+
+/// `opendir()`, `copy()` and `scandir()` refused php's `$context` argument outright.
+///
+/// All three document one, and passing it was a COMPILE error on a signature php accepts — the
+/// same trap `unlink()`/`mkdir()`/`rmdir()` were already fixed for. The argument is accepted and
+/// ignored: elephc has no context plumbing on these routes, and a null context behaves the same.
+/// Measured on php 8.5.6.
+#[test]
+fn test_opendir_copy_and_scandir_accept_phps_context_argument() {
+    let out = compile_and_run(
+        r#"<?php
+$base = "elephc_ctxprobe";
+@mkdir($base);
+file_put_contents("$base/a.txt", "x");
+$ctx = stream_context_create(["http" => ["method" => "GET"]]);
+$h = opendir($base, $ctx);
+var_dump(is_resource($h));
+closedir($h);
+$h = opendir($base, null);
+var_dump(is_resource($h));
+closedir($h);
+var_dump(copy("$base/a.txt", "$base/b.txt", $ctx));
+var_dump(copy("$base/a.txt", "$base/c.txt", null));
+var_dump(file_exists("$base/b.txt"), file_exists("$base/c.txt"));
+$list = scandir($base, SCANDIR_SORT_ASCENDING, $ctx);
+echo implode(",", $list), "\n";
+$list = scandir($base, SCANDIR_SORT_ASCENDING, null);
+echo implode(",", $list), "\n";
+unlink("$base/a.txt"); unlink("$base/b.txt"); unlink("$base/c.txt");
+rmdir($base);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n\
+         .,..,a.txt,b.txt,c.txt\n.,..,a.txt,b.txt,c.txt\n",
+        "all three accept the context php documents, including a null one"
+    );
+}
+
+/// `readdir()` answers php's `string|false`, not `string|bool`.
+///
+/// The registered union was the wider `Str|Bool`, so a function DECLARED with php's own
+/// `string|false` return could not hand back what `readdir()` gave it —
+/// `Method 'D::read' return type expects Union([Str, False]), got Union([Str, Bool])` — on a
+/// signature php accepts. `readlink()` and `ob_get_clean()` already used the narrow form. This is
+/// what `Directory::read()` needs, so the prelude pins it too.
+#[test]
+fn test_readdir_returns_string_or_false_not_string_or_bool() {
+    let out = compile_and_run(
+        r#"<?php
+$base = "elephc_readdir_type";
+@mkdir($base);
+function first_entry($handle): string|false {
+    return readdir($handle);
+}
+$h = opendir($base);
+$e = first_entry($h);
+closedir($h);
+var_dump(is_string($e));
+rmdir($base);
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
+}

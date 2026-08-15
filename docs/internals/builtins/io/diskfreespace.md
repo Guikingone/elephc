@@ -2,7 +2,7 @@
 title: "diskfreespace() — internals"
 description: "Compiler internals for diskfreespace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 167
+  order: 168
 ---
 
 ## `diskfreespace()` — internals

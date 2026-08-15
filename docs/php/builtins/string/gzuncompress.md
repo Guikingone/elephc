@@ -2,7 +2,7 @@
 title: "gzuncompress()"
 description: "Uncompress a compressed string."
 sidebar:
-  order: 412
+  order: 413
 ---
 
 ## gzuncompress()

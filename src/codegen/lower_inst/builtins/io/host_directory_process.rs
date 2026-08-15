@@ -233,7 +233,8 @@ pub(crate) fn lower_getservbyport(
 
 /// Lowers `opendir(path)` and boxes the directory stream as `resource|false`.
 pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "opendir", 1)?;
+    // `$context` is the second parameter, accepted and ignored (see `lower_unlink`).
+    super::super::ensure_arg_count_between(inst, "opendir", 1, 2)?;
     // PHP creates the request default stream context on the FIRST stream open of any
     // kind, not only on `fopen`: after `opendir(".")` the directory handle is id 5 and
     // `stream_context_get_default()` answers 4, so the context was minted first. Doing

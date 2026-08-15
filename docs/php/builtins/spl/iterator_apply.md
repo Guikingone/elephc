@@ -2,7 +2,7 @@
 title: "iterator_apply()"
 description: "Call a function for every element in an iterator."
 sidebar:
-  order: 380
+  order: 381
 ---
 
 ## iterator_apply()

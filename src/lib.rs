@@ -29,6 +29,7 @@ pub mod exports;
 pub mod func_args;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod dir_prelude;
 pub mod hash_prelude;
 pub mod image_prelude;
 /// Intrinsic call handling.

@@ -2,7 +2,7 @@
 title: "html_entity_decode() — internals"
 description: "Compiler internals for html_entity_decode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 422
+  order: 423
 ---
 
 ## `html_entity_decode()` — internals

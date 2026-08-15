@@ -93,9 +93,12 @@ fn test_error_mkdir_wrong_args() {
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
+///
+/// The wording follows the signature: php declares `copy(string $from, string $to, $context = null)`,
+/// so since `$context` landed the range is 2 or 3, not exactly 2.
 #[test]
 fn test_error_copy_wrong_args() {
-    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+    expect_error(r#"<?php copy("x");"#, "copy() takes 2 or 3 arguments");
 }
 
 /// Verifies `link()` rejects one argument (requires 2) with arity error.
@@ -143,11 +146,11 @@ fn test_error_getcwd_wrong_args() {
 /// Verifies `scandir()` rejects zero arguments with arity error.
 ///
 /// The wording follows the signature: php declares
-/// `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, ...)`,
-/// so since the sorting order landed the range is 1 or 2, not exactly 1.
+/// `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null)`,
+/// so since the sorting order and then `$context` landed the range is 1 to 3, not exactly 1.
 #[test]
 fn test_error_scandir_wrong_args() {
-    expect_error("<?php scandir();", "scandir() takes 1 or 2 arguments");
+    expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
 /// Verifies `tempnam()` rejects one argument (requires 2) with arity error.

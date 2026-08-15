@@ -15,7 +15,7 @@ sidebar:
 | [`chmod()`](./filesystem/chmod.md) | `(string $filename, int $permissions): bool` | `bool` | ✓ | ✓ |
 | [`chown()`](./filesystem/chown.md) | `(string $filename, string $user): bool` | `bool` | ✓ | ✓ |
 | [`clearstatcache()`](./filesystem/clearstatcache.md) | `(bool $clear_realpath_cache = false, string $filename = ''): void` | `void` | ✓ | ✓ |
-| [`copy()`](./filesystem/copy.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
+| [`copy()`](./filesystem/copy.md) | `(string $from, string $to, mixed $context = null): bool` | `bool` | ✓ | ✓ |
 | [`dirname()`](./filesystem/dirname.md) | `(string $path, int $levels = 1): string` | `string` | ✓ | ✓ |
 | [`disk_free_space()`](./filesystem/disk_free_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
 | [`disk_total_space()`](./filesystem/disk_total_space.md) | `(string $directory): mixed` | `mixed` | ✓ | ✓ |
@@ -55,7 +55,7 @@ sidebar:
 | [`realpath_cache_size()`](./filesystem/realpath_cache_size.md) | `(): int` | `int` | ✓ | ✓ |
 | [`rename()`](./filesystem/rename.md) | `(string $from, string $to): bool` | `bool` | ✓ | ✓ |
 | [`rmdir()`](./filesystem/rmdir.md) | `(string $directory, mixed $context = null): bool` | `bool` | ✓ | ✓ |
-| [`scandir()`](./filesystem/scandir.md) | `(string $directory, int $sorting_order = 0): mixed` | `mixed` | ✓ | ✓ |
+| [`scandir()`](./filesystem/scandir.md) | `(string $directory, int $sorting_order = 0, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
 | [`stat()`](./filesystem/stat.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`symlink()`](./filesystem/symlink.md) | `(string $target, string $link): bool` | `bool` | ✓ | ✓ |
 | [`sys_get_temp_dir()`](./filesystem/sys_get_temp_dir.md) | `(): string` | `string` | ✓ | ✓ |

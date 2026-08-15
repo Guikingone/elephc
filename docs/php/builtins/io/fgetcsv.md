@@ -2,7 +2,7 @@
 title: "fgetcsv()"
 description: "Gets line from file pointer and parse for CSV fields."
 sidebar:
-  order: 173
+  order: 174
 ---
 
 ## fgetcsv()

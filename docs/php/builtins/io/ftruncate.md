@@ -2,7 +2,7 @@
 title: "ftruncate()"
 description: "Truncates a file to a given length."
 sidebar:
-  order: 190
+  order: 191
 ---
 
 ## ftruncate()

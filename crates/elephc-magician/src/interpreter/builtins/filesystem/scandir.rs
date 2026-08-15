@@ -50,9 +50,10 @@ pub(in crate::interpreter) fn eval_builtin_scandir(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // `scandir()`'s third parameter is php's `$context`, accepted and ignored (see `opendir`).
     let (directory, order) = match args {
         [directory] => (directory, 0),
-        [directory, order] => {
+        [directory, order] | [directory, order, _] => {
             let order = eval_expr(order, context, scope, values)?;
             (directory, eval_int_value(order, values)?)
         }

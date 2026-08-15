@@ -2,7 +2,7 @@
 title: "fputs() — internals"
 description: "Compiler internals for fputs(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 184
 ---
 
 ## `fputs()` — internals

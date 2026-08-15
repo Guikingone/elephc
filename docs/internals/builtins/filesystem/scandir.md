@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function scandir(string $directory, int $sorting_order = 0): mixed
+function scandir(string $directory, int $sorting_order = 0, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–2 arguments (1 optional).
+- **Arity**: takes 1–3 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

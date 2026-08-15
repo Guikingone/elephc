@@ -224,6 +224,10 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decbin",
     "dechex",
     "decoct",
+    // The compiler serves `dir()` through the `Directory` class prelude, which eval does not
+    // parse: the interpreter would need a Directory cell kind with property reads and method
+    // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
+    "dir",
     "hexdec",
     "join",
     "octdec",

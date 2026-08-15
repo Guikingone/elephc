@@ -2,7 +2,7 @@
 title: "diskfreespace()"
 description: "Returns available space in filesystem or disk partition (alias of disk_free_space)."
 sidebar:
-  order: 167
+  order: 168
 ---
 
 ## diskfreespace()

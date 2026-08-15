@@ -59,6 +59,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     let ast = crate::list_id_prelude::inject_if_used(ast);
     let ast = crate::var_export_prelude::inject_if_used(ast);
     let ast = crate::image_prelude::inject_if_used(ast, false);
+    let ast = crate::dir_prelude::inject_if_used(ast);
     let ast = crate::hash_prelude::inject_if_used(ast, false);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
     let (ast, _) = crate::autoload::run_collecting_included_with_defines(

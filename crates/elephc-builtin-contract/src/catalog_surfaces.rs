@@ -86,6 +86,18 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "Terminates execution with an optional status."
     ),
     surface!(
+        "dir",
+        Io,
+        PreludeProvided,
+        [
+            param!("directory", Str),
+            param!("context", Mixed = DefaultSpec::Null),
+        ],
+        None,
+        Mixed,
+        "Opens a directory and returns a Directory object, or false."
+    ),
+    surface!(
         "empty",
         Types,
         LanguageConstruct,

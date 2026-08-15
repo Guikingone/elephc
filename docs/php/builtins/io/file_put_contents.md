@@ -2,7 +2,7 @@
 title: "file_put_contents()"
 description: "Writes data to a file."
 sidebar:
-  order: 177
+  order: 178
 ---
 
 ## file_put_contents()

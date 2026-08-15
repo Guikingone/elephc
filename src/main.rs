@@ -18,6 +18,7 @@ mod errors;
 mod eval_aot;
 mod exports;
 mod func_args;
+mod dir_prelude;
 mod hash_prelude;
 mod image_prelude;
 mod intrinsics;
