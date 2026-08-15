@@ -52,6 +52,23 @@ echo $length("héllo", "8bit");"#,
     assert_eq!(out, "5:6:3:6:2:6");
 }
 
+/// Verifies a gradual encoding value narrowed away from literal `false` reaches the ordinary
+/// runtime string-coercion path instead of being rejected solely for its static `mixed` type.
+#[test]
+fn test_mb_strlen_accepts_gradual_encoding_after_false_guard() {
+    let out = compile_and_run(
+        r#"<?php
+function detectedEncoding(): mixed { return "UTF-8"; }
+if (false === $encoding = detectedEncoding()) {
+    echo "missing";
+} else {
+    echo mb_strlen("héllo", $encoding);
+}
+"#,
+    );
+    assert_eq!(out, "5");
+}
+
 /// Verifies malformed and truncated UTF-8 follows PHP mbstring substitution boundaries.
 #[test]
 fn test_mb_strlen_malformed_utf8() {

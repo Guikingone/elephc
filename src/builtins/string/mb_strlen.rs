@@ -7,6 +7,8 @@
 //!
 //! Key details:
 //! - The public signature matches PHP: `mb_strlen(string $string, ?string $encoding = null)`.
+//! - Gradual string operands remain admissible because lowering performs PHP scalar string
+//!   coercion before the runtime validates an explicit encoding name.
 //! - Omitted/null encoding uses UTF-8; explicit encodings are handled by the target runtime,
 //!   which keeps malformed-sequence counting aligned with mbstring and rejects unknown names.
 
@@ -28,7 +30,7 @@ builtin! {
 /// Validates PHP's string plus nullable optional encoding parameter surface.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let string_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    if string_ty != PhpType::Str {
+    if !matches!(string_ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         return Err(CompileError::new(
             cx.args[0].span,
             "mb_strlen() string argument must be string",
@@ -37,7 +39,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
 
     if let Some(encoding) = cx.args.get(1) {
         let encoding_ty = cx.checker.infer_type(encoding, cx.env)?;
-        if !matches!(encoding_ty, PhpType::Str | PhpType::Void) {
+        if !matches!(
+            encoding_ty,
+            PhpType::Str | PhpType::Void | PhpType::Mixed | PhpType::Union(_)
+        ) {
             return Err(CompileError::new(
                 encoding.span,
                 "mb_strlen() encoding argument must be string or null",
