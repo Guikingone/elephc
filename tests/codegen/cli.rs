@@ -15391,27 +15391,40 @@ process.exitCode = wasi.start(instance);
         );
     }
 
-    // Storing an ALREADY-boxed cell stays refused, for the reason in the doc comment above.
-    // The raw write before the read is what keeps the read from folding to a constant — without
-    // it the EIR answers `$a[0]` as the literal and the boxed path is never reached at all.
+    // Storing an ALREADY-boxed cell read out of another array. This was a documented refusal
+    // when the test was written; the cell-to-cell store has since been implemented, so what is
+    // pinned now is php's own ANSWER rather than the refusal. The raw write before the read is
+    // what keeps the read from folding to a constant — without it the EIR answers `$a[0]` as
+    // the literal and the boxed path is never reached at all.
     let boxed = dir.join("boxed.php");
     fs::write(
         &boxed,
         "<?php\n$a = [1, \"two\"];\n$a[0] = 9;\n$b = [1, \"two\"];\n$b[1] = $a[0];\necho $b[1], \"\\n\";\n",
     )
     .unwrap();
-    let refused = elephc_cli_command(&dir)
+    let built = elephc_cli_command(&dir)
         .arg("--target")
         .arg("wasm32-wasi")
         .arg(&boxed)
         .output()
         .expect("failed to run the compiler over the boxed-cell write");
     assert!(
-        !refused.status.success()
-            && String::from_utf8_lossy(&refused.stderr)
-                .contains("does not match supported element storage Mixed"),
-        "storing an already-boxed cell must stay refused: {}",
-        String::from_utf8_lossy(&refused.stderr)
+        built.status.success(),
+        "the boxed-cell write must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("boxed.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the boxed-cell write under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "9\n",
+        "php -n's own answer for the boxed-cell write ({})",
+        String::from_utf8_lossy(&run.stderr)
     );
 
     let _ = fs::remove_dir_all(&dir);
