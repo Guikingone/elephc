@@ -55,6 +55,15 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // A value whose flow type is a union is assignable only when every possible runtime
+        // member satisfies the destination. Apply this before dispatching on `expected` so
+        // non-union supertypes such as `iterable`, `object`, and generic arrays see each member
+        // instead of rejecting the union wrapper itself.
+        if let PhpType::Union(actual_members) = actual {
+            return actual_members
+                .iter()
+                .all(|actual_member| self.type_accepts(expected, actual_member));
+        }
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
@@ -65,16 +74,9 @@ impl Checker {
             {
                 true
             }
-            PhpType::Union(members) => match actual {
-                PhpType::Union(actual_members) => actual_members.iter().all(|actual_member| {
-                    members
-                        .iter()
-                        .any(|expected_member| self.type_accepts(expected_member, actual_member))
-                }),
-                _ => members
-                    .iter()
-                    .any(|member| self.type_accepts(member, actual)),
-            },
+            PhpType::Union(members) => members
+                .iter()
+                .any(|member| self.type_accepts(member, actual)),
             PhpType::Array(expected_elem) => match actual {
                 PhpType::Array(actual_elem) if matches!(actual_elem.as_ref(), PhpType::Never) => {
                     true

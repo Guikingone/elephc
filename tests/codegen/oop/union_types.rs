@@ -52,6 +52,24 @@ demo();
     assert_eq!(out, "411");
 }
 
+/// Verifies every array member of a flow union satisfies an `iterable` parameter, including the
+/// empty-array arm retained after a conditional append.
+#[test]
+fn test_array_flow_union_binds_to_iterable_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class FlowItem {}
+function countFlowItems(iterable $items): int { return count($items); }
+$items = [];
+if ($argc > 1) {
+    $items[] = new FlowItem();
+}
+echo countFlowItems($items);
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
 /// Verifies truthiness dispatch for a union-typed local: string "0" is falsy, int 7 is truthy.
 /// Regression: ensures the codegen emits correct branch logic for both string and int payloads.
 #[test]
