@@ -499,3 +499,26 @@ fn test_error_callable_parameter_rejects_runtime_string() {
         "a callable string must be a compile-time constant here",
     );
 }
+
+/// Verifies a dynamic class-name `cases()` result is recognized as an array by array consumers.
+#[test]
+fn test_dynamic_cases_call_is_array_for_array_column() {
+    expect_error(
+        r#"<?php
+enum DynamicChoice: string { case First = "first"; }
+function values(string $class): int { return array_column($class::cases(), "value"); }
+"#,
+        "got Array",
+    );
+}
+
+/// Verifies unrelated unresolved dynamic static calls remain gradual rather than array-shaped.
+#[test]
+fn test_dynamic_non_cases_call_is_not_array_for_array_column() {
+    expect_error(
+        r#"<?php
+function values(string $class): array { return array_column($class::unknown(), "value"); }
+"#,
+        "array_column() first argument must be array",
+    );
+}

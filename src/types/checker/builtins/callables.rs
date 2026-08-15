@@ -335,6 +335,15 @@ fn check_object_or_array_callable_call(
         }
     }
 
+    if let Some(cases_ty) = unresolved_cases_callable_return(
+        checker,
+        callback,
+        callback_args,
+        env,
+    )? {
+        return Ok(Some(cases_ty));
+    }
+
     let callback_ty = checker.infer_type(callback, env)?;
     if runtime_callable_array_type(&callback_ty) {
         if !allow_runtime_callable_array {
@@ -424,6 +433,10 @@ fn infer_object_or_array_callable_runtime_return(
             return infer_callable_target_runtime_return(checker, &target, callback, env)
                 .map(Some);
         }
+    }
+
+    if let Some(cases_ty) = unresolved_cases_callable_return(checker, callback, &[], env)? {
+        return Ok(Some(cases_ty));
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
@@ -662,6 +675,36 @@ fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
         return None;
     };
     Some((&elems[0], method.as_str()))
+}
+
+/// Infers `array<mixed>` for an unresolved dynamic class-name call to the standard `cases()`
+/// method while leaving every other unresolved static call gradual.
+///
+/// The receiver must not resolve to a known static class or an invokable object. Extra arguments
+/// are still inferred so their diagnostics and side effects remain visible to the checker.
+fn unresolved_cases_callable_return(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    env: &TypeEnv,
+) -> Result<Option<PhpType>, CompileError> {
+    let Some((receiver, method)) = callable_array_parts(callback) else {
+        return Ok(None);
+    };
+    if php_symbol_key(method) != "cases" {
+        return Ok(None);
+    }
+    if static_callable_receiver(checker, receiver, callback.span)?.is_some() {
+        return Ok(None);
+    }
+    let receiver_ty = checker.infer_type(receiver, env)?;
+    if checker.invokable_class_for_type(&receiver_ty).is_some() {
+        return Ok(None);
+    }
+    for arg in callback_args {
+        checker.infer_type(arg, env)?;
+    }
+    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
 }
 
 /// Provides the Static callable receiver helper used by the callables module.
