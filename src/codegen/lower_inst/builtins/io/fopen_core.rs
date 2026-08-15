@@ -259,25 +259,28 @@ fn emit_dynamic_data_branch(
     done: &str,
 ) -> Result<()> {
     let not_data = ctx.next_label("fopen_dynamic_not_data");
+    // The scheme is `data:`, NOT `data://`: php-src's `php_stream_locate_url_wrapper` special-cases
+    // this one wrapper so the `//` is optional, and `__rt_data_stream_dynamic` skips it when it is
+    // there. Requiring it here sent `data:text/plain,hi` to the file opener.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x2, #8");                              // "data://" plus at least a comma
-            ctx.emitter.instruction(&format!("b.lt {}", not_data));             // too short to carry the scheme
-            for (offset, byte) in b"data://".iter().enumerate() {
+            ctx.emitter.instruction("cmp x2, #5");                              // "data:" is the whole scheme
+            ctx.emitter.instruction(&format!("b.lt {}", not_data));             // too short to carry it
+            for (offset, byte) in b"data:".iter().enumerate() {
                 ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // load one candidate scheme byte
-                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical data:// byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical data: byte
                 ctx.emitter.instruction(&format!("b.ne {}", not_data));         // a different prefix is not this wrapper
             }
             ctx.emitter.instruction("mov x0, x1");                              // pass the URI pointer
             ctx.emitter.instruction("mov x1, x2");                              // pass the URI length
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rdx, 8");                              // "data://" plus at least a comma
-            ctx.emitter.instruction(&format!("jl {}", not_data));               // too short to carry the scheme
-            for (offset, byte) in b"data://".iter().enumerate() {
+            ctx.emitter.instruction("cmp rdx, 5");                              // "data:" is the whole scheme
+            ctx.emitter.instruction(&format!("jl {}", not_data));               // too short to carry it
+            for (offset, byte) in b"data:".iter().enumerate() {
                 ctx.emitter.instruction(&format!(
                     "cmp BYTE PTR [rax + {}], {}", offset, byte
-                ));                                                             // compare one byte against the canonical data:// prefix
+                ));                                                             // compare one byte against the canonical data: prefix
                 ctx.emitter.instruction(&format!("jne {}", not_data));          // a different prefix is not this wrapper
             }
             ctx.emitter.instruction("mov rdi, rax");                            // pass the URI pointer
@@ -287,7 +290,11 @@ fn emit_dynamic_data_branch(
     abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");
     box_stream_fd_or_false_result(ctx, "fopen_data_dynamic");
     emit_dynamic_php_filter_finish(ctx, "fopen");                               // a php://filter URL may wrap a data:// resource
-    emit_record_stream_meta_after_boxed_stashed(ctx, 2);
+    // Wrapper id 7 is `data:`. This said 2, which is `https`, so a data URI built at RUN TIME
+    // reported `wrapper_type` = `https` and `stream_type` = `STDIO` where php says `RFC2397` for
+    // both — while the literal route, recording 7, was right all along. The two routes have to
+    // agree: nothing about the URI changes because its bytes were known earlier.
+    emit_record_stream_meta_after_boxed_stashed(ctx, 7);
     emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
@@ -348,6 +355,92 @@ fn emit_dynamic_php_wrapper_branch(
     Ok(())
 }
 
+/// Refuses a runtime `glob://` filename the way php does, falling through when it is not one.
+///
+/// php-src registers `glob` with NO `stream_opener` at all, so the generic caller reports the
+/// absence itself and no filesystem is ever consulted:
+///   `Warning: fopen(glob://*.php): Failed to open stream: wrapper does not support stream open`
+/// Without this the URL reached the file opener, which answered `No such file or directory` about
+/// a path nothing had looked for. `glob://` still opens as a DIRECTORY; only `fopen()` is refused.
+///
+/// The line is assembled from three interned fragments rather than a run-time composition: only
+/// the URL varies, and it is already in the string registers here.
+fn emit_dynamic_glob_branch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    done: &str,
+) -> Result<()> {
+    let not_glob = ctx.next_label("fopen_dynamic_not_glob");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #7");                              // "glob://" is the whole scheme
+            ctx.emitter.instruction(&format!("b.lt {}", not_glob));             // too short to carry it
+            for (offset, byte) in b"glob://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // load one candidate scheme byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical glob:// byte
+                ctx.emitter.instruction(&format!("b.ne {}", not_glob));         // a different prefix is not this wrapper
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 7");                              // "glob://" is the whole scheme
+            ctx.emitter.instruction(&format!("jl {}", not_glob));               // too short to carry it
+            for (offset, byte) in b"glob://".iter().enumerate() {
+                ctx.emitter.instruction(&format!(
+                    "cmp BYTE PTR [rax + {}], {}", offset, byte
+                ));                                                             // compare one byte against the canonical glob:// prefix
+                ctx.emitter.instruction(&format!("jne {}", not_glob));          // a different prefix is not this wrapper
+            }
+        }
+    }
+    let tail = format!(
+        "{}{}\n",
+        crate::codegen_support::runtime::io::OPEN_FAILED_MIDDLE,
+        crate::codegen_support::runtime::io::GLOB_NO_STREAM_OPEN
+    );
+    let (tail_label, tail_len) = ctx.data.add_string(tail.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the URL, across the three calls
+            abi::emit_symbol_address(ctx.emitter, "x1", "_diag_open_failed_fopen_prefix");
+            abi::emit_load_int_immediate(ctx.emitter, "x2", "Warning: fopen(".len() as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");             // the URL is already the argument pair
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            abi::emit_symbol_address(ctx.emitter, "x1", &tail_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", tail_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the URL, across the three calls
+            abi::emit_symbol_address(ctx.emitter, "rdi", "_diag_open_failed_fopen_prefix");
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", "Warning: fopen(".len() as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("mov rdi, rax");                            // the URL
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            abi::emit_symbol_address(ctx.emitter, "rdi", &tail_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", tail_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_diag_warning");
+        }
+    }
+    emit_fd_result(ctx, -1);
+    box_stream_fd_or_false_result(ctx, "fopen_glob_dynamic");
+    emit_dynamic_php_filter_finish(ctx, "fopen");
+    emit_record_stream_meta_after_boxed_stashed(ctx, 0);
+    emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&not_glob);
+    Ok(())
+}
+
 /// Dispatches a runtime filename to the streaming HTTP opener or generic fopen helper.
 fn emit_dynamic_fopen_result(
     ctx: &mut FunctionContext<'_>,
@@ -369,6 +462,7 @@ fn emit_dynamic_fopen_result(
     abi::emit_call_label(ctx.emitter, "__rt_php_filter_suppress_begin");
     emit_dynamic_php_wrapper_branch(ctx, inst, &done)?;
     emit_dynamic_data_branch(ctx, inst, &done)?;
+    emit_dynamic_glob_branch(ctx, inst, &done)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #7");                              // is the dynamic filename long enough for http://?
@@ -694,6 +788,67 @@ impl LiteralOpenMode {
     }
 }
 
+/// The warning LINES php prints for a URL a built-in wrapper refuses to open at all.
+///
+/// `None` means this URL is not one of them and the ordinary openers below decide. Every line is
+/// complete, newline included, because all of it is known here — the URL is a literal.
+///
+/// All measured on `php -n` 8.5.6:
+///
+/// ```text
+/// fopen("php://bogus","r")   Warning: fopen(): Invalid php:// URL specified
+///                            Warning: fopen(php://bogus): Failed to open stream: operation failed
+/// fopen("php://fd/","r")     Warning: fopen(php://fd/): Failed to open stream:
+///                                     php://fd/ stream must be specified in the form php://fd/<orig fd>
+/// fopen("glob://*.php","r")  Warning: fopen(glob://*.php): Failed to open stream:
+///                                     wrapper does not support stream open
+/// ```
+///
+/// The php:// case is the only one that prints TWO lines, and the reason it does is structural:
+/// `php_stream_url_wrap_php` reports through a DIRECT `php_error_docref`, which prints at once as
+/// `fopen(): …` and leaves the wrapper error stack empty — so the generic failed-open line that
+/// follows has nothing left to say but `operation failed`. Every other wrapper here goes through
+/// `php_stream_wrapper_log_error`, whose message IS the reason in the single line.
+///
+/// elephc used to send all of these to the FILE opener, which reported `No such file or
+/// directory` for a path no filesystem was ever asked about — or, for the dynamic route, said
+/// nothing at all.
+fn literal_wrapper_refusal(path: &str) -> Option<Vec<String>> {
+    if let Some(target) = path.strip_prefix("php://") {
+        // Everything php-src's `php_stream_url_wrap_php` knows how to open. `temp` takes an
+        // optional `/maxmemory:N`, and `filter` is resolved long before this point.
+        let known = matches!(
+            target,
+            "stdin" | "stdout" | "stderr" | "input" | "output" | "memory" | "temp"
+        ) || target.starts_with("temp/")
+            || target.starts_with("filter/")
+            // `php://fd/` with no number is refused, but with its OWN sentence.
+            || (target.starts_with("fd/") && target.len() > 3);
+        if known {
+            return None;
+        }
+        if target == "fd/" {
+            return Some(vec![format!(
+                "Warning: fopen({path}): Failed to open stream: \
+                 php://fd/ stream must be specified in the form php://fd/<orig fd>\n"
+            )]);
+        }
+        return Some(vec![
+            "Warning: fopen(): Invalid php:// URL specified\n".to_string(),
+            format!("Warning: fopen({path}): Failed to open stream: operation failed\n"),
+        ]);
+    }
+    if path.starts_with("glob://") {
+        // php-src registers `glob` with no `stream_opener` at all, so the generic caller reports
+        // the absence rather than any wrapper of its own. `glob://` still opens as a DIRECTORY.
+        return Some(vec![format!(
+            "Warning: fopen({path}): Failed to open stream: {}\n",
+            crate::codegen_support::runtime::io::GLOB_NO_STREAM_OPEN
+        )]);
+    }
+    None
+}
+
 pub(super) fn emit_literal_fopen_result(
     ctx: &mut FunctionContext<'_>,
     mode: LiteralOpenMode,
@@ -711,7 +866,16 @@ pub(super) fn emit_literal_fopen_result(
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());
     }
-    if path.starts_with("data://") {
+    if let Some(lines) = literal_wrapper_refusal(path) {
+        for line in &lines {
+            emit_static_diag_warning(ctx, line);
+        }
+        emit_fd_result(ctx, -1);
+        box_stream_fd_or_false_result(ctx, "fopen_wrapper_refused");
+        return Ok(());
+    }
+    // `data:` is the whole scheme; php-src makes the `//` optional for this one wrapper.
+    if path.starts_with("data:") {
         return emit_literal_data_fopen_result(ctx, path);
     }
     if path.starts_with("ftp://") {
@@ -938,7 +1102,7 @@ fn emit_unknown_filter_warnings(
 ///
 /// Goes through `__rt_diag_warning` like every other warning, so `@` suppresses it through the
 /// shared depth counter rather than through a rule of its own.
-fn emit_static_diag_warning(ctx: &mut FunctionContext<'_>, text: &str) {
+pub(super) fn emit_static_diag_warning(ctx: &mut FunctionContext<'_>, text: &str) {
     let (label, len) = ctx.data.add_string(text.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

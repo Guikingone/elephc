@@ -1248,6 +1248,173 @@ unlink($f);
     assert_eq!(out, "+++++---");
 }
 
+/// Verifies a `data:` URI php refuses is refused, and named with php's own `rfc2397:` sentence.
+///
+/// The `unable to decode` case was not just undiagnosed: the run-time opener asked
+/// `__rt_base64_decode` for its LAX mode — and asked in the wrong register, since the flag is
+/// `x3`/`rdi` and it wrote `x0`/`edi` — so `data://text/plain;base64,!!!not-base64!!!` opened a
+/// stream over the lax decoder's salvage. php answers false. That is a silent wrong VALUE, not a
+/// missing message, which is why it leads here.
+///
+/// Measured on `php -n` 8.5.6; each of the four sentences is a different php-src call site, and
+/// which one applies is not guessable from the URI's shape — `;,` and `;BASE64,` are `illegal
+/// parameter`, not `illegal media type`, because the TYPE is only the first `;`-segment.
+///
+/// RED before the fix (dynamic form, `$u` a loop variable):
+///   `!!!not-base64!!!`  php `false` + `rfc2397: unable to decode`   vs elephc a stream of `''`
+///   `data://`           php `rfc2397: no comma in URL`              vs elephc silent `false`
+#[test]
+fn test_refused_data_uris_carry_phps_rfc2397_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+foreach ([
+    "data://text/plain;base64,!!!not-base64!!!",
+    "data://nocomma",
+    "data://text;base64,SGk=",
+    "data://text/plain;,hi",
+] as $u) {
+    var_dump(fopen($u, "r"));
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+    for (url, reason) in [
+        ("data://text/plain;base64,!!!not-base64!!!", "rfc2397: unable to decode"),
+        ("data://nocomma", "rfc2397: no comma in URL"),
+        ("data://text;base64,SGk=", "rfc2397: illegal media type"),
+        ("data://text/plain;,hi", "rfc2397: illegal parameter"),
+    ] {
+        assert!(
+            out.stderr.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: {reason}"
+            )),
+            "missing php's reason for {url}, got stderr={}",
+            out.stderr
+        );
+    }
+}
+
+/// Verifies the `data:` scheme opens with or without the `//`, as php-src special-cases it.
+///
+/// `php_stream_locate_url_wrapper` normally demands `://`, but its test is
+/// `!strncmp("//", p+1, 2) || (n == 4 && !memcmp("data:", path, 5))` — `data` is the one scheme
+/// exempted. elephc matched `data://` only, so `data:text/plain,hi` went to the FILE opener and
+/// reported `No such file or directory`.
+///
+/// RED before the fix: php `'hi'` / `'Hi'`, elephc `false` twice with a filesystem errno.
+/// Both the compile-time literal and the run-time value are covered — they are separate dispatches.
+#[test]
+fn test_data_scheme_opens_without_the_double_slash() {
+    let out = compile_and_run(
+        r#"<?php
+echo stream_get_contents(fopen("data:text/plain,hi", "r"));
+echo "|";
+$u = "data:text/plain;base64,SGk=";
+echo stream_get_contents(fopen($u, "r"));
+echo "|";
+echo stream_get_contents(fopen("data://text/plain,slashes", "r"));
+"#,
+    );
+    assert_eq!(out, "hi|Hi|slashes");
+}
+
+/// Verifies an unrecognised `php://` target prints php's TWO lines instead of nothing.
+///
+/// The pair is structural, not decorative. `php_stream_url_wrap_php` reports the first with a
+/// DIRECT `php_error_docref`, so it prints at once as `fopen(): …` and leaves the wrapper error
+/// stack empty — which is exactly why the generic failed-open line that follows has nothing left
+/// to say but `operation failed`. Getting one without the other would be wrong twice over.
+///
+/// `php://fd/` is the exception and is asserted with them: it goes through
+/// `php_stream_wrapper_log_error` like an ordinary wrapper, so it prints ONE line carrying its own
+/// sentence. Measured on `php -n` 8.5.6; elephc answered a silent `false` for every case here.
+///
+/// Both dispatches are covered: a literal URL is refused during lowering, a run-time one inside
+/// `__rt_php_wrapper_open`, and the two compose the same text by different means.
+#[test]
+fn test_unknown_php_target_prints_both_of_phps_lines() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("php://bogus", "r"));
+$u = "php://foo/bar";
+var_dump(fopen($u, "r"));
+var_dump(fopen("php://fd/", "r"));
+$v = "php://fd/";
+var_dump(fopen($v, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
+    assert_eq!(
+        out.stderr.matches("Warning: fopen(): Invalid php:// URL specified").count(),
+        2,
+        "the direct php_error_docref line is missing or duplicated, got stderr={}",
+        out.stderr
+    );
+    for url in ["php://bogus", "php://foo/bar"] {
+        assert!(
+            out.stderr.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: operation failed"
+            )),
+            "missing the failed-open line for {url}, got stderr={}",
+            out.stderr
+        );
+    }
+    assert_eq!(
+        out.stderr
+            .matches(
+                "Warning: fopen(php://fd/): Failed to open stream: \
+                 php://fd/ stream must be specified in the form php://fd/<orig fd>"
+            )
+            .count(),
+        2,
+        "php://fd/ lost its own sentence on one of the two dispatches, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("No such file or directory"),
+        "a php:// URL reached the file opener, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies `fopen("glob://…")` is refused for the reason php gives, with no filesystem consulted.
+///
+/// php-src registers `glob` with NO `stream_opener`, so the generic caller reports the absence
+/// itself. elephc sent the URL to the file opener, which answered `No such file or directory`
+/// about a path nothing had ever looked for — a message that would send a reader hunting for a
+/// missing file when the wrapper simply has no such operation.
+///
+/// RED before the fix: `wrapper does not support stream open` vs `No such file or directory`,
+/// on both the literal and the run-time dispatch.
+#[test]
+fn test_fopen_on_glob_is_refused_by_the_wrapper_not_the_filesystem() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("glob://*.php", "r"));
+$u = "glob:///tmp/*";
+var_dump(fopen($u, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
+    for url in ["glob://*.php", "glob:///tmp/*"] {
+        assert!(
+            out.stderr.contains(&format!(
+                "Warning: fopen({url}): Failed to open stream: wrapper does not support stream open"
+            )),
+            "missing php's reason for {url}, got stderr={}",
+            out.stderr
+        );
+    }
+    assert!(
+        !out.stderr.contains("No such file or directory"),
+        "a glob:// URL reached the file opener, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies a filter name that resolves to nothing is REPORTED, naming the filter.
 ///
 /// Returning `false` silently left a misspelled filter indistinguishable from one that
@@ -7666,7 +7833,7 @@ fclose($h);
 /// - `base64` counts only as the LAST parameter and only in lower case, so
 ///   `;charset=utf-8;base64` decodes while `;base64;charset=utf-8` is refused outright.
 ///
-/// The rule lives twice — in `data_uri_media_type_is_valid` for a literal URI resolved at compile
+/// The rule lives twice — in `data_uri_media_type_shape` for a literal URI resolved at compile
 /// time, and in `__rt_data_uri_meta_ok` for one built at run time. Neither can serve both, so both
 /// forms are exercised here and a divergence fails this test.
 #[test]

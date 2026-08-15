@@ -18,6 +18,7 @@
 //!   what the literal path already does: `fclose()` on the result must not close the real stdout.
 
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::io::PHP_FD_FORM;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Byte stride of one `_php_wrapper_schemes` record.
@@ -49,9 +50,15 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: open a run-time php:// URL ---");
     emitter.label_global("__rt_php_wrapper_open");
     // Frame: [0]=sub-scheme pointer [8]=sub-scheme length [16]=matched record
-    emitter.instruction("sub sp, sp, #48");                                     // reserve the dispatch frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    //        [24]=whole URI pointer [32]=whole URI length [48]/[56]=linkage.
+    //
+    // The URI is kept whole because php NAMES it in the failed-open line, and by the time a
+    // refusal is reached the cursor has been advanced past `php://`.
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the dispatch frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #24]");                                   // the URI, whole, for the refusal line
+    emitter.instruction("str x1, [sp, #32]");
     emitter.instruction("cmp x1, #6");                                          // is there anything after "php://"?
     emitter.instruction("b.le __rt_pwo_unknown");                               // a bare "php://" names no stream
     emitter.instruction("add x0, x0, #6");                                      // skip the scheme prefix
@@ -108,7 +115,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, x10");                                   // step past "fd/"
     emitter.instruction("sub x12, x12, x10");                                   // bytes of digits remaining
     emitter.instruction("cmp x12, #1");                                         // php://fd/ with no number names nothing
-    emitter.instruction("b.lt __rt_pwo_unknown");                               // reject it
+    emitter.instruction("b.lt __rt_pwo_fd_form");                               // php has its own sentence for this one
     emitter.instruction("mov x14, #0");                                         // digit index
     emitter.instruction("mov x0, #0");                                          // accumulated descriptor
     emitter.label("__rt_pwo_fd_digit");
@@ -127,14 +134,52 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pwo_dup");
     emitter.bl_c("dup");                                                        // hand out a copy, never the process's own descriptor
     emitter.label("__rt_pwo_done");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the dispatch frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the dispatch frame
     emitter.instruction("ret");                                                 // return the descriptor
 
+    // -- `php://fd/` with no number: php words this one itself, in the single line --
+    emitter.label("__rt_pwo_fd_form");
+    abi::emit_symbol_address(emitter, "x9", "_diag_php_fd_form");
+    emitter.instruction("str x9, [sp, #0]");                                    // park the reason; the sub-scheme is finished with
+    emitter.instruction(&format!("mov x9, #{}", PHP_FD_FORM.len()));
+    emitter.instruction("str x9, [sp, #8]");
+    emitter.instruction("b __rt_pwo_refuse");
+
     emitter.label("__rt_pwo_unknown");
+    // php-src reports this one with a DIRECT `php_error_docref`, so it prints at once, on its own
+    // line, and leaves the wrapper error stack empty — which is why the failed-open line below has
+    // nothing left to say but `operation failed`. Measured: `fopen("php://bogus","r")` prints both.
+    abi::emit_symbol_address(emitter, "x1", "_diag_php_invalid_url");
+    emitter.instruction(&format!(
+        "mov x2, #{}",
+        crate::codegen_support::runtime::io::PHP_INVALID_URL_LINE.len()
+    ));
+    emitter.instruction("bl __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "x9", "_diag_open_operation_failed");
+    emitter.instruction("str x9, [sp, #0]");
+    emitter.instruction(&format!(
+        "mov x9, #{}",
+        crate::codegen_support::runtime::io::OPEN_OPERATION_FAILED.len()
+    ));
+    emitter.instruction("str x9, [sp, #8]");
+
+    emitter.label("__rt_pwo_refuse");
+    // The composer wants a NUL-terminated path and the URI arrived as a pointer/length pair, so it
+    // goes through the same `__rt_cstr` scratch `__rt_fopen` uses; the composer copies out of it
+    // before anything else can claim it.
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the URI, still whole
+    emitter.instruction("ldr x2, [sp, #32]");
+    emitter.instruction("bl __rt_cstr");                                        // x0 = a NUL-terminated copy
+    emitter.instruction("mov x2, x0");                                          // the path php names in the parentheses
+    emitter.instruction("ldr x3, [sp, #0]");                                    // the reason this refusal chose
+    emitter.instruction("ldr x4, [sp, #8]");
+    abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));
+    emitter.instruction("bl __rt_open_failed_reason_warning");
     emitter.instruction("mov x0, #-1");                                         // an unrecognised php:// URL opens nothing
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the dispatch frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the dispatch frame
     emitter.instruction("ret");                                                 // report the failure
 }
 
@@ -145,10 +190,13 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: open a run-time php:// URL ---");
     emitter.label_global("__rt_php_wrapper_open");
-    // Frame: [rbp-8]=sub-scheme pointer [rbp-16]=sub-scheme length
+    // Frame: [rbp-8]=sub-scheme pointer [rbp-16]=sub-scheme length [rbp-24]=whole URI pointer
+    //        [rbp-32]=whole URI length. See the AArch64 counterpart on why the URI is kept whole.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame
-    emitter.instruction("sub rsp, 32");                                         // reserve the dispatch spill slots
+    emitter.instruction("sub rsp, 48");                                         // reserve the dispatch spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                       // the URI, whole, for the refusal line
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");
     emitter.instruction("cmp rsi, 6");                                          // is there anything after "php://"?
     emitter.instruction("jle __rt_pwo_unknown_x");                              // a bare "php://" names no stream
     emitter.instruction("add rdi, 6");                                          // skip the scheme prefix
@@ -206,7 +254,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, r10");                                         // step past "fd/"
     emitter.instruction("sub rcx, r10");                                        // bytes of digits remaining
     emitter.instruction("cmp rcx, 1");                                          // php://fd/ with no number names nothing
-    emitter.instruction("jl __rt_pwo_unknown_x");                               // reject it
+    emitter.instruction("jl __rt_pwo_fd_form_x");                               // php has its own sentence for this one
     emitter.instruction("xor rdx, rdx");                                        // digit index
     emitter.instruction("xor rdi, rdi");                                        // accumulated descriptor
     emitter.label("__rt_pwo_fd_digit_x");
@@ -228,7 +276,40 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the descriptor
 
+    // -- `php://fd/` with no number: php words this one itself, in the single line --
+    emitter.label("__rt_pwo_fd_form_x");
+    abi::emit_symbol_address(emitter, "r9", "_diag_php_fd_form");
+    emitter.instruction("mov QWORD PTR [rbp - 8], r9");                         // park the reason; the sub-scheme is finished with
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 16], {}", PHP_FD_FORM.len()));
+    emitter.instruction("jmp __rt_pwo_refuse_x");
+
     emitter.label("__rt_pwo_unknown_x");
+    // See the AArch64 counterpart: php reports this one with a direct `php_error_docref`, which is
+    // why a second line follows saying only `operation failed`.
+    abi::emit_symbol_address(emitter, "rdi", "_diag_php_invalid_url");
+    emitter.instruction(&format!(
+        "mov esi, {}",
+        crate::codegen_support::runtime::io::PHP_INVALID_URL_LINE.len()
+    ));
+    emitter.instruction("call __rt_diag_warning");
+    abi::emit_symbol_address(emitter, "r9", "_diag_open_operation_failed");
+    emitter.instruction("mov QWORD PTR [rbp - 8], r9");
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rbp - 16], {}",
+        crate::codegen_support::runtime::io::OPEN_OPERATION_FAILED.len()
+    ));
+
+    emitter.label("__rt_pwo_refuse_x");
+    // See the AArch64 counterpart on the `__rt_cstr` round trip.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // the URI, still whole
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_cstr");                                      // rax = a NUL-terminated copy
+    emitter.instruction("mov rdx, rax");                                        // the path php names in the parentheses
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // the reason this refusal chose
+    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov esi, {}", "Warning: fopen(".len()));
+    emitter.instruction("call __rt_open_failed_reason_warning");
     emitter.instruction("mov rax, -1");                                         // an unrecognised php:// URL opens nothing
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer

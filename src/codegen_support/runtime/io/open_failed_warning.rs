@@ -56,6 +56,48 @@ pub(crate) const BAD_MODE_REASON_CAPACITY: usize = 160;
 /// The most mode bytes echoed back. php prints the mode whole; nothing sane is near this.
 const MODE_CLAMP: usize = 100;
 
+/// Every sentence a built-in wrapper refuses an open with, and the symbol that holds it.
+///
+/// php-src's wrappers do not report these through `errno` — there is no failed syscall behind
+/// them — but through `php_stream_wrapper_log_error`, which the generic caller prints after
+/// `Failed to open stream: `. All measured on `php -n` 8.5.6; `data://text/plain;,hi` and
+/// `data://text/plain;BASE64,SGk=` are `illegal parameter` rather than `illegal media type`,
+/// which is not the split the names suggest: the TYPE is the first `;`-segment and everything
+/// after it is a parameter, so a rejected `;base64` spelling lands in the second bucket.
+///
+/// The reasons carry no newline: [`emit_open_failed_reason_warning`]'s composer adds it, the same
+/// way it does for a `strerror` string.
+pub(crate) const WRAPPER_REFUSAL_REASONS: &[(&str, &str)] = &[
+    ("_diag_rfc2397_no_comma", "rfc2397: no comma in URL"),
+    ("_diag_rfc2397_undecodable", "rfc2397: unable to decode"),
+    ("_diag_rfc2397_media_type", "rfc2397: illegal media type"),
+    ("_diag_rfc2397_parameter", "rfc2397: illegal parameter"),
+    ("_diag_wrapper_no_stream_open", "wrapper does not support stream open"),
+    ("_diag_open_operation_failed", "operation failed"),
+    ("_diag_php_fd_form", PHP_FD_FORM),
+];
+
+/// What `php://fd/` with no number answers. It is a REASON, so it prints in the one line.
+pub(crate) const PHP_FD_FORM: &str =
+    "php://fd/ stream must be specified in the form php://fd/<orig fd>";
+
+/// The line php prints BEFORE the failed-open line for a php:// target it does not recognise.
+///
+/// Whole and newline-terminated, because php-src emits it with a direct `php_error_docref` rather
+/// than through the wrapper error stack — which is also why the failed-open line that follows says
+/// only `operation failed`.
+pub(crate) const PHP_INVALID_URL_LINE: &str = "Warning: fopen(): Invalid php:// URL specified\n";
+
+/// The reason a `glob://` open answers, whose wrapper has no `stream_opener` at all.
+pub(crate) const GLOB_NO_STREAM_OPEN: &str = "wrapper does not support stream open";
+
+/// What the generic caller prints when the wrapper stashed no reason of its own.
+///
+/// `php://bogus` reaches it: `php_stream_url_wrap_php` reports `Invalid php:// URL specified`
+/// with a DIRECT `php_error_docref`, which prints immediately as `fopen(): …` and leaves the
+/// error stack empty — so the failed-open line that follows has nothing to say but this.
+pub(crate) const OPEN_OPERATION_FAILED: &str = "operation failed";
+
 /// Emits `__rt_open_failed_warning(prefix_ptr, prefix_len, path_cstr, errno)`.
 ///
 /// AArch64 takes `x0`/`x1`/`x2`/`x3`; x86_64 takes `rdi`/`rsi`/`rdx`/`rcx`.

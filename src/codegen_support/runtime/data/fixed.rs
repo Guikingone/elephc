@@ -647,6 +647,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_filter_missing_append_prefix\n_diag_filter_missing_append_prefix:\n    .ascii \"Warning: stream_filter_append(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_filter_missing_prepend_prefix\n_diag_filter_missing_prepend_prefix:\n    .ascii \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_open_failed_middle\n_diag_open_failed_middle:\n    .ascii \"): Failed to open stream: \"\n");
+    // The four sentences php-src's `php_stream_url_wrap_rfc2397` refuses a `data://` URI with, and
+    // the one `php_stream_url_wrap_php` uses for a php:// target it does not recognise. Each is a
+    // REASON — the composer supplies "Warning: fopen(<uri>): Failed to open stream: " and the
+    // newline around it — so none of them carries punctuation of its own.
+    for (label, reason) in crate::codegen_support::runtime::io::WRAPPER_REFUSAL_REASONS {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {reason:?}\n"));
+    }
+    // Whole line, newline included: php emits it with a direct `php_error_docref`, so it does not
+    // pass through the "Failed to open stream: " composition at all.
+    out.push_str(&format!(
+        ".globl _diag_php_invalid_url\n_diag_php_invalid_url:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PHP_INVALID_URL_LINE
+    ));
     // Closes php's quoting of the rejected fopen mode; `__rt_fopen_bad_mode_warning` writes the
     // opening backtick and the mode itself in front of it.
     out.push_str(&format!(

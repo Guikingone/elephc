@@ -134,7 +134,8 @@ use stream_read_helpers::*;
 use context_result_helpers::*;
 use stream_context::*;
 use fopen_core::{begin_fopen_context_scope, emit_literal_php_filter_fopen_result,
-    emit_request_default_stream_context_handle, finish_fopen_context_scope, LiteralOpenMode};
+    emit_request_default_stream_context_handle, emit_static_diag_warning,
+    finish_fopen_context_scope, LiteralOpenMode};
 use resource_handles::*;
 use seek_hash_arch::*;
 use boxing_helpers::*;

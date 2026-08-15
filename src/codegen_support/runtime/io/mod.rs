@@ -258,7 +258,12 @@ pub(crate) use stream_is_local::emit_stream_is_local_path;
 pub(crate) use stream_supports_lock::emit_stream_supports_lock;
 pub(crate) use filter_missing_warning::{emit_filter_missing_warning, FILTER_MISSING_MSG_CAPACITY};
 pub(crate) use open_failed_warning::{
-    emit_open_failed_warning, BAD_MODE_REASON_CAPACITY, BAD_MODE_TAIL, OPEN_FAILED_MSG_CAPACITY,
+    emit_open_failed_warning, BAD_MODE_REASON_CAPACITY, BAD_MODE_TAIL, OPEN_FAILED_MIDDLE,
+    OPEN_FAILED_MSG_CAPACITY, WRAPPER_REFUSAL_REASONS,
+};
+#[allow(unused_imports)]
+pub(crate) use open_failed_warning::{
+    GLOB_NO_STREAM_OPEN, OPEN_OPERATION_FAILED, PHP_FD_FORM, PHP_INVALID_URL_LINE,
 };
 pub(crate) use unknown_wrapper_warning::{
     emit_unknown_wrapper_warning, UNKNOWN_WRAPPER_MSG_CAPACITY,
