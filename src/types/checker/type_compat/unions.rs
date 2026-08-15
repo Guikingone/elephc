@@ -111,6 +111,8 @@ impl Checker {
                         || self.is_subclass_of(actual_name, expected_name)
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
+                        || (expected_name == "Throwable"
+                            && self.object_type_implements_throwable(actual_name))
                 }
                 _ => false,
             },

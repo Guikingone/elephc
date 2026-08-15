@@ -434,16 +434,6 @@ fn test_error_magic_unset_must_not_take_two_arguments() {
     );
 }
 
-/// Verifies that `catch (MissingException $e)` with an undefined class
-/// reports "Undefined class: MissingException".
-#[test]
-fn test_error_catch_requires_defined_class() {
-    expect_error(
-        "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
-        "Undefined class: MissingException",
-    );
-}
-
 /// Verifies that catching a plain class not implementing `Throwable`
 /// (e.g., `catch (PlainObject $e)`) reports
 /// "Catch type must extend or implement Throwable: PlainObject".

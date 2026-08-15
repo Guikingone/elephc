@@ -175,6 +175,9 @@ impl Checker {
     /// Returns true if `type_name` (a class or interface) implements `Throwable`,
     /// checking both direct implementation and interface extension chains.
     pub(crate) fn object_type_implements_throwable(&self, type_name: &str) -> bool {
+        if self.unresolved_catch_types.contains(type_name) {
+            return true;
+        }
         if self.classes.contains_key(type_name) {
             return self.class_implements_interface(type_name, "Throwable");
         }

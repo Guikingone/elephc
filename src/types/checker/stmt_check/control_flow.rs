@@ -478,15 +478,11 @@ impl Checker {
                     for raw_exception_type in &catch_clause.exception_types {
                         let exception_type =
                             self.resolve_catch_type_name(raw_exception_type, stmt.span)?;
-                        if !self.classes.contains_key(&exception_type)
-                            && !self.interfaces.contains_key(&exception_type)
+                        let catch_type_is_known = self.classes.contains_key(&exception_type)
+                            || self.interfaces.contains_key(&exception_type);
+                        if catch_type_is_known
+                            && !self.object_type_implements_throwable(&exception_type)
                         {
-                            return Err(CompileError::new(
-                                stmt.span,
-                                &format!("Undefined class: {}", exception_type),
-                            ));
-                        }
-                        if !self.object_type_implements_throwable(&exception_type) {
                             return Err(CompileError::new(
                                 stmt.span,
                                 &format!(
@@ -495,6 +491,12 @@ impl Checker {
                                 ),
                             ));
                         }
+                        if !catch_type_is_known {
+                            self.unresolved_catch_types.insert(exception_type.clone());
+                        }
+                        // PHP permits unresolved catch names: if the class never loads, that arm
+                        // simply cannot match. Keep the declared nominal type so unreachable-arm
+                        // analysis does not erase callback and collection element precision.
                         resolved_types.push(exception_type);
                     }
                     if let Some(variable) = &catch_clause.variable {

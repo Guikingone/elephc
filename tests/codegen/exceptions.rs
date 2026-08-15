@@ -267,6 +267,29 @@ fn test_exception_multi_catch_matches_each_type() {
     assert_eq!(out, "12");
 }
 
+/// Verifies an unresolved catch type never matches and later known handlers still receive errors.
+#[test]
+fn test_exception_unresolved_catch_type_is_a_non_matching_arm() {
+    let out = compile_and_run(
+        r#"<?php
+function describeThrowable(Throwable $e): string {
+    return $e->getMessage();
+}
+
+try {
+    echo "try:";
+    throw new Exception("ok");
+} catch (MissingRuntimeException $e) {
+    echo describeThrowable($e);
+    throw $e;
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "try:ok");
+}
+
 /// Verifies exception catch without variable.
 #[test]
 fn test_exception_catch_without_variable() {

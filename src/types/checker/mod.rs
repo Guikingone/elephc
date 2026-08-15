@@ -135,6 +135,11 @@ pub(crate) struct Checker {
     /// Canonical trait names declared in the program, available for reflection
     /// and class-like metadata probes that accept traits.
     pub declared_traits: HashSet<String>,
+    /// Nominal types introduced only by unresolved catch clauses.
+    ///
+    /// PHP guarantees that a value reaching such a clause implements `Throwable`, even though
+    /// the absent declaration must not be installed in the runtime class registry.
+    pub unresolved_catch_types: HashSet<String>,
     /// Reflection-visible method signatures declared directly on each trait.
     pub declared_trait_methods: HashMap<String, HashMap<String, FunctionSig>>,
     /// Reflection-visible class constant names declared directly on each trait.

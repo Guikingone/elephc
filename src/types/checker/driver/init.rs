@@ -184,6 +184,7 @@ impl Checker {
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
             declared_traits: HashSet::new(),
+            unresolved_catch_types: HashSet::new(),
             declared_trait_methods: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             current_class: None,
