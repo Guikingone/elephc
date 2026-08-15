@@ -184,6 +184,34 @@ pub(super) fn emit_instance_method_first_class_callable(
             ))
         })?;
     let Some(sig) = class_info.methods.get(&method_key).cloned() else {
+        if class_info.static_methods.contains_key(&method_key) {
+            let static_target = format!("{}::{}", normalized_class, method_name);
+            let descriptor = first_class_callable_descriptor(ctx, &static_target, false)?
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "instance first-class callable '{}' with unknown static method",
+                        target
+                    ))
+                })?;
+            let invoker_label = descriptor
+                .sig
+                .as_ref()
+                .map(|sig| emit_runtime_callable_invoker_inline(ctx, sig, &[]));
+            let descriptor_label =
+                callable_descriptor::static_descriptor_with_optional_invoker_meta(
+                    ctx.data,
+                    &descriptor.entry_label,
+                    Some(&static_target),
+                    descriptor.kind,
+                    descriptor.sig.as_ref(),
+                    &[],
+                    &[],
+                    descriptor.invocation,
+                    invoker_label.as_deref(),
+                );
+            emit_runtime_closure_descriptor_with_captures(ctx, &descriptor_label, &[], &[])?;
+            return Ok(true);
+        }
         if method_key == "__invoke" {
             emit_object_receiver_first_class_callable(ctx, receiver, method_name, None)?;
             return Ok(true);
@@ -465,8 +493,8 @@ fn emit_mixed_first_class_method_dispatch(
                 .instruction(&format!("ldr x9, [{}]", receiver_reg)); // load the runtime receiver class id for callable selection
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "x10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp x9, x10");              // compare this concrete callable receiver class id
-                ctx.emitter.instruction(&format!("b.eq {}", label)); // capture the matching concrete method descriptor
+                ctx.emitter.instruction("cmp x9, x10");                         // compare this concrete callable receiver class id
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // capture the matching concrete method descriptor
             }
         }
         Arch::X86_64 => {
@@ -474,8 +502,8 @@ fn emit_mixed_first_class_method_dispatch(
                 .instruction(&format!("mov r11, QWORD PTR [{}]", receiver_reg)); // load the runtime receiver class id for callable selection
             for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
                 abi::emit_load_int_immediate(ctx.emitter, "r10", candidate.class_id as i64);
-                ctx.emitter.instruction("cmp r11, r10");             // compare this concrete callable receiver class id
-                ctx.emitter.instruction(&format!("je {}", label));   // capture the matching concrete method descriptor
+                ctx.emitter.instruction("cmp r11, r10");                        // compare this concrete callable receiver class id
+                ctx.emitter.instruction(&format!("je {}", label));              // capture the matching concrete method descriptor
             }
         }
     }

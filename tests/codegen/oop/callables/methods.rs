@@ -10,6 +10,28 @@
 
 use super::*;
 
+/// Verifies object-syntax first-class callables can target an accessible static method.
+#[test]
+fn test_object_syntax_first_class_callable_to_static_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Formatter {
+    private static function normalize(string $value): string {
+        return strtoupper($value);
+    }
+
+    public function run(): string {
+        $normalize = $this->NoRmAlIzE(...);
+        return $normalize('ok');
+    }
+}
+
+echo (new Formatter())->run();
+"#,
+    );
+    assert_eq!(out, "OK");
+}
+
 /// Tests an instance method captured as a first-class callable is passed to `call_user_func`
 /// and the captured receiver is correctly bound on invocation.
 #[test]

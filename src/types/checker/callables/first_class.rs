@@ -204,8 +204,8 @@ impl Checker {
                         Ok(dynamic_first_class_callable_sig())
                     }
                     PhpType::Object(class_name) => {
+                        let method_key = crate::names::php_symbol_key(method);
                         if let Some(interface_info) = self.interfaces.get(&class_name) {
-                            let method_key = crate::names::php_symbol_key(method);
                             let sig = interface_info.methods.get(&method_key).ok_or_else(|| {
                                 CompileError::new(
                                     span,
@@ -222,7 +222,37 @@ impl Checker {
                         let class_info = self.classes.get(&class_name).ok_or_else(|| {
                             CompileError::new(span, &format!("Undefined class: {}", class_name))
                         })?;
-                        let Some(sig) = class_info.methods.get(method) else {
+                        let Some(sig) = class_info.methods.get(&method_key) else {
+                            if let Some(sig) = class_info.static_methods.get(&method_key) {
+                                if let Some(visibility) =
+                                    class_info.static_method_visibilities.get(&method_key)
+                                {
+                                    let declaring_class = class_info
+                                        .static_method_declaring_classes
+                                        .get(&method_key)
+                                        .map(String::as_str)
+                                        .unwrap_or(class_name.as_str());
+                                    if !self.can_access_member(declaring_class, visibility) {
+                                        return Err(CompileError::new(
+                                            span,
+                                            &format!(
+                                                "Cannot access {} method: {}::{}",
+                                                Self::visibility_label(visibility),
+                                                class_name,
+                                                method
+                                            ),
+                                        ));
+                                    }
+                                }
+                                let declared_flags = Self::declared_method_param_flags(
+                                    class_info,
+                                    &method_key,
+                                    true,
+                                );
+                                let effective_sig =
+                                    Self::callable_sig_for_declared_params(sig, &declared_flags);
+                                return Ok(Self::callable_wrapper_sig(&effective_sig));
+                            }
                             if method == "__invoke" {
                                 return Ok(dynamic_first_class_callable_sig());
                             }
@@ -234,10 +264,12 @@ impl Checker {
                                 ),
                             ));
                         };
-                        if let Some(visibility) = class_info.method_visibilities.get(method) {
+                        if let Some(visibility) =
+                            class_info.method_visibilities.get(&method_key)
+                        {
                             let declaring_class = class_info
                                 .method_declaring_classes
-                                .get(method)
+                                .get(&method_key)
                                 .map(String::as_str)
                                 .unwrap_or(class_name.as_str());
                             if !self.can_access_member(declaring_class, visibility) {
@@ -253,7 +285,7 @@ impl Checker {
                             }
                         }
                         let declared_flags =
-                            Self::declared_method_param_flags(class_info, method, false);
+                            Self::declared_method_param_flags(class_info, &method_key, false);
                         let effective_sig =
                             Self::callable_sig_for_declared_params(sig, &declared_flags);
                         Ok(Self::callable_wrapper_sig(&effective_sig))
