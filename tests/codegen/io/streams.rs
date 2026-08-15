@@ -11837,3 +11837,316 @@ var_dump(fopen($bad, "r"));
         "twelve throws must cost no filter frame, so the last open still names the whole URL"
     );
 }
+
+/// The WHOLE stat family reaches a wrapper's `url_stat()`, with the flags php passes each caller.
+///
+/// Only `file_exists()`/`filesize()`/`is_file()` ever dispatched; every other stat builtin ran the
+/// real filesystem against a `scheme://` path that is not a file, so on the wrapper below elephc
+/// measured `is_dir`, `is_link`, `filemtime`, `fileatime`, `filectime`, `filetype`, `fileperms`,
+/// `fileowner`, `filegroup`, `fileinode`, `stat` and `lstat` ALL as `bool(false)` — twelve silent
+/// wrong answers.
+///
+/// The `[n]` markers are the `$flags` argument, which php varies per caller and elephc hard-coded
+/// to 0. Measured one call at a time on php 8.5.6 with `clearstatcache(true)` between them — php
+/// keeps a ONE-entry stat cache, so without that the second read of a path never reaches the
+/// wrapper at all and the flags never show. `PHP_STREAM_URL_STAT_NOCACHE`(4) alone for the value
+/// readers, `|LINK`(5) for the two that do not follow a symlink, `|QUIET`(6) for the silent
+/// predicates, and all three (7) for `is_link()`.
+///
+/// `stat()` rebuilds php's canonical 26 entries rather than handing back the wrapper's own array,
+/// which is why the numeric keys read as well as the string ones.
+#[test]
+fn test_whole_stat_family_dispatches_to_wrapper_url_stat_with_php_flags() {
+    let out = compile_and_run(
+        r#"<?php
+class SW {
+    public $context;
+    function url_stat($path, $flags) {
+        echo "[", $flags, "]";
+        if (strpos($path, "dir") !== false) {
+            return ["dev"=>7,"ino"=>11,"mode"=>040755,"nlink"=>2,"uid"=>501,"gid"=>20,
+                    "rdev"=>0,"size"=>96,"atime"=>1000000001,"mtime"=>1000000002,
+                    "ctime"=>1000000003,"blksize"=>4096,"blocks"=>0];
+        }
+        return ["dev"=>7,"ino"=>11,"mode"=>0100644,"nlink"=>1,"uid"=>501,"gid"=>20,
+                "rdev"=>0,"size"=>1234,"atime"=>1000000001,"mtime"=>1000000002,
+                "ctime"=>1000000003,"blksize"=>4096,"blocks"=>8];
+    }
+}
+stream_wrapper_register("sw", "SW");
+$f = "sw://a.txt";
+$d = "sw://x/dir";
+echo "is_dir "; echo is_dir($f) ? "Y" : "N"; clearstatcache(true);
+echo is_dir($d) ? "Y" : "N"; echo "\n"; clearstatcache(true);
+echo "is_link "; echo is_link($f) ? "Y" : "N"; echo "\n"; clearstatcache(true);
+echo "filemtime ", filemtime($f), "\n"; clearstatcache(true);
+echo "fileatime ", fileatime($f), "\n"; clearstatcache(true);
+echo "filectime ", filectime($f), "\n"; clearstatcache(true);
+echo "fileperms ", fileperms($f), "\n"; clearstatcache(true);
+echo "fileowner ", fileowner($f), "\n"; clearstatcache(true);
+echo "filegroup ", filegroup($f), "\n"; clearstatcache(true);
+echo "fileinode ", fileinode($f), "\n"; clearstatcache(true);
+echo "filetype ", filetype($f); clearstatcache(true);
+echo " ", filetype($d), "\n"; clearstatcache(true);
+$s = stat($f);
+echo "stat ", $s["mode"], " ", $s[2], " ", $s["size"], " ", $s[7], " ", $s["blocks"], " ", $s[0], "\n";
+clearstatcache(true);
+$s = lstat($d);
+echo "lstat ", $s["mode"], " ", $s["nlink"], " ", $s[12], "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "is_dir [6]N[6]Y\n\
+         is_link [7]N\n\
+         filemtime [4]1000000002\n\
+         fileatime [4]1000000001\n\
+         filectime [4]1000000003\n\
+         fileperms [4]33188\n\
+         fileowner [4]501\n\
+         filegroup [4]20\n\
+         fileinode [4]11\n\
+         filetype [5]file [5]dir\n\
+         [4]stat 33188 33188 1234 1234 8 7\n\
+         [5]lstat 16877 2 0\n",
+        "every stat builtin must reach url_stat with php's own flags and read php's own field"
+    );
+}
+
+/// A wrapper array that does not NAME a field answers zero, not false.
+///
+/// php builds a `php_stream_statbuf` from the array and `statbuf_from_array` zeroes it first, so
+/// only `url_stat()` answering `false` is a failed stat. Measured on php 8.5.6: a wrapper returning
+/// just `['mode' => 0100644]` gives `filesize()` `int(0)` and `filemtime()` `int(0)`, while
+/// `stat()` still measures as a full 26-entry array whose unnamed fields are all `0`. Conflating
+/// "absent field" with "failed stat" would turn each of those into `bool(false)`.
+///
+/// A mode of zero matches no `S_IFMT`, so the type predicates read false and `filetype()` reads
+/// `"unknown"` — after php's notice, which names the mode MASKED to its file-type bits.
+#[test]
+fn test_wrapper_url_stat_absent_field_reads_zero_not_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Sparse {
+    public $context;
+    function url_stat($path, $flags) { return ["mode" => 0100644]; }
+}
+class Bald {
+    public $context;
+    function url_stat($path, $flags) { return []; }
+}
+stream_wrapper_register("sp", "Sparse");
+stream_wrapper_register("bd", "Bald");
+var_dump(filesize("sp://x"));
+clearstatcache(true);
+var_dump(filemtime("sp://x"));
+clearstatcache(true);
+var_dump(fileowner("sp://x"));
+clearstatcache(true);
+var_dump(is_file("sp://x"));
+clearstatcache(true);
+var_dump(filetype("sp://x"));
+clearstatcache(true);
+$s = stat("sp://x");
+echo $s["mode"], ",", $s["size"], ",", $s[8], ",", $s[12], "\n";
+clearstatcache(true);
+var_dump(filetype("bd://x"));
+clearstatcache(true);
+var_dump(is_file("bd://x"));
+clearstatcache(true);
+var_dump(is_dir("bd://x"));
+clearstatcache(true);
+var_dump(filesize("bd://x"));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(
+        out.stdout,
+        "int(0)\nint(0)\nint(0)\nbool(true)\nstring(4) \"file\"\n\
+         33188,0,0,0\n\
+         string(7) \"unknown\"\nbool(false)\nbool(false)\nint(0)\n",
+        "an unnamed stat field is php's zero; only url_stat() answering false is a failed stat"
+    );
+    assert_eq!(
+        out.stderr,
+        "Notice: filetype(): Unknown file type (0)\n",
+        "a successful stat that names few fields warns about nothing, but a mode php cannot \
+         classify still gets its notice"
+    );
+}
+
+/// The access checks SELECT a permission triad out of the wrapper's mode; they do not `access(2)`.
+///
+/// php never asks the kernel about a `scheme://` path — it compares the array's `uid`/`gid` against
+/// the process and then tests ONE bit of the mode, so the answer can contradict the filesystem
+/// entirely. elephc ran `access(2)` on the URL as a literal path, which cannot exist, so
+/// `is_readable()`/`is_writable()`/`is_writeable()`/`is_executable()` measured false for every
+/// wrapper.
+///
+/// Measured on php 8.5.6, with `$mode` decimal because the wrapper reads it back out of the path:
+/// owner-matched `0400`(256) reads readable and `0040`(32) does not; unmatched, `0040` does not and
+/// `0004`(4) does. The GROUP triad — `st_gid == getgid()` or `st_gid` among `getgroups()` — is the
+/// third branch and measures the same way (`--- --- --- r-- -w- --x --- --- ---` for a file owned
+/// by another user in the process's primary group); it is not asserted here because a compiled test
+/// has no portable way to name the runner's gid.
+#[test]
+fn test_wrapper_access_checks_select_phps_permission_triad() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("triad_probe.txt", "x");
+$me = fileowner("triad_probe.txt");
+class TW {
+    public $context;
+    public static $owner = 0;
+    function url_stat($path, $flags) {
+        $mode = (int) substr($path, strrpos($path, "/") + 1);
+        if (strpos($path, "/mine/") !== false) {
+            return ["mode" => $mode, "uid" => TW::$owner, "gid" => 4242];
+        }
+        return ["mode" => $mode, "uid" => 4242, "gid" => 4242];
+    }
+}
+TW::$owner = $me;
+stream_wrapper_register("tw", "TW");
+function probe($p) {
+    clearstatcache(true);
+    echo is_readable($p) ? "r" : "-";
+    clearstatcache(true);
+    echo is_writable($p) ? "w" : "-";
+    clearstatcache(true);
+    echo is_writeable($p) ? "W" : "-";
+    clearstatcache(true);
+    echo is_executable($p) ? "x" : "-";
+    echo " ";
+}
+foreach ([256, 128, 64, 32, 16, 8, 4, 2, 1, 511] as $mode) { probe("tw:///mine/" . $mode); }
+echo "|";
+foreach ([256, 128, 64, 32, 16, 8, 4, 2, 1, 511] as $mode) { probe("tw:///other/" . $mode); }
+echo "\n";
+unlink("triad_probe.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "r--- -wW- ---x ---- ---- ---- ---- ---- ---- rwWx \
+         |---- ---- ---- ---- ---- ---- r--- -wW- ---x rwWx \n",
+        "the owner triad wins on a uid match and the world triad answers when nothing matches"
+    );
+}
+
+/// Every stat caller names ITSELF in the missing-hook warning, and the value readers add php's
+/// second line.
+///
+/// One runtime dispatcher serves them all, so it cannot know which builtin reached it; the lowering
+/// publishes the caller's name. `is_writeable()` names the ALIAS the program called, not
+/// `is_writable`. Measured on php 8.5.6: the value readers follow with `stat failed for`, the two
+/// link-free ones with php's capitalized `Lstat failed for`, and the six PREDICATES print nothing
+/// beyond the missing-hook line.
+#[test]
+fn test_every_stat_caller_names_itself_when_url_stat_is_missing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class Bare {
+    public $context;
+    function stream_open($p, $m, $o, &$op) { $op = $p; return true; }
+}
+stream_wrapper_register("bare", "Bare");
+var_dump(is_dir("bare://a"));
+var_dump(is_link("bare://a"));
+var_dump(is_readable("bare://a"));
+var_dump(is_writable("bare://a"));
+var_dump(is_writeable("bare://a"));
+var_dump(is_executable("bare://a"));
+var_dump(filemtime("bare://a"));
+var_dump(fileatime("bare://a"));
+var_dump(filectime("bare://a"));
+var_dump(filetype("bare://a"));
+var_dump(fileperms("bare://a"));
+var_dump(fileowner("bare://a"));
+var_dump(filegroup("bare://a"));
+var_dump(fileinode("bare://a"));
+var_dump(stat("bare://a"));
+var_dump(lstat("bare://a"));
+var_dump(@is_dir("bare://a"));
+"#,
+    );
+    assert!(out.success, "the diagnostics must not disturb the program");
+    assert_eq!(out.stdout, "bool(false)\n".repeat(17));
+    assert_eq!(
+        out.stderr,
+        "Warning: is_dir(): Bare::url_stat is not implemented!\n\
+         Warning: is_link(): Bare::url_stat is not implemented!\n\
+         Warning: is_readable(): Bare::url_stat is not implemented!\n\
+         Warning: is_writable(): Bare::url_stat is not implemented!\n\
+         Warning: is_writeable(): Bare::url_stat is not implemented!\n\
+         Warning: is_executable(): Bare::url_stat is not implemented!\n\
+         Warning: filemtime(): Bare::url_stat is not implemented!\n\
+         Warning: filemtime(): stat failed for bare://a\n\
+         Warning: fileatime(): Bare::url_stat is not implemented!\n\
+         Warning: fileatime(): stat failed for bare://a\n\
+         Warning: filectime(): Bare::url_stat is not implemented!\n\
+         Warning: filectime(): stat failed for bare://a\n\
+         Warning: filetype(): Bare::url_stat is not implemented!\n\
+         Warning: filetype(): Lstat failed for bare://a\n\
+         Warning: fileperms(): Bare::url_stat is not implemented!\n\
+         Warning: fileperms(): stat failed for bare://a\n\
+         Warning: fileowner(): Bare::url_stat is not implemented!\n\
+         Warning: fileowner(): stat failed for bare://a\n\
+         Warning: filegroup(): Bare::url_stat is not implemented!\n\
+         Warning: filegroup(): stat failed for bare://a\n\
+         Warning: fileinode(): Bare::url_stat is not implemented!\n\
+         Warning: fileinode(): stat failed for bare://a\n\
+         Warning: stat(): Bare::url_stat is not implemented!\n\
+         Warning: stat(): stat failed for bare://a\n\
+         Warning: lstat(): Bare::url_stat is not implemented!\n\
+         Warning: lstat(): Lstat failed for bare://a\n",
+        "each caller's own name, php's second line only for the value readers, \
+         and nothing at all from the suppressed call"
+    );
+}
+
+/// The value readers report a FAILED stat on an ordinary path too, not just through a wrapper.
+///
+/// Only `filesize()` printed php's `stat failed for` line; the other ten failed in silence.
+/// Measured on php 8.5.6 against an absent path — note that `filetype()` and `lstat()` capitalize
+/// it as `Lstat failed for`, and that the predicates print nothing at all.
+#[test]
+fn test_stat_value_readers_report_a_failed_stat_on_an_ordinary_path() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$p = "/definitely/not/here";
+var_dump(filesize($p));
+var_dump(filemtime($p));
+var_dump(fileatime($p));
+var_dump(filectime($p));
+var_dump(fileperms($p));
+var_dump(fileowner($p));
+var_dump(filegroup($p));
+var_dump(fileinode($p));
+var_dump(filetype($p));
+var_dump(stat($p));
+var_dump(lstat($p));
+var_dump(is_dir($p));
+var_dump(is_link($p));
+var_dump(is_readable($p));
+var_dump(file_exists($p));
+"#,
+    );
+    assert!(out.success);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(15));
+    assert_eq!(
+        out.stderr,
+        "Warning: filesize(): stat failed for /definitely/not/here\n\
+         Warning: filemtime(): stat failed for /definitely/not/here\n\
+         Warning: fileatime(): stat failed for /definitely/not/here\n\
+         Warning: filectime(): stat failed for /definitely/not/here\n\
+         Warning: fileperms(): stat failed for /definitely/not/here\n\
+         Warning: fileowner(): stat failed for /definitely/not/here\n\
+         Warning: filegroup(): stat failed for /definitely/not/here\n\
+         Warning: fileinode(): stat failed for /definitely/not/here\n\
+         Warning: filetype(): Lstat failed for /definitely/not/here\n\
+         Warning: stat(): stat failed for /definitely/not/here\n\
+         Warning: lstat(): Lstat failed for /definitely/not/here\n",
+        "eleven readers report the failure and the four predicates stay silent"
+    );
+}

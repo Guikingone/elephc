@@ -251,16 +251,84 @@ pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILESIZE: &str = "Warning: filesize()
 /// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
 pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_FILE: &str = "Warning: is_file(): ";
 
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_DIR: &str = "Warning: is_dir(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_LINK: &str = "Warning: is_link(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_READABLE: &str = "Warning: is_readable(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_WRITABLE: &str = "Warning: is_writable(): ";
+
+/// php names the ALIAS the program called, not the canonical spelling; measured on php 8.5.6.
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_WRITEABLE: &str = "Warning: is_writeable(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_IS_EXECUTABLE: &str = "Warning: is_executable(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEMTIME: &str = "Warning: filemtime(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEATIME: &str = "Warning: fileatime(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILECTIME: &str = "Warning: filectime(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILETYPE: &str = "Warning: filetype(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEPERMS: &str = "Warning: fileperms(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEOWNER: &str = "Warning: fileowner(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEGROUP: &str = "Warning: filegroup(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FILEINODE: &str = "Warning: fileinode(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_STAT: &str = "Warning: stat(): ";
+
+/// See [`WRAPPER_MISSING_HOOK_HEAD_FILE_EXISTS`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_LSTAT: &str = "Warning: lstat(): ";
+
 /// `url_stat`'s tail, shared by every builtin that stats a path through a wrapper.
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_URL_STAT: &str = "::url_stat is not implemented!\n";
 
-/// Head of the SECOND line `filesize()` prints whenever its stat fails.
+/// Middle of the SECOND line every VALUE reader prints whenever its stat fails.
 ///
 /// php emits it for any failure, not just a wrapper's: an absent ordinary file gets it too, and a
-/// wrapper with no `url_stat()` gets this line after the missing-hook one. The path follows, then
-/// a newline; `_diag_newline` already serves as the tail. `is_file()` and `file_exists()` have no
-/// counterpart — measured on php 8.5.6, they fail silently.
-pub(crate) const FILESIZE_STAT_FAILED_HEAD: &str = "Warning: filesize(): stat failed for ";
+/// wrapper with no `url_stat()` gets this line after the missing-hook one. The caller's own
+/// `_uwmh_head_*` symbol comes first and the path follows, then a newline; `_diag_newline` already
+/// serves as the tail. Measured on php 8.5.6 for `filesize`, `filemtime`, `fileatime`, `filectime`,
+/// `fileperms`, `fileowner`, `filegroup`, `fileinode` and `stat`. The PREDICATES have no
+/// counterpart — `file_exists()`, `is_file()`, `is_dir()`, `is_link()` and the access checks all
+/// fail silently.
+pub(crate) const STAT_FAILED_TAIL: &str = "stat failed for ";
+
+/// Head of the notice `filetype()` prints for an `S_IFMT` it does not name.
+///
+/// Unreachable through a real filesystem, but a userspace wrapper can report any mode it likes and
+/// php then says `Notice: filetype(): Unknown file type (12288)` before answering `"unknown"`. The
+/// number is the mode MASKED to its file-type bits — `0030644` is reported as `12288`, not `12708`.
+/// Measured on php 8.5.6.
+pub(crate) const FILETYPE_UNKNOWN_HEAD: &str = "Notice: filetype(): Unknown file type (";
+
+/// Tail of [`FILETYPE_UNKNOWN_HEAD`], after the masked mode.
+pub(crate) const FILETYPE_UNKNOWN_TAIL: &str = ")\n";
+
+/// The same line for the two readers that do NOT follow the last symlink.
+///
+/// php capitalizes it — `filetype(): Lstat failed for /x` and `lstat(): Lstat failed for /x` —
+/// which is the only wording difference between the two families. Measured on php 8.5.6.
+pub(crate) const LSTAT_FAILED_TAIL: &str = "Lstat failed for ";
 
 /// Head of the first warning `scandir()` prints for a directory it cannot open.
 ///

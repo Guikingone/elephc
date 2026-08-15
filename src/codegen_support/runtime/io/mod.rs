@@ -147,6 +147,7 @@ mod user_wrapper_path_op;
 mod user_wrapper_set_option;
 mod user_wrapper_table;
 mod user_wrapper_url_stat;
+mod user_wrapper_url_stat_fields;
 mod print_r_walk;
 mod print_r_buffer;
 mod var_dump_object;
@@ -322,8 +323,10 @@ pub(crate) use stash_connect_host::emit_stash_connect_host;
 pub(crate) use notification::emit_fire_notification;
 pub(crate) use touch_meta_array::emit_touch_meta_array;
 pub(crate) use user_wrapper_set_option::emit_user_wrapper_set_option;
-pub(crate) use user_wrapper_url_stat::{
-    emit_user_wrapper_url_stat, emit_user_wrapper_url_stat_field,
+pub(crate) use user_wrapper_url_stat::emit_user_wrapper_url_stat;
+pub(crate) use user_wrapper_url_stat_fields::{
+    emit_user_wrapper_url_stat_readers, STAT_FIELD_ATIME, STAT_FIELD_CTIME, STAT_FIELD_GID,
+    STAT_FIELD_INO, STAT_FIELD_MODE, STAT_FIELD_MTIME, STAT_FIELD_SIZE, STAT_FIELD_UID,
 };
 pub(crate) use print_r_walk::{
     emit_print_r_close, emit_print_r_hash, emit_print_r_indexed, emit_print_r_int_key,
