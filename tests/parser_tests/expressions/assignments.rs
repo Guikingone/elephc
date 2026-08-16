@@ -236,3 +236,60 @@ fn test_parse_union_typed_assign() {
         other => panic!("Expected typed assign, got {:?}", other),
     }
 }
+
+/// Verifies that an assignment used as the right operand of a comparison binds tighter
+/// than the comparison, so `false !== $pos = strrpos($s, "/")` parses as
+/// `false !== ($pos = strrpos($s, "/"))` rather than as an assignment to the comparison.
+#[test]
+fn test_assignment_as_right_operand_of_comparison() {
+    let stmts = parse_source("<?php if (false !== $pos = strrpos($s, \"/\")) { echo $pos; }");
+    let condition = match &stmts[0].kind {
+        StmtKind::If { condition, .. } => condition,
+        other => panic!("expected If, got {:?}", other),
+    };
+    match &condition.kind {
+        ExprKind::BinaryOp { left, op, right } => {
+            assert_eq!(op, &BinOp::StrictNotEq);
+            assert_eq!(left.kind, ExprKind::BoolLiteral(false));
+            assert!(
+                matches!(&right.kind, ExprKind::Assignment { .. }),
+                "expected the comparison's right operand to be an assignment, got {:?}",
+                right.kind
+            );
+        }
+        other => panic!("expected BinaryOp, got {:?}", other),
+    }
+}
+
+/// Verifies that an assignment as the right operand of an arithmetic operator binds tighter
+/// than that operator, so `$x = 1 + $y = 2;` parses as `$x = 1 + ($y = 2)`.
+#[test]
+fn test_assignment_as_right_operand_of_arithmetic() {
+    let stmts = parse_source("<?php $x = 1 + $y = 2;");
+    match &stmts[0].kind {
+        StmtKind::Assign { name, value } => {
+            assert_eq!(name, "x");
+            match &value.kind {
+                ExprKind::BinaryOp { left, op, right } => {
+                    assert_eq!(op, &BinOp::Add);
+                    assert_eq!(left.kind, ExprKind::IntLiteral(1));
+                    assert!(
+                        matches!(&right.kind, ExprKind::Assignment { .. }),
+                        "expected an assignment on the right of `+`, got {:?}",
+                        right.kind
+                    );
+                }
+                other => panic!("expected BinaryOp, got {:?}", other),
+            }
+        }
+        other => panic!("expected Assign, got {:?}", other),
+    }
+}
+
+/// Verifies that a non-variable left-hand side is still rejected, so relaxing precedence
+/// for assignment does not admit assignments to arbitrary expressions.
+#[test]
+fn test_assignment_to_non_variable_still_rejected() {
+    assert!(parse_fails("<?php $x = (1 + 2) = 3;"));
+    assert!(parse_fails("<?php $x = foo() = 3;"));
+}
