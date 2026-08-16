@@ -2,13 +2,13 @@
 title: "stream_copy_to_stream()"
 description: "Copies data from one stream to another."
 sidebar:
-  order: 217
+  order: 235
 ---
 
 ## stream_copy_to_stream()
 
 ```php
-function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = -1): mixed
+function stream_copy_to_stream(resource $from, resource $to, int $length = null, int $offset = 0): mixed
 ```
 
 Copies data from one stream to another.
@@ -17,7 +17,7 @@ Copies data from one stream to another.
 - `$from` (`resource`)
 - `$to` (`resource`)
 - `$length` (`int`), default `null`, optional
-- `$offset` (`int`), default `-1`, optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `mixed`
 
@@ -27,12 +27,6 @@ Copies data from one stream to another.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -6,12 +6,15 @@
 //!
 //! Key details:
 //! - Inline PHP fixtures are compiled to native binaries and assertions compare stdout or expected failures.
+//! - The trailing group pins the result storage of a builtin reached through a callable
+//!   binding: every dispatch form must agree with the direct call, because a mislabelled
+//!   result silently boxed a raw scalar or array return.
 
 use crate::support::*;
 
 /// Returns true when assembly contains a valid invokable object dispatch path.
 fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
-    let eir_method = format!("_method_{}__u__u_invoke", class_name);
+    let eir_method = elephc::names::method_symbol(class_name, "__invoke");
     (user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"))
         || user_asm.contains(&eir_method)
 }
@@ -1517,201 +1520,6 @@ echo $cb();
     assert_eq!(out, "B");
 }
 
-/// Verifies the dynamic first-class-callable form `$callable(...)`: creating a closure from a
-/// callable held in a variable yields a value that can be stored and invoked. Here `$f` holds a
-/// `strlen(...)` callable, `$g = $f(...)` re-wraps it, and `$g("hello")` returns `5`.
-#[test]
-fn test_fcc_dynamic_variable_callable() {
-    let out = compile_and_run(
-        r#"<?php
-$f = strlen(...);
-$g = $f(...);
-echo $g("hello");
-"#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies `$callable(...)` on a variable holding a closure: the first-class-callable form returns
-/// the closure value, which is then invoked with an argument.
-#[test]
-fn test_fcc_dynamic_variable_closure() {
-    let out = compile_and_run(
-        r#"<?php
-$c = function ($x) { return $x * 2; };
-$d = $c(...);
-echo $d(21);
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Verifies invoking the result of an instance method call directly: `$obj->method()(args)` calls
-/// the closure returned by `getCb` with `41`, yielding `42`.
-#[test]
-fn test_invoke_instance_method_call_result() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public function getCb() { return function ($x) { return $x + 1; }; }
-}
-$b = new Box();
-echo $b->getCb()(41);
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Verifies invoking the result of a static method call directly: `Box::make()()` calls the closure
-/// returned by `make`, yielding `"S"`.
-#[test]
-fn test_invoke_static_method_call_result() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public static function make() { return function () { return "S"; }; }
-}
-echo Box::make()();
-"#,
-    );
-    assert_eq!(out, "S");
-}
-
-/// Verifies `self::$method(args)` dispatches to the static method named at runtime by `$method`.
-#[test]
-fn test_self_dynamic_static_method_call() {
-    let out = compile_and_run(
-        r#"<?php
-class C {
-    public static function a($x) { return "a:$x"; }
-    public static function b($x) { return "b:$x"; }
-    public static function run($m, $x) { return self::$m($x); }
-}
-echo C::run("a", 1), C::run("b", 2);
-"#,
-    );
-    assert_eq!(out, "a:1b:2");
-}
-
-/// Verifies `static::$method(args)` dispatches through the late-static-binding class: in `D::go`
-/// the receiver `static::` is `D`, so `static::$m` selects `D`'s override of `a`.
-#[test]
-fn test_static_dynamic_static_method_call() {
-    let out = compile_and_run(
-        r#"<?php
-class C {
-    public static function a($x) { return "C:$x"; }
-}
-class D extends C {
-    public static function a($x) { return "D:$x"; }
-    public static function go($m, $x) { return static::$m($x); }
-}
-echo D::go("a", 9);
-"#,
-    );
-    assert_eq!(out, "D:9");
-}
-
-/// Regression pin (symfony/console `Command.php:157`): `$this(...)` first-class callable inside a
-/// class that does NOT declare `__invoke`. The produced callable flows into a `callable`-typed
-/// constructor parameter but is never invoked (mirrors `new InvokableCommand($this, $this(...))`).
-/// Proves it parses, type-checks to `callable`, compiles, links, and the program runs normally.
-#[test]
-fn test_this_fcc_without_invoke_flows_into_callable_param() {
-    let out = compile_and_run(
-        r#"<?php
-class Sink {
-    public $code;
-    public function __construct(callable $code) { $this->code = $code; }
-}
-class Command {
-    public $sink;
-    public function configure(): void {
-        $this->sink = new Sink($this(...));
-    }
-    public function name(): string { return "cmd"; }
-}
-$c = new Command();
-$c->configure();
-echo $c->name();
-"#,
-    );
-    assert_eq!(out, "cmd");
-}
-
-/// Dispatch correctness: `$this(...)` FCC inside a class that DOES declare `__invoke`, then invoke
-/// the produced callable (`$g = $this(...); return $g();`). Proves the desugaring reuses the
-/// working instance-method (`__invoke`) dispatch path and yields the `__invoke` return value.
-#[test]
-fn test_this_fcc_with_invoke_dispatches() {
-    let out = compile_and_run(
-        r#"<?php
-class Greeter {
-    public function __invoke(): string { return "hi"; }
-    public function run(): string {
-        $g = $this(...);
-        return $g();
-    }
-}
-$obj = new Greeter();
-echo $obj->run();
-"#,
-    );
-    assert_eq!(out, "hi");
-}
-
-/// Best-effort direct-invoke form: `$this($n)` inside a class that declares `__invoke` routes to
-/// the existing invokable-object dispatch and returns the `__invoke` result.
-#[test]
-fn test_this_direct_call_with_invoke_dispatches() {
-    let out = compile_and_run(
-        r#"<?php
-class Doubler {
-    public function __invoke(int $n): int { return $n * 2; }
-    public function run(int $n): int {
-        return $this($n);
-    }
-}
-$obj = new Doubler();
-echo $obj->run(21);
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Sibling of the `$this(...)` FCC fix: `($expr)(...)` first-class callable applied to a
-/// parenthesized expression. `($c)(...)` where `$c` already holds a closure evaluates to that
-/// closure value directly (mirrors `$var(...)`), so calling the result invokes it normally.
-#[test]
-fn test_grouped_expr_fcc_then_invoke() {
-    let out = compile_and_run(
-        r#"<?php
-$c = function(){ return 7; };
-$g = ($c)(...);
-echo $g();
-"#,
-    );
-    assert_eq!(out, "7");
-}
-
-/// Regression pin (symfony/console `Attribute/Argument.php:113`): `($this->prop)(...)` FCC on a
-/// parenthesized object-property access guarded by `is_callable`. Proves the grouped-expression
-/// FCC form parses and dispatches through property access, not just a bare variable.
-#[test]
-fn test_grouped_property_fcc_then_invoke() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public $suggestedValues;
-    public function __construct($v) { $this->suggestedValues = $v; }
-}
-$box = new Box(function() { return 99; });
-$g = is_callable($box->suggestedValues) ? ($box->suggestedValues)(...) : $box->suggestedValues;
-echo $g();
-"#,
-    );
-    assert_eq!(out, "99");
-}
 /// Regression for #487: a value the register allocator parks in a callee-saved register
 /// across an indirect callable invoke (here the loaded LHS of `$acc += $f()`) must survive
 /// the call. The generated descriptor-invoker trampoline used callee-saved registers as
@@ -1941,4 +1749,85 @@ echo $adapter->run();
         "short callable array should fail cleanly, got: {}",
         out.stderr
     );
+}
+
+/// Regression: a builtin reached through `call_user_func()` must be typed from its own
+/// descriptor, not from the checker's result type for the `call_user_func()` call itself.
+///
+/// The checker cannot resolve a callback held in a variable, so it types the call
+/// runtime-opaque `mixed`; constant propagation then turns the variable into a literal and
+/// lowering *does* resolve it. Reading the checker's per-span type back for the resolved
+/// builtin labelled `array_reverse`'s raw array pointer as a boxed Mixed cell, and
+/// `var_dump()` printed `bool(true)`. Expected output is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_array_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$g = "array_reverse";
+var_dump(call_user_func($g, [1, 2, 3]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  int(3)\n  [1]=>\n  int(2)\n  [2]=>\n  int(1)\n}\n"
+    );
+}
+
+/// Regression: every `array_slice()` dispatch form agrees on the result layout.
+///
+/// A variable-held callback previously reached the backend typed `mixed` and aborted with
+/// `unsupported EIR backend feature: array_slice result PHP type Mixed`, while the direct,
+/// value-call and literal-callback forms compiled. Expected output is verbatim
+/// `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_array_slice_dispatch_forms_agree_on_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4];
+$f = "array_slice";
+echo implode(",", array_slice($a, 1, 2)), ":";
+echo implode(",", $f($a, 1, 2)), ":";
+echo implode(",", call_user_func("array_slice", $a, 1, 2)), ":";
+echo implode(",", call_user_func($f, $a, 1, 2)), ":";
+echo implode(",", call_user_func_array($f, [$a, 1, 2]));
+"#,
+    );
+    assert_eq!(out, "2,3:2,3:2,3:2,3:2,3");
+}
+
+/// Regression: a `bool`-returning builtin dispatched through a variable-held callback name
+/// must return a raw bool, not a boxed Mixed cell.
+///
+/// This is the shape that segfaulted — the `mixed` label made the consumer dereference the
+/// raw bool as a heap pointer. `in_array()` carries a checker hook, so its registry result
+/// type is `Checked` and it took the bad per-span lookup; `str_contains()` is `Declared` and
+/// never did. Expected output is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_bool_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "in_array";
+var_dump(call_user_func($f, 2, [1, 2, 3]));
+var_dump(call_user_func($f, 9, [1, 2, 3]));
+echo call_user_func($f, 2, [1, 2, 3]) ? "y" : "n";
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\ny");
+}
+
+/// Regression: an `int`-returning builtin dispatched through a variable-held callback name
+/// keeps its raw integer result instead of a boxed Mixed cell.
+///
+/// Same crash shape as the `bool` case, on the other scalar storage class. Expected output
+/// is verbatim `LC_ALL=C php` 8.4.20.
+#[test]
+fn test_call_user_func_variable_builtin_name_keeps_int_result_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "count";
+var_dump(call_user_func($f, [1, 2, 3]));
+echo call_user_func($f, [1, 2, 3]) + 1;
+"#,
+    );
+    assert_eq!(out, "int(3)\n4");
 }

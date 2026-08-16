@@ -87,6 +87,46 @@ pub(super) fn analyze_function_like_scope(
     declaration_span: Span,
     warnings: &mut Vec<CompileWarning>,
 ) {
+    analyze_function_like_scope_with_reads(
+        params,
+        variadic,
+        body,
+        declaration_span,
+        &[],
+        warnings,
+    );
+}
+
+/// Analyzes a closure scope while treating by-reference captures as used output
+/// storage, so assigning through a retained caller reference is not reported unused.
+pub(super) fn analyze_closure_scope(
+    params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&String>,
+    body: &[Stmt],
+    declaration_span: Span,
+    capture_refs: &[String],
+    warnings: &mut Vec<CompileWarning>,
+) {
+    analyze_function_like_scope_with_reads(
+        params,
+        variadic,
+        body,
+        declaration_span,
+        capture_refs,
+        warnings,
+    );
+}
+
+/// Implements function-like warning analysis with a set of names that are
+/// semantically used even when the body only writes them.
+fn analyze_function_like_scope_with_reads(
+    params: &[(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&String>,
+    body: &[Stmt],
+    declaration_span: Span,
+    preset_reads: &[String],
+    warnings: &mut Vec<CompileWarning>,
+) {
     let mut scope = ScopeUsage::default();
     for (name, _, _, is_ref) in params {
         scope.declare(name, declaration_span);
@@ -96,6 +136,9 @@ pub(super) fn analyze_function_like_scope(
     }
     if let Some(name) = variadic {
         scope.declare(name, declaration_span);
+    }
+    for name in preset_reads {
+        scope.read(name);
     }
     collect_scope_reads(body, &mut scope, warnings);
     for (name, span) in scope.declared {
@@ -133,10 +176,6 @@ pub(super) fn collect_scope_reads(
                 collect_expr_reads(source, scope, warnings);
                 scope.declare(target, stmt.span);
             }
-            StmtKind::RefAssignToTarget { target, source, .. } => {
-                collect_expr_reads(target, scope, warnings);
-                collect_expr_reads(source, scope, warnings);
-            }
             StmtKind::TypedAssign { name, value, .. } => {
                 collect_expr_reads(value, scope, warnings);
                 scope.declare(name, stmt.span);
@@ -159,11 +198,7 @@ pub(super) fn collect_scope_reads(
             | StmtKind::ExprStmt(expr)
             | StmtKind::ConstDecl { value: expr, .. } => collect_expr_reads(expr, scope, warnings),
             StmtKind::Return(Some(expr)) => collect_expr_reads(expr, scope, warnings),
-            StmtKind::Return(None)
-            | StmtKind::Break(_)
-            | StmtKind::Continue(_)
-            | StmtKind::Goto(_)
-            | StmtKind::Label(_) => {}
+            StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
             StmtKind::If {
                 condition,
                 then_body,
@@ -292,13 +327,6 @@ pub(super) fn collect_scope_reads(
             }
             StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
                 collect_expr_reads(index, scope, warnings);
-                collect_expr_reads(value, scope, warnings);
-            }
-            StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-                collect_expr_reads(property, scope, warnings);
-                if let Some(index) = index {
-                    collect_expr_reads(index, scope, warnings);
-                }
                 collect_expr_reads(value, scope, warnings);
             }
             StmtKind::PropertyArrayPush {

@@ -10,7 +10,7 @@
 
 use super::super::cursor::Cursor;
 use super::super::token::{spanned, SpannedToken, Token};
-use super::identifiers::{is_ident_continue, is_ident_start};
+use super::identifiers::is_ident_continue;
 use crate::errors::CompileError;
 use crate::span::Span;
 use std::iter::Peekable;
@@ -172,17 +172,6 @@ fn interpolate(
                     continue;
                 }
                 input.advance_escape(); // consume '$'
-                // PHP simple `$name` interpolation only begins a variable when the first
-                // character after `$` is a valid identifier START (letter, `_`, or a non-ASCII
-                // byte). `is_ident_continue` additionally accepts digits, so scanning the name
-                // with it alone would wrongly treat `"$0"` as a variable `$0` (which is not a
-                // legal PHP variable name). When the next character is not an ident-start (e.g.
-                // a digit, or another `$`), the `$` is a literal dollar sign and no
-                // interpolation begins.
-                if !input.peek_escape().is_some_and(is_ident_start) {
-                    current.push('$');
-                    continue;
-                }
                 let mut name = String::new();
                 while let Some(ch) = input.peek_escape() {
                     if is_ident_continue(ch) {

@@ -1,7 +1,8 @@
 //! Purpose:
-//! Regression coverage for nested writes through homogeneous matrices,
-//! an `Array(Mixed)` element (`$a[$i][$j] = ...`), and an `ArrayAccess`
-//! object parent (`$objects[$i][$key] = ...`) (issue #529).
+//! Regression coverage for nested writes through an `Array(Mixed)` element
+//! (`$a[$i][$j] = ...`) and through an `ArrayAccess` object parent
+//! (`$objects[$i][$key] = ...`) — the nested-write shapes the checker accepts
+//! (issue #529).
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests arrays::nested_mixed_write`.
@@ -20,117 +21,6 @@
 //!   container for every slot representation.
 
 use crate::support::compile_and_run_with_heap_debug;
-
-/// Homogeneous `array<array<int>>` matrices preserve concrete slot types while leaf writes
-/// COW-split and write the mutated child back through every indexed parent.
-#[test]
-fn test_nested_write_homogeneous_matrix_from_array_fill() {
-    let baseline = compile_and_run_with_heap_debug(
-        r#"<?php
-function renderMatrixBaseline(): void {
-    $matrix = array_fill(0, 3, array_fill(0, 3, 0));
-    foreach ($matrix as $row) {
-        echo $row[0] . ":" . $row[2] . "\n";
-    }
-}
-renderMatrixBaseline();
-"#,
-    );
-    assert!(
-        baseline
-            .stderr
-            .contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean baseline heap, got: {}",
-        baseline.stderr
-    );
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-function renderMatrix(): void {
-    $matrix = array_fill(0, 3, array_fill(0, 3, 0));
-    for ($i = 1; $i < 3; ++$i) {
-        $matrix[$i][0] = $i + 10;
-    }
-    for ($j = 1; $j < 3; ++$j) {
-        $matrix[0][$j] = $j + 20;
-    }
-    for ($i = 1; $i < 3; ++$i) {
-        for ($j = 1; $j < 3; ++$j) {
-            $matrix[$i][$j] = $matrix[$i - 1][$j - 1] + $i + $j;
-        }
-    }
-    foreach ($matrix as $row) {
-        echo $row[0] . ":" . $row[1] . ":" . $row[2] . "\n";
-    }
-}
-renderMatrix();
-"#,
-    );
-    assert_eq!(out.stdout, "0:21:22\n11:2:24\n12:14:6\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Associative roots whose values are concrete indexed arrays write a COW-split child back into
-/// the map instead of mutating a detached `HashGet` result.
-#[test]
-fn test_nested_write_assoc_root_concrete_array_value() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$scopes = [];
-$name = 'property';
-$scopes[$name] = ['class', 'name', null, 1];
-$scopes[$name][2] = 'write-scope';
-echo $scopes[$name][0] . ':' . $scopes[$name][2] . "\n";
-"#,
-    );
-    assert_eq!(out.stdout, "class:write-scope\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// A declared static cache whose entries were aliased by reference must publish a replaced child
-/// through the static property's shared storage.
-#[test]
-fn test_nested_write_static_assoc_cache_entry() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Cache {
-    private static array $entries = [];
-
-    public static function replaceFiles(): void {
-        self::$entries[0] = ['/', []];
-        self::$entries[1] = &self::$entries[0];
-        $key = 1;
-        $files = ['file' => 'resolved'];
-        self::$entries[$key][1] = $files;
-        echo self::$entries[$key][0] . ':' . self::$entries[$key][1]['file'] . "\n";
-    }
-}
-Cache::replaceFiles();
-"#,
-    );
-    assert_eq!(
-        out.stdout, "/:resolved\n",
-        "unexpected stderr: {}",
-        out.stderr
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    // A control with only the static tuple + alias retains 7 blocks at process exit. The nested
-    // write intentionally makes the `$files` hash and its persisted string reachable from that
-    // static graph, adding exactly 2 blocks; any extra block is a write-back ownership leak.
-    assert!(
-        out.stderr
-            .contains("HEAP DEBUG: leak summary: live_blocks=9"),
-        "expected the 7-block static baseline plus 2 reachable file-map blocks, got: {}",
-        out.stderr
-    );
-}
 
 /// Issue #529 repro: the inner arrays are homogeneous `array<string>` (16-byte
 /// string slots), the outer heterogeneous literal is `array<mixed>`. The write
@@ -319,35 +209,6 @@ echo $boxes[0]['y'] . "\n";
 "#,
     );
     assert_eq!(out.stdout, "patched\n1\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// A loop-carried empty root is read before its nested autovivifying write in source order.
-///
-/// The next iteration can observe the container produced by the previous one, so both checker
-/// and lowering must pre-widen the root to boxed elements before the first body read.
-#[test]
-fn test_loop_backedge_prewidens_empty_nested_write_root() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$unmerged = [];
-foreach ([0, 1] as $rowKey) {
-    foreach ([0, 1] as $lineKey) {
-        if (!array_key_exists($rowKey, $unmerged) || !array_key_exists($lineKey, $unmerged[$rowKey])) {
-            $unmerged[$rowKey][$lineKey] = ['seed'];
-        }
-        $unmerged[$rowKey][$lineKey][1] = $rowKey * 10 + $lineKey;
-    }
-}
-echo $unmerged[0][0][1], ':', $unmerged[0][1][1], ':', $unmerged[1][0][1], ':', $unmerged[1][1][1];
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "0:1:10:11");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected clean heap, got: {}",

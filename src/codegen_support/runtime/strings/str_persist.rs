@@ -7,7 +7,11 @@
 //!
 //! Key details:
 //! - String helpers scan or transform byte ranges and return target ABI pointer/length pairs for generated call sites.
+//! - A source already carrying `CONCAT_TEMP_HEAP_KIND` is a heap-backed `.` operator temporary:
+//!   it is taken over in place (retagged as an owned string) instead of being duplicated, so a
+//!   `$s .= ...` accumulation loop does not leave one oversized block behind per append.
 
+use crate::codegen_support::runtime::strings::concat_scratch::CONCAT_TEMP_HEAP_KIND;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 
@@ -15,6 +19,11 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Used to persist strings that would otherwise outlive their current owner.
 /// Input:  x1=ptr, x2=len
 /// Output: x1=new_ptr (on heap), x2=len (unchanged)
+///
+/// A source stamped with `CONCAT_TEMP_HEAP_KIND` is an unowned `.` operator temporary with at
+/// most one consumer, so ownership is transferred by retagging the existing block as heap kind 1
+/// instead of allocating and copying a second one. Every other source (rodata literals, concat
+/// scratch slices, already-owned strings) still gets a fresh owned duplicate.
 pub fn emit_str_persist(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_persist_linux_x86_64(emitter);
@@ -32,6 +41,19 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
     );
     emitter.instruction("cmp x1, x9");                                          // preserve the dedicated null-string sentinel across ownership stabilization
     emitter.instruction("b.eq __rt_str_persist_done");                          // a missing string has no payload to allocate or copy
+
+    // -- take over a transient `.` operator temporary instead of duplicating it --
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the frame pointer and return address across the heap-kind probe
+    emitter.instruction("mov x29, sp");                                         // establish the persist-helper probe frame pointer
+    emitter.instruction("mov x0, x1");                                          // pass the source payload pointer to the uniform heap-kind probe
+    emitter.instruction("bl __rt_heap_kind");                                   // classify the source storage without disturbing the x1/x2 string pair
+    emitter.instruction(&format!("cmp x0, #{}", CONCAT_TEMP_HEAP_KIND));        // is the source an unowned heap-backed concat temporary?
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the frame pointer and return address after the probe
+    emitter.instruction("b.ne __rt_str_persist_duplicate");                     // every other source still gets a fresh owned duplicate
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = persisted elephc string
+    emitter.instruction("str x9, [x1, #-8]");                                   // retag the concat temporary as an owned string in place
+    emitter.instruction("ret");                                                 // return the taken-over block with its length unchanged
+    emitter.label("__rt_str_persist_duplicate");
 
     // -- zero-length strings still get an owned heap block so callers never alias a borrowed source pointer --
     // (the old early-return let explode()'s empty segment alias the subject string and double-free it on release)
@@ -90,8 +112,11 @@ pub fn emit_str_persist(emitter: &mut Emitter) {
 /// x86_64 Linux variant of `emit_str_persist`.
 /// Allocates heap storage, stamps the header with the owned-string heap kind, and copies
 /// the source bytes into the owned allocation.
-/// Input:  rdi=ptr, rdx=len
+/// Input:  rax=ptr, rdx=len
 /// Output: rax=heap_ptr (owned), rdx=len (unchanged)
+///
+/// NOTE: the source pointer is consumed from `rax`, not `rdi` — this mirrors the
+/// x86_64 string result-pair convention used by the helpers that feed it.
 fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_persist ---");
@@ -113,7 +138,21 @@ fn emit_str_persist_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve local slots for the source pointer and source length across the allocator call
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source pointer across the heap allocation helper call
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source length across the heap allocation helper call
-    emitter.instruction("mov rax, rdx");                                        // move the byte length into the x86_64 heap helper input register
+
+    // -- take over a transient `.` operator temporary instead of duplicating it --
+    emitter.instruction("call __rt_heap_kind");                                 // classify the source storage (rax already holds the source pointer)
+    emitter.instruction(&format!("cmp eax, {}", CONCAT_TEMP_HEAP_KIND));        // is the source an unowned heap-backed concat temporary?
+    emitter.instruction("jne __rt_str_persist_duplicate");                      // every other source still gets a fresh owned duplicate
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the concat temporary payload pointer for the in-place retag
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // retag the concat temporary as an owned string in place
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original string length for the x86_64 string result pair
+    emitter.instruction("add rsp, 16");                                         // release the temporary spill slots used by the persist helper
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
+    emitter.instruction("ret");                                                 // return the taken-over block with its length unchanged
+
+    emitter.label("__rt_str_persist_duplicate");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the byte length into the x86_64 heap helper input register
     emitter.instruction("call __rt_heap_alloc");                                // allocate owned string storage and return the payload pointer in rax
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap magic marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as a persisted elephc string in the uniform heap header

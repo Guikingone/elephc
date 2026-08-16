@@ -220,20 +220,10 @@ fn visit_stmt(stmt: &Stmt, st: &mut State) {
             visit_expr(index, st);
             visit_expr(value, st);
         }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            visit_expr(property, st);
-            if let Some(index) = index {
-                visit_expr(index, st);
-            }
-            visit_expr(value, st);
-        }
         // Statements that don't carry expressions or sub-bodies for yield checks.
         StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::EnumDecl { .. }
@@ -306,9 +296,6 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         ExprKind::Pipe { value, callable } => {
             visit_expr(value, st);
             visit_expr(callable, st);
-        }
-        ExprKind::ListUnpack { value, .. } => {
-            visit_expr(value, st);
         }
         ExprKind::FunctionCall { args, .. }
         | ExprKind::ClosureCall { args, .. }
@@ -429,9 +416,6 @@ fn visit_expr(expr: &Expr, st: &mut State) {
         | ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::MagicConstant(_) => {}
-        // `$obj::CONST` — a yield can only appear inside the object sub-expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => visit_expr(object, st),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => visit_expr(property, st),
         ExprKind::Print(inner) => visit_expr(inner, st),
         ExprKind::Assignment { target, value, .. } => {
             visit_expr(target, st);

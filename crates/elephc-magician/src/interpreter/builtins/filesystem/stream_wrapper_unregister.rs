@@ -8,9 +8,8 @@
 //! - Unregisters protocols in the eval stream wrapper registry.
 
 eval_builtin! {
-    name: "stream_wrapper_unregister",
+    contract: "stream_wrapper_unregister",
     area: Filesystem,
-    params: [protocol],
     direct: Filesystem,
     values: Filesystem,
 }

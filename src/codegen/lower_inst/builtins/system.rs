@@ -136,48 +136,6 @@ pub(crate) fn lower_microtime(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `memory_get_usage(real_usage = false)` from Elephc allocator counters.
-///
-/// The default form returns `_gc_live`, the sum of currently-live heap payload bytes.
-/// The `real_usage` form returns `_heap_off`, the committed bump-arena extent, which includes
-/// headers and freed blocks retained for reuse. Both counters are maintained identically on all
-/// supported targets by `__rt_heap_alloc` / `__rt_heap_free`.
-pub(crate) fn lower_memory_get_usage(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "memory_get_usage", 0, 1)?;
-    let result = abi::int_result_reg(ctx.emitter);
-    let Some(real_usage) = inst.operands.first().copied() else {
-        abi::emit_load_symbol_to_reg(ctx.emitter, result, "_gc_live", 0);
-        return store_if_result(ctx, inst);
-    };
-    require_integer_like(
-        ctx.load_value_to_result(real_usage)?,
-        "memory_get_usage real_usage",
-    )?;
-    let live_label = ctx.next_label("memory_get_usage_live");
-    let done_label = ctx.next_label("memory_get_usage_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // did the caller request committed arena usage?
-            ctx.emitter.instruction(&format!("b.eq {live_label}"));             // use live payload bytes for false
-            abi::emit_load_symbol_to_reg(ctx.emitter, result, "_heap_off", 0);
-            ctx.emitter.instruction(&format!("b {done_label}"));                // skip the live-byte fallback
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // did the caller request committed arena usage?
-            ctx.emitter.instruction(&format!("jz {live_label}"));               // use live payload bytes for false
-            abi::emit_load_symbol_to_reg(ctx.emitter, result, "_heap_off", 0);
-            ctx.emitter.instruction(&format!("jmp {done_label}"));              // skip the live-byte fallback
-        }
-    }
-    ctx.emitter.label(&live_label);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result, "_gc_live", 0);
-    ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `mktime(hour, minute, second, month, day, year)` through the runtime helper.
 pub(crate) fn lower_mktime(
     ctx: &mut FunctionContext<'_>,
@@ -352,19 +310,6 @@ pub(crate) fn lower_header(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     emit_load_scratch_to_arg_reg(ctx, 3, 8);
     emit_scratch_release(ctx, 16);
     abi::emit_call_label(ctx.emitter, "__rt_header");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `trigger_deprecation(package, version, message, ...args)` as a sound no-op.
-///
-/// elephc suppresses Symfony deprecation notices: the call's arguments are already
-/// evaluated (for their side effects) during argument lowering, so this emitter emits
-/// no instructions and produces no value. Any owning argument temporaries are released
-/// by the shared call-argument cleanup, exactly as for any other builtin call.
-pub(super) fn lower_trigger_deprecation(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
     store_if_result(ctx, inst)
 }
 
@@ -604,6 +549,51 @@ pub(crate) fn lower_elephc_strtotime_raw(
     store_if_result(ctx, inst)
 }
 
+/// Tests whether a dynamically named AOT class exposes an inherited or declared constructor.
+pub(crate) fn lower_elephc_class_has_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_class_has_constructor", 1)?;
+    super::super::objects::lower_dynamic_class_has_constructor(ctx, inst)
+}
+
+/// Classifies a dynamically named class for PDO's custom statement construction rules.
+pub(crate) fn lower_elephc_pdo_statement_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_statement_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_statement_class_status(ctx, inst)
+}
+
+/// Classifies the late-static called class for `PDO::connect()` driver validation.
+pub(crate) fn lower_elephc_pdo_called_class_status(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_pdo_called_class_status", 1)?;
+    super::super::objects::lower_dynamic_pdo_called_class_status(ctx, inst)
+}
+
+/// Invokes a selected PDOStatement subclass constructor after its native state is initialized.
+pub(crate) fn lower_elephc_invoke_pdo_statement_constructor(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_invoke_pdo_statement_constructor", 3)?;
+    super::super::objects::lower_dynamic_pdo_statement_constructor_call(ctx, inst)
+}
+
+/// Initializes the private PDOStatement base fields on a dynamically allocated subclass.
+pub(crate) fn lower_elephc_initialize_pdo_statement(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_initialize_pdo_statement", 5)?;
+    super::super::objects::lower_dynamic_pdo_statement_initialize(ctx, inst)
+}
+
 /// Marshals the shared `__rt_strtotime` ABI for `strtotime` / `__elephc_strtotime_raw`.
 ///
 /// Loads the datetime string (`x1`/`x2` on ARM64, `rdi`/`rsi` on x86_64), the optional base
@@ -685,29 +675,16 @@ pub(crate) fn lower_usleep(
 }
 
 /// Lowers `exit(status?)` and `die(status?)` by terminating the current process.
-///
-/// Runs the `register_shutdown_function` prelude's runner (a no-op when the program never
-/// references it) BEFORE the process-terminating syscall, matching PHP: registered shutdown
-/// functions run before `exit()`/`die()` too, not just at normal script end. This must happen
-/// before the status operand is loaded into the ABI result register — a function call does not
-/// touch the operand's own stack slot, but loading it first and then calling a function would
-/// clobber the just-loaded result register.
 pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "exit", 0, 1)?;
     let Some(status) = inst.operands.first().copied() else {
-        ctx.emit_shutdown_functions_runner_call_if_present();
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
-    ctx.emit_shutdown_functions_runner_call_if_present();
-    // `exit(int $status)` accepts every int-family scalar the checker's `accepts_gradual_int`
-    // admits — including the boxed `int|float` that elephc infers for `exit(128 + $this->sig)`.
-    // The shared resolver is that predicate's codegen mirror.
-    super::resolve_gradual_int_arg_to_result(ctx, status, "exit status")?;
+    require_integer_like(ctx.load_value_to_result(status)?, "exit status")?;
     emit_dynamic_exit(ctx);
     Ok(())
 }
-
 
 /// Lowers `getenv(name)` through the target-aware environment lookup helper.
 pub(crate) fn lower_getenv(
@@ -733,380 +710,6 @@ pub(crate) fn lower_putenv(
         Arch::AArch64 => lower_putenv_aarch64(ctx),
         Arch::X86_64 => lower_putenv_x86_64(ctx),
     }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `ini_get(name)` through the persistent-ini-table reader `__rt_ini_get`.
-///
-/// Materializes the directive name into the string result registers, calls the reader,
-/// and boxes the owned string-or-false result so `var_dump`/`=== false`/`echo` observe a
-/// distinct PHP `false` for unset directives.
-pub(super) fn lower_ini_get(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "ini_get", 1)?;
-    let name = expect_operand(inst, 0)?;
-    super::io::load_string_to_result(ctx, name, "ini_get name")?;
-    abi::emit_call_label(ctx.emitter, "__rt_ini_get");
-    super::io::box_owned_string_or_false_result(ctx, "ini_get");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `get_cfg_var(name)` through the immutable master reader `__rt_get_cfg_var`.
-///
-/// Materializes the directive name into the string result registers, calls the reader
-/// (which never touches the mutable ini table), and boxes the owned string-or-false result.
-pub(super) fn lower_get_cfg_var(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "get_cfg_var", 1)?;
-    let name = expect_operand(inst, 0)?;
-    super::io::load_string_to_result(ctx, name, "get_cfg_var name")?;
-    abi::emit_call_label(ctx.emitter, "__rt_get_cfg_var");
-    super::io::box_owned_string_or_false_result(ctx, "get_cfg_var");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `ini_set(name, value)` through the persistent-ini-table writer `__rt_ini_set`.
-///
-/// PHP casts the ini value to a string, so the value operand is coerced to a string here
-/// (using the target-aware `load_string_to_result` string cast) but is passed BORROWED —
-/// `__rt_ini_set` persists it only after confirming the directive is registered, so an
-/// unregistered directive (which PHP rejects with `false`) allocates nothing to leak. The
-/// borrowed value pointer/length are parked on the stack while the directive name is
-/// materialized (the name may itself be a boxed Mixed whose string cast clobbers
-/// caller-saved registers), then restored into the value argument registers. The writer
-/// returns the previous value (or false), boxed for the caller.
-pub(super) fn lower_ini_set(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "ini_set", 2)?;
-    let name = expect_operand(inst, 0)?;
-    let value = expect_operand(inst, 1)?;
-
-    // 1. Coerce the value to a PHP string (in the string result registers), then park the
-    //    BORROWED pointer/length below the stack — the runtime writer persists it only if the
-    //    directive is registered, so the unregistered path never allocates an owned copy.
-    super::io::load_string_to_result(ctx, value, "ini_set value")?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // park the borrowed coerced ini value pointer/length on the stack
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("push rdx");                                // park the borrowed coerced ini value length on the stack
-            ctx.emitter.instruction("push rax");                                // park the borrowed coerced ini value pointer (keeps the stack 16-byte aligned)
-        }
-    }
-    // 2. Materialize the directive name into the string result registers.
-    super::io::load_string_to_result(ctx, name, "ini_set name")?;
-    // 3. Restore the borrowed value into the value argument registers and call the writer.
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the borrowed ini value pointer/length as the value args
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("pop rcx");                                 // restore the borrowed ini value pointer as value_lo
-            ctx.emitter.instruction("pop r8");                                  // restore the borrowed ini value length as value_hi
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_ini_set");
-    super::io::box_owned_string_or_false_result(ctx, "ini_set");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `error_reporting(?int $error_level = null)` through `__rt_error_reporting`.
-///
-/// Materializes the level argument into the integer result register (its payload
-/// is the in-band `NULL_SENTINEL` for a null/omitted argument, so the runtime can
-/// distinguish "get" from "set"), then calls the helper which returns the previous
-/// level. When the argument is omitted entirely the `NULL_SENTINEL` is loaded
-/// directly so the helper still performs a plain "get".
-pub(super) fn lower_error_reporting(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "error_reporting", 0, 1)?;
-    if let Some(level) = inst.operands.first().copied() {
-        ctx.load_value_to_result(level)?;
-    } else {
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            crate::codegen::sentinels::NULL_SENTINEL,
-        );
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_error_reporting");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `ignore_user_abort(?bool $enable = null)` through `__rt_ignore_user_abort`.
-///
-/// Mirrors `error_reporting`: the enable argument is materialized into the integer
-/// result register (`NULL_SENTINEL` payload for null/omitted), and the runtime
-/// helper coerces a real argument to 0/1, stores it, and returns the previous flag.
-pub(super) fn lower_ignore_user_abort(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "ignore_user_abort", 0, 1)?;
-    if let Some(enable) = inst.operands.first().copied() {
-        ctx.load_value_to_result(enable)?;
-    } else {
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            crate::codegen::sentinels::NULL_SENTINEL,
-        );
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_ignore_user_abort");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `set_time_limit(int $seconds): bool` as the constant `true`.
-///
-/// A native AOT binary has no execution timeout, so PHP's `set_time_limit`
-/// return value (`true` on success in the CLI/SAPI default) is materialized
-/// directly; the seconds argument is an already-evaluated SSA value and is
-/// intentionally ignored at runtime (documented AOT limitation).
-pub(super) fn lower_set_time_limit(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "set_time_limit", 1)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `connection_aborted(): int` as the constant `0`.
-///
-/// A compiled program's connection is never aborted, so PHP's
-/// `connection_aborted` result (`0`) is materialized directly.
-pub(super) fn lower_connection_aborted(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "connection_aborted", 0)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `gc_collect_cycles(): int` by running the real cycle collector.
-///
-/// Emits a call to `__rt_gc_collect_cycles`, the concrete four-pass cycle
-/// collector already shared by the runtime safe points (both supported ABIs).
-/// The collection has a real effect (unreachable refcounted cycles are freed);
-/// the freed-cycle count is not tracked by the collector, so `0` is materialized
-/// as the return value afterwards. This is an honest AOT limitation — collection
-/// runs, but the count is not reported. Symfony's only caller
-/// (`FrankenPhpWorkerRunner`) ignores the return value.
-pub(super) fn lower_gc_collect_cycles(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "gc_collect_cycles", 0)?;
-    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `gc_enabled(): bool` by loading the queryable garbage-collector flag.
-///
-/// Loads `_rt_gc_enabled` (0/1) into the integer result register. The flag is
-/// seeded to 1 (enabled, PHP's default) by an explicit `.data` initializer and
-/// round-trips through `gc_enable`/`gc_disable`.
-pub(super) fn lower_gc_enabled(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "gc_enabled", 0)?;
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), "_rt_gc_enabled", 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `gc_enable(): void` by setting the queryable garbage-collector flag to 1.
-///
-/// Stores `1` into `_rt_gc_enabled` so a subsequent `gc_enabled()` observes the
-/// enabled state. elephc's cycle collection is semantically transparent (it only
-/// frees unreachable cycles and never changes program output), so the flag is
-/// honest queryable state rather than a switch that gates the safe-point collector.
-pub(super) fn lower_gc_enable(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "gc_enable", 0)?;
-    let reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, reg, 1);
-    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_gc_enabled", 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `gc_disable(): void` by setting the queryable garbage-collector flag to 0.
-///
-/// Stores `0` into `_rt_gc_enabled` so a subsequent `gc_enabled()` observes the
-/// disabled state. As with `gc_enable`, this maintains honest queryable state;
-/// collection is transparent, so the flag only affects the observable
-/// `gc_enabled()` result, never program output.
-pub(super) fn lower_gc_disable(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "gc_disable", 0)?;
-    let reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_int_immediate(ctx.emitter, reg, 0);
-    abi::emit_store_reg_to_symbol(ctx.emitter, reg, "_rt_gc_enabled", 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `gc_mem_caches(): int` as the constant `0`.
-///
-/// PHP returns the number of bytes freed from the request-scoped memory cache;
-/// elephc has no such cache, so `0` freed is the honest concrete answer.
-pub(super) fn lower_gc_mem_caches(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "gc_mem_caches", 0)?;
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `error_get_last(): ?array` by reading the last-recorded-error slot.
-///
-/// `_rt_last_error_ptr` is a zero-initialized global reserved for a boxed `Mixed`
-/// array cell describing the most recently recorded runtime error/warning. elephc
-/// does not record any runtime error into this slot today (`trigger_error()` is
-/// registered by the checker but has no EIR backend lowering, so it fails loudly
-/// at compile time instead of silently succeeding), so every compiled program
-/// observes the slot as `0` and this always returns PHP `null` — which is
-/// PHP-identical for any program that records no error. A nonzero slot is read as
-/// an already-boxed, globally-owned `Mixed` cell pointer and is `__rt_incref`'d
-/// before being handed to the caller (incref is itself null-safe, but the null
-/// case still needs a real boxed-null `Mixed` cell, not a raw zero pointer), so
-/// future error-recording work only needs to publish a boxed cell pointer here.
-pub(super) fn lower_error_get_last(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "error_get_last", 0)?;
-    let result = abi::int_result_reg(ctx.emitter);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result, "_rt_last_error_ptr", 0);
-    let null_label = ctx.next_label("error_get_last_null");
-    let done_label = ctx.next_label("error_get_last_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // an unset slot means no error was ever recorded
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null-boxing path once an existing error cell is owned
-            ctx.emitter.label(&null_label);
-            ctx.emitter.instruction("mov x0, #8");                              // runtime tag 8 = PHP null
-            ctx.emitter.instruction("mov x1, #0");                              // null has no low payload word
-            ctx.emitter.instruction("mov x2, #0");                              // null has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // an unset slot means no error was ever recorded
-            ctx.emitter.instruction(&format!("jz {}", null_label));
-            abi::emit_call_label(ctx.emitter, "__rt_incref");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null-boxing path once an existing error cell is owned
-            ctx.emitter.label(&null_label);
-            ctx.emitter.instruction("mov rax, 8");                              // runtime tag 8 = PHP null
-            ctx.emitter.instruction("xor edi, edi");                            // null has no low payload word
-            ctx.emitter.instruction("xor esi, esi");                            // null has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `libxml_use_internal_errors(?bool $use_errors = null): bool` through
-/// `__rt_libxml_use_internal_errors`.
-///
-/// Marshals the optional null-sentinel/bool argument the same way
-/// `ignore_user_abort()` does, then calls the shared get/set runtime helper,
-/// which returns the *previous* flag value.
-pub(super) fn lower_libxml_use_internal_errors(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "libxml_use_internal_errors", 0, 1)?;
-    if let Some(use_errors) = inst.operands.first().copied() {
-        ctx.load_value_to_result(use_errors)?;
-    } else {
-        abi::emit_load_int_immediate(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            crate::codegen::sentinels::NULL_SENTINEL,
-        );
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_libxml_use_internal_errors");
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `libxml_clear_errors(): void` as a no-op.
-///
-/// elephc has no libxml/DOM subsystem, so there is never a recorded parse error
-/// to clear; observably identical to PHP clearing an already-empty error buffer.
-pub(super) fn lower_libxml_clear_errors(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "libxml_clear_errors", 0)?;
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `libxml_get_errors(): array` as a freshly allocated, always-empty array.
-///
-/// elephc has no libxml/DOM subsystem, so no libxml parse error can ever be
-/// recorded; PHP's own behavior with no recorded errors is exactly an empty
-/// array, so a zero-capacity `Mixed`-element indexed array is byte-identical
-/// and remains a normal, independently owned, growable PHP array value if the
-/// caller appends to it afterward.
-pub(super) fn lower_libxml_get_errors(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "libxml_get_errors", 0)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #0");                              // no elements to preallocate — the array is always empty
-            ctx.emitter.instruction("mov x1, #8");                              // Mixed-element indexed array stride in bytes
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("xor edi, edi");                            // no elements to preallocate — the array is always empty
-            ctx.emitter.instruction("mov rsi, 8");                              // Mixed-element indexed array stride in bytes
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_new");
-    crate::codegen::emit_array_value_type_stamp(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        &PhpType::Mixed,
-    );
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `error_log(string $message, ...): bool` through `__rt_error_log`.
-///
-/// Materializes the message string (ptr/len in the string result registers) and
-/// calls the helper, which writes the message plus a trailing newline to stderr.
-/// The optional `message_type`/`destination`/`additional_headers` arguments are
-/// accepted (1..=4 args) and ignored at runtime — a documented AOT behavior:
-/// every message goes to stderr rather than being silently dropped. The boolean
-/// `true` return value is materialized after the call.
-pub(super) fn lower_error_log(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    ensure_arg_count_between(inst, "error_log", 1, 4)?;
-    let message = expect_operand(inst, 0)?;
-    require_string(ctx.load_value_to_result(message)?.codegen_repr(), "error_log message")?;
-    abi::emit_call_label(ctx.emitter, "__rt_error_log");
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
     store_if_result(ctx, inst)
 }
 

@@ -121,10 +121,6 @@ impl Checker {
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" => Ok(PhpType::Void),
                     "array" => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
-                    // `object` is PHP's any-instance pseudo-type, modeled as Mixed for now
-                    // (gradual; a precise any-object type is a follow-up). `\Closure` as a
-                    // type hint is modeled as Callable since closure values are already
-                    // Callable (nominal Closure with its methods is a follow-up).
                     // Relative class types only survive to this point when used outside a class
                     // body; inside a class they are rewritten to the enclosing class beforehand.
                     relative @ ("self" | "static" | "parent") => Err(CompileError::new(
@@ -142,16 +138,10 @@ impl Checker {
                     _ if self.packed_classes.contains_key(name_str) => {
                         Ok(PhpType::Packed(name_str.to_string()))
                     }
-                    // An unresolved class name (not a known class/interface/enum/extern/packed and
-                    // not a reserved keyword handled above) is treated as an absent optional
-                    // dependency: the type hint degrades to `Mixed` (gradual any-value, codegen-safe)
-                    // with a warning rather than a hard error, so a framework's optional-dependency
-                    // type hints (e.g. `array|\Process`) compile. `resolve_type_expr` is `&self`, so
-                    // the warning is deferred to a mutable interner and emitted after resolution.
-                    _ => {
-                        self.pending_absent_class_warning(span, name_str);
-                        Ok(PhpType::Mixed)
-                    }
+                    _ => Err(CompileError::new(
+                        span,
+                        &format!("Unknown type: {}", name_str),
+                    )),
                 }
             },
         }

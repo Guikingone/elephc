@@ -20,10 +20,7 @@ use crate::ir::{Immediate, IrType, Op};
 use crate::types::PhpType;
 
 builtin! {
-    name: "strlen",
-    area: String,
-    params: [string: Str],
-    returns: Int,
+    contract: "strlen",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::Shared(validate),
         result_type: BuiltinResultType::Declared,
@@ -39,8 +36,6 @@ builtin! {
         ),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the length of a string.",
-    php_manual: "function.strlen",
 }
 
 /// Validates the inferred `strlen` argument without depending on checker internals.
@@ -56,7 +51,7 @@ fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
     // (numbers become their decimal representation, true → "1",
     // false/null → ""). Dynamic inputs first use the ordinary EIR
     // string-cast operation, then the same string-length operation.
-    if !crate::builtins::semantics::strlen_accepts_source(ty) {
+    if !matches!(ty, PhpType::Str | PhpType::Mixed | PhpType::Union(_)) {
         return Err(CompileError::new(
             input.span,
             "strlen() argument must be string",
@@ -79,26 +74,24 @@ fn lower(
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
     let value = call.operand(0)?;
-    let source_ty = ctx.value_php_type(value);
-    let string = if source_ty.codegen_repr() == PhpType::Str {
-        value
-    } else if crate::builtins::semantics::strlen_accepts_source(&source_ty) {
-        ctx.emit_value(
-            Op::Cast,
-            vec![value],
-            Some(Immediate::CastTarget(IrType::Str)),
-            PhpType::Str,
-            Op::Cast.default_effects(),
-            Some(call.span),
-        )
-        .value
-    } else {
-        return Err(crate::builtins::semantics::BuiltinLoweringError::new(
-            format!(
-                "strlen cannot lower checked operand type {:?}",
-                source_ty.codegen_repr()
-            ),
-        ));
+    let string = match ctx.value_php_type(value).codegen_repr() {
+        PhpType::Str => value,
+        PhpType::Mixed | PhpType::Union(_) => {
+            ctx.emit_value(
+                Op::Cast,
+                vec![value],
+                Some(Immediate::CastTarget(IrType::Str)),
+                PhpType::Str,
+                Op::Cast.default_effects(),
+                Some(call.span),
+            )
+            .value
+        }
+        other => {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new(
+                format!("strlen cannot lower checked operand type {:?}", other),
+            ));
+        }
     };
     Ok(ctx.emit_value(
         Op::StrLen,

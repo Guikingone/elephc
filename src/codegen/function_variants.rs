@@ -11,8 +11,8 @@
 //!   active function-pointer slot populated by `FunctionVariantMark`.
 
 use crate::codegen::abi;
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{function_variants, Function, Module};
 use crate::names::{function_symbol, function_variant_active_symbol};

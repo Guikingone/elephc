@@ -55,7 +55,6 @@ impl ReturnArgAlias {
     }
 
     /// Returns whether analysis proved the result aliases `parameter_index`.
-    #[allow(dead_code)]
     pub(crate) fn proven_aliases_parameter(&self, parameter_index: usize) -> bool {
         matches!(self, Self::Parameters(parameters) if parameters.contains(&parameter_index))
     }
@@ -574,11 +573,6 @@ fn builtin_result_is_proven_independent(name: &str) -> bool {
 /// Conservatively invalidates locals that an expression can rewrite by reference.
 fn apply_expr_effects(expr: &Expr, state: &mut HashMap<String, ReturnArgAlias>) {
     match &expr.kind {
-        // Campaign expression forms: list-unpack rebinds its targets (drop all facts);
-        // dynamic member reads only evaluate their sub-expressions.
-        ExprKind::ListUnpack { .. } => state.clear(),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => apply_expr_effects(property, state),
-        ExprKind::DynamicClassConstantAccess { object, .. } => apply_expr_effects(object, state),
         ExprKind::Assignment {
             target,
             value,

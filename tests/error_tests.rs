@@ -32,10 +32,20 @@ fn check_source_with_defines(src: &str, defines: &[&str]) -> Result<(), String> 
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
     let ast = elephc::autoload::collect_aliases(ast);
+    // Mirrors `pipeline::compile`: the hash prelude declares `HashContext` and the
+    // `hash_*` context wrappers, and is injected between alias collection and name
+    // resolution so a namespaced caller resolves to it. Without this the four
+    // prelude-declared functions report `Undefined function` instead of their real
+    // arity diagnostics. Injection is gated on usage, so no other test is affected.
+    let ast = elephc::dir_prelude::inject_if_used(ast);
+    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let ast = elephc::scanf_prelude::inject_if_used(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
-    let ast = elephc::resolver::hoist_conditional_function_declarations(ast);
+    // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
+    // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
+    // their own diagnostics reach this harness instead of a bare `Undefined function`.
+    let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
-    let ast = elephc::return_type_guard::inject(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;
     Ok(())
 }
@@ -45,10 +55,12 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let tokens = tokenize(src).map_err(|e| elephc::errors::CompileError::new(e.span, &e.message))?;
     let ast = parse(&tokens)?;
     let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::dir_prelude::inject_if_used(ast);
+    let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let ast = elephc::scanf_prelude::inject_if_used(ast);
     let ast = elephc::name_resolver::resolve(ast)?;
-    let ast = elephc::resolver::hoist_conditional_function_declarations(ast);
+    let ast = elephc::func_args::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
-    let ast = elephc::return_type_guard::inject(ast);
     types::check(&ast)
 }
 
@@ -82,14 +94,6 @@ fn resolve_files_error(
 
     let _ = fs::remove_dir_all(&dir);
     result.expect_err("expected resolve to fail")
-}
-
-/// Asserts that `src` type-checks cleanly (no reported error). Used for regression
-/// tests where a construct that previously produced a diagnostic is now accepted.
-fn expect_ok(src: &str) {
-    if let Err(msg) = check_source(src) {
-        panic!("Expected source to type-check cleanly, but got error: {}", msg);
-    }
 }
 
 /// Verifies expect error.
@@ -209,14 +213,6 @@ mod strict_php;
 mod math_builtins;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
-#[path = "error_tests/mbstring_builtins.rs"]
-mod mbstring_builtins;
-#[path = "error_tests/intl_builtins.rs"]
-mod intl_builtins;
-#[path = "error_tests/process_builtins.rs"]
-mod process_builtins;
-#[path = "error_tests/misc_builtins.rs"]
-mod misc_builtins;
 #[path = "error_tests/io_builtins/mod.rs"]
 mod io_builtins;
 #[path = "error_tests/array_builtins.rs"]
@@ -233,33 +229,15 @@ mod misc;
 mod narrowing;
 #[path = "error_tests/image.rs"]
 mod image;
-#[path = "error_tests/absent_class.rs"]
-mod absent_class;
-#[path = "error_tests/short_circuit_narrowing.rs"]
-mod short_circuit_narrowing;
-#[path = "error_tests/match_narrowing.rs"]
-mod match_narrowing;
-#[path = "error_tests/ternary_member_narrowing.rs"]
-mod ternary_member_narrowing;
-#[path = "error_tests/switch_case_narrowing.rs"]
-mod switch_case_narrowing;
-#[path = "error_tests/ctor_arg_propagation_cross_class.rs"]
-mod ctor_arg_propagation_cross_class;
-#[path = "error_tests/weak_coercion_negatives.rs"]
-mod weak_coercion_negatives;
 
 // --- Iterator-related errors ---
 
-/// Verifies the error diagnostic for by-reference foreach over a plain object.
-///
-/// A by-value foreach over a plain object now iterates its accessible public
-/// properties (PHP's default object iteration), but a by-reference foreach over an
-/// object remains unsupported and must still be rejected.
+/// Verifies the error diagnostic for foreach over object not implementing iterator.
 #[test]
-fn test_error_foreach_by_ref_over_plain_object() {
+fn test_error_foreach_over_object_not_implementing_iterator() {
     expect_error(
-        "<?php class Plain { public int $x = 1; } foreach (new Plain() as &$v) { echo $v; }",
-        "by-reference foreach over Iterator/IteratorAggregate objects or iterable-typed values is not supported",
+        "<?php class Plain { public int $x = 1; } foreach (new Plain() as $v) { echo $v; }",
+        "foreach over object requires Plain to implement Iterator",
     );
 }
 
@@ -313,63 +291,6 @@ class Bad implements Iterator {
     );
 }
 
-// --- Untyped (bodyless) interface/abstract method return inference ---
-
-/// Regression: a bodyless interface method with no declared return type is UNTYPED in PHP (the
-/// implementor may return any value), so its result must be usable as an object. `build_method_sig`
-/// must seed Mixed, not the Void that an empty body would otherwise get — Void rejected
-/// `$c->get($id)::class` with "Cannot use ::class on null".
-#[test]
-fn test_untyped_interface_method_result_usable_as_object() {
-    expect_ok(
-        "<?php
-interface C { public function get(string $id); }
-class Svc {}
-class Container implements C { public function get(string $id) { return new Svc(); } }
-class App {
-    public function __construct(private C $c) {}
-    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
-}
-echo (new App(new Container()))->run();",
-    );
-}
-
-/// The same for an `abstract` (bodyless) method: an untyped abstract method is UNTYPED, so its
-/// result must be usable as an object rather than inferred Void.
-#[test]
-fn test_untyped_abstract_method_result_usable_as_object() {
-    expect_ok(
-        "<?php
-abstract class C { abstract public function get(string $id); }
-class Svc {}
-class Container extends C { public function get(string $id) { return new Svc(); } }
-class App {
-    public function __construct(private C $c) {}
-    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
-}
-echo (new App(new Container()))->run();",
-    );
-}
-
-/// Negative control (no over-acceptance): an interface method declared `: void` is explicitly
-/// typed Void, and Void is not a value — using its result (e.g. `::class`) must STILL error. This
-/// pins that the untyped-bodyless→Mixed fix does not widen an explicit `: void` return.
-#[test]
-fn test_void_interface_method_result_not_usable_as_value() {
-    expect_error(
-        "<?php
-interface C { public function get(string $id): void; }
-class Svc {}
-class Container implements C { public function get(string $id): void {} }
-class App {
-    public function __construct(private C $c) {}
-    public function run() { $s = $this->c->get(\"x\"); return $s::class; }
-}
-echo (new App(new Container()))->run();",
-        "Cannot use \"::class\" on null",
-    );
-}
-
 // --- Generator-related errors ---
 
 /// Verifies the error diagnostic for generator cannot be redeclared.
@@ -418,9 +339,6 @@ fn test_error_yield_from_outside_function() {
 }
 
 /// Verifies the error diagnostic for yield from rejects non generator call.
-/// The wording is "an array or Generator" (message-only change: `yield from`
-/// now accepts array-typed operands, not just array literals). An `int`-typed
-/// operand is neither an array nor a Generator, so it stays an error.
 #[test]
 fn test_error_yield_from_rejects_non_generator_call() {
     expect_error(
@@ -428,36 +346,6 @@ fn test_error_yield_from_rejects_non_generator_call() {
 function not_gen(): int { return 1; }
 function gen() { yield from not_gen(); }
 ",
-        "yield from expects an array or Generator, got Int",
-    );
-}
-
-/// Codegen-safety guard: `yield from` a `Mixed`-typed operand must STAY an
-/// error. Codegen's `lower_yield_from` sends any non-array operand to
-/// `__rt_gen_delegate`, which assumes a real `Generator` pointer (reads the
-/// fiber state offset). A `Mixed` value is not a Generator, so accepting it
-/// would mis-delegate and crash at runtime. `type_accepts(Object("Generator"),
-/// Mixed)` is false (the Object-expected arm only matches Object actuals), so
-/// the type-based gate keeps rejecting it. This test pins that boundary.
-#[test]
-fn test_error_yield_from_rejects_mixed_operand() {
-    expect_error(
-        "<?php
-function outer(mixed $m) { yield from $m; }
-",
-        "yield from expects an array or Generator, got Mixed",
-    );
-}
-
-/// Codegen-safety guard: `yield from` still rejects a concrete object that implements neither
-/// `Iterator` nor `IteratorAggregate`; gradual `Iterable` has its own checked runtime dispatch.
-#[test]
-fn test_error_yield_from_rejects_plain_object_operand() {
-    expect_error(
-        "<?php
-class Plain {}
-function outer(Plain $value) { yield from $value; }
-",
-        "yield from expects an array or Generator, got Object(\"Plain\")",
+        "yield from expects an array literal or Generator, got Int",
     );
 }

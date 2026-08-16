@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "natsort",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "natsort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Natsort,
     ),
-    summary: "Sorts an array using a natural order algorithm.",
-    php_manual: "https://www.php.net/manual/en/function.natsort.php",
 }
 
 /// Validates the argument type for a `natsort` call.

@@ -23,7 +23,7 @@ pub(crate) fn lower_intdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "intdiv", 2)?;
+    super::super::ensure_arg_count(inst, "intdiv", 2)?;
     let zero_label = ctx.next_label("intdiv_zero");
     let overflow_label = ctx.next_label("intdiv_overflow");
     let done_label = ctx.next_label("intdiv_done");
@@ -55,7 +55,8 @@ pub(crate) fn lower_intdiv(
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the fatal path after successful integer division
         }
     }
-    emit_intdiv_zero_fatal(ctx, &zero_label);
+    ctx.emitter.label(&zero_label);
+    emit_intdiv_zero_throw(ctx);
     ctx.emitter.label(&overflow_label);
     emit_intdiv_overflow_throw(ctx);
     ctx.emitter.label(&done_label);
@@ -67,7 +68,7 @@ pub(crate) fn lower_fdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fdiv", 2)?;
+    super::super::ensure_arg_count(inst, "fdiv", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fdiv")?;
@@ -88,11 +89,16 @@ pub(crate) fn lower_fdiv(
 }
 
 /// Lowers `fmod()` for concrete integer-like and floating operands.
+///
+/// Both targets call libc `fmod`, which is IEEE-754 `remainder`-truncated: the result
+/// carries the sign of the *dividend*, so `fmod(-7.5, 2.5)` is `-0.0` and `echo`s as `-0`
+/// exactly like PHP. Recomputing it as `x - trunc(x / y) * y` loses that signed zero
+/// (the subtraction yields `+0.0`), which is why the AArch64 path is not open-coded.
 pub(crate) fn lower_fmod(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fmod", 2)?;
+    super::super::ensure_arg_count(inst, "fmod", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fmod")?;
@@ -100,10 +106,9 @@ pub(crate) fn lower_fmod(
     super::load_numeric_as_float(ctx, rhs, "fmod")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_float_reg(ctx.emitter, "d1");
-            ctx.emitter.instruction("fdiv d2, d1, d0");                         // compute dividend divided by divisor for fmod truncation
-            ctx.emitter.instruction("frintz d2, d2");                           // truncate the quotient toward zero
-            ctx.emitter.instruction("fmsub d0, d2, d0, d1");                    // compute dividend minus truncated quotient times divisor
+            ctx.emitter.instruction("fmov d1, d0");                             // move the divisor into the second libc fmod argument
+            abi::emit_pop_float_reg(ctx.emitter, "d0");
+            ctx.emitter.bl_c("fmod");
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
@@ -121,7 +126,7 @@ pub(crate) fn lower_pow(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "pow", 2)?;
+    super::super::ensure_arg_count(inst, "pow", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "pow")?;
@@ -144,31 +149,17 @@ pub(crate) fn lower_pow(
     store_if_result(ctx, inst)
 }
 
-/// Emits the legacy fatal diagnostic for `intdiv()` division by zero.
-fn emit_intdiv_zero_fatal(ctx: &mut FunctionContext<'_>, zero_label: &str) {
-    ctx.emitter.label(zero_label);
-    let (err_label, err_len) = ctx.data.add_string(b"Fatal error: division by zero\n");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #2");                              // select stderr as the fatal diagnostic destination
-            ctx.emitter.adrp("x1", &err_label);
-            ctx.emitter.add_lo12("x1", "x1", &err_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", err_len));          // pass the fatal diagnostic byte length to write()
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, #1");                              // select process exit code 1 after the fatal diagnostic
-            ctx.emitter.syscall(1);
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("lea rsi, [rip + {}]", err_label)); // pass the fatal diagnostic buffer to write()
-            ctx.emitter.instruction(&format!("mov edx, {}", err_len));          // pass the fatal diagnostic byte length to write()
-            ctx.emitter.instruction("mov edi, 2");                              // select stderr as the fatal diagnostic destination
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux write syscall
-            ctx.emitter.instruction("syscall");                                 // write the fatal division-by-zero diagnostic
-            ctx.emitter.instruction("mov edi, 1");                              // select process exit code 1 after the fatal diagnostic
-            ctx.emitter.instruction("mov eax, 60");                             // select Linux exit syscall
-            ctx.emitter.instruction("syscall");                                 // terminate after reporting division by zero
-        }
-    }
+/// Emits the catchable `DivisionByZeroError` throw for `intdiv($a, 0)`.
+///
+/// Reference PHP 8.5.6 raises `DivisionByZeroError: Division by zero` here, catchable by
+/// `DivisionByZeroError`, `ArithmeticError`, `Error`, and `Throwable`. Until this
+/// increment elephc wrote a bare `Fatal error: division by zero` to stderr and exited 1,
+/// so no `catch` clause could ever observe it. The shared `emit_static_exception` path
+/// keeps a specific uncaught diagnostic (`Fatal error: Uncaught DivisionByZeroError:
+/// Division by zero`) when no handler is active, so the uncaught case stays a fatal —
+/// it just names the PHP class now.
+fn emit_intdiv_zero_throw(ctx: &mut FunctionContext<'_>) {
+    crate::codegen::lower_inst::exceptions::emit_division_by_zero_error(ctx, "Division by zero");
 }
 
 /// Emits the AArch64 overflow check for `intdiv(PHP_INT_MIN, -1)`.
@@ -219,6 +210,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("bl __rt_heap_alloc");                      // allocate the ArithmeticError object payload
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 marks an object instance allocation
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation header as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_symbol_address(ctx.emitter, "x9", "_spl_arithmetic_error_class_id");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("str x9, [x0]");                            // store the ArithmeticError class id in the Throwable header
@@ -228,6 +220,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("mov x9, #{}", msg_len));          // materialize the static ArithmeticError message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store the exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // store the default zero exception code
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active ArithmeticError object
@@ -241,12 +234,14 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("call __rt_heap_alloc");                    // allocate the ArithmeticError object payload
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // materialize the x86_64 object heap-kind header
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation header as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"); // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header
-            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label));    // materialize the static ArithmeticError message pointer
+            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label)); // materialize the static ArithmeticError message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static ArithmeticError message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", msg_len)); // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             ctx.emitter.instruction("mov QWORD PTR [rip + _exc_value], rax");   // publish the active ArithmeticError object
             ctx.emitter.instruction("mov rsp, rbp");                            // release the helper frame before throwing

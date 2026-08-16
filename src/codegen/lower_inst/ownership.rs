@@ -8,6 +8,8 @@
 //! Key details:
 //! - `Acquire` turns PHP strings into heap-owned storage so local slots do not
 //!   alias transient concat buffers or immutable data-section literals.
+//! - Resources retain and release their opaque handles through the authoritative
+//!   runtime resource registry rather than heap-block reference counts.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -21,7 +23,12 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers an ownership acquire by making the operand safe to store as a new owner.
 pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
+    let raw_ty = ctx.raw_value_php_type(value)?;
     let ty = ctx.load_value_to_result(value)?;
+    if matches!(raw_ty, PhpType::Resource(_)) {
+        retain_loaded_resource(ctx);
+        return store_if_result(ctx, inst);
+    }
     match ty {
         PhpType::Str => {
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
@@ -53,6 +60,64 @@ pub(super) fn lower_acquire(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `ReleaseUnlessAliases`: releases operand 0 only when it is not the same payload the
+/// call returned in operand 1.
+///
+/// A callee summarized as *possibly* returning a parameter (`if ($c) return $x; return 7;`)
+/// makes the caller suppress that argument's release on every path, because releasing it on the
+/// branch that hands the box back would free it twice (issue #604). Suppressing it on the other
+/// branches leaks one block per call (issue #619). Comparing the two payloads at runtime picks
+/// the right behaviour per call: identical pointers mean ownership moved into the result and the
+/// caller must keep its hands off, different pointers mean the callee dropped the argument and
+/// the caller still owns it.
+pub(super) fn lower_release_unless_aliases(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let result = expect_operand(inst, 1)?;
+    let ownership = ctx.value_ownership(value)?;
+    if !ownership.may_require_release() {
+        return Ok(());
+    }
+    if value_is_scratch_string(ctx, value)? {
+        return Ok(());
+    }
+
+    let skip_label = ctx.next_label("release_unless_aliases_skip");
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    let result_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let ty = ctx.load_value_to_result(value)?;
+    ctx.load_value_to_reg(result, result_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", value_reg, result_reg));    // compare the argument payload with the value the callee returned
+            ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // ownership moved into the result: the caller must not release it
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", value_reg, result_reg));    // compare the argument payload with the value the callee returned
+            ctx.emitter.instruction(&format!("je {}", skip_label));             // ownership moved into the result: the caller must not release it
+        }
+    }
+    match ty {
+        PhpType::Str => {
+            release_loaded_string(ctx);
+        }
+        PhpType::Callable => {
+            abi::emit_decref_if_refcounted(ctx.emitter, &ty);
+        }
+        PhpType::Buffer(_) => {}
+        other if other.is_refcounted() => {
+            abi::emit_decref_if_refcounted(ctx.emitter, &other);
+        }
+        _ => {}
+    }
+    ctx.emitter.label(&skip_label);
+    Ok(())
+}
+
 /// Lowers a release only for values that own or may own runtime-managed storage.
 pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -64,7 +129,12 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         return Ok(());
     }
 
+    let raw_ty = ctx.raw_value_php_type(value)?;
     let ty = ctx.load_value_to_result(value)?;
+    if matches!(raw_ty, PhpType::Resource(_)) {
+        release_loaded_resource(ctx);
+        return Ok(());
+    }
     match ty {
         PhpType::Str => {
             release_loaded_string(ctx);
@@ -73,16 +143,6 @@ pub(super) fn lower_release(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_decref_if_refcounted(ctx.emitter, &ty);
         }
         PhpType::Buffer(_) => {}
-        // A statically Array-typed slot can hold HASH storage at runtime: a later
-        // `$t[$k] = &$v` / string-keyed write de-packs the fresh `[]` in place, and loads
-        // keep the stale packed flow type (`local_load_types_share_storage` pairs the
-        // representations). `__rt_decref_array` would packed-free that hash — leaking its
-        // buckets and reference-cell shares — so releases dispatch on the runtime heap
-        // kind instead (`__rt_decref_any` routes kind 2 → array free, kind 3 → deep hash
-        // free).
-        PhpType::Array(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
-        }
         other if other.is_refcounted() => {
             abi::emit_decref_if_refcounted(ctx.emitter, &other);
         }
@@ -129,6 +189,12 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh
             ),
             Some(crate::ir::Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
+            Some(crate::ir::Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_),
             )) => true,
             _ => false,
@@ -143,9 +209,7 @@ fn value_is_scratch_string(ctx: &FunctionContext<'_>, value: ValueId) -> Result<
             | Op::ResourceToStr
             | Op::MixedCastString
             | Op::StrConcat
-            | Op::StrBitwise
             | Op::StrCharAt
-            | Op::StrOffsetSet
             | Op::StrInterpolate
     ))
 }
@@ -178,4 +242,23 @@ fn release_loaded_string(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
         }
     }
+}
+
+/// Retains the loaded opaque resource handle and leaves it as the acquire result.
+///
+/// The runtime helper accepts the normal target integer argument and returns the
+/// same handle, allowing `store_if_result` to forward the acquired value.
+fn retain_loaded_resource(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded opaque resource handle to the registry retain helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+}
+
+/// Releases the loaded opaque resource handle through the runtime registry.
+fn release_loaded_resource(ctx: &mut FunctionContext<'_>) {
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the loaded opaque resource handle to the registry release helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_release");
 }

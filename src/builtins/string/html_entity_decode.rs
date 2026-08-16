@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "html_entity_decode",
-    area: String,
-    params: [string: Str, flags: Int = crate::builtins::spec::DefaultSpec::Int(11), encoding: Mixed = crate::builtins::spec::DefaultSpec::Null],
-    returns: Str,
+    contract: "html_entity_decode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::HtmlEntityDecode),
         crate::ir::Effects::PURE,
     ),
-    summary: "Converts HTML entities in a string back into their corresponding characters.",
-    php_manual: "https://www.php.net/manual/en/function.html-entity-decode.php",
 }

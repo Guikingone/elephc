@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "chgrp",
-    area: Io,
-    params: [filename: Str, group: Str],
-    returns: Bool,
+    contract: "chgrp",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Chgrp,
     ),
-    summary: "Changes file group.",
-    php_manual: "function.chgrp",
 }
 
 /// Returns `Bool`, rejecting a `group` argument that is neither `Int` nor `Str`.

@@ -18,16 +18,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "buffer_free",
-    area: Pointers,
-    params: [buffer: Mixed],
-    returns: Void,
+    contract: "buffer_free",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::BufferFree,
     ),
-    summary: "Frees a buffer<T> and nulls the local variable that held it.",
-    extension: true,
 }
 
 /// Validates that the argument is a freeable local `buffer<T>` variable.

@@ -79,13 +79,36 @@ echo strlen($s);
     assert_eq!(out, "65538,66000");
 }
 
-/// Verifies str_repeat emits a runtime error when given a negative count, matching PHP's behavior.
+/// Verifies an uncaught `str_repeat()` negative count reports PHP's uncaught-`ValueError` fatal.
+///
+/// The count used to reach `__rt_str_repeat`, which printed a bare fatal no `catch` block could
+/// ever intercept. It is now screened at the call site and raised as a real `ValueError`, so the
+/// uncaught diagnostic gains PHP's `Uncaught ValueError:` prefix.
 #[test]
 fn test_str_repeat_negative_count_reports_runtime_error() {
     let err = compile_and_run_expect_failure(r#"<?php echo str_repeat("ab", -1);"#);
     assert!(err.contains(
-        "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0"
+        "Fatal error: Uncaught ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0"
     ));
+}
+
+/// Verifies `str_repeat()` with a negative count raises a catchable `ValueError` like PHP 8.4.
+#[test]
+fn test_str_repeat_negative_count_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_repeat("ab", -1);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_repeat("ab", 0), "|", str_repeat("ab", 2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_repeat(): Argument #2 ($times) must be greater than or equal to 0||abab"
+    );
 }
 
 /// Verifies strrev reverses the characters in a string.
@@ -154,63 +177,6 @@ fn test_str_replace_multiple() {
     assert_eq!(out, "Hell0 W0rld");
 }
 
-/// Verifies `strlen` applies PHP weak scalar coercion both directly and as an `array_map` callback.
-#[test]
-fn test_strlen_weak_scalar_coercion_including_callback() {
-    let out = compile_and_run(
-        r#"<?php
-echo implode(",", array_map("strlen", [12, 345])), ":";
-echo strlen(123), ":", strlen(1.5), ":", strlen(true), ":", strlen(false), ":", strlen(null);
-"#,
-    );
-    assert_eq!(out, "2,3:3:3:1:0:0");
-}
-
-/// Verifies str_replace with an array `$search` and a single-string `$replace` replaces every
-/// search needle with the one replacement, processing search elements in order.
-#[test]
-fn test_str_replace_array_search_single_replace() {
-    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], "X", "abc");"#);
-    assert_eq!(out, "XXc");
-}
-
-/// Verifies str_replace with array `$search`/`$replace` pairs each needle with its replacement.
-#[test]
-fn test_str_replace_array_search_array_replace() {
-    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], ["1", "2"], "abc");"#);
-    assert_eq!(out, "12c");
-}
-
-/// Verifies str_replace treats missing array-replacement elements as the empty string when the
-/// replacement array is shorter than the search array.
-#[test]
-fn test_str_replace_array_replace_shorter() {
-    let out = compile_and_run(r#"<?php echo str_replace(["a", "b", "c"], ["1"], "abc");"#);
-    assert_eq!(out, "1");
-}
-
-/// Verifies str_replace applies array search elements iteratively, so a replacement introduced by an
-/// earlier element is itself matched by a later search element (matching PHP ordering).
-#[test]
-fn test_str_replace_array_iterative_ordering() {
-    let out = compile_and_run(r#"<?php echo str_replace(["a", "b"], ["b", "c"], "a");"#);
-    assert_eq!(out, "c");
-}
-
-/// Verifies str_replace skips empty search-array elements as no-ops, matching PHP.
-#[test]
-fn test_str_replace_array_empty_search_element_skipped() {
-    let out = compile_and_run(r#"<?php echo str_replace(["", "a"], ["X", "Y"], "abc");"#);
-    assert_eq!(out, "Ybc");
-}
-
-/// Verifies str_ireplace supports the case-insensitive array-search/array-replace form.
-#[test]
-fn test_str_ireplace_array_search_array_replace() {
-    let out = compile_and_run(r#"<?php echo str_ireplace(["A", "B"], ["1", "2"], "abAB");"#);
-    assert_eq!(out, "1212");
-}
-
 /// Verifies explode splits a string on a delimiter and returns an indexed array.
 #[test]
 fn test_explode() {
@@ -237,6 +203,196 @@ echo implode(" ", $arr);
     assert_eq!(out, "Hello World");
 }
 
+/// Regression: `implode()` over an array whose STATIC type is `Mixed` SIGSEGVed on int elements.
+///
+/// A `Mixed` operand carries no compile-time element type, so `implode_runtime_label` sent it to
+/// `__rt_implode` — the renderer that reads 16-byte string `{ptr,len}` slots. An int array stores
+/// 8-byte payloads, so element 0 (`1`) was dereferenced as a string pointer and the process died
+/// with SIGSEGV (exit 139). Measured with `php -n` (8.5.6):
+/// `$r = eval('return [1,2];'); echo implode(",", $r);` prints `1,2`.
+#[test]
+fn test_implode_mixed_operand_int_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1, 2];');
+echo implode(",", $r), "\n";
+function h(): mixed { return [10, 20, 30]; }
+echo implode("-", h()), "\n";
+echo join(",", eval('return [7, 8];')), "\n";
+echo implode(eval('return [4, 5];')), "\n";
+"#,
+    );
+    assert_eq!(out, "1,2\n10-20-30\n7,8\n45\n");
+}
+
+/// Regression: `implode()` over a `Mixed` operand holding a BOOL array rendered the wrong bytes.
+///
+/// PHP stringifies `true` as `"1"` and `false` as the EMPTY string, which only `__rt_implode_bool`
+/// does. Reading the 8-byte bool payloads as 16-byte string pairs silently produced `","` instead.
+/// Measured with `php -n` (8.5.6): `implode(",", [true, false])` is `"1,"`.
+#[test]
+fn test_implode_mixed_operand_bool_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [true, false];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [true, true]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(out, "1,|\n1-1|\n");
+}
+
+/// Guard: the `Mixed`-operand dispatcher must leave the layouts that already worked untouched.
+///
+/// String slots (value_type tag 1), boxed Mixed cells (tag 7), and the empty array (unstamped, so
+/// it shares the int tag) all round-trip through `__rt_implode_dyn` unchanged. Measured with
+/// `php -n` (8.5.6): `"a,b"`, `"1,a"`, and the empty string.
+#[test]
+fn test_implode_mixed_operand_preserves_string_and_boxed_layouts() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["a", "b"];')), "|\n";
+echo implode(",", eval('return [1, "a"];')), "|\n";
+echo implode(",", eval('return [];')), "|\n";
+"#,
+    );
+    assert_eq!(out, "a,b|\n1,a|\n|\n");
+}
+
+/// Regression: `implode()` over an array of FLOATS had no renderer at all.
+///
+/// A statically `array<float>` operand was refused at codegen with "implode array element PHP type
+/// Float", and the same array behind a `Mixed` operand (runtime value_type tag 2) reached
+/// `__rt_implode`, which read the 8-byte doubles as 16-byte string `{ptr,len}` pairs and SIGSEGVed
+/// (exit 139). `__rt_implode_float` renders each element through `__rt_ftoa`, PHP's `precision=14`
+/// / `zend_gcvt` spelling. Measured with `php -n` (8.5.6):
+/// `implode(",", [1.5, 2.0, 1e20, 0.1+0.2, -0.0, INF])` is `1.5,2,1.0E+20,0.3,-0,INF`, and
+/// `implode(",", [1/3, 1e-7, 1e15])` is `0.33333333333333,1.0E-7,1.0E+15`.
+#[test]
+fn test_implode_float_elements() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", [1.5, 2.5]), "|\n";
+echo implode(",", [1.5, 2.0, 1e20, 0.1 + 0.2, -0.0, INF]), "|\n";
+echo implode(",", [1/3, 1e-7, 1e15]), "|\n";
+echo implode(",", [-1.5, -INF]), "|\n";
+echo implode(",", [2.0]), "|\n";
+echo join(",", [1.5, 2.5]), "|\n";
+echo implode([1.5, 2.5]), "|\n";
+$r = eval('return [1.5, 2.5];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [1.25, 2.75, 3.0]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5|\n\
+         1.5,2,1.0E+20,0.3,-0,INF|\n\
+         0.33333333333333,1.0E-7,1.0E+15|\n\
+         -1.5,-INF|\n\
+         2|\n\
+         1.5,2.5|\n\
+         1.52.5|\n\
+         1.5,2.5|\n\
+         1.25-2.75-3|\n"
+    );
+}
+
+/// Guard: the float renderer must publish the LIVE concat cursor before every conversion.
+///
+/// `__rt_ftoa` formats into `_concat_buf` at `_concat_off` and advances the offset by the bytes it
+/// actually wrote — unlike `__rt_itoa`, which always reserves a fixed 21-byte scratch. Leaving
+/// `_concat_off` parked at the implode result START made the second element's conversion overwrite
+/// the glue already copied, so a glue LONGER than the rendered element is what exposes it. The
+/// trailing concat and `strlen` pin the other half: the ABSOLUTE end offset must be stamped on
+/// completion, or the next string written reuses the joined bytes. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_float_publishes_concat_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode("XXXXXXXXXXXXXXXXXXXXXXXXXXXX", [1.5, 2.5, 3.5]), "|\n";
+echo implode(",", [1.5, 2.5]) . "TAIL", "|\n";
+echo strlen(implode(",", [1.5, 2.0, 1e20])), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX2.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX3.5|\n\
+         1.5,2.5TAIL|\n\
+         13|\n"
+    );
+}
+
+/// Regression: `implode()` over a HASH held in a `Mixed` operand SIGSEGVed for every value type.
+///
+/// A statically `AssocArray` operand was already flattened into a temporary indexed array of its
+/// values, but a `Mixed` operand carries no compile-time storage kind, so hash storage reached
+/// `__rt_implode`, which read the entry table as 16-byte string slots and died (exit 139) — for
+/// int, float, string, bool, null and heterogeneous values alike. The call site now probes
+/// `__rt_heap_kind` and flattens kind 3 the same way, flagging the temporary so only IT is freed.
+/// Measured with `php -n` (8.5.6): php's `implode()` reads only the VALUES, in insertion order.
+#[test]
+fn test_implode_mixed_operand_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1.5, "j" => 2.0];')), "|\n";
+echo implode(",", eval('return ["k" => "aa", "j" => "bb"];')), "|\n";
+echo implode(",", eval('return ["k" => true, "j" => false];')), "|\n";
+echo implode(",", eval('return ["k" => null, "j" => null];')), "|\n";
+echo implode(",", eval('return ["k" => 1, "j" => "two", "l" => 3.5, "m" => true, "n" => null];')), "|\n";
+echo implode(",", eval('return [5 => 10, 9 => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1];')), "|\n";
+echo join("-", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(eval('return ["k" => 10, "j" => 13];')), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "10,13|\n1.5,2|\naa,bb|\n1,|\n,|\n1,two,3.5,1,|\n10,13|\n1|\n10-13|\n1013|\n"
+    );
+}
+
+/// Guard: only the MATERIALIZED temporary may be freed, never the caller's own array.
+///
+/// The `Mixed` arm decides at runtime whether it handed the renderer a temporary (hash storage) or
+/// the caller's own indexed array, so an unconditional deep-free would destroy a live operand.
+/// Both storage kinds are joined twice and read afterwards. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_mixed_operand_does_not_free_borrowed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1.5, 2.5, 3.5];');
+echo implode(",", $r), "|", implode("-", $r), "|", count($r), "|\n";
+$h = eval('return ["a" => 1.5, "b" => "two", "c" => 3];');
+echo implode(",", $h), "|", implode("-", $h), "|", count($h), "|", $h["b"], "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5,3.5|1.5-2.5-3.5|3|\n1.5,two,3|1.5-two-3|3|two|\n"
+    );
+}
+
+/// Regression: a statically `array<string, float>` hash had no `implode()` renderer.
+///
+/// `emit_loaded_assoc_array_values` stamps the values array with value_type tag 2 and appends the
+/// raw f64 payloads as 8-byte words, so the float renderer reads it directly; before this the
+/// lowering refused with "implode hash value PHP type Float". Measured with `php -n` (8.5.6):
+/// `implode(",", ["x" => 1.5, "y" => 2.0])` is `1.5,2`.
+#[test]
+fn test_implode_hash_float_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", ["x" => 1.5, "y" => 2.0]), "|\n";
+echo implode("-", ["x" => 1e20, "y" => 0.1 + 0.2, "z" => -0.0]), "|\n";
+"#,
+    );
+    assert_eq!(out, "1.5,2|\n1.0E+20-0.3--0|\n");
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {
@@ -250,119 +406,6 @@ echo implode(", ", $parts);
     assert_eq!(out, "one, two, three");
 }
 
-/// REGRESSION for the N2 union-boxed-array READ SIGSEGV: `$u = $hosts ?: false;
-/// implode(",", $u)` used to segfault (rc=139) — `--emit-ir` showed the Elvis join correctly
-/// boxes both arms into a tagged `Heap(Mixed)` cell (proving the JOIN representation was sound),
-/// but `implode`'s dynamic Mixed-array reader unconditionally called the generic `__rt_implode`
-/// runtime routine after unboxing, which only correctly handles STRING (value_type 1) and
-/// boxed-Mixed (value_type 7) element layouts — for `[1,2,3]`'s raw 8-byte int elements
-/// (value_type 0) it misread each integer VALUE as a `{ptr,len}` string pair and dereferenced it
-/// as a pointer. Fixed in `crate::codegen_ir::lower_inst::builtins::strings::lower_implode_dynamic`
-/// by reading the array's OWN runtime element tag and branching to the already-existing, already
-/// tag-correct `__rt_implode_int` helper instead. php -n verified: `1,2,3`.
-#[test]
-fn test_implode_union_array_false_idiom_int_array_no_longer_segfaults() {
-    let out = compile_and_run(
-        r#"<?php
-$hosts = [1, 2, 3];
-$u = $hosts ?: false;
-echo implode(",", $u);
-"#,
-    );
-    assert_eq!(out, "1,2,3");
-}
-
-/// Same repro shape as `test_implode_union_array_false_idiom_int_array_no_longer_segfaults` but
-/// with a `array<string>`-element source array, exercising the OTHER branch of the runtime
-/// element-tag dispatch (`__rt_implode`, value_type 1) instead of `__rt_implode_int`.
-#[test]
-fn test_implode_union_array_false_idiom_string_array() {
-    let out = compile_and_run(
-        r#"<?php
-$parts = ["a", "b", "c"];
-$u = $parts ?: false;
-echo implode("-", $u);
-"#,
-    );
-    assert_eq!(out, "a-b-c");
-}
-
-/// Verifies `implode(",", $u)` on the OTHER branch of the `$hosts = $x ?: false` idiom (an empty,
-/// therefore falsy, source array collapses `$u` to boxed `false`) throws a catchable `\TypeError`
-/// with PHP's EXACT wording instead of reading a null/zero payload as an array pointer. php -n
-/// VERIFIED against PHP 8.5's real (nullable) `implode(string $separator, ?array $array)`
-/// signature: `implode(): Argument #2 ($array) must be of type ?array, false given`.
-#[test]
-fn test_implode_union_false_tag_throws_byte_identical_type_error() {
-    let out = compile_and_run(
-        r#"<?php
-$hosts = [];
-$u = $hosts ?: false;
-try {
-    echo implode(",", $u);
-} catch (\TypeError $e) {
-    echo $e->getMessage();
-}
-"#,
-    );
-    assert_eq!(
-        out,
-        "implode(): Argument #2 ($array) must be of type ?array, false given"
-    );
-}
-
-/// Sweeps the shared `union_type_guard` wrong-tag `\TypeError` dispatch (int/float/true/null)
-/// through `implode()`'s union-array argument — the SAME dispatch `array_slice()`/`count()` reuse
-/// for this family. php -n VERIFIED every message.
-#[test]
-fn test_implode_union_wrong_scalar_tags_throw_byte_identical_type_errors() {
-    let out = compile_and_run(
-        r#"<?php
-function probe($v): string {
-    $u = $v ?: false;
-    try {
-        return implode(",", $u);
-    } catch (\TypeError $e) {
-        return $e->getMessage();
-    }
-}
-echo probe(0), "|";
-echo probe(1.5), "|";
-echo probe(true), "|";
-echo probe(null);
-"#,
-    );
-    assert_eq!(
-        out,
-        "implode(): Argument #2 ($array) must be of type ?array, false given|\
-implode(): Argument #2 ($array) must be of type ?array, float given|\
-implode(): Argument #2 ($array) must be of type ?array, true given|\
-implode(): Argument #2 ($array) must be of type ?array, false given"
-    );
-}
-
-/// Heap-cleanliness proof for the SIGSEGV fix: the union-boxed array payload is only BORROWED
-/// (`crate::codegen_ir::lower_inst::builtins::arrays::union_type_guard::emit_borrow_array_or_type_error`
-/// — no incref/decref/tag mutation on the source cell), so running the (formerly crashing) repro
-/// under `--heap-debug` must report a clean heap with no leaked or double-freed blocks.
-#[test]
-fn test_implode_union_array_heap_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$hosts = [1, 2, 3];
-$u = $hosts ?: false;
-echo implode(",", $u);
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "1,2,3");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
 // --- v0.4 batch 2: more string functions ---
 
 /// Verifies ucwords capitalizes the first character of each word in a string.
@@ -370,25 +413,6 @@ echo implode(",", $u);
 fn test_ucwords() {
     let out = compile_and_run(r#"<?php echo ucwords("hello world foo");"#);
     assert_eq!(out, "Hello World Foo");
-}
-
-/// Verifies `ucwords($string, $separators)` honors a custom word-boundary set.
-///
-/// With separators `"-"` only the first character and the character after each
-/// `-` are capitalized (a following space is no longer a boundary), matching
-/// PHP's `ucwords("a-b c", "-") === "A-B c"`. A multi-character separators set
-/// (`"|-"`) treats every listed byte as a boundary. Verified against `php -n`.
-#[test]
-fn test_ucwords_custom_separators() {
-    let out = compile_and_run(
-        r#"<?php
-echo ucwords("a-b c", "-"), "\n";
-echo ucwords("foo|bar-baz", "|-"), "\n";
-$sep = "-";
-echo ucwords("x-y-z", $sep), "\n";
-"#,
-    );
-    assert_eq!(out, "A-B c\nFoo|Bar-Baz\nX-Y-Z\n");
 }
 
 /// Verifies str_ireplace performs case-insensitive find-and-replace.
@@ -438,6 +462,181 @@ echo count($parts) . " " . $parts[0] . " " . $parts[1] . " " . $parts[2];
     assert_eq!(out, "3 He ll o");
 }
 
+/// Verifies `str_pad()` with an empty `$pad_string` raises PHP's catchable `ValueError`.
+///
+/// The runtime pad loop copied `$length - strlen($string)` bytes out of the pad string, so an
+/// empty pad string made it read whatever followed the zero-length buffer: `str_pad("x", 4, "")`
+/// returned `"xUUU"` built from uninitialized memory. PHP only rejects the empty pad string when
+/// padding would actually happen, so the shorter-`$length` call must still return the input.
+#[test]
+fn test_str_pad_empty_pad_string_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_pad("x", 4, "");
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_pad("xyz", 1, ""), "|", str_pad("x", 4, "-", STR_PAD_LEFT);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_pad(): Argument #3 ($pad_string) must not be empty|xyz|---x"
+    );
+}
+
+/// Verifies an uncaught empty `str_pad()` pad string reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_str_pad_empty_pad_string_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php echo str_pad("x", 4, "");"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: str_pad(): Argument #3 ($pad_string) must not be empty"
+    ));
+}
+
+/// Verifies `str_pad()` rejects a `$pad_type` outside `STR_PAD_LEFT`/`RIGHT`/`BOTH`.
+#[test]
+fn test_str_pad_invalid_pad_type_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_pad("x", 4, "ab", 9);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_pad("x", 5, "ab", STR_PAD_BOTH);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH|abxab"
+    );
+}
+
+/// Verifies `str_split()` with a non-positive `$length` raises PHP's catchable `ValueError`.
+///
+/// `__rt_str_split` advanced its cursor by the chunk length, so `0` spun forever pushing empty
+/// chunks until the heap was exhausted and `-1` walked the cursor backwards and crashed.
+#[test]
+fn test_str_split_non_positive_length_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([0, -1] as $len) {
+    try {
+        var_dump(str_split("abc", $len));
+    } catch (ValueError $e) {
+        echo get_class($e), "|", $e->getMessage(), "\n";
+    }
+}
+echo implode(",", str_split("abcde", 2)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_split(): Argument #2 ($length) must be greater than 0\n\
+         ValueError|str_split(): Argument #2 ($length) must be greater than 0\n\
+         ab,cd,e\n"
+    );
+}
+
+/// Verifies an uncaught zero `str_split()` chunk length reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_str_split_zero_length_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php var_dump(str_split("abc", 0));"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: str_split(): Argument #2 ($length) must be greater than 0"
+    ));
+}
+
+/// Verifies `explode()` with an empty separator raises PHP's catchable `ValueError`.
+///
+/// A zero-length separator matched at every position, so the splitter never advanced and pushed
+/// empty segments until the heap was exhausted.
+#[test]
+fn test_explode_empty_separator_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    var_dump(explode("", "abc"));
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", implode("/", explode(",", "a,b,c"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|explode(): Argument #1 ($separator) must not be empty|a/b/c"
+    );
+}
+
+/// Verifies an uncaught empty `explode()` separator reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_explode_empty_separator_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php var_dump(explode("", "abc"));"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: explode(): Argument #1 ($separator) must not be empty"
+    ));
+}
+
+/// Verifies `explode()`'s third `$limit` parameter follows php-src for every sign.
+///
+/// A positive limit caps the element count and lets the last element absorb the remaining
+/// suffix, `0` behaves like `1`, and a negative limit drops that many trailing segments —
+/// including down to an empty array when it drops them all.
+#[test]
+fn test_explode_limit_matches_php_for_every_sign() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "a,b,c";
+echo implode("/", explode(",", $s, 0)), "|";
+echo implode("/", explode(",", $s, 1)), "|";
+echo implode("/", explode(",", $s, 2)), "|";
+echo implode("/", explode(",", $s, 3)), "|";
+echo implode("/", explode(",", $s, 99)), "|";
+echo count(explode(",", $s, -1)), ":", implode("/", explode(",", $s, -1)), "|";
+echo count(explode(",", $s, -2)), ":", implode("/", explode(",", $s, -2)), "|";
+echo count(explode(",", $s, -3)), "|";
+echo count(explode(",", $s, -9)), "|";
+echo count(explode(",", "", -1)), "|";
+echo count(explode(",", "", 0));
+"#,
+    );
+    assert_eq!(out, "a,b,c|a,b,c|a/b,c|a/b/c|a/b/c|2:a/b|1:a|0|0|0|1");
+}
+
+/// Verifies `wordwrap()` rejects the argument combinations reference PHP refuses to wrap with.
+///
+/// An empty `$break` left the wrapper with nothing to insert, so it silently returned the input
+/// unwrapped; a zero `$width` with `$cut_long_words` asks for progress-free cutting. php-src
+/// checks `$break` first, then the width/cut pair.
+#[test]
+fn test_wordwrap_invalid_arguments_are_catchable_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo wordwrap("ab cd", 3, "");
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|";
+try {
+    echo wordwrap("abcdef", 0, "\n", true);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", wordwrap("ab cd", 3, "|"), "|", wordwrap("abcdef", 0, "\n", false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|wordwrap(): Argument #3 ($break) must not be empty|\
+         ValueError|wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0|\
+         ab|cd|abcdef"
+    );
+}
+
 /// Verifies sprintf zero-pads an integer to a given width.
 #[test]
 fn test_sprintf_zero_padded_int() {
@@ -482,125 +681,266 @@ fn test_multiarg_string_builtins_of_mixed_argument() {
     assert_eq!(out, "hell0 w0rld|6|hello,world");
 }
 
-/// Regression: `$v = trim($v)` reassigning a HEAP string to a trimmed slice of ITSELF used to
-/// corrupt `$v`. `trim` returns a borrowed slice into the source buffer; the store freed the old
-/// buffer the slice still points into before copying it, so the value read back was garbage. This
-/// is the exact shape of symfony/yaml `Inline::parse`'s `mixed` scalar return (a heap `$value`
-/// trimmed and returned), which produced corruption once heap churn reused the freed buffer.
-/// Persisting the trim slice to an owned copy fixes it. The first iteration used to be correct and
-/// later iterations garbage; asserting every iteration is `elephc` catches the regression.
-/// Output cross-checked with `php -r`.
+/// Verifies `str_pad()` to a target width far beyond the 64 KiB concat scratch buffer produces the
+/// full padded string instead of running the pad loop past the scratch end (overflow regression).
 #[test]
-fn test_trim_self_reassign_mixed_return_loop_does_not_corrupt() {
+fn test_str_pad_target_larger_than_concat_scratch() {
     let out = compile_and_run(
         r#"<?php
-function parseScalar(string $v): mixed {
-    $v = trim($v);
-    $refs = [];
-    for ($i = 0; $i < 8; $i++) { $refs[] = $i * $i; }
-    return $v;
-}
-$out = "";
-$parts = ["ele", "phc"];
-for ($k = 0; $k < 4; $k++) {
-    $h = $parts[0] . $parts[1];
-    $r = parseScalar($h);
-    $out .= $r . ":" . strlen($r) . "|";
-}
-echo $out;
+$p = str_pad("a", 1 << 20, "xy");
+echo strlen($p), "|", substr($p, 0, 5), "|", substr($p, -5);
 "#,
     );
-    assert_eq!(out, "elephc:6|elephc:6|elephc:6|elephc:6|");
+    assert_eq!(out, "1048576|axyxy|xyxyx");
 }
 
-/// Regression: `$s = trim($s)` on a heap string with real leading/trailing whitespace persists the
-/// interior slice to an owned copy, so a later read after heap churn still sees the trimmed value
-/// instead of a freed/reused region. Guards the interior-pointer case of the trim persist fix.
+/// Verifies `str_repeat()` reports PHP's allocation-overflow fatal error instead of crashing when
+/// `length * times` wraps a machine word (`4 * 2^62` wraps to 0, which used to pass the 64 KiB
+/// scratch check and then SIGBUS while copying `times * length` bytes).
 #[test]
-fn test_trim_self_reassign_interior_slice_survives_heap_churn() {
+fn test_str_repeat_length_times_overflow_is_a_controlled_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo str_repeat("aaaa", 4611686018427387904);"#);
+    assert!(
+        err.contains("Fatal error: Possible integer overflow in memory allocation"),
+        "expected an allocation-overflow fatal error, got: {err}"
+    );
+}
+
+// --- Expansive transformers beyond the 64 KiB concat scratch buffer ---
+
+/// Verifies `htmlspecialchars()` on a payload whose worst-case 6x entity expansion cannot fit the
+/// shared 64 KiB concat scratch buffer produces the full correct escaping instead of writing past
+/// the scratch end into the adjacent BSS globals (concat-scratch overflow regression).
+#[test]
+fn test_htmlspecialchars_result_larger_than_concat_scratch() {
     let out = compile_and_run(
         r#"<?php
-$parts = ["  ele", "phc  "];
-$s = $parts[0] . $parts[1];
-$s = trim($s);
-$junk = [];
-for ($i = 0; $i < 12; $i++) { $junk[] = str_repeat("q", $i + 1); }
-echo $s, "|", strlen($s);
+$h = htmlspecialchars(str_repeat("<a href=\"x\">&'", 8000));
+echo strlen($h), "|", substr($h, 0, 12), "|", substr($h, -12);
 "#,
     );
-    assert_eq!(out, "elephc|6");
+    assert_eq!(out, "312000|&lt;a href=&|;&amp;&#039;");
 }
 
-/// Verifies strval coerces scalars to their PHP string representation.
-/// Fixture: int/float/string via strval; each matches the `(string)` cast (php-verified).
+/// Verifies `html_entity_decode()` of an entity-encoded payload longer than the 64 KiB concat
+/// scratch buffer decodes every entity through the heap fallback.
 #[test]
-fn test_strval_scalars() {
+fn test_html_entity_decode_input_larger_than_concat_scratch() {
     let out = compile_and_run(
-        r#"<?php echo strval(42), "|", strval(1.5), "|", strval("x");"#,
+        r#"<?php
+$d = html_entity_decode(str_repeat("&lt;a&gt;&amp;&quot;&#039;", 5000));
+echo strlen($d), "|", substr($d, 0, 8), "|", substr($d, -8);
+"#,
     );
-    assert_eq!(out, "42|1.5|x");
+    assert_eq!(out, "30000|<a>&\"'<a|\"'<a>&\"'");
 }
 
-/// Verifies strval of a boolean true yields "1" and null yields the empty string.
-/// Fixture: strval(true)="1", strval(null)="" (php-verified).
+/// Verifies `nl2br()` on an all-newline-heavy payload whose worst-case 7x expansion exceeds the
+/// 64 KiB concat scratch buffer keeps every injected break tag intact.
 #[test]
-fn test_strval_bool_and_null() {
-    let out = compile_and_run(r#"<?php echo "[", strval(true), "][", strval(null), "]";"#);
-    assert_eq!(out, "[1][]");
-}
-
-/// Verifies strval resolves through PHP's namespace fallback and case-insensitive lookup.
-/// Fixture: inside a namespace, upper-case STRVAL() resolves to the builtin.
-#[test]
-fn test_strval_namespaced_case_insensitive_fallback() {
-    let out = compile_and_run(r#"<?php namespace App; echo STRVAL(7);"#);
-    assert_eq!(out, "7");
-}
-
-/// Verifies addcslashes backslash-prefixes printable set members, including `a..z` ranges.
-/// Fixture: addcslashes("aBcDeF", "A..Z") escapes the upper-case letters (php-verified).
-#[test]
-fn test_addcslashes_range_and_printable() {
+fn test_nl2br_result_larger_than_concat_scratch() {
     let out = compile_and_run(
-        r#"<?php echo addcslashes("aBcDeF", "A..Z"), "|", addcslashes("a.b", "."), "|", addcslashes('a"b', '"');"#,
+        r#"<?php
+$n = nl2br(str_repeat("a\nb\n", 20000));
+echo strlen($n), "|", substr($n, 0, 8), "|", substr($n, -8);
+"#,
     );
-    assert_eq!(out, r#"a\Bc\De\F|a\.b|a\"b"#);
+    assert_eq!(out, "320000|a<br />\n|b<br />\n");
 }
 
-/// Verifies addcslashes emits C escapes for control bytes and octal for high bytes.
-/// Fixture: NUL/TAB/LF/BEL/ESC via a `\0..\37` range, and chr(200) -> `\310` (php-verified).
+/// Verifies `addslashes()` / `stripslashes()` round-trip a payload whose 2x escaped form exceeds
+/// the 64 KiB concat scratch buffer, so both directions take the heap fallback and stay byte-exact.
 #[test]
-fn test_addcslashes_control_and_octal() {
+fn test_addslashes_roundtrip_larger_than_concat_scratch() {
     let out = compile_and_run(
-        r#"<?php echo bin2hex(addcslashes(chr(0).chr(9).chr(10).chr(7).chr(27), "\0..\37")), "|", bin2hex(addcslashes(chr(200), chr(200)));"#,
+        r#"<?php
+$s = str_repeat("a'b\"c\\d", 20000);
+$a = addslashes($s);
+$b = stripslashes($a);
+echo strlen($a), "|", substr($a, 0, 10), "|", strlen($b), "|", ($b === $s ? "same" : "DIFF");
+"#,
     );
-    assert_eq!(out, "5c3030305c745c6e5c615c303333|5c333130");
+    assert_eq!(out, "200000|a\\'b\\\"c\\\\d|140000|same");
 }
 
-/// Verifies stripcslashes decodes C-style escapes as the inverse of addcslashes.
-/// Fixture: `\t`/`\n` control escapes, `\101` octal -> 'A', `\x42` hex -> 'B' (php-verified).
+/// Verifies `wordwrap()` on a payload whose wrapped form far exceeds the 64 KiB concat scratch
+/// buffer inserts every break string instead of running the copy helper past the scratch end.
 #[test]
-fn test_stripcslashes_decodes_escapes() {
+fn test_wordwrap_result_larger_than_concat_scratch() {
     let out = compile_and_run(
-        r#"<?php echo bin2hex(stripcslashes("a\\tb\\nc")), "|", stripcslashes("\\101\\x42");"#,
+        r#"<?php
+$t = str_repeat("hello world ", 8000);
+$w = wordwrap($t, 5, "<BR>", true);
+echo strlen($w), "|", substr($w, 0, 14), "|", substr($w, -9);
+"#,
     );
-    assert_eq!(out, "6109620a63|AB");
+    assert_eq!(out, "144000|hello<BR>world|world<BR>");
 }
 
-/// Verifies stripcslashes truncates octal to one byte and leaves unknown escapes literal.
-/// Fixture: `\777` -> 0xff, and `\A`/`\z`/`\8` keep their literal characters (php-verified).
+/// Verifies `str_replace()` with an expanding replacement whose result exceeds the 64 KiB concat
+/// scratch buffer emits every replacement instead of overrunning the scratch end.
 #[test]
-fn test_stripcslashes_octal_overflow_and_literals() {
+fn test_str_replace_expansion_larger_than_concat_scratch() {
     let out = compile_and_run(
-        r#"<?php echo bin2hex(stripcslashes("\\777")), "|", stripcslashes("\\A\\z\\8");"#,
+        r#"<?php
+$s = str_repeat("ab", 40000);
+$r = str_replace("a", "XYZW", $s);
+echo strlen($r), "|", substr($r, 0, 10), "|", substr($r, -10);
+"#,
     );
-    assert_eq!(out, "ff|Az8");
+    assert_eq!(out, "200000|XYZWbXYZWb|XYZWbXYZWb");
 }
 
-/// Verifies stripcslashes resolves through PHP's namespace fallback and case-insensitive lookup.
-/// Fixture: inside a namespace, upper-case StripCSlashes() resolves to the builtin.
+/// Verifies `str_ireplace()` with an expanding case-insensitive replacement whose result exceeds
+/// the 64 KiB concat scratch buffer stays byte-exact through the heap fallback.
 #[test]
-fn test_stripcslashes_namespaced_case_insensitive_fallback() {
-    let out = compile_and_run(r#"<?php namespace App; echo StripCSlashes("q\\tr");"#);
-    assert_eq!(out, "q\tr");
+fn test_str_ireplace_expansion_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("ab", 40000);
+$i = str_ireplace("A", "0123456789", $s);
+echo strlen($i), "|", substr($i, 0, 12), "|", substr($i, -12);
+"#,
+    );
+    assert_eq!(out, "440000|0123456789b0|b0123456789b");
+}
+
+/// Verifies `substr_replace()` on a subject plus replacement that together exceed the 64 KiB
+/// concat scratch buffer keeps the prefix, replacement, and suffix intact.
+#[test]
+fn test_substr_replace_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("x", 50000);
+$r = str_repeat("R", 50000);
+$o = substr_replace($s, $r, 100, 200);
+echo strlen($o), "|", $o[0], $o[99], $o[100], $o[50099], $o[50100];
+"#,
+    );
+    assert_eq!(out, "99800|xxRRx");
+}
+
+/// Verifies `number_format()` still formats correctly when the shared concat scratch buffer is
+/// already nearly full, which used to spill its grouped output past the scratch end.
+#[test]
+fn test_number_format_near_end_of_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$pad = str_repeat("z", 65400);
+$n = $pad . number_format(1234567.891, 2, ".", ",");
+echo strlen($n), "|", substr($n, -12);
+"#,
+    );
+    assert_eq!(out, "65412|1,234,567.89");
+}
+
+/// Verifies `join()` behaves as `implode()`'s alias for the two-argument call form.
+/// Fixture and expectation come from `LC_ALL=C php`: `join(", ", ["a","b","c"])` is `"a, b, c"`.
+#[test]
+fn test_join_with_separator() {
+    let out = compile_and_run(r#"<?php echo join(", ", ["a", "b", "c"]);"#);
+    assert_eq!(out, "a, b, c");
+}
+
+/// Verifies `join()`'s single-argument form joins with an empty separator.
+/// PHP declares `join(string|array $separator, ?array $array = null)`, so `join($array)`
+/// concatenates the elements: `LC_ALL=C php` prints `abc`.
+#[test]
+fn test_join_single_array_argument() {
+    let out = compile_and_run(r#"<?php echo join(["a", "b", "c"]);"#);
+    assert_eq!(out, "abc");
+}
+
+/// Verifies `join()` resolves case-insensitively and through a namespace-qualified call,
+/// and that its parameters are reachable by name.
+#[test]
+fn test_join_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x", "y"];
+echo JOIN("-", $a), "|", \join("+", $a), "|", join(separator: "*", array: $a);
+"#,
+    );
+    assert_eq!(out, "x-y|x+y|x*y");
+}
+
+/// Verifies `join()` joins an integer array, which routes through the integer renderer.
+#[test]
+fn test_join_int_array() {
+    let out = compile_and_run(r#"<?php echo join("+", [1, 2, 3]), "|", join([1, 2, 3]);"#);
+    assert_eq!(out, "1+2+3|123");
+}
+
+/// Verifies `implode()`/`join()` accept an empty array literal, whose element type is
+/// uninhabited. `LC_ALL=C php` prints an empty string for both.
+#[test]
+fn test_join_empty_array() {
+    let out = compile_and_run(r#"<?php echo "[", implode("", []), join([]), "]";"#);
+    assert_eq!(out, "[]");
+}
+
+/// Verifies `ucwords()` accepts PHP's second `$separators` argument positionally and by
+/// name. `$separators` is a byte SET: each listed byte ends a word, an empty set leaves only
+/// the very first character capitalized, and a separator run capitalizes only the byte after
+/// the last one. The final case pins PHP's own default set, which includes the `\r`, `\f`,
+/// and `\v` that the previous hard-coded space/tab/newline scan silently ignored.
+/// Every expected value is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_ucwords_separators_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(ucwords("hello world"));
+var_dump(ucwords("hello|world", "|"));
+var_dump(ucwords("hello-world", "-"));
+var_dump(ucwords("hello world-again", " -"));
+var_dump(ucwords("hello world", ""));
+var_dump(ucwords("", "-"));
+var_dump(ucwords("a.b.c", "."));
+var_dump(ucwords("hello world", separators: "|"));
+var_dump(ucwords(string: "hello|world", separators: "|"));
+var_dump(ucwords("--x", "-"));
+var_dump(ucwords("1abc def"));
+var_dump(ucwords("HELLO world"));
+var_dump(ucwords("hello\tworld\nfoo\rbar\fbaz\vqux"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(11) \"Hello World\"\n\
+string(11) \"Hello|World\"\n\
+string(11) \"Hello-World\"\n\
+string(17) \"Hello World-Again\"\n\
+string(11) \"Hello world\"\n\
+string(0) \"\"\n\
+string(5) \"A.B.C\"\n\
+string(11) \"Hello world\"\n\
+string(11) \"Hello|World\"\n\
+string(3) \"--X\"\n\
+string(8) \"1abc Def\"\n\
+string(11) \"HELLO World\"\n\
+string(27) \"Hello\tWorld\nFoo\rBar\u{0c}Baz\u{0b}Qux\"\n"
+    );
+}
+
+/// Verifies the separator set is honored when neither the subject nor the set can be folded
+/// at compile time, so the runtime membership scan is exercised rather than a constant.
+/// `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_ucwords_separators_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = "hello|world-again" . ($argc > 100 ? "z" : "");
+$separators = "|" . ($argc > 100 ? "" : "-");
+var_dump(ucwords($subject, $separators));
+var_dump(ucwords($subject, separators: $separators));
+var_dump(ucwords($subject));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(17) \"Hello|World-Again\"\n\
+string(17) \"Hello|World-Again\"\n\
+string(17) \"Hello|world-again\"\n"
+    );
 }

@@ -13,24 +13,15 @@
 //!   the inline arity check from the legacy arm is therefore not reproduced here.
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::builtins::spec::DefaultSpec;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "str_split",
-    area: String,
-    params: [
-        string: Str,
-        length: Int = DefaultSpec::Int(1),
-    ],
-    returns: Mixed,
+    contract: "str_split",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrSplit,
     ),
-    summary: "Converts a string into an array of chunks of the given length.",
-    php_manual: "https://www.php.net/manual/en/function.str-split.php",
 }
 
 /// Returns `PhpType::Array(Box::new(PhpType::Str))` for a `str_split` call.

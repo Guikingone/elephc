@@ -8,12 +8,12 @@
 //! Key details:
 //! - Runtime autoload callbacks cannot run in native binaries; supported rules are interpreted at compile time.
 //! - Composer files execute before the entry program while class-triggered files splice before first use.
+//! - `run_collecting_included` additionally surfaces the canonical path of every file the pass
+//!   loaded, which `crate::opcache_prelude` bakes into the OPcache script manifest.
 
 mod alias;
-mod composer_global_functions;
 mod index;
 mod interpret;
-mod polyfill_prune;
 mod registry;
 mod rule;
 mod walk;
@@ -22,9 +22,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub use registry::Registry;
-pub use composer_global_functions::scan_composer_global_functions;
 
-use crate::errors::{CompileError, CompileWarning};
+use crate::errors::CompileError;
 use crate::parser::ast::Program;
 use crate::parser::ast::Stmt;
 use crate::span::Span;
@@ -35,15 +34,18 @@ use walk::{collect_declared_fqns, collect_reference_points};
 /// `stdClass`, `Iterator`). Seeded into the declared FQN set so references to these
 /// types are never treated as autoload demands.
 const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
+    "ArgumentCountError",
     "ArrayAccess",
     "AppendIterator",
     "ArrayIterator",
     "ArrayObject",
+    "AssertionError",
     "BadFunctionCallException",
     "BadMethodCallException",
     "CachingIterator",
     "CallbackFilterIterator",
     "Countable",
+    "DivisionByZeroError",
     "DomainException",
     "EmptyIterator",
     "Error",
@@ -108,43 +110,65 @@ const BUILTIN_CLASS_LIKE_NAMES: &[&str] = &[
     "stdClass",
 ];
 
-/// Walks up from `start` (the entry file's directory) to the nearest ancestor that
-/// contains a `composer.json`, returning that directory as the composer project root.
-/// Falls back to `start` when no composer.json is found (a non-composer program).
-/// PSR-4/classmap targets and the `vendor/` tree are resolved relative to this root, so
-/// an entry in a subdirectory (e.g. Symfony's `public/index.php`) still discovers the
-/// root autoload map.
-pub fn find_composer_project_root(start: &Path) -> PathBuf {
-    let mut dir = start;
-    loop {
-        if dir.join("composer.json").is_file() {
-            return dir.to_path_buf();
-        }
-        match dir.parent() {
-            Some(p) => dir = p,
-            None => return start.to_path_buf(),
-        }
-    }
-}
-
 /// Run the autoload pass over a fully resolver+name_resolver-processed
 /// program. For every canonical class reference that isn't declared in
 /// the program, look it up first in the composer.json PSR-4 index and
 /// then in the user-registered closure rules; parse the referenced file,
 /// run resolver+name_resolver on it, and append. Iterate until stable.
 ///
-/// Returns the expanded program plus any non-fatal warnings (e.g. an
-/// `autoload.files` helper that was skipped because it could not be parsed).
+/// This is the loaded-set-discarding wrapper over [`run_collecting_included`], kept for the
+/// call sites that do not bake the OPcache script manifest (the `ir_lower` and
+/// `tests/codegen/support` harnesses); only `crate::pipeline` takes the longer form.
+#[allow(dead_code)] // Consumed by the test harnesses; `crate::pipeline` uses the collecting form.
 pub fn run(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+) -> Result<Program, CompileError> {
+    run_collecting_included(program, base_dir, registry).map(|(program, _)| program)
+}
+
+/// Same as [`run`], but also returns the CANONICAL path of every source file this pass
+/// pulled into the program, each exactly once:
+/// - Composer `autoload.files` (the always-included list),
+/// - every PSR-4 / SPL-rule class file resolved by the fixpoint below,
+/// - every `include`/`require` target those files themselves pull in (an autoloaded class
+///   file that `require`s a helper compiles that helper into the binary too, so it is just
+///   as much a cached script).
+///
+/// The first two come from the pass's own `included` set, which is already canonicalized
+/// with `Path::canonicalize` — the SAME normalization `__FILE__` bakes
+/// (`crate::magic_constants::file_pass`) — so the paths are directly comparable with
+/// `crate::opcache_prelude::ScriptEntry::path`. The third comes from
+/// `resolver::resolve_collecting_includes`, canonicalized identically.
+///
+/// Nested include paths are accumulated SEPARATELY from `included` rather than being
+/// folded into it: `included` doubles as the "already autoloaded" guard, and seeding it
+/// with include targets would change which files the fixpoint loads. Keeping them apart
+/// makes this function's autoload behavior byte-identical to [`run`]'s.
+///
+/// The vector is SORTED so a build is byte-reproducible.
+pub fn run_collecting_included(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    run_collecting_included_with_defines(program, base_dir, registry, &HashSet::new())
+}
+
+/// Runs autoload expansion while applying conditional symbols to every physical file loaded.
+pub fn run_collecting_included_with_defines(
     mut program: Program,
     base_dir: &Path,
     registry: &Registry,
-) -> Result<(Program, Vec<CompileWarning>), CompileError> {
-    let mut warnings: Vec<CompileWarning> = Vec::new();
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if registry.is_empty() {
-        return Ok((program, warnings));
+        return Ok((program, Vec::new()));
     }
     let mut included: HashSet<PathBuf> = HashSet::new();
+    let mut nested_includes: HashSet<PathBuf> = HashSet::new();
+    const MAX_ITERATIONS: usize = 64;
 
     // -- prefix always-included files first --
     // composer.json's `autoload.files` declares files that must always be
@@ -154,24 +178,10 @@ pub fn run(
     for path in registry.always_included_files() {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
-            // `autoload.files` helpers are always-included but often unreferenced by
-            // the app. Tolerate an unparseable or unreadable helper by skipping it and
-            // recording a warning rather than aborting the whole build, so one
-            // unsupported construct in an unused helper cannot kill compilation.
-            // Strict include resolution (`false`): a helper's top-level statements run
-            // eagerly at startup, so an unresolvable dynamic include must surface as an
-            // error that becomes a skip here, not a degraded stub that would fatal at boot.
-            match load_autoloaded_file(&canonical, base_dir, false) {
-                Ok(stmts) => prefix.extend(stmts),
-                Err(e) => warnings.push(CompileWarning::new(
-                    Span::dummy(),
-                    &format!(
-                        "Autoload: skipped autoload.files helper '{}': {}",
-                        canonical.display(),
-                        e.message
-                    ),
-                )),
-            }
+            let (loaded, loaded_includes) =
+                load_autoloaded_file(&canonical, base_dir, defines)?;
+            nested_includes.extend(loaded_includes);
+            prefix.extend(loaded);
         }
     }
     if !prefix.is_empty() {
@@ -179,66 +189,6 @@ pub fn run(
         program = prefix;
     }
 
-    // Remove PHP polyfill redefinition guards for functions elephc provides. The
-    // guarded wrapper bodies are never materialized, so dropping them keeps the
-    // classes they delegate to (e.g. the 97 KB `DeepClone` polyfill) out of the
-    // reference graph collected below.
-    program = polyfill_prune::prune_provided_function_polyfills(program);
-
-    // Decide which optional `autoload.files` helpers (`u`/`b`/`s`, `dump`/`dd`) the program
-    // actually calls, so uncalled ones can be pruned (keeping the heavy classes their bodies
-    // reference — `UnicodeString`, `ByteString`, `VarDumper` — out of the closure) while called
-    // ones are retained. A helper may be called only from a class that the PSR-4 class-reference
-    // iteration loads (e.g. `OutputFormatter` calling `b()`/`s()` via `use function`), so the call
-    // set must be gathered AFTER that iteration. But running the iteration with the helper bodies
-    // present would drag their referenced classes in even for uncalled helpers. The two-phase
-    // survey below resolves the ordering: survey with all optional helper bodies stripped, then
-    // prune the real program with the surveyed call set, then load the retained helper bodies'
-    // classes.
-
-    // Snapshot the set of files already spliced (the `autoload.files` prefix) so the final
-    // class-load iteration can re-splice caller classes the survey parsed without re-parsing the
-    // prefix.
-    let included_after_prefix = included.clone();
-
-    // Survey phase: strip every optional helper guard so none of their bodies' class references
-    // enter the survey graph, then iterate class loading to a fixed point. This loads every
-    // PSR-4-referenced caller class and exposes the helpers it calls.
-    let survey = polyfill_prune::strip_all_optional_helper_guards(program.clone());
-    let survey_loaded = load_referenced_classes(survey, base_dir, registry, &mut included)?;
-    let called = walk::collect_called_function_names(&survey_loaded);
-
-    // Reset the included set to the prefix snapshot: caller classes parsed during the survey must
-    // be re-spliced into the real program (the survey's splices live only in `survey_loaded`), so
-    // they must re-parse-and-splice during the final iteration. The prefix files stay included so
-    // they are not re-read.
-    included = included_after_prefix;
-
-    // Prune the original program (with helper guards intact) using the surveyed call set: a
-    // helper named in `called` is retained, an uncalled one is dropped with its body's class
-    // references.
-    program = polyfill_prune::prune_unused_optional_helpers_with(program, &called);
-
-    // Final class-load iteration: retained helper bodies now reference their classes
-    // (`UnicodeString`/`ByteString` for retained `b()`/`s()`), which get loaded here alongside
-    // the re-spliced caller classes.
-    program = load_referenced_classes(program, base_dir, registry, &mut included)?;
-
-    Ok((program, warnings))
-}
-
-/// Iterates PSR-4 class-reference loading to a fixed point: each pass collects class-like
-/// references the program makes but does not declare, resolves them through the registry
-/// (PSR-4 then user rules), parses and name-resolves the referenced file, and splices its
-/// statements before the referencing statement. Stops when a pass adds no new class file.
-/// `included` tracks already-loaded files so a class is parsed at most once per call.
-fn load_referenced_classes(
-    mut program: Program,
-    base_dir: &Path,
-    registry: &Registry,
-    included: &mut HashSet<PathBuf>,
-) -> Result<Program, CompileError> {
-    const MAX_ITERATIONS: usize = 64;
     for _ in 0..MAX_ITERATIONS {
         let mut declared = collect_declared_fqns(&program);
         seed_builtin_declared_fqns(&mut declared);
@@ -251,13 +201,9 @@ fn load_referenced_classes(
             if let Some(path) = resolve_class(&fqn, registry) {
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
-                    // Referenced classes must load or the program is broken: a class the
-                    // app actually uses cannot be tolerated-away like an unreferenced
-                    // `autoload.files` helper, so a load failure here is a hard error.
-                    // Lenient include resolution (`true`): a dynamic include inside a class
-                    // method is lazy and may never run, so an unresolvable one degrades to a
-                    // runtime-fatal stub instead of failing the whole compile.
-                    let loaded = load_autoloaded_file(&canonical, base_dir, true)?;
+                    let (loaded, loaded_includes) =
+                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                    nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
             }
@@ -272,7 +218,11 @@ fn load_referenced_classes(
             program.splice(insert_at..insert_at, loaded);
         }
     }
-    Ok(program)
+
+    included.extend(nested_includes);
+    let mut loaded_files: Vec<PathBuf> = included.into_iter().collect();
+    loaded_files.sort();
+    Ok((program, loaded_files))
 }
 
 /// Lower any top-level literal `class_alias()` calls left after another
@@ -307,21 +257,14 @@ fn resolve_class(fqn: &str, registry: &Registry) -> Option<PathBuf> {
     None
 }
 
-/// Load, parse, and resolve a single autoloaded PHP file, returning its statements.
-///
-/// `lenient_includes` selects include-resolution strictness for this file. It is `true` only
-/// for lazily-referenced class files: such a file's dynamic `include`/`require` typically sits
-/// inside a method that may never run for the program being built (e.g. a polyfill that
-/// `require`s a data table by a computed path), so an unresolvable runtime-dynamic path is
-/// degraded to a runtime-fatal stub rather than failing compilation. It is `false` for
-/// always-included `autoload.files` helpers, whose top-level statements execute eagerly at
-/// startup: a degraded stub there would fatal immediately, so those keep the strict behavior
-/// and an unresolvable include surfaces as an error the caller turns into a tolerant skip.
+/// Load, parse, and resolve a single autoloaded PHP file, returning its statements plus the
+/// canonical paths of every `include`/`require` target the file itself pulled in (surfaced for
+/// the OPcache script manifest — see [`run_collecting_included`]).
 fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
-    lenient_includes: bool,
-) -> Result<Program, CompileError> {
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
             Span::dummy(),
@@ -329,22 +272,22 @@ fn load_autoloaded_file(
         )
     })?;
     let file_label = path.display().to_string();
-    let tokens = crate::lexer::tokenize(&content).map_err(|e| e.with_file(file_label.clone()))?;
-    let parsed = crate::parser::parse(&tokens).map_err(|e| e.with_file(file_label.clone()))?;
-    let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, path);
-    // Strict-PHP audit of the autoloaded user file on its freshly parsed AST,
-    // before resolution can synthesize compiler-internal names into it.
-    crate::strict_php::check_file(&parsed, &file_label)?;
-    let include_base = path.parent().unwrap_or(base_dir);
-    let resolved = if lenient_includes {
-        crate::resolver::resolve_lenient_includes(parsed, include_base)?
-    } else {
-        crate::resolver::resolve(parsed, include_base)?
-    };
+    let source_mode = crate::source::SourceMode::from_path(path);
+    let tokens = crate::lexer::tokenize_with_mode(&content, source_mode)
+        .map_err(|e| e.with_file(file_label.clone()))?;
+    let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
+        .map_err(|e| e.with_file(file_label.clone()))?;
+    let parsed =
+        crate::source::finalize_physical_program(parsed, path, source_mode, defines)?;
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_with_defines(
+        parsed,
+        path.parent().unwrap_or(base_dir),
+        defines,
+    )?;
     let resolved = alias::collect_aliases(resolved);
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;
     // name_resolver has already flattened namespace nodes and canonicalized
     // declarations, so we splice the statements directly into the top-level
     // program.
-    Ok(canonicalized)
+    Ok((canonicalized, nested_includes))
 }

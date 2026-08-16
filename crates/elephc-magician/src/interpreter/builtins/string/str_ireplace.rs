@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the string-replace hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "str_ireplace",
+    contract: "str_ireplace",
     area: String,
-    params: [search, replace, subject, count = EvalBuiltinDefaultValue::Null],
     direct: StrReplace,
     values: StrReplace,
 }

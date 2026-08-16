@@ -9,6 +9,9 @@
 //! Key details:
 //! - Cached labels are global assembly entries emitted at their first call site.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
+//! - Owns the module-wide assembly label counter. It must not be per function: the readable part
+//!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
+//!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
 use crate::types::{FunctionSig, PhpType};
@@ -17,7 +20,7 @@ use crate::types::{FunctionSig, PhpType};
 #[derive(Default)]
 pub(crate) struct SharedCodegenState {
     runtime_string_descriptor_cases:
-        Vec<(Option<PhpType>, Option<Vec<String>>, Vec<RuntimeCallableCase>)>,
+        Vec<(Option<PhpType>, Option<Vec<String>>, bool, Vec<RuntimeCallableCase>)>,
     runtime_static_method_descriptor_cases:
         Vec<(Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCase>)>,
     runtime_static_method_descriptor_case_entries: Vec<RuntimeStaticMethodCallableCase>,
@@ -25,6 +28,7 @@ pub(crate) struct SharedCodegenState {
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    label_counter: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -53,23 +57,37 @@ struct RuntimeCallableInvokerCacheEntry {
 struct RuntimeCallWrapperCacheEntry {
     name: String,
     signature: FunctionSig,
+    strict_php: bool,
     label: String,
 }
 
 impl SharedCodegenState {
+    /// Reserves the next module-unique assembly label id.
+    ///
+    /// Every generated local label ends in `_<id>` taken from this counter. Because the id is a
+    /// decimal run terminated by the preceding `_`, it is recoverable from the finished label,
+    /// which makes the whole label unique no matter how ambiguous its readable prefix is.
+    pub(super) fn next_label_id(&mut self) -> usize {
+        let id = self.label_counter;
+        self.label_counter += 1;
+        id
+    }
+
     /// Returns cached runtime string-callable cases for the requested specialization.
     pub(super) fn runtime_string_descriptor_cases(
         &self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
+        strict_php: bool,
     ) -> Option<Vec<RuntimeCallableCase>> {
         self.runtime_string_descriptor_cases
             .iter()
-            .find(|(cached_ty, cached_names, _)| {
+            .find(|(cached_ty, cached_names, cached_strict_php, _)| {
                 cached_ty.as_ref() == source_arg_ty
                     && cached_names.as_deref() == candidate_names
+                    && *cached_strict_php == strict_php
             })
-            .map(|(_, _, cases)| cases.clone())
+            .map(|(_, _, _, cases)| cases.clone())
     }
 
     /// Stores runtime string-callable cases after their global wrappers are emitted.
@@ -77,11 +95,13 @@ impl SharedCodegenState {
         &mut self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
+        strict_php: bool,
         cases: &[RuntimeCallableCase],
     ) {
         self.runtime_string_descriptor_cases.push((
             source_arg_ty.cloned(),
             candidate_names.map(|names| names.to_vec()),
+            strict_php,
             cases.to_vec(),
         ));
     }
@@ -199,8 +219,14 @@ impl SharedCodegenState {
         &self,
         name: &str,
         signature: &FunctionSig,
+        strict_php: bool,
     ) -> Option<String> {
-        cached_runtime_call_wrapper(&self.runtime_builtin_wrappers, name, signature)
+        cached_runtime_call_wrapper(
+            &self.runtime_builtin_wrappers,
+            name,
+            signature,
+            strict_php,
+        )
     }
 
     /// Records a synthetic builtin wrapper for module-wide reuse.
@@ -208,12 +234,14 @@ impl SharedCodegenState {
         &mut self,
         name: &str,
         signature: &FunctionSig,
+        strict_php: bool,
         label: &str,
     ) {
         cache_runtime_call_wrapper(
             &mut self.runtime_builtin_wrappers,
             name,
             signature,
+            strict_php,
             label,
         );
     }
@@ -224,7 +252,7 @@ impl SharedCodegenState {
         name: &str,
         signature: &FunctionSig,
     ) -> Option<String> {
-        cached_runtime_call_wrapper(&self.runtime_extern_wrappers, name, signature)
+        cached_runtime_call_wrapper(&self.runtime_extern_wrappers, name, signature, false)
     }
 
     /// Records a synthetic extern wrapper for module-wide reuse.
@@ -238,6 +266,7 @@ impl SharedCodegenState {
             &mut self.runtime_extern_wrappers,
             name,
             signature,
+            false,
             label,
         );
     }
@@ -248,10 +277,15 @@ fn cached_runtime_call_wrapper(
     entries: &[RuntimeCallWrapperCacheEntry],
     name: &str,
     signature: &FunctionSig,
+    strict_php: bool,
 ) -> Option<String> {
     entries
         .iter()
-        .find(|entry| entry.name == name && entry.signature == *signature)
+        .find(|entry| {
+            entry.name == name
+                && entry.signature == *signature
+                && entry.strict_php == strict_php
+        })
         .map(|entry| entry.label.clone())
 }
 
@@ -260,11 +294,13 @@ fn cache_runtime_call_wrapper(
     entries: &mut Vec<RuntimeCallWrapperCacheEntry>,
     name: &str,
     signature: &FunctionSig,
+    strict_php: bool,
     label: &str,
 ) {
     entries.push(RuntimeCallWrapperCacheEntry {
         name: name.to_string(),
         signature: signature.clone(),
+        strict_php,
         label: label.to_string(),
     });
 }

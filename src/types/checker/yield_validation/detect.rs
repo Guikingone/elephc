@@ -138,11 +138,6 @@ fn stmt_contains_yield(stmt: &Stmt) -> bool {
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_contains_yield(index) || expr_contains_yield(value)
         }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_contains_yield(property)
-                || index.as_ref().is_some_and(expr_contains_yield)
-                || expr_contains_yield(value)
-        }
         _ => false,
     }
 }

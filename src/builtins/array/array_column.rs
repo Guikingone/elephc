@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_column",
-    area: Array,
-    params: [array: Mixed, column_key: Mixed],
-    returns: Mixed,
+    contract: "array_column",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayColumn,
     ),
-    summary: "Returns the values from a single column of an array of arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-column.php",
 }
 
 /// Returns the extracted-column array type for an `array_column` call.
@@ -38,23 +33,17 @@ builtin! {
 /// inferred every argument once for side effects, and arity (exactly 2) is pre-validated.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(inner) => match *inner {
             PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),
-            // Gradual boundary: an array of `Mixed` rows (e.g. a dynamic `$enum::cases()`
-            // whose class is unresolved) has an unknown row shape, so the extracted column
-            // is a list of `Mixed`.
-            PhpType::Mixed => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
             _ => Err(CompileError::new(
                 cx.span,
                 "array_column() requires an array of associative arrays",
             )),
         },
-        // Gradual boundary: a `Mixed` or union-containing-array operand is accepted,
-        // exactly like `count`. The row/column element type is unknown, so the result is a
-        // list of `Mixed`. EIR emits a runtime unbox + assert-array guard, so a runtime
-        // non-array still fatals.
-        t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(
             cx.span,
             "array_column() first argument must be array",

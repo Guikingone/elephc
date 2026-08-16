@@ -13,8 +13,10 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::super::builtins::out_params;
+use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::merge_null_coalesce_result_type;
+use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -39,8 +41,6 @@ impl Checker {
     /// - Ternary, null coalesce, and match clone the environment per branch so assignments
     ///   do not leak across arms; match/ternary result types then reuse `infer_type`'s
     ///   Mixed-aware branch merge (not the Str-absorbing syntactic join).
-    /// - Logical NOT returns `Bool` directly after applying nested effects, so
-    ///   `!($value = call())` does not re-check `call()` against its own newly assigned result.
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -73,12 +73,6 @@ impl Checker {
                     ExprKind::Variable(name) => {
                         Self::purge_property_narrowings_for_root(env, name)
                     }
-                    // A direct `$obj->prop = …` rebinds only that receiver's own slot, so scope the
-                    // purge to the exact `<root>->prop` fact (keeping e.g. `$this->prop` when the
-                    // write targets `$clone->prop`); an element write still mutates through.
-                    ExprKind::PropertyAccess { object, property } => {
-                        Self::purge_property_narrowings_for_property_write(env, object, property)
-                    }
                     _ if assignment_may_write_property(target) => {
                         Self::purge_property_narrowings(env)
                     }
@@ -86,39 +80,12 @@ impl Checker {
                 }
                 Ok(ty)
             }
-            ExprKind::ListUnpack { vars, value } => {
-                // `[$a, $b] = EXPR` binds each positional target as a local (so later code,
-                // e.g. an `if` body, sees them defined) and evaluates to EXPR. Each target takes
-                // the source's element type, or `Mixed` when the source is not a statically-known
-                // array (e.g. `$pairs ?? null`, which PHP permits — targets become `null`).
-                let value_ty = match self.infer_type_with_assignment_effects(value, env) {
-                    Ok(value_ty) => value_ty,
-                    Err(err) => {
-                        // The RHS carries its own (unrelated) error — e.g. an undefined function
-                        // in `[$a, $b] = someUndefinedFn()`. Bind every destructure target as
-                        // `Mixed` before propagating so downstream reads of `$a`/`$b` do not
-                        // cascade into spurious "Undefined variable" diagnostics that bury the
-                        // real root error. The root error is still returned unchanged.
-                        for var in vars {
-                            env.insert(var.clone(), PhpType::Mixed);
-                        }
-                        return Err(err);
-                    }
-                };
-                let elem_ty = match &value_ty {
-                    PhpType::Array(elem) => (**elem).clone(),
-                    PhpType::AssocArray { value: elem, .. } => (**elem).clone(),
-                    _ => PhpType::Mixed,
-                };
-                for var in vars {
-                    env.insert(var.clone(), elem_ty.clone());
-                }
-                Ok(value_ty)
-            }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // `int` can overflow to float and `string` can become int/float
+                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -126,120 +93,40 @@ impl Checker {
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // Same retype as the pre-form: only the RESULT differs, and it was already
+                // computed above against the type the local held before the update.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
             }
             ExprKind::BinaryOp { left, op, right } => {
+                self.infer_type_with_assignment_effects(left, env)?;
                 if matches!(op, BinOp::And | BinOp::Or) {
-                    // PHP evaluates a short-circuit chain left-to-right, so an assignment in an
-                    // earlier operand is visible to every later operand of the same chain (e.g.
-                    // `... && ($w = strspn(...)) < n && '#' !== $line[$w]`). The chain is
-                    // left-associative, so the naive "clone the env for the right operand" approach
-                    // hides a nested operand's assignments from the operands that run after it.
-                    //
-                    // Flatten the chain into its source-order operands instead. Only operands joined
-                    // by the *same* operator are flattened: in a pure `&&` chain every earlier
-                    // operand definitely ran when a later one runs, and likewise for a pure `||`
-                    // chain (each later operand runs only after the earlier ones evaluated to
-                    // false). Mixing `&&` and `||` is left as a nested boundary, handled by the
-                    // recursive call, so we never treat a conditionally-skipped operand's
-                    // assignment as visible.
-                    //
-                    // The first operand always runs, so it is processed into `env` and its ordinary
-                    // assignments stay definitely-assigned past the chain. The remaining operands
-                    // are threaded through a single cloned `chain_env` for left-to-right visibility
-                    // without leaking their (conditionally evaluated) assignments to the outer
-                    // scope. By-reference call outputs in later operands are still surfaced to `env`,
-                    // matching PHP's non-flow-sensitive undefined-variable behavior for out-params.
-                    let mut operands = Vec::new();
-                    flatten_short_circuit_operands(expr, op, &mut operands);
-                    // Thread `chain_env` left-to-right so each operand is checked with the
-                    // assignments AND the type-guard narrowings implied by the operands that ran
-                    // before it. The first operand runs unconditionally, so it is inferred into
-                    // `env` (its definite assignments survive the chain); `chain_env` is then
-                    // re-cloned from `env` and every later operand mutates only `chain_env`.
-                    let mut chain_env = env.clone();
-                    for (i, &operand) in operands.iter().enumerate() {
-                        if i == 0 {
-                            self.infer_type_with_assignment_effects(operand, env)?;
-                            chain_env = env.clone();
-                        } else {
-                            self.infer_type_with_assignment_effects(operand, &mut chain_env)?;
-                            self.define_nested_by_ref_outputs(operand, env);
-                        }
-                        // Short-circuit type-guard narrowing: in a pure `&&` chain a later operand
-                        // runs only when this one was truthy, so a recognized type guard here
-                        // narrows its variable to the guard-true (`then_ty`) type for the operands
-                        // that follow; in a pure `||` chain a later operand runs only when this one
-                        // was falsy, so the guard-false (`else_ty`) complement applies. The narrowing
-                        // is read from and written to `chain_env` so repeated guards refine
-                        // cumulatively (e.g. `$x instanceof A && $x instanceof B`) and a variable
-                        // reassigned by an earlier operand is seen at its post-assignment type. This
-                        // runs for the FIRST operand too, which is frequently the guard itself
-                        // (`$q instanceof CQ && $q->m()`). Narrowing stays inside `chain_env`; the
-                        // `or_insert` surfacing below never overwrites an outer-scope type, so it
-                        // does not leak past the chain.
-                        if let Some(g) = self.guard_narrowing(operand, &chain_env)? {
-                            let narrowed = if matches!(op, BinOp::And) {
-                                g.then_ty
-                            } else {
-                                g.else_ty
-                            };
-                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
-                            // same narrowing for the operands that follow in the chain.
-                            for alias in &g.aliases {
-                                chain_env.insert(alias.clone(), narrowed.clone());
-                            }
-                            chain_env.insert(g.var, narrowed);
-                        }
-                    }
-                    // Surface ordinary assignments made in later (conditionally-evaluated) operands
-                    // to the outer scope, mirroring the by-ref-output surfacing above and PHP's
-                    // non-flow-sensitive undefined-variable behavior: a variable first assigned in a
-                    // `&&`/`||` operand is usable after the chain (e.g. `... && ($u = 5) > 0` then
-                    // read `$u`). `or_insert` only DEFINES a currently-undefined variable — it never
-                    // overwrites an existing type, so the flow-sensitive narrowing threaded through
-                    // `chain_env` for variables that already existed does not leak to the outer scope.
-                    //
-                    // Synthetic narrowing keys are the exception that argument does not cover: a
-                    // member-path fact (`\x01prop\x01$this->application`) is absent from the outer
-                    // environment *by construction*, so `or_insert` would INSERT it and the chain's
-                    // narrowing would outlive the `if` it was proved in — the statement checker's
-                    // save/restore then faithfully restores the already-leaked type. Skip them; a
-                    // genuine member fact is re-derived per branch by `guard_narrowing`.
-                    for (var, ty) in chain_env {
-                        if Self::is_synthetic_narrowing_key(&var) {
-                            continue;
-                        }
-                        env.entry(var).or_insert(ty);
-                    }
+                    let mut right_env = env.clone();
+                    self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
-                    self.infer_type_with_assignment_effects(left, env)?;
                     self.infer_type_with_assignment_effects(right, env)?;
                     self.infer_type(expr, env)
                 }
             }
             ExprKind::NullCoalesce { value, default } => {
-                let value_ty =
-                    if let ExprKind::PropertyAccess { object, property } = &value.kind {
-                        self.infer_type_with_assignment_effects(object, env)?;
-                        self.infer_property_null_coalesce_type(
-                            object,
-                            property,
-                            value,
-                            env,
-                        )?
-                    } else {
-                        self.infer_type_with_assignment_effects(value, env)?
-                    };
+                // `$neverDefined ?? $d` is a null probe: PHP answers `$d` without an
+                // undefined-variable warning, so the left chain root reads as `null`.
+                let probe = null_probe::begin_null_probe_root(self, value, env);
+                let value_ty = self.infer_null_probe_operand_with_effects(value, env);
+                null_probe::end_null_probe_root(probe, env);
+                let value_ty = value_ty?;
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let default_ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
+                    default_ty
                 };
                 let non_null_value = if Self::union_contains_void(&value_ty) {
                     self.strip_void_from_union(&value_ty)
@@ -258,6 +145,7 @@ impl Checker {
                 } else {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
                 self.infer_type(expr, env)
@@ -275,39 +163,19 @@ impl Checker {
                 let mut then_env = env.clone();
                 let mut else_env = env.clone();
                 if let Some(guard) = guard {
-                    then_env.insert(guard.var.clone(), guard.then_ty.clone());
-                    else_env.insert(guard.var.clone(), guard.else_ty.clone());
-                    // Assignment-receiver aliases (`$f = $src`) share the value and take the same
-                    // then/else narrowing.
-                    for alias in &guard.aliases {
-                        then_env.insert(alias.clone(), guard.then_ty.clone());
-                        else_env.insert(alias.clone(), guard.else_ty.clone());
-                    }
+                    then_env.insert(guard.var.clone(), guard.then_ty);
+                    else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty =
-                    self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                let else_ty =
-                    self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                // By-reference call outputs in the cloned branches define their out-parameters
-                // for later code, mirroring PHP's undefined-variable behavior.
-                self.define_nested_by_ref_outputs(then_expr, env);
-                self.define_nested_by_ref_outputs(else_expr, env);
-                // Merge with the same Mixed-aware join as `infer_type`'s ternary arm, computed
-                // directly from the (narrowed) branch inferences: re-inferring the whole ternary
-                // through the plain path would drop the short-circuit chain narrowing threaded
-                // through the condition and falsely reject guarded member calls.
-                Ok(super::merge_match_arm_result_type(self, then_ty, else_ty))
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                merge_array_storage_effects(env, &then_env);
+                merge_array_storage_effects(&mut else_env, &then_env);
+                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                merge_array_storage_effects(env, &else_env);
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
-                    if let ExprKind::Spread(inner) = &elem.kind {
-                        // The enclosing array-literal inference owns spread validation because it
-                        // can insert the gradual runtime array guard. Preserve source-order effects
-                        // here without applying the stricter call/general-spread rule to the child.
-                        self.infer_type_with_assignment_effects(inner, env)?;
-                    } else {
-                        self.infer_type_with_assignment_effects(elem, env)?;
-                    }
+                    self.infer_type_with_assignment_effects(elem, env)?;
                 }
                 self.infer_type(expr, env)
             }
@@ -324,90 +192,30 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
-                // PHP evaluates match arm conditions top-to-bottom in one shared scope, so an
-                // assignment in one arm's condition (e.g. `($len = $n) > 100 => ...`) is visible
-                // to the conditions of every later arm (`$len < 10 => ...`) and to the matching
-                // arm's body. Thread one `condition_env` through all arm conditions in source
-                // order to model that, instead of giving each arm a fresh clone of the outer env
-                // (which is what regressed cross-arm visibility). Each arm body sees the
-                // conditions evaluated up to and including its own arm, but body assignments stay
-                // in a per-arm clone so they do not leak to sibling arms (only one body runs).
-                // Condition assignments are not surfaced to the outer `env`, keeping post-match
-                // definite-assignment conservative. The result type still comes from the
-                // Mixed-aware merge in `infer_type` (given the same accumulated env) rather than
-                // the Str-absorbing syntactic join.
-                let narrows_between_arms =
-                    matches!(subject.kind, ExprKind::BoolLiteral(true));
-                let mut condition_env = env.clone();
-                let mut result_ty: Option<PhpType> = None;
                 for (conditions, result) in arms {
-                    let mut arm_env = if narrows_between_arms && conditions.len() == 1 {
-                        let condition = &conditions[0];
-                        self.infer_type_with_assignment_effects(
-                            condition,
-                            &mut condition_env,
-                        )?;
-                        if let Some(guard) = self.guard_narrowing(condition, &condition_env)? {
-                            let mut narrowed_env = condition_env.clone();
-                            narrowed_env.insert(guard.var.clone(), guard.then_ty.clone());
-                            condition_env.insert(guard.var.clone(), guard.else_ty.clone());
-                            // Assignment-receiver aliases (`$f = $src`) share the value and take the
-                            // same then/else narrowing.
-                            for alias in &guard.aliases {
-                                narrowed_env.insert(alias.clone(), guard.then_ty.clone());
-                                condition_env.insert(alias.clone(), guard.else_ty.clone());
-                            }
-                            narrowed_env
-                        } else {
-                            let mut narrowed_env = condition_env.clone();
-                            for (var, then_ty) in
-                                self.and_chain_then_narrowings(condition, &condition_env)
-                            {
-                                narrowed_env.insert(var, then_ty);
-                            }
-                            narrowed_env
-                        }
-                    } else {
-                        for condition in conditions {
-                            self.infer_type_with_assignment_effects(
-                                condition,
-                                &mut condition_env,
-                            )?;
-                        }
-                        condition_env.clone()
-                    };
-                    let ty = super::normalize_match_arm_result_type(
-                        result,
-                        self.infer_type_with_assignment_effects(result, &mut arm_env)?,
-                    );
-                    result_ty = Some(match result_ty {
-                        Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
+                    let mut arm_env = env.clone();
+                    for condition in conditions {
+                        self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
+                    }
+                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    merge_array_storage_effects(env, &arm_env);
                 }
                 if let Some(default) = default {
-                    let mut default_env = condition_env.clone();
-                    let ty = super::normalize_match_arm_result_type(
-                        default,
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?,
-                    );
-                    result_ty = Some(match result_ty {
-                        Some(acc) => super::merge_match_arm_result_type(self, acc, ty),
-                        None => ty,
-                    });
+                    let mut default_env = env.clone();
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
-                Ok(result_ty.unwrap_or(PhpType::Void))
+                // Result type comes from the Mixed-aware match merge in `infer_type`
+                // (assignment effects must not reintroduce the Str-absorbing syntactic join).
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
                 self.infer_type_with_assignment_effects(index, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::Not(inner) => {
-                self.infer_type_with_assignment_effects(inner, env)?;
-                Ok(PhpType::Bool)
-            }
             ExprKind::Negate(inner)
+            | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)
             | ExprKind::ErrorSuppress(inner)
@@ -422,49 +230,12 @@ impl Checker {
             }
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                let mut evaluated_arg_types = Vec::new();
-                // A user function with a by-reference parameter defines the caller's argument
-                // variable, just like the builtin out-parameter handling below. Define such
-                // variables before inferring the arguments so the (otherwise undefined)
-                // by-reference variable is not reported as "Undefined variable".
-                for (var, ty) in self.function_call_by_ref_outputs(name, &expanded_args, env) {
-                    env.entry(var).or_insert(ty);
-                }
-                // Promote already-defined caller variables whose storage cannot hold the
-                // boxed/nullable value a by-reference parameter may write back.
-                for (var, ty) in
-                    self.function_call_by_ref_boxed_promotions(name, &expanded_args, env)
-                {
-                    env.insert(var, ty);
-                }
                 let builtin_name = name.trim_start_matches('\\');
-                // A builtin by-reference out-parameter auto-vivifies the caller's variable (PHP
-                // definite-assignment semantics), mirroring the user-function path above. Define
-                // such variables BEFORE inferring the call so the variable stays defined even when
-                // the call's own inference recovers from an error.
-                //
-                // `builtin_call_by_ref_outputs` returns only entries that must be applied: an
-                // as-yet-undefined var (any by-ref param) OR an already-defined var bound to an
-                // OUT-ONLY param (preg_match/preg_match_all `$matches`, preg_replace/
-                // preg_replace_callback `$count`), which PHP overwrites wholesale. Using `insert`
-                // (not `or_insert`) therefore re-types the aliased subject-as-out-param shape
-                // `preg_match_all(…, $s, $s)` while leaving IN-OUT params untouched.
-                for (var, out_ty) in
-                    Checker::builtin_call_by_ref_outputs(builtin_name, &expanded_args, env)
-                {
-                    env.insert(var, out_ty);
-                }
-                // Builtin by-reference out-parameter positions come from the canonical
-                // signature's `ref_params` (preg_match/preg_match_all &$matches, preg_replace
-                // &$count, parse_str &$result, proc_open &$pipes, ...): such arguments are not
-                // eagerly inferred here (they may be as-yet undefined) — they were defined in
-                // the caller scope above.
-                let builtin_sig = crate::types::builtin_call_sig(builtin_name);
-                let is_builtin_by_ref = |idx: usize| {
-                    builtin_sig
-                        .as_ref()
-                        .map_or(false, |sig| sig.ref_params.get(idx).copied().unwrap_or(false))
-                };
+                // A write-only by-ref argument is a definition, not a use: PHP auto-vivifies it
+                // to `null` before the call, so reading it below would reject the manual's own
+                // `stream_socket_client($url, $errno, $errstr)` idiom. The same list is what
+                // binds those variables once the call has been checked.
+                let write_only = out_params::write_only_variable_args(builtin_name, &expanded_args);
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -473,84 +244,96 @@ impl Checker {
                     php_symbol_key(builtin_name).as_str(),
                     "isset" | "unset"
                 ) {
+                    // `isset($never)` / `unset($never)` are exactly the constructs PHP provides
+                    // for probing storage that may never have been declared, so a never-declared
+                    // chain root reads as `null` for the operand.
                     for arg in &expanded_args {
-                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
+                        let probe = null_probe::begin_null_probe_root(self, arg, env);
+                        let effects = self.infer_non_reading_arg_assignment_effects(arg, env);
+                        null_probe::end_null_probe_root(probe, env);
+                        effects?;
                     }
                 } else if !builtin_name.eq_ignore_ascii_case("unset") {
+                    // `empty()` shares that tolerance, but its operand is still read (PHP
+                    // consults `__isset` then `__get`), so it stays on the eager path with only
+                    // the probe binding added.
+                    let is_empty = php_symbol_key(builtin_name) == "empty";
+                    // An array-callback builtin types its callback's unannotated parameters
+                    // from the array element/key inside `check_builtin`. Skip that argument
+                    // here: the eager pass would otherwise check the closure body against the
+                    // unhinted parameter fallback and reject valid PHP such as
+                    // `array_filter($strings, fn($v) => strlen($v) > 5)`.
+                    let contextual_callbacks =
+                        crate::types::checker::builtins::contextual_callback_arg_positions(
+                            builtin_name,
+                        );
                     for (idx, arg) in expanded_args.iter().enumerate() {
-                        if is_builtin_by_ref(idx) {
+                        if contextual_callbacks.contains(&idx) {
                             continue;
                         }
-                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
-                            continue;
-                        }
-                        // The user-sort comparator is type-checked by `check_builtin`
-                        // with its parameters typed from the array element (so an
-                        // unannotated object comparator type-checks). Skip the eager
-                        // pass here, which would otherwise check the comparator body
-                        // with default `Int` parameters and reject object access.
-                        if idx == 1
-                            && (builtin_name.eq_ignore_ascii_case("usort")
-                                || builtin_name.eq_ignore_ascii_case("uasort")
-                                || builtin_name.eq_ignore_ascii_case("uksort"))
+                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                            || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
+                                && is_openssl_encrypt_tag_arg(arg, idx))
                         {
                             continue;
                         }
-                        let arg_ty = self.infer_type_with_assignment_effects(arg, env)?;
-                        if arg.span.line != 0 {
-                            evaluated_arg_types.push((
-                                arg.span,
-                                super::super::super::EvaluatedExprType {
-                                    kind: std::mem::discriminant(&arg.kind),
-                                    ty: arg_ty.clone(),
-                                },
-                            ));
+                        if write_only.iter().any(|out| out.index == idx) {
+                            continue;
                         }
-                        if let ExprKind::NamedArg { value, .. } = &arg.kind {
-                            if value.span.line != 0 {
-                                evaluated_arg_types.push((
-                                    value.span,
-                                    super::super::super::EvaluatedExprType {
-                                        kind: std::mem::discriminant(&value.kind),
-                                        ty: arg_ty,
-                                    },
-                                ));
-                            }
+                        if is_empty {
+                            let probe = null_probe::begin_null_probe_root(self, arg, env);
+                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            null_probe::end_null_probe_root(probe, env);
+                            effects?;
+                            continue;
                         }
+                        self.infer_type_with_assignment_effects(arg, env)?;
                     }
                 }
-                // Argument values are captured in source order before the callee runs. Revalidating
-                // the complete call must therefore reuse those evaluated types rather than
-                // re-reading an earlier property receiver after a nested argument call purged its
-                // flow fact. Span-keyed entries are temporary and restored even when validation
-                // reports an error, so nested calls compose without leaking cached types.
-                let mut previous_types = Vec::with_capacity(evaluated_arg_types.len());
-                for (span, ty) in evaluated_arg_types {
-                    previous_types.push((span, self.evaluated_expr_types.insert(span, ty)));
-                }
-                let inferred = self.infer_type(expr, env);
-                for (span, previous) in previous_types.into_iter().rev() {
-                    if let Some(previous) = previous {
-                        self.evaluated_expr_types.insert(span, previous);
-                    } else {
-                        self.evaluated_expr_types.remove(&span);
-                    }
-                }
-                let ty = inferred?;
+                let ty = self.infer_type(expr, env)?;
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
+                if builtin_name.eq_ignore_ascii_case("preg_match") {
+                    if let Some(arg) = expanded_args.get(2) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
+                        }
+                    }
+                }
+                // Bind each write-only by-ref argument to the type the builtin writes. Going
+                // through the ordinary assignment merge means a variable already holding an
+                // incompatible type reports elephc's own reassignment error rather than having
+                // the runtime write an int into, say, a string slot.
+                for out in &write_only {
+                    crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(
+                        self, &out.variable, &out.written, out.span, env,
+                    )?;
+                }
+                if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
+                    if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Str);
+                        }
+                    }
+                }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
                         promote_indexed_local_for_element_unset(arg, env);
                     }
                 }
+                promote_indexed_local_for_key_preserving_sort(
+                    builtin_name,
+                    &expanded_args,
+                    &self.active_ref_params,
+                    env,
+                );
                 if builtin_name.eq_ignore_ascii_case("eval") {
                     self.mark_eval_barrier(env);
                 }
                 Ok(ty)
             }
-            ExprKind::NewObject { args, .. } => {
+            ExprKind::NewObject { args, .. } | ExprKind::StaticMethodCall { args, .. } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
@@ -559,61 +342,8 @@ impl Checker {
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
-            ExprKind::StaticMethodCall {
-                receiver,
-                method,
-                args,
-            } => {
-                let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                // A static method with a by-reference parameter (e.g. the yaml
-                // `Parser::preg_match($re, $value, $match)` shape) defines the caller's argument
-                // variable. Define such variables before inferring the arguments so the
-                // by-reference variable is not reported as "Undefined variable".
-                for (var, ty) in
-                    self.static_method_call_by_ref_outputs(receiver, method, &expanded_args, env)
-                {
-                    env.entry(var).or_insert(ty);
-                }
-                // Promote already-defined caller variables whose storage cannot hold the
-                // boxed/nullable value a by-reference parameter may write back.
-                for (var, ty) in self.static_method_call_by_ref_boxed_promotions(
-                    receiver,
-                    method,
-                    &expanded_args,
-                    env,
-                ) {
-                    env.insert(var, ty);
-                }
-                // `Closure::bind($closure, $newThis, $scope)`: the closure literal's body is
-                // type-checked here (assignment-effects walk), before the static-call inference
-                // runs, so the rebound-scope visibility relaxation must be applied at THIS point
-                // too — mirroring `infer_static_method_call_type_with_options`.
-                let scope_ctx = if self.is_closure_bind_static_call(receiver, method) {
-                    self.closure_bind_scope_context(&expanded_args, env)
-                } else {
-                    None
-                };
-                for (index, arg) in expanded_args.iter().enumerate() {
-                    if index == 0 && scope_ctx.is_some() {
-                        let saved = self.enter_bound_scope_context(scope_ctx.clone());
-                        let result = self.infer_type_with_assignment_effects(arg, env);
-                        self.exit_bound_scope_context(saved);
-                        result?;
-                    } else {
-                        self.infer_type_with_assignment_effects(arg, env)?;
-                    }
-                }
-                let ty = self.infer_type(expr, env)?;
-                Self::purge_property_narrowings(env);
-                Ok(ty)
-            }
             ExprKind::ClosureCall { var, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                for (output, ty) in
-                    self.callable_variable_by_ref_outputs(var, &expanded_args, env)
-                {
-                    env.entry(output).or_insert(ty);
-                }
                 let skip_contextual_callback =
                     self.variable_targets_preg_replace_callback(var.as_str());
                 for (idx, arg) in expanded_args.iter().enumerate() {
@@ -629,13 +359,6 @@ impl Checker {
             ExprKind::ExprCall { callee, args } => {
                 self.infer_type_with_assignment_effects(callee, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                if let ExprKind::Variable(var) = &callee.kind {
-                    for (output, ty) in
-                        self.callable_variable_by_ref_outputs(var, &expanded_args, env)
-                    {
-                        env.entry(output).or_insert(ty);
-                    }
-                }
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {
@@ -673,58 +396,13 @@ impl Checker {
                 method,
                 args,
             } => {
-                let object_type = self.infer_type_with_assignment_effects(object, env)?;
-                let evaluated_property_receiver = match &object.kind {
-                    ExprKind::PropertyAccess {
-                        object: root,
-                        property,
-                    }
-                    | ExprKind::NullsafePropertyAccess {
-                        object: root,
-                        property,
-                    } => Self::narrowed_property_env_key(root, property)
-                        .map(|key| (key, object_type.clone())),
-                    _ => None,
-                };
+                self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                // An instance method with a by-reference parameter defines the caller's argument
-                // variable. Define such variables before inferring the arguments so the
-                // by-reference variable is not reported as "Undefined variable".
-                for (var, ty) in
-                    self.method_call_by_ref_outputs(&object_type, method, &expanded_args, env)
-                {
-                    env.entry(var).or_insert(ty);
-                }
-                // Promote already-defined caller variables whose storage cannot hold the
-                // boxed/nullable value a by-reference parameter may write back.
-                for (var, ty) in
-                    self.method_call_by_ref_boxed_promotions(&object_type, method, &expanded_args, env)
-                {
-                    env.insert(var, ty);
-                }
+                self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
-                // PHP evaluates the receiver before the arguments. An argument call may purge
-                // property facts because it can mutate reachable state, but that cannot change
-                // the receiver value already captured for this outer call. Reinstall only that
-                // receiver's evaluated type while validating the call, then restore the
-                // post-argument environment before applying the outer call's own invalidation.
-                let ty = if let Some((key, evaluated_type)) = evaluated_property_receiver {
-                    let post_arg_fact = env.insert(key.clone(), evaluated_type);
-                    let result = self.infer_type(expr, env);
-                    match post_arg_fact {
-                        Some(ty) => {
-                            env.insert(key, ty);
-                        }
-                        None => {
-                            env.remove(&key);
-                        }
-                    }
-                    result?
-                } else {
-                    self.infer_type(expr, env)?
-                };
+                let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
@@ -753,22 +431,6 @@ impl Checker {
                 let ty = self.infer_type(expr, env)?;
                 Self::purge_property_narrowings(env);
                 Ok(ty)
-            }
-            ExprKind::Closure { capture_refs, .. } => {
-                // A by-reference capture (`use (&$x)`) always binds `$x` in the enclosing scope,
-                // auto-vivifying it to null; PHP never warns on it (unlike a by-value `use($x)` of
-                // an undefined variable). Record each as an assignment effect so a later read of
-                // the captured variable is not flagged "Undefined variable".
-                for capture in capture_refs {
-                    env.entry(capture.clone()).or_insert(PhpType::Mixed);
-                }
-                self.infer_type(expr, env)
-            }
-            ExprKind::InstanceOf { value, .. } => {
-                // The left operand of `instanceof` is always evaluated, so an assignment inside it
-                // (`($x = f()) instanceof T`) defines its target; collect those effects.
-                self.infer_type_with_assignment_effects(value, env)?;
-                self.infer_type(expr, env)
             }
             _ => self.infer_type(expr, env),
         }
@@ -825,6 +487,40 @@ impl Checker {
             .is_some_and(callable_target_is_preg_replace_callback)
     }
 
+    /// Widens PDO binding destinations before by-reference signature validation.
+    fn promote_pdo_binding_ref_storage(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        if !type_may_be_pdo_statement(&object_ty) {
+            return Ok(());
+        }
+        let parameter_name = match crate::names::php_symbol_key(method).as_str() {
+            "bindparam" => "variable",
+            "bindcolumn" => "var",
+            _ => return Ok(()),
+        };
+        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+        let Some(Expr {
+            kind: ExprKind::Variable(name),
+            ..
+        }) = argument
+        else {
+            return Ok(());
+        };
+        env.insert(name.clone(), PhpType::Mixed);
+        Ok(())
+    }
+
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
         self.eval_barrier_active = true;
@@ -839,6 +535,29 @@ impl Checker {
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }
+    }
+}
+
+/// Returns whether a receiver type may contain a PDOStatement instance.
+fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
+        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
+        _ => false,
+    }
+}
+
+/// Merges array layout conversions from a conditional expression arm into its outer environment.
+fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
+    let converted = branch_env
+        .iter()
+        .filter_map(|(name, branch_ty)| {
+            let converted = crate::types::array_storage_conversion(env.get(name), branch_ty)?;
+            Some((name.clone(), converted))
+        })
+        .collect::<Vec<_>>();
+    for (name, converted) in converted {
+        env.insert(name, converted);
     }
 }
 
@@ -859,6 +578,97 @@ fn assignment_may_write_property(target: &Expr) -> bool {
         ExprKind::ArrayAccess { array, .. } => assignment_may_write_property(array),
         _ => true,
     }
+}
+
+/// Returns the variable name used by a builtin output argument.
+fn output_variable(arg: &Expr) -> Option<&String> {
+    match &arg.kind {
+        ExprKind::Variable(name) => Some(name),
+        ExprKind::NamedArg { value, .. } => output_variable(value),
+        _ => None,
+    }
+}
+
+/// Returns true when one source-order argument is OpenSSL encrypt's by-reference tag.
+fn is_openssl_encrypt_tag_arg(arg: &Expr, index: usize) -> bool {
+    match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name) == "tag",
+        _ => index == 5,
+    }
+}
+
+/// Finds OpenSSL encrypt's tag argument across positional and reordered named calls.
+fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
+    args.iter()
+        .find(|arg| {
+            matches!(
+                &arg.kind,
+                ExprKind::NamedArg { name, .. } if php_symbol_key(name) == "tag"
+            )
+        })
+        .or_else(|| {
+            args.get(5)
+                .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        })
+}
+
+/// Promotes a packed indexed-array local to an int-keyed hash when a KEY-PRESERVING sort mutates
+/// it through its by-reference receiver.
+///
+/// php sorts with `zend_array_sort(Z_ARRVAL_P(array), <comparator>, renumber)`
+/// (ext/standard/array.c). `sort()` and `usort()` pass `renumber = 1`; `natsort()` and
+/// `natcasesort()` pass `0`, so only the iteration order moves and every key stays attached to its
+/// own value — measured, `php -n -r '$n=["img12","img2"]; natsort($n); echo json_encode($n);'`
+/// prints `{"1":"img2","0":"img12"}`. A packed array stores its keys implicitly as slot positions
+/// `0..n-1` and has nowhere to put that permutation, so the receiver's STORAGE has to become a
+/// hash; re-typing the local as `AssocArray<Int, T>` is what makes the lowering emit
+/// `Op::ArrayToHash` for it and what makes every later read of the local — `foreach`,
+/// `json_encode`, `$n[0]`, `count` — go through the hash view the runtime now holds. Which
+/// receivers move is `crate::types::key_preserving_sort_promotes`, the SAME predicate the lowering
+/// applies; splitting that decision in two is how a local ends up with the checker and the backend
+/// compiling its reads against different storage.
+///
+/// This is the ARGUMENT-DEPENDENT counterpart of `ParamSpec::writes`: the written type is not a
+/// fixed `TypeSpec` but a function of the argument's own type (the element type carries over), and
+/// the parameter is in-out rather than write-only. `promote_indexed_local_for_element_unset` is the
+/// same shape one construct over — `unset($a[$k])` also re-types a local from `Array(T)` to
+/// `AssocArray` because php's own semantics leave the array unable to stay packed — and this
+/// re-uses that shape rather than adding a second retyping mechanism to the registry.
+///
+/// A local that ALIASES someone else's storage — `$s = &$r`, a `&$a` parameter — is left alone.
+/// Converting one rewrites the storage the alias points at while every OTHER name for it stays
+/// compiled against the packed layout, which reads the hash header as elements: measured,
+/// `$r = ["img12","img2"]; $s = &$r; natsort($s); json_encode($r)` printed `[5,0]`. The lowering
+/// skips the same locals through `is_ref_bound_local`, so neither side promotes storage the other
+/// would not.
+fn promote_indexed_local_for_key_preserving_sort(
+    builtin_name: &str,
+    args: &[Expr],
+    ref_bound: &std::collections::HashSet<String>,
+    env: &mut TypeEnv,
+) {
+    let [arg] = args else {
+        return;
+    };
+    let Some(name) = output_variable(arg) else {
+        return;
+    };
+    if ref_bound.contains(name) {
+        return;
+    }
+    let Some(PhpType::Array(elem_ty)) = env.get(name).cloned() else {
+        return;
+    };
+    if !crate::types::key_preserving_sort_promotes(builtin_name, &elem_ty) {
+        return;
+    }
+    env.insert(
+        name.clone(),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem_ty,
+        },
+    );
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is
@@ -900,28 +710,4 @@ fn promote_indexed_local_for_element_unset(arg: &Expr, env: &mut TypeEnv) {
             value: Box::new(value_ty),
         },
     );
-}
-
-/// Collects, in source order, the operands of a left-associative short-circuit chain joined by `op`.
-///
-/// `op` is the chain's logical operator (`&&` or `||`). The function recurses into nested
-/// `BinaryOp` nodes only while they use the *same* operator, appending every other expression as a
-/// leaf operand. Mixing `&&` and `||` therefore stops the flattening at the operator boundary: a
-/// differently-joined sub-expression becomes a single leaf, so a conditionally-skipped operand's
-/// assignments are never threaded into operands that run after it. The resulting order matches
-/// PHP's left-to-right evaluation order, which the caller relies on for definite-assignment.
-fn flatten_short_circuit_operands<'a>(expr: &'a Expr, op: &BinOp, out: &mut Vec<&'a Expr>) {
-    if let ExprKind::BinaryOp {
-        left,
-        op: inner_op,
-        right,
-    } = &expr.kind
-    {
-        if inner_op == op {
-            flatten_short_circuit_operands(left, op, out);
-            flatten_short_circuit_operands(right, op, out);
-            return;
-        }
-    }
-    out.push(expr);
 }

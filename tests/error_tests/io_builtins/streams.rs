@@ -18,8 +18,6 @@ fn test_error_var_dump_wrong_args() {
 /// Verifies print_r() produces correct error when called with no arguments.
 #[test]
 fn test_error_print_r_wrong_args() {
-    // print_r() gained an optional $return param since 3a2bb667a; zero args
-    // is still invalid (value is required), just with a "1 or 2" message now.
     expect_error("<?php print_r();", "print_r() takes 1 or 2 arguments");
 }
 
@@ -74,7 +72,8 @@ fn test_error_fwrite_requires_resource_handle() {
 /// Verifies fgets() produces correct error when called with no arguments.
 #[test]
 fn test_error_fgets_wrong_args() {
-    expect_error("<?php fgets();", "fgets() takes exactly 1 argument");
+    // `fgets()` carries PHP's optional `$length`, so the arity it reports is a range.
+    expect_error("<?php fgets();", "fgets() takes 1 or 2 arguments");
 }
 
 /// Verifies fgets() produces correct error when passed an int instead of a resource.
@@ -158,6 +157,20 @@ fn test_error_formatted_stream_io_wrong_args() {
     }
 }
 
+/// Regression: `fscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+///
+/// Measured with `php -n` (8.5.6): `fscanf($f, "%s %d", $name, $age)` assigns both variables and
+/// returns `int(2)`. This backend compiled the call, returned the matched-fields ARRAY, and
+/// assigned nothing — the same silent double divergence `sscanf()` had, on the same cause: the
+/// contract's `variadic: Some("vars")` is a bare NAME carrying no by-ref marker.
+#[test]
+fn test_error_fscanf_by_ref_vars_form_is_refused() {
+    expect_error(
+        r#"<?php $name = "unset"; $age = -1; fscanf(STDIN, "%s %d", $name, $age);"#,
+        "fscanf(): the by-ref $vars output form is not supported",
+    );
+}
+
 /// Verifies tmpfile() produces correct error when called with an argument.
 #[test]
 fn test_error_tmpfile_wrong_args() {
@@ -170,18 +183,16 @@ fn test_error_tmpfile_rejects_nonempty_static_spread() {
     expect_error("<?php tmpfile(...[1]);", "tmpfile() takes no arguments");
 }
 
-/// Verifies returning `fgetc()` (typed `Str|False`) from a `: string` function is ACCEPTED under
-/// PHP weak-mode `string`-boundary coercion: the boxed-`Mixed` return boundary runs
-/// `__rt_mixed_cast_string`, which maps the `false` EOF marker to `""` (matching non-`strict_types`
-/// PHP), so it flows into the scalar `string` return instead of erroring.
+/// Verifies a function with string return type annotation produces an error when returning fgetc() which can return false.
 #[test]
-fn test_fgetc_false_return_coerces_into_string_return_type() {
-    expect_ok(
+fn test_error_fgetc_false_return_rejects_string_return_type() {
+    expect_error(
         r#"<?php
 function read_char(): string {
     return fgetc(STDIN);
 }
 "#,
+        "Function 'read_char' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -431,7 +442,7 @@ fn test_error_stream_context_and_bucket_wrong_args() {
 fn test_error_stream_socket_server_wrong_args() {
     expect_error(
         "<?php stream_socket_server();",
-        "stream_socket_server() takes exactly 1 argument",
+        "stream_socket_server() takes 1 to 5 arguments",
     );
 }
 
@@ -441,16 +452,6 @@ fn test_error_stream_socket_client_wrong_args() {
     expect_error(
         "<?php stream_socket_client();",
         "stream_socket_client() takes 1 to 6 arguments",
-    );
-}
-
-/// Verifies that a non-variable `$error_code` argument is rejected, as PHP requires an lvalue
-/// for the by-reference out-param.
-#[test]
-fn test_error_stream_socket_client_error_code_not_variable() {
-    expect_error(
-        r#"<?php stream_socket_client("tcp://127.0.0.1:1", 0);"#,
-        "stream_socket_client() parameter $error_code must be passed a variable",
     );
 }
 
@@ -685,6 +686,21 @@ fn test_error_stream_bucket_prepend_wrong_args() {
     );
 }
 
+/// Verifies the arity diagnostic for `stream_bucket_append()` (exactly 2 args).
+#[test]
+fn test_error_stream_bucket_append_wrong_args() {
+    expect_error(
+        "<?php stream_bucket_append(1);",
+        "stream_bucket_append() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies `pfsockopen()` requires a hostname and port and accepts at most five arguments.
+#[test]
+fn test_error_pfsockopen_wrong_args() {
+    expect_error("<?php pfsockopen(\"localhost\");", "pfsockopen() takes 2 to 5 arguments");
+}
+
 // stream_filter_append() with an unknown filter name no longer fails at
 // compile time: unknown built-in names are routed through the user-filter
 // registry (Phase 10 tier 3), and an unregistered name resolves to PHP
@@ -800,12 +816,18 @@ fn test_error_stream_socket_recvfrom_address_not_variable() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream socket recvfrom address not string.
+/// Verifies a variable of the wrong type in the `$address` output position is rejected.
+///
+/// The diagnostic is now elephc's ordinary reassignment error rather than a message
+/// `stream_socket_recvfrom()` spelled out for itself: `$address` is declared `ref(Str)`, so the
+/// call binds the variable to `string` through the normal assignment merge. That is what makes
+/// the SLOT a string wherever the runtime writes one, and it is the same diagnostic every other
+/// by-reference output gives for the same mistake.
 #[test]
 fn test_error_stream_socket_recvfrom_address_not_string() {
     expect_error(
         "<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);",
-        "stream_socket_recvfrom() parameter $address must be a string",
+        "cannot reassign $n from int to string",
     );
 }
 
@@ -855,15 +877,27 @@ fn test_error_pclose_requires_resource() {
 }
 
 /// Verifies the invalid-call diagnostic for error opendir wrong args.
+///
+/// The wording follows the signature: php declares `opendir(string $directory, $context = null)`,
+/// so since `$context` landed the range is 1 or 2, not exactly 1.
 #[test]
 fn test_error_opendir_wrong_args() {
-    expect_error("<?php opendir();", "opendir() takes exactly 1 argument");
+    expect_error("<?php opendir();", "opendir() takes 1 or 2 arguments");
 }
 
 /// Verifies the invalid-call diagnostic for error readdir wrong args.
+///
+/// This test used to pin `readdir()` — the NO-argument form — as the refusal, which pinned a
+/// bug: php declares `readdir(?resource $dir_handle = null)` and runs the handle-less call
+/// against the last opened directory stream. The only arity php refuses is the second argument,
+/// with `ArgumentCountError: readdir() expects at most 1 argument, 2 given` (MEASURED on
+/// `php -n` 8.5.6); elephc says the same thing in its own house phrasing, at compile time.
 #[test]
 fn test_error_readdir_wrong_args() {
-    expect_error("<?php readdir();", "readdir() takes exactly 1 argument");
+    expect_error(
+        "<?php $h = opendir('.'); readdir($h, $h);",
+        "readdir() takes at most 1 argument",
+    );
 }
 
 /// Verifies the invalid-call diagnostic for error readdir requires resource.
@@ -879,9 +913,15 @@ fn test_error_closedir_requires_resource() {
 }
 
 /// Verifies the invalid-call diagnostic for error rewinddir wrong args.
+///
+/// `$dir_handle` is optional here too, so — as for `readdir()` — only a SECOND argument is out
+/// of range: `ArgumentCountError: rewinddir() expects at most 1 argument, 2 given`.
 #[test]
 fn test_error_rewinddir_wrong_args() {
-    expect_error("<?php rewinddir();", "rewinddir() takes exactly 1 argument");
+    expect_error(
+        "<?php $h = opendir('.'); rewinddir($h, $h);",
+        "rewinddir() takes at most 1 argument",
+    );
 }
 
 /// Verifies the invalid-call diagnostic for error stream select wrong args.

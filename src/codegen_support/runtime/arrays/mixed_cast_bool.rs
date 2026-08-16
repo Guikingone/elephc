@@ -20,7 +20,9 @@ use crate::codegen_support::platform::Arch;
 /// and null/unsupported (falsy). Calls `__rt_mixed_unbox` to拆box the input pointer.
 ///
 /// ABI: ARM64 — input boxed mixed pointer in `x0`, result boolean in `x0`.
-/// ABI: x86_64 — input boxed mixed pointer in `rdi`, result boolean in `rax`.
+/// ABI: x86_64 — input boxed mixed pointer in `rax`, result boolean in `rax`. The input
+/// register is `rax` and not the SysV first argument register because the boxed cell is
+/// forwarded untouched to `__rt_mixed_unbox`, which reads it from `rax`.
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_bool_linux_x86_64(emitter);
@@ -73,6 +75,9 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_bool_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
+    super::emit_nan_bool_coercion_probe(emitter, "__rt_mixed_cast_bool_float_no_nan");
+    // AArch64 `fcmp` reports unordered as `Z=0`, so `ne` already answers true for a NAN,
+    // matching PHP's `(bool)NAN === true`. The x86_64 twin below needs an explicit fixup.
     emitter.instruction("fcmp d0, #0.0");                                       // compare the float payload against zero
     emitter.instruction("cset x0, ne");                                         // floats are truthy when non-zero
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the float truthiness result
@@ -102,9 +107,10 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
 }
 
 /// Emits the `__rt_mixed_cast_bool` runtime helper for the x86_64 Linux target.
-/// Mirrors the ARM64 logic with x86_64 SysV ABI register conventions:
-/// input boxed mixed pointer in `rdi`, result boolean in `rax`.
-/// Uses `__rt_mixed_unbox` to拆box the input before tag-based dispatch.
+/// Mirrors the ARM64 logic: input boxed mixed pointer in `rax`, result boolean in `rax`.
+/// The input arrives in `rax` rather than in `rdi` because it is passed straight through to
+/// `__rt_mixed_unbox`, whose x86_64 input register is `rax`; callers that also set `rdi`
+/// merely happen to leave `rax` live from `load_value_to_first_int_arg`.
 fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_bool ---");
@@ -156,9 +162,14 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_bool_from_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
+    super::emit_nan_bool_coercion_probe(emitter, "__rt_mixed_cast_bool_float_no_nan_linux_x86_64");
     emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a zero floating-point register for the truthiness comparison
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the float payload against zero
-    emitter.instruction("setne al");                                            // floats are truthy when they compare non-equal to zero
+    // `ucomisd` sets ZF for an UNORDERED compare, so a bare `setne` would answer false for a
+    // NAN — the inverse of PHP and of the AArch64 twin above. Fold the parity flag back in.
+    emitter.instruction("setne al");                                            // floats are truthy when they compare ordered-non-equal to zero
+    emitter.instruction("setp r10b");                                           // materialize whether the comparison was unordered (a NAN)
+    emitter.instruction("or al, r10b");                                         // PHP counts NAN as truthy, so merge the unordered case in
     emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the float truthiness result
 

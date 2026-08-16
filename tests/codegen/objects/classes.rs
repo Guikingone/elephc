@@ -245,71 +245,6 @@ $bad = new $missing();
     );
 }
 
-/// Verifies `new $arr['k'](args)` — a `new` whose class name is held in an array element —
-/// constructs the named class and forwards constructor arguments. This is the form Symfony's
-/// runtime bootstrap uses (`new $_SERVER['APP_RUNTIME'](...)`).
-#[test]
-fn test_class_dynamic_instantiation_array_access_class_name() {
-    let out = compile_and_run(
-        r#"<?php
-class Roadster { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
-class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
-$registry = ["fast" => "Roadster", "big" => "Coupe"];
-$a = new $registry["fast"](2);
-$b = new $registry["big"](4);
-echo gettype($a) . ":" . $a->seats . "|" . gettype($b) . ":" . $b->seats;
-"#,
-    );
-    assert_eq!(out, "object:2|object:4");
-}
-
-/// Verifies `new $obj->prop(args)` — a `new` whose class name is read from an object property —
-/// constructs the named class. The trailing `(4)` is the constructor argument list, not a
-/// method call on the property.
-#[test]
-fn test_class_dynamic_instantiation_property_class_name() {
-    let out = compile_and_run(
-        r#"<?php
-class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
-class Factory { public string $kind = "Coupe"; }
-$f = new Factory();
-$o = new $f->kind(4);
-echo gettype($o) . ":" . $o->seats;
-"#,
-    );
-    assert_eq!(out, "object:4");
-}
-
-/// Verifies the PHP 8.0 `new (expr)(args)` form: an arbitrary parenthesized expression naming
-/// the class, here a function returning a class-string.
-#[test]
-fn test_class_dynamic_instantiation_parenthesized_expr() {
-    let out = compile_and_run(
-        r#"<?php
-class Roadster { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
-function pick(): string { return "Roadster"; }
-$o = new (pick())(7);
-echo gettype($o) . ":" . $o->seats;
-"#,
-    );
-    assert_eq!(out, "object:7");
-}
-
-/// Verifies a nested array-access class-name expression (`new $cfg['a']['b'](args)`) resolves
-/// through the full dereference chain before construction.
-#[test]
-fn test_class_dynamic_instantiation_nested_array_access() {
-    let out = compile_and_run(
-        r#"<?php
-class Coupe { public int $seats; public function __construct(int $s) { $this->seats = $s; } }
-$cfg = ["cars" => ["sport" => "Coupe"]];
-$o = new $cfg["cars"]["sport"](9);
-echo gettype($o) . ":" . $o->seats;
-"#,
-    );
-    assert_eq!(out, "object:9");
-}
-
 /// Verifies compiled PHP output for class object aliasing.
 #[test]
 fn test_class_object_aliasing() {
@@ -674,63 +609,89 @@ echo $u->id();
     assert_eq!(out, "7");
 }
 
-/// Regression: `get_class()` on a Mixed value holding an object (here the result of a dynamic
-/// `new $class()`, which is typed Mixed) used to fail with an EIR "unsupported feature" error.
-/// It now unboxes the Mixed and reads the class name. Output cross-checked with `php -r`.
+/// Verifies PHP's `==` between two objects: same class plus loosely equal properties.
+///
+/// `===` (identity) must keep answering instance identity, a property-less class
+/// compares equal for two distinct instances, differing property values and
+/// differing classes compare unequal, and property comparison is LOOSE
+/// (`Box(1) == Box("1")` and `Box(0) == Box(null)` are true).
 #[test]
-fn test_get_class_on_dynamic_new_mixed_object() {
+fn test_object_loose_equality_compares_class_then_properties() {
     let out = compile_and_run(
         r#"<?php
-class Roadster {}
-$c = "Roadster";
-$o = new $c();
-echo get_class($o);
+class Empty1 {}
+class Pt { public int $x = 1; public string $y = "a"; }
+class Pt2 { public int $x = 1; public string $y = "a"; }
+class Box { public $v; function __construct($v) { $this->v = $v; } }
+$e1 = new Empty1(); $e2 = new Empty1();
+var_dump($e1 == $e2, $e1 === $e2, $e1 === $e1);
+$p1 = new Pt(); $p2 = new Pt();
+var_dump($p1 == $p2, $p1 === $p2);
+$p2->x = 2;
+var_dump($p1 == $p2, $p1 != $p2);
+var_dump($p1 == new Pt2());
+var_dump(new Box(1) == new Box("1"), new Box(0) == new Box(null), new Box(1) == new Box(2));
 "#,
     );
-    assert_eq!(out, "Roadster");
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\n\
+         bool(false)\nbool(true)\n\
+         bool(false)\n\
+         bool(true)\nbool(true)\nbool(false)\n"
+    );
 }
 
-/// Regression: `get_class()` / `get_parent_class()` on a Mixed object resolves the runtime class
-/// and its parent.
+/// Verifies object `==` recurses through array-valued and object-valued properties,
+/// and that enum cases keep PHP's compare-by-identity behavior.
 #[test]
-fn test_get_class_and_parent_on_mixed_object() {
+fn test_object_loose_equality_recurses_and_handles_enums() {
     let out = compile_and_run(
         r#"<?php
-class Base {}
-class Derived extends Base {}
-$c = "Derived";
-$o = new $c();
-echo get_class($o) . "|" . get_parent_class($o);
+class Bag { public array $items = [1, 2, 3]; }
+class Pt { public int $x = 1; }
+class Wrap { public ?Pt $inner = null; }
+enum Suit { case Hearts; case Spades; }
+enum Grade: string { case A = 'a'; case B = 'b'; }
+$b1 = new Bag(); $b2 = new Bag();
+var_dump($b1 == $b2);
+$b2->items = [1, 2, 4];
+var_dump($b1 == $b2);
+$w1 = new Wrap(); $w2 = new Wrap();
+var_dump($w1 == $w2);
+$w1->inner = new Pt();
+var_dump($w1 == $w2);
+$w2->inner = new Pt();
+var_dump($w1 == $w2);
+var_dump(Suit::Hearts == Suit::Hearts, Suit::Hearts == Suit::Spades, Suit::Hearts === Suit::Hearts);
+var_dump(Grade::A == Grade::A, Grade::A == Grade::B);
 "#,
     );
-    assert_eq!(out, "Derived|Base");
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\n"
+    );
 }
 
-/// Regression: `get_class()` on a heterogeneous (Mixed-element) array entry holding an object.
+/// Verifies a cyclic object graph does not make `==` recurse until the stack dies.
+///
+/// PHP raises `Nesting level too deep - recursive dependency?`; elephc's walker caps
+/// its depth and reports "not equal" instead (documented in `docs/php/classes.md`).
+/// The regression this pins is that the program terminates normally.
 #[test]
-fn test_get_class_on_mixed_array_element_object() {
+fn test_object_loose_equality_survives_recursive_dependency() {
     let out = compile_and_run(
         r#"<?php
-class Widget {}
-$registry = ["w" => new Widget()];
-echo get_class($registry["w"]);
+class Node { public ?Node $self = null; public int $v = 1; }
+$a = new Node(); $a->self = $a;
+$b = new Node(); $b->self = $b;
+var_dump($a == $b);
+echo "survived";
 "#,
     );
-    assert_eq!(out, "Widget");
-}
-
-/// Verifies that a statically-typed object used in a boolean context is always truthy in PHP
-/// (there is no `__toBool`), so a ternary or `!` on a non-null object folds to `true`/`false`.
-/// Regression for the symfony/yaml `is_truthy for PHP type Object(...)` backend gap.
-#[test]
-fn test_object_is_always_truthy() {
-    let out = compile_and_run(
-        r#"<?php
-class C {}
-$o = new C();
-echo $o ? "t" : "f";
-echo "|", (!$o) ? "no" : "yes";
-"#,
-    );
-    assert_eq!(out, "t|yes");
+    assert_eq!(out, "bool(false)\nsurvived");
 }

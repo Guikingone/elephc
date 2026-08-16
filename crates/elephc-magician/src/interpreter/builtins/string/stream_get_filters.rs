@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the static stream-filter list helper.
 
 eval_builtin! {
-    name: "stream_get_filters",
+    contract: "stream_get_filters",
     area: String,
-    params: [],
     direct: StreamIntrospection,
     values: StreamIntrospection,
 }

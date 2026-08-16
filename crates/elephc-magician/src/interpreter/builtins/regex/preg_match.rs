@@ -8,21 +8,12 @@
 //! - This file owns registry metadata, direct dispatch, by-value dispatch, and
 //! - `$matches` writeback for `preg_match()`.
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_match",
+    contract: "preg_match",
     area: Regex,
-    params: [
-        pattern,
-        subject,
-        matches: by_ref = EvalBuiltinDefaultValue::EmptyArray,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        offset = EvalBuiltinDefaultValue::Int(0),
-    ],
-    by_ref: [matches],
     direct: PregMatch,
     values: PregMatch,
 }
@@ -60,21 +51,6 @@ pub(in crate::interpreter) fn eval_builtin_preg_match(
             eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
             Ok(result)
         }
-        [pattern, subject, matches, flags, offset] => {
-            // `$offset` is accepted for PHP-signature parity but not yet applied by the
-            // eval regex engine, matching the compiler's `preg_match` runtime which also
-            // accepts and ignores `$offset` (it behaves as the default). It is still
-            // evaluated so any side effects happen in source order.
-            let pattern = eval_expr(pattern, context, scope, values)?;
-            let subject = eval_expr(subject, context, scope, values)?;
-            let matches_target = eval_preg_matches_target(matches, context, scope, values)?;
-            let flags = eval_expr(flags, context, scope, values)?;
-            let _offset = eval_expr(offset, context, scope, values)?;
-            let (result, matches_array) =
-                eval_preg_match_capture_result(pattern, subject, Some(flags), values)?;
-            eval_write_preg_matches_target(&matches_target, matches_array, context, values)?;
-            Ok(result)
-        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
@@ -88,16 +64,13 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let evaluated_args = eval_call_arg_values(args, context, scope, values)?;
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags", "offset"],
+        &["pattern", "subject", "matches", "flags"],
         &evaluated_args,
         false,
     )?;
     let pattern = required_evaluated_ref_arg(&bound, 0)?;
     let subject = required_evaluated_ref_arg(&bound, 1)?;
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
-    // `$offset` (index 4) is accepted for PHP-signature parity but not applied by the
-    // eval regex engine, matching the compiler's `preg_match` runtime.
-    let _offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
     let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
         return eval_preg_match_result(pattern.value, subject.value, values);
     };

@@ -22,6 +22,34 @@ pub(crate) struct ReturnInfo {
     pub has_value: bool,
 }
 
+/// Makes an inferred return type nullable, the way a declared `?T` hint resolves.
+///
+/// `Checker::resolve_type_expr` expands `?T` to `Union([T, Void])`, and
+/// `nullable_match_arm_type` builds the same shape for ternary/match joins, so this keeps a
+/// hint-less nullable return byte-identical to both. `codegen_repr()` maps such a union to
+/// `Mixed` (or `TaggedScalar` for `int|null`), which is why `return null` then boxes instead
+/// of being coerced into the other arm's zero value.
+///
+/// `Mixed` already admits null and is left alone; an existing union gains `Void` as one more
+/// member rather than nesting; `Void`/`Never` collapse to plain `Void` so a function whose
+/// every path yields null does not become `null|null`.
+fn nullable_return_type(other: &PhpType) -> PhpType {
+    match other {
+        PhpType::Mixed => PhpType::Mixed,
+        PhpType::Void | PhpType::Never => PhpType::Void,
+        PhpType::Union(members) => {
+            if members.iter().any(|member| matches!(member, PhpType::Void)) {
+                PhpType::Union(members.clone())
+            } else {
+                let mut members = members.clone();
+                members.push(PhpType::Void);
+                PhpType::Union(members)
+            }
+        }
+        other => PhpType::Union(vec![other.clone(), PhpType::Void]),
+    }
+}
+
 impl Checker {
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
     /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
@@ -34,7 +62,16 @@ impl Checker {
     ) {
         match &stmt.kind {
             StmtKind::Return(Some(expr)) => {
-                if let Ok(ty) = self.infer_type(expr, env) {
+                // Prefer the type recorded while this exact statement was checked: it reflects
+                // the environment at the return site, whereas `env` here is the body's final
+                // environment and would leak a later narrowing backwards. Falls back to
+                // re-inference when nothing was recorded (e.g. an unchecked body).
+                let recorded = self
+                    .flow_typed_returns
+                    .get(&(stmt as *const Stmt as usize))
+                    .filter(|(span, _)| *span == stmt.span)
+                    .map(|(_, ty)| ty.clone());
+                if let Some(ty) = recorded.or_else(|| self.infer_type(expr, env).ok()) {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
@@ -287,21 +324,9 @@ impl Checker {
             return Ok(());
         }
 
-        // Two accepting shapes, both meaning "control cannot reach the closing brace":
-        //  - the body leaves the FUNCTION on every path (return/throw/never-call), and
-        //  - the body's end is unreachable for another reason — a `goto` jumping backwards is
-        //    the shape `Cache\PhpArrayAdapter::get()` uses, and it exits the BLOCK without
-        //    exiting the function, so the first check alone rejected a program PHP runs.
-        //
-        // For everything else `crate::return_type_guard` has already appended PHP's implicit
-        // `throw new TypeError(...)`, which lands in the first case — so by the time a
-        // function or method reaches here it always passes, and what survives is the CLOSURE
-        // path, which that pass deliberately skips (PHP names a closure in the message by
-        // source position, and elephc has no per-declaration file identity yet).
         if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
             self.expr_is_declared_never_call(expr)
-        }) || body.iter().any(crate::termination::stmt_guarantees_termination)
-        {
+        }) {
             Ok(())
         } else {
             Err(CompileError::new(
@@ -348,33 +373,7 @@ impl Checker {
             ));
         }
 
-        match self.require_compatible_arg_type(expected, actual, span, context) {
-            Ok(()) => Ok(()),
-            // Base→derived object returns (the value is statically only known to be a
-            // SUPERTYPE of a declared return arm) are accepted here ONLY because
-            // `crate::ir_lower::checked_downcast` mirrors this same relaxation and always emits
-            // a runtime `instanceof` guard for it — see the shared predicate
-            // `checked_downcast_guardable`, which every guarded position consults. Genuinely
-            // unrelated classes still fail loudly below; this never widens acceptance beyond
-            // what the runtime guard can enforce.
-            Err(err) => {
-                // The return-coercion codegen (`coerce_to_return_type`) already emits the same
-                // `IToStr`/`FToStr`/`__toString` string cast (for a `string` return) or boxes the
-                // value into a `Mixed` union return slot — so the PHP weak-mode value-boundary
-                // coercions are realized at the return boundary exactly as at a call argument.
-                if self.checked_downcast_guardable(
-                    expected,
-                    actual,
-                    crate::types::checked_downcast::GuardPosition::Return,
-                )
-                    || self.weak_boundary_coercion_accepts(expected, actual)
-                {
-                    Ok(())
-                } else {
-                    Err(err)
-                }
-            }
-        }
+        self.require_compatible_arg_type(expected, actual, span, context)
     }
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
@@ -461,15 +460,24 @@ impl Checker {
 
     /// Computes the wider of two PHP types for return-type merging:
     /// - If equal, returns a clone.
-    /// - Str + anything → Str; Float + anything → Float.
-    /// - Void or Never resolves to the other type; otherwise → Mixed.
+    /// - `Never` is absorbed by the other type (it materializes no value).
+    /// - `Void` (elephc's spelling of PHP `null`) makes the other type NULLABLE.
+    /// - Str + anything → Str; Float + anything → Float; otherwise → Mixed.
+    ///
+    /// The `Void` arm must be tested BEFORE `Str`/`Float`, and `Never` before `Void`.
+    /// `Void` used to resolve to the other type outright, which silently deleted the null
+    /// arm of a hint-less union return: `function f($x) { if ($x) { return "s"; } return null; }`
+    /// inferred `Str`, so `return null` was lowered as `i_to_str(const_null)` and the caller
+    /// saw `""` instead of `NULL`. Writing `: ?string` was already correct, and the ternary
+    /// spelling of the same function already inferred `string|null` through
+    /// `nullable_match_arm_type` — this makes the multi-`return` fold agree with both.
     pub(crate) fn wider_type(a: &PhpType, b: &PhpType) -> PhpType {
         match (a, b) {
             _ if a == b => a.clone(),
+            (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
+            (PhpType::Void, other) | (other, PhpType::Void) => nullable_return_type(other),
             (PhpType::Str, _) | (_, PhpType::Str) => PhpType::Str,
             (PhpType::Float, _) | (_, PhpType::Float) => PhpType::Float,
-            (PhpType::Void, other) | (other, PhpType::Void) => other.clone(),
-            (PhpType::Never, other) | (other, PhpType::Never) => other.clone(),
             _ => PhpType::Mixed,
         }
     }

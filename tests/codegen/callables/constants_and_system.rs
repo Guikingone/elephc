@@ -140,59 +140,6 @@ fn test_define_duplicate_is_checked_at_runtime() {
     assert_eq!(out.stderr, "");
 }
 
-// Regression (Bug B): a `define()` inside a function body is prescanned so a
-// bareword read of the constant resolves instead of SIGSEGV'ing.
-/// Verifies that an in-function `define()` is visible to a later bareword read.
-#[test]
-fn test_in_function_define_visible_to_bareword() {
-    let out = compile_and_run(
-        "<?php\nfunction once() { return define(\"RD\", 1); }\nonce();\necho RD;\n",
-    );
-    assert_eq!(out, "1");
-}
-
-// Regression (Bug B): `defined()` sees a constant defined inside a function body.
-/// Verifies that `defined()` reports true after an in-function `define()`.
-#[test]
-fn test_in_function_define_visible_to_defined() {
-    let out = compile_and_run(
-        "<?php\nfunction once() { define(\"RD\", 7); }\nonce();\nvar_dump(defined(\"RD\"));\n",
-    );
-    assert_eq!(out, "bool(true)\n");
-}
-
-// Regression (Bug B): `constant()` resolves a constant defined inside a function.
-/// Verifies that `constant()` returns the value of an in-function `define()`.
-#[test]
-fn test_in_function_define_visible_to_constant() {
-    let out = compile_and_run(
-        "<?php\nfunction once() { define(\"RD\", 7); }\nonce();\necho constant(\"RD\");\n",
-    );
-    assert_eq!(out, "7");
-}
-
-// Regression (Bug B): a `define()` nested inside an `if`/`for` within a function
-// body is still discovered by the prescan and resolves at every read path.
-/// Verifies that a define nested in control-flow inside a function resolves.
-#[test]
-fn test_define_nested_in_control_flow_in_function() {
-    let out = compile_and_run(
-        "<?php\nfunction setup() { if (true) { for ($i=0;$i<1;$i++) { define(\"NESTED\", 42); } } }\nsetup();\necho NESTED, \"|\", constant(\"NESTED\");\nvar_dump(defined(\"NESTED\"));\n",
-    );
-    assert_eq!(out, "42|42bool(true)\n");
-}
-
-// Regression (Bug B): a top-level `define()` still resolves (no regression from
-// extending the prescan walker to recurse into bodies).
-/// Verifies that a top-level `define()` remains visible after the walker change.
-#[test]
-fn test_top_level_define_still_visible() {
-    let out = compile_and_run(
-        "<?php\ndefine(\"RC\", 42);\necho RC, \"|\", constant(\"RC\");\nvar_dump(defined(\"RC\"));\n",
-    );
-    assert_eq!(out, "42|42bool(true)\n");
-}
-
 // Tests that two `const` declarations can be used together in an expression:
 // `const X = 10; const Y = 20; echo X + Y;` outputs "30".
 /// Verifies that const in expression.
@@ -377,71 +324,6 @@ fn test_list_unpack_static_property_targets() {
     assert_eq!(out, "7 8");
 }
 
-// --- foreach array destructuring (PHP 7.1+) ---
-
-/// Verifies `foreach ($arr as [$a, $b])` binds each positional element pair.
-#[test]
-fn test_foreach_destructure_positional() {
-    let out = compile_and_run(
-        "<?php\n$out = \"\";\nforeach ([[\"a\",\"b\"], [\"c\",\"d\"]] as [$x, $y]) {\n $out .= $x . $y . \"|\";\n}\necho $out;\n",
-    );
-    assert_eq!(out, "ab|cd|");
-}
-
-/// Verifies `foreach ($arr as $k => [$a, $b])` binds the key and the element pair.
-#[test]
-fn test_foreach_destructure_key_value_pair() {
-    let out = compile_and_run(
-        "<?php\nforeach ([\"k1\" => [1, 2], \"k2\" => [3, 4]] as $k => [$m, $n]) {\n echo $k . \":\" . $m . \",\" . $n . \"\\n\";\n}\n",
-    );
-    assert_eq!(out, "k1:1,2\nk2:3,4\n");
-}
-
-/// Verifies keyed destructuring directly as the foreach value pattern.
-#[test]
-fn test_foreach_destructure_keyed_pattern() {
-    let out = compile_and_run(
-        "<?php\nforeach ([[\"id\"=>1,\"name\"=>\"Alice\"], [\"id\"=>2,\"name\"=>\"Bob\"]] as [\"id\" => $id, \"name\" => $name]) {\n echo $id . \":\" . $name . \"\\n\";\n}\n",
-    );
-    assert_eq!(out, "1:Alice\n2:Bob\n");
-}
-
-/// Verifies nested patterns inside a foreach value pattern bind correctly.
-#[test]
-fn test_foreach_destructure_nested_pattern() {
-    let out = compile_and_run(
-        "<?php\nforeach ([[1, [2, 3]], [4, [5, 6]]] as [$a, [$b, $c]]) {\n echo $a . $b . $c;\n}\n",
-    );
-    assert_eq!(out, "123456");
-}
-
-/// Verifies holes (skipped slots) advance the positional index without binding.
-#[test]
-fn test_foreach_destructure_holes() {
-    let out = compile_and_run(
-        "<?php\nforeach ([[10, 20, 30], [40, 50, 60]] as [, $mid,]) {\n echo $mid . \"\\n\";\n}\n",
-    );
-    assert_eq!(out, "20\n50\n");
-}
-
-/// Verifies foreach destructuring over a real typed-element local variable array.
-#[test]
-fn test_foreach_destructure_over_variable_array() {
-    let out = compile_and_run(
-        "<?php\n$rows = [[\"p\", \"q\"], [\"r\", \"s\"]];\nforeach ($rows as [$u, $v]) {\n echo $u . $v;\n}\n",
-    );
-    assert_eq!(out, "pqrs");
-}
-
-/// Verifies foreach destructuring works inside a function (local slot + element binding).
-#[test]
-fn test_foreach_destructure_inside_function() {
-    let out = compile_and_run(
-        "<?php\nfunction pair(array $rows): string {\n $out = \"\";\n foreach ($rows as [$a, $b]) { $out .= $a . $b; }\n return $out;\n}\necho pair([[\"x\",\"y\"], [\"z\",\"w\"]]);\n",
-    );
-    assert_eq!(out, "xyzw");
-}
-
 // Tests that list unpacking from a shorter array yields null for missing keys
 // so `??` treats them as null: `[$a, $b, $c] = [10]; echo ($a ?? 'n') ... ;`
 // outputs "10:n:n". Regression for #337.
@@ -481,6 +363,20 @@ fn test_list_unpack_empty_array_null() {
 fn test_call_user_func_array_basic() {
     let out = compile_and_run("<?php\nfunction add($a, $b) { return $a + $b; }\necho call_user_func_array(\"add\", [3, 4]);\n");
     assert_eq!(out, "7");
+}
+
+/// Verifies a callable boxed behind `mixed` remains recognizable by `is_callable()`.
+#[test]
+fn test_is_callable_accepts_boxed_callable_descriptor() {
+    let out = compile_and_run(
+        r#"<?php
+function accepts_mixed(mixed $value): bool {
+    return is_callable($value);
+}
+echo accepts_mixed(function () { return 1; }) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "yes");
 }
 
 // Tests `call_user_func_array("double", [21])` where `double($n) { return $n * 2; }`
@@ -2431,29 +2327,38 @@ echo getenv("ELEPHC_TEST_VAR");
 
 // -- v0.8 phpversion / php_uname --
 
-// Tests `phpversion()` returns the compiler version string (`CARGO_PKG_VERSION`).
+// Tests `phpversion()` returns the PHP LANGUAGE version of the compile target, not elephc's
+// own package version. The default `--php-version` is 8.5, and elephc reports the profile's
+// `8.<minor>.0` form (reference PHP 8.5.6 reports `8.5.6`) — the same deliberate `.0`
+// divergence `opcache_get_configuration()['version']['version']` makes. See
+// `web_prelude::PhpVersion::version_string`.
 /// Verifies that phpversion.
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
-    assert_eq!(out, env!("CARGO_PKG_VERSION"));
+    assert_eq!(out, "8.5.0");
 }
 
-/// Verifies `phpversion($extension)` returns PHP `false` for an extension query.
-///
-/// elephc has no loadable extensions, so `phpversion("...")` is the concrete
-/// false, matching PHP invoked without that extension. `var_dump` therefore
-/// prints `bool(false)` for both a literal and a variable extension name.
+// Tests `phpversion($extension)` reports the same version for a loaded extension and `false`
+// for an unknown one. Reference PHP 8.5.6 verified: `phpversion('json')` is `'8.5.6'` (every
+// bundled extension reports the interpreter's version) and `phpversion('nope_xyz')` is
+// `false`. Matching is case-insensitive there too, so `Core`/`core` must agree.
+/// Verifies that phpversion with an extension name.
 #[test]
-fn test_phpversion_extension_returns_false() {
+fn test_phpversion_extension() {
     let out = compile_and_run(
         r#"<?php
-var_dump(phpversion("no_such_ext"));
-$e = "curl";
-var_dump(phpversion($e));
+var_dump(phpversion("json"));
+var_dump(phpversion("Core"));
+var_dump(phpversion("core"));
+var_dump(phpversion("nope_xyz"));
+var_dump(phpversion("json") === phpversion());
 "#,
     );
-    assert_eq!(out, "bool(false)\nbool(false)\n");
+    assert_eq!(
+        out,
+        "string(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nbool(false)\nbool(true)\n"
+    );
 }
 
 // Tests `php_uname()` and `php_uname("a")` return identical strings (default "a" mode).
@@ -2555,367 +2460,4 @@ fn test_system() {
 fn test_passthru() {
     let out = compile_and_run("<?php passthru(\"echo bye\");");
     assert_eq!(out, "bye\n");
-}
-
-/// Verifies `extension_loaded()` reports unknown extensions as not loaded, matching
-/// the closed-world AOT model where no dynamic PHP extensions are present.
-#[test]
-fn test_extension_loaded_reports_false() {
-    let out = compile_and_run(
-        "<?php echo extension_loaded('deepclone') ? '1' : '0'; echo extension_loaded('mbstring') ? '1' : '0';",
-    );
-    assert_eq!(out, "00");
-}
-
-/// Verifies `extension_loaded()` returns a real boolean usable as an `if` condition,
-/// so polyfill `if (!extension_loaded('x'))` guards take their userland branch.
-#[test]
-fn test_extension_loaded_drives_polyfill_guard() {
-    let out = compile_and_run(
-        "<?php if (!extension_loaded('json')) { echo 'fallback'; } else { echo 'native'; }",
-    );
-    assert_eq!(out, "fallback");
-}
-
-/// Verifies `extension_loaded()` matches extension names case-insensitively, as PHP does.
-#[test]
-fn test_extension_loaded_is_case_insensitive() {
-    let out = compile_and_run("<?php var_dump(extension_loaded('DeepClone'));");
-    assert_eq!(out, "bool(false)\n");
-}
-
-/// Regression: `extension_loaded` must not be a first-class-callable builtin. Because the
-/// dynamic-callable dispatch table emits a wrapper for every FCC-eligible builtin, listing
-/// `extension_loaded` there made every program that uses a dynamic string callback reference
-/// a non-existent `_fn_extension_loaded` symbol (it is inlined, not a runtime function), so
-/// linking failed. This program both calls `extension_loaded` and invokes a user function
-/// through a dynamic string callback; it must compile and run.
-#[test]
-fn test_extension_loaded_does_not_break_dynamic_string_callback() {
-    let out = compile_and_run(
-        r#"<?php
-function inc($x) { return $x + 1; }
-$loaded = extension_loaded('deepclone') ? '1' : '0';
-$mapped = array_map("inc", [10]);
-echo $loaded . $mapped[0];
-"#,
-    );
-    assert_eq!(out, "011");
-}
-
-/// Verifies `error_reporting()` seeds to E_ALL (30719) and round-trips a set:
-/// `error_reporting(0)` returns the previous level then leaves the level at 0,
-/// matching PHP's `30719|0`.
-#[test]
-fn test_error_reporting_round_trip() {
-    let out = compile_and_run(
-        "<?php $p = error_reporting(0); echo $p; echo \"|\"; echo error_reporting();",
-    );
-    assert_eq!(out, "30719|0");
-}
-
-/// Same round-trip under the legacy sentinel null representation, guarding that
-/// the get/set detection (an in-band NULL_SENTINEL payload marks a "get") holds
-/// regardless of the active null representation.
-#[test]
-fn test_error_reporting_round_trip_sentinel_repr() {
-    let out = compile_and_run_sentinel(
-        "<?php $p = error_reporting(0); echo $p; echo \"|\"; echo error_reporting();",
-    );
-    assert_eq!(out, "30719|0");
-}
-
-/// Verifies a no-argument `error_reporting()` returns the E_ALL seed initially.
-#[test]
-fn test_error_reporting_no_arg_seed() {
-    let out = compile_and_run("<?php echo error_reporting();");
-    assert_eq!(out, "30719");
-}
-
-/// Verifies the PHP save/restore idiom: `error_reporting(E_ALL & ~E_DEPRECATED)`
-/// returns the previous level (30719) and installs the masked level (22527).
-#[test]
-fn test_error_reporting_save_restore() {
-    let out = compile_and_run(
-        "<?php $prev = error_reporting(E_ALL & ~E_DEPRECATED); echo $prev; echo \"|\"; echo error_reporting();",
-    );
-    assert_eq!(out, "30719|22527");
-}
-
-/// Verifies `ignore_user_abort()` save/restore: seeds to 0, `ignore_user_abort(true)`
-/// returns the previous flag (0) and installs 1, matching PHP's `0|1`.
-#[test]
-fn test_ignore_user_abort_save_restore() {
-    let out = compile_and_run(
-        "<?php $p = ignore_user_abort(true); echo $p; echo \"|\"; echo ignore_user_abort();",
-    );
-    assert_eq!(out, "0|1");
-}
-
-/// Verifies `set_time_limit(30)` returns `true` — a native binary has no execution
-/// timeout, so PHP's CLI/SAPI success result is reproduced (documented AOT limitation).
-#[test]
-fn test_set_time_limit_returns_true() {
-    let out = compile_and_run("<?php var_dump(set_time_limit(30));");
-    assert_eq!(out, "bool(true)\n");
-}
-
-/// Verifies `connection_aborted()` returns `0` — a compiled program's connection
-/// is never aborted.
-#[test]
-fn test_connection_aborted_returns_zero() {
-    let out = compile_and_run("<?php echo connection_aborted();");
-    assert_eq!(out, "0");
-}
-
-/// Verifies `error_log()` writes its message to stderr (not stdout) and returns
-/// true: only `ok` reaches stdout. The message + trailing newline go to fd 2 and
-/// are not captured here.
-#[test]
-fn test_error_log_writes_to_stderr_only() {
-    let out = compile_and_run("<?php error_log(\"hi\"); echo \"ok\";");
-    assert_eq!(out, "ok");
-}
-
-/// Verifies `ini_get` returns the seeded CLI default for a known directive
-/// (`memory_limit` → "128M"), matching `php`'s master default.
-#[test]
-fn test_ini_get_seeded_memory_limit() {
-    let out = compile_and_run("<?php echo ini_get(\"memory_limit\");");
-    assert_eq!(out, "128M");
-}
-
-/// Verifies `ini_get` returns PHP `false` (a distinct boxed bool, not "") for an
-/// unseeded directive, matching PHP for unloaded extension directives.
-#[test]
-fn test_ini_get_unset_is_false() {
-    let out = compile_and_run("<?php var_dump(ini_get(\"no_such_xyz\"));");
-    assert_eq!(out, "bool(false)\n");
-}
-
-/// Anti-stub: `ini_set` returns the REAL previous value ("1") and the new value is
-/// observed by a subsequent `ini_get` ("0"), proving a live mutable table.
-#[test]
-fn test_ini_set_returns_previous_and_persists() {
-    let out = compile_and_run(
-        "<?php $p = ini_set(\"display_errors\", \"0\"); echo $p . \"|\" . ini_get(\"display_errors\");",
-    );
-    assert_eq!(out, "1|0");
-}
-
-/// Verifies the PHP save/restore idiom round-trips: `$p = ini_set(...); ini_set(..., $p);`
-/// restores the original seeded value ("14" for `precision`).
-#[test]
-fn test_ini_set_save_restore_roundtrip() {
-    let out = compile_and_run(
-        "<?php $p = ini_set(\"precision\", \"5\"); ini_set(\"precision\", $p); echo ini_get(\"precision\");",
-    );
-    assert_eq!(out, "14");
-}
-
-/// PHP-faithful rejection: `ini_set`/`ini_get` on an UNREGISTERED (unseeded) directive
-/// both return `false`. Verified with `php` and `php -n`: PHP only accepts REGISTERED
-/// directives — `ini_set("my.custom","abc")` => bool(false) and stores nothing, and
-/// `ini_get("my.custom")` => bool(false). The seeded table doubles as the registered
-/// set, so `my.custom` (absent) is rejected exactly like real PHP.
-#[test]
-fn test_ini_set_unregistered_directive_is_false() {
-    let set = compile_and_run("<?php var_dump(ini_set(\"my.custom\", \"abc\"));");
-    assert_eq!(set, "bool(false)\n");
-    let get = compile_and_run("<?php var_dump(ini_get(\"my.custom\"));");
-    assert_eq!(get, "bool(false)\n");
-}
-
-/// Verifies `get_cfg_var` is independent of `ini_set`: it returns the immutable
-/// MASTER value ("128M") even after `ini_set("memory_limit", "999M")`, while
-/// `ini_get` reflects the mutated value ("999M").
-#[test]
-fn test_get_cfg_var_independent_of_ini_set() {
-    let out = compile_and_run(
-        "<?php ini_set(\"memory_limit\", \"999M\"); echo get_cfg_var(\"memory_limit\") . \"|\" . ini_get(\"memory_limit\");",
-    );
-    assert_eq!(out, "128M|999M");
-}
-
-/// Verifies `get_cfg_var` returns PHP `false` for an unknown directive and for a
-/// directive absent from the master map (`date.timezone`), matching `php`.
-#[test]
-fn test_get_cfg_var_unknown_is_false() {
-    let unknown = compile_and_run("<?php var_dump(get_cfg_var(\"no_such\"));");
-    assert_eq!(unknown, "bool(false)\n");
-    let tz = compile_and_run("<?php var_dump(get_cfg_var(\"date.timezone\"));");
-    assert_eq!(tz, "bool(false)\n");
-}
-
-/// Heap gate: an ini-heavy program (seeded reads, mutating overwrites of registered
-/// directives, an UNREGISTERED `ini_set` that must allocate nothing, and a `get_cfg_var`)
-/// whose results are consumed through owned array storage is `--heap-debug` clean. This
-/// proves the main-epilogue teardown deep-frees the persistent ini table AND that the
-/// persist-on-get / persist-before-overwrite ownership rules leave no dangling table
-/// copies (no UAF: `precision` is read after being overwritten twice). The unregistered
-/// `ini_set("my.unreg", ...)` returns false and — because the new value is persisted only
-/// after the registration check — allocates nothing to leak.
-///
-/// Results are stored into an array (deep-freed at epilogue) rather than bare locals,
-/// because a bare boxed-Mixed call-result local is not reliably released on the CLI exit
-/// path (a pre-existing EIR ownership gap shared with `realpath`/`strpos` and every other
-/// `string|false`-returning builtin — orthogonal to this ini table).
-#[test]
-fn test_ini_table_heap_clean_with_teardown() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php \
-         $a = []; \
-         $a['seed'] = ini_get(\"memory_limit\"); \
-         $a['prev'] = ini_set(\"display_errors\", \"0\"); \
-         $a['cur'] = ini_get(\"display_errors\"); \
-         $a['k0'] = ini_set(\"precision\", \"8\"); \
-         $a['k1'] = ini_set(\"precision\", \"10\"); \
-         $a['k2'] = ini_get(\"precision\"); \
-         $a['unreg'] = ini_set(\"my.unreg\", \"x\"); \
-         $a['master'] = get_cfg_var(\"precision\"); \
-         echo $a['seed']; echo \"|\"; echo $a['cur']; echo \"|\"; echo $a['k2']; echo \"|\"; echo $a['master'];",
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "128M|0|10|14", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies the ini builtins resolve case-insensitively (`INI_GET`) and through a
-/// leading-namespace-separator call (`\ini_set`), and that `function_exists` sees
-/// `get_cfg_var` via the canonical catalog.
-#[test]
-fn test_ini_builtins_case_insensitive_and_namespaced() {
-    let out = compile_and_run(
-        "<?php echo INI_GET(\"memory_limit\"); echo \"|\"; echo \\ini_set(\"precision\", \"3\"); echo \"|\"; var_dump(function_exists(\"get_cfg_var\"));",
-    );
-    assert_eq!(out, "128M|14|bool(true)\n");
-}
-
-/// Verifies `gc_enabled()`/`gc_disable()`/`gc_enable()` round-trip: seeds to
-/// `true` (PHP's default), `gc_disable()` flips it to `false`, and `gc_enable()`
-/// flips it back to `true`. php -n verified: `bool(true)/bool(false)/bool(true)`.
-#[test]
-fn test_gc_enabled_round_trip() {
-    let out = compile_and_run(
-        "<?php var_dump(gc_enabled()); gc_disable(); var_dump(gc_enabled()); gc_enable(); var_dump(gc_enabled());",
-    );
-    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
-}
-
-/// Anti-stub: `gc_collect_cycles()` and `gc_mem_caches()` must return typed
-/// `int(0)`, not PHP `NULL` (the bug this test guards against: the EIR backend
-/// return-type override previously omitted both names from the `Int` group, so
-/// the boxed result printed as `NULL` instead of `int(0)`).
-#[test]
-fn test_gc_collect_cycles_and_mem_caches_return_typed_int() {
-    let out = compile_and_run("<?php var_dump(gc_collect_cycles()); var_dump(gc_mem_caches());");
-    assert_eq!(out, "int(0)\nint(0)\n");
-}
-
-/// Heap gate: building and dropping a genuine reference cycle, then calling
-/// `gc_collect_cycles()`, must not crash and must leave the heap clean — proving
-/// the real `__rt_gc_collect_cycles` collector call added to the lowering runs
-/// safely from the builtin call site (not just from internal safe points).
-#[test]
-fn test_gc_collect_cycles_reclaims_ref_cycle_heap_clean() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php \
-         class GcNode { public $next; } \
-         function make_cycle() { $a = new GcNode(); $b = new GcNode(); $a->next = $b; $b->next = $a; } \
-         make_cycle(); \
-         gc_collect_cycles(); \
-         echo \"done\";",
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies the `libxml_use_internal_errors()` save/restore idiom used by
-/// Symfony's `XmlUtils`: seeds to `false` (PHP's default), setting `true`
-/// returns the previous value (`false`), a no-arg read observes `true`, and
-/// restoring the saved previous value (`false`) round-trips. php -n verified:
-/// `bool(false)/bool(true)/bool(false)`.
-#[test]
-fn test_libxml_use_internal_errors_save_restore() {
-    let out = compile_and_run(
-        "<?php $p = libxml_use_internal_errors(true); var_dump($p); var_dump(libxml_use_internal_errors()); libxml_use_internal_errors($p); var_dump(libxml_use_internal_errors());",
-    );
-    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\n");
-}
-
-/// Verifies `libxml_get_errors()` always returns a fresh empty array (no
-/// libxml/DOM subsystem means no parse error can ever be recorded), matching
-/// `php -n`'s `array(0) { }` for a program with no libxml errors.
-#[test]
-fn test_libxml_get_errors_is_empty_array() {
-    let out = compile_and_run("<?php var_dump(libxml_get_errors());");
-    assert_eq!(out, "array(0) {\n}\n");
-}
-
-/// Verifies `libxml_clear_errors()` is accepted as a no-op that does not disturb
-/// surrounding output.
-#[test]
-fn test_libxml_clear_errors_is_noop() {
-    let out = compile_and_run("<?php libxml_clear_errors(); echo \"ok\";");
-    assert_eq!(out, "ok");
-}
-
-/// Verifies `error_get_last()` returns PHP `null` when no error has been
-/// recorded — the only state elephc can currently produce, since
-/// `trigger_error()` has no EIR backend lowering and fails loudly at compile
-/// time instead of silently recording an error. php -n verified: `NULL`.
-#[test]
-fn test_error_get_last_is_null() {
-    let out = compile_and_run("<?php var_dump(error_get_last());");
-    assert_eq!(out, "NULL\n");
-}
-
-/// Heap gate for the libxml trio + `error_get_last()`: results are stored into
-/// an array (deep-freed at epilogue) rather than bare locals, following the
-/// same idiom as `test_ini_table_heap_clean_with_teardown` — a bare boxed
-/// call-result local is not reliably released on the CLI exit path today (a
-/// pre-existing EIR ownership gap shared with `realpath`/`strpos`/`ini_get`
-/// and every other builtin whose result is a fresh heap-backed or boxed
-/// value, independently confirmed here to also affect zero-argument
-/// array-returning builtins such as `get_declared_classes()` — orthogonal to
-/// this change; see the residual notes in this task's report).
-#[test]
-fn test_libxml_and_error_get_last_heap_clean_with_teardown() {
-    let out = compile_and_run_with_heap_debug(
-        "<?php \
-         $a = []; \
-         $a['prev'] = libxml_use_internal_errors(true); \
-         $a['errors'] = libxml_get_errors(); \
-         libxml_clear_errors(); \
-         libxml_use_internal_errors($a['prev']); \
-         $a['last'] = error_get_last(); \
-         echo count($a['errors']); echo \"|\"; echo $a['last'] === null ? \"null\" : \"non-null\";",
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "0|null", "stderr: {}", out.stderr);
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies the new builtins resolve case-insensitively (`GC_ENABLED`) and
-/// through a leading-namespace-separator call (`\libxml_get_errors`), and that
-/// `function_exists` sees `error_get_last` via the canonical catalog.
-#[test]
-fn test_gc_and_libxml_builtins_case_insensitive_and_namespaced() {
-    let out = compile_and_run(
-        "<?php var_dump(GC_ENABLED()); var_dump(\\libxml_get_errors()); var_dump(function_exists(\"error_get_last\"));",
-    );
-    assert_eq!(out, "bool(true)\narray(0) {\n}\nbool(true)\n");
 }

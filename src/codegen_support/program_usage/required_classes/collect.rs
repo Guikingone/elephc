@@ -232,22 +232,6 @@ fn collect_required_class_names_in_body(stmts: &[Stmt], names: &mut HashSet<Stri
                 collect_required_class_names_in_expr(index, names);
                 collect_required_class_names_in_expr(value, names);
             }
-            StmtKind::DynamicStaticPropertyWrite {
-                receiver,
-                property,
-                index,
-                value,
-                ..
-            } => {
-                if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
-                    names.insert(name.as_str().to_string());
-                }
-                collect_required_class_names_in_expr(property, names);
-                if let Some(index) = index {
-                    collect_required_class_names_in_expr(index, names);
-                }
-                collect_required_class_names_in_expr(value, names);
-            }
             _ => {}
         }
     }
@@ -297,14 +281,6 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
                 _ => {}
             }
         }
-        // `(object)` allocates a stdClass, so the class must be registered even
-        // when the program never names `stdClass` explicitly.
-        ExprKind::Cast { target, expr } => {
-            if matches!(target, crate::parser::ast::CastType::Object) {
-                names.insert("stdClass".to_string());
-            }
-            collect_required_class_names_in_expr(expr, names);
-        }
         ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
@@ -313,6 +289,7 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         | ExprKind::Print(expr)
         | ExprKind::Clone(expr)
         | ExprKind::Spread(expr)
+        | ExprKind::Cast { expr, .. }
         | ExprKind::PtrCast { expr, .. } => collect_required_class_names_in_expr(expr, names),
         ExprKind::NullCoalesce { value, default } => {
             collect_required_class_names_in_expr(value, names);
@@ -321,9 +298,6 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
         ExprKind::Pipe { value, callable } => {
             collect_required_class_names_in_expr(value, names);
             collect_required_class_names_in_expr(callable, names);
-        }
-        ExprKind::ListUnpack { value, .. } => {
-            collect_required_class_names_in_expr(value, names);
         }
         ExprKind::Assignment {
             target,
@@ -495,19 +469,6 @@ fn collect_required_class_names_in_expr(expr: &Expr, names: &mut HashSet<String>
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
                 names.insert(name.as_str().to_string());
             }
-        }
-        // `$obj::CONST` — the resolved class is only known by type; recurse into the
-        // object expression, which constructs/holds the class instance that makes it required.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            collect_required_class_names_in_expr(object, names);
-        }
-        // `self::${$expr}` — a named receiver makes its class required (like
-        // `StaticPropertyAccess`); recurse into the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            if let crate::parser::ast::StaticReceiver::Named(name) = receiver {
-                names.insert(name.as_str().to_string());
-            }
-            collect_required_class_names_in_expr(property, names);
         }
         ExprKind::NewScopedObject { receiver, args } => {
             if let crate::parser::ast::StaticReceiver::Named(name) = receiver {

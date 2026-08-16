@@ -29,3 +29,27 @@ foreach (["greet", "shout"] as $command) {
 // Dispatch a static method through a dynamic class name.
 $class = "Commands";
 echo $class::help(), "\n";
+
+// A named virtual call has a runtime-selected receiver but a closed set of
+// checked implementations. Its property and literal-array reads are likewise
+// visible to the optimizer's EIR effect refinement.
+class Renderer
+{
+    public $prefix = "result: ";
+
+    public function render(array $parts): string
+    {
+        return $this->prefix . $parts[0];
+    }
+}
+
+final class LoudRenderer extends Renderer
+{
+    public function render(array $parts): string
+    {
+        return strtoupper($this->prefix . $parts[0]);
+    }
+}
+
+$renderer = $argc > 1 ? new LoudRenderer() : new Renderer();
+echo $renderer->render(["effects"]), "\n";

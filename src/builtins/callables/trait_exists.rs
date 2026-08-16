@@ -9,17 +9,11 @@
 //!   optional autoload argument is a literal bool or int (AOT constraint).
 //! - Arguments are pre-inferred by the registry common path before the hook runs.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "trait_exists",
-    area: Callables,
-    params: [trait: Str, autoload: Bool = DefaultSpec::Bool(true)],
-    returns: Bool,
+    contract: "trait_exists",
     check: crate::builtins::callables::support::check_class_like_exists,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::TraitExists,
     ),
-    summary: "Checks whether the trait exists.",
-    php_manual: "function.trait-exists",
 }

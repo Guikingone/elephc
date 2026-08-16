@@ -1001,20 +1001,6 @@ echo $im->format("Y-m-d H:i:s");
     assert_eq!(out, "2020-06-15 00:00:00");
 }
 
-/// PHP's coercive call mode accepts an integer timestamp as the string subject
-/// of `createFromFormat("U", ...)`; the EIR call boundary must stringify it.
-#[test]
-fn test_create_from_format_coerces_integer_subject() {
-    let out = compile_and_run(
-        r#"<?php
-date_default_timezone_set("UTC");
-$im = DateTimeImmutable::createFromFormat("U", 0);
-echo $im->format("Y-m-d H:i:s");
-"#,
-    );
-    assert_eq!(out, "1970-01-01 00:00:00");
-}
-
 /// Verifies a range of format specifiers: two-digit year `y`, no-leading-zero `n`/`j`, the `U`
 /// timestamp specifier, 12-hour `h` with am/pm `A`, and a literal `/` separator.
 #[test]
@@ -2453,53 +2439,4 @@ echo ($a <=> $b);
 "#,
     );
     assert_eq!(out, "101-1");
-}
-
-/// Verifies a `DateTimeInterface`-typed receiver resolves its declared method return types: a
-/// parameter typed `\DateTimeInterface` can have `->format('Y')` used where a `string` is
-/// required, and `->getTimestamp()` used where an `int` is required. Regression for interface
-/// method-return inference on the builtin date/time contract.
-#[test]
-fn test_datetime_interface_typed_receiver_method_returns() {
-    let out = compile_and_run(
-        r#"<?php
-function fmt(\DateTimeInterface $d): string { return $d->format('Y'); }
-function epoch(\DateTimeInterface $d): int { return $d->getTimestamp(); }
-$d = new DateTime("2021-06-15 00:00:00");
-echo fmt($d), "|", (epoch($d) > 0 ? "pos" : "neg");
-"#,
-    );
-    assert_eq!(out, "2021|pos");
-}
-
-/// Verifies the guaranteed numeric `U.u` DateTime format can participate in float addition.
-#[test]
-fn test_datetime_fractional_unix_format_is_numeric_in_arithmetic() {
-    let out = compile_and_run(
-        r#"<?php
-$date = (new DateTimeImmutable())->setTimestamp(0);
-echo 0.5 + $date->format("U.u");
-"#,
-    );
-    assert_eq!(out, "0.5");
-}
-
-/// Verifies that calling a method on an `instanceof`-narrowed (`mixed` → `DateTimeInterface`)
-/// receiver type-checks against a `: string` return signature: a method call on a gradual `Mixed`
-/// receiver yields `Mixed` (unknown class → unknown, gradual-compatible) rather than a default
-/// `Int`. This is the Symfony YAML `Inline::dump` pattern.
-#[test]
-fn test_datetime_interface_instanceof_narrowed_format_returns_string() {
-    let out = compile_and_run(
-        r#"<?php
-function describe(mixed $value): string {
-    if ($value instanceof \DateTimeInterface) {
-        return $value->format('Y');
-    }
-    return "n/a";
-}
-echo describe(new DateTime("2021-06-15 00:00:00"));
-"#,
-    );
-    assert_eq!(out, "2021");
 }

@@ -73,10 +73,7 @@ fn stmt_terminal_effect_with_divergence(
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
             block_terminal_effect_with_divergence(stmts, additional_expr_diverges)
         }
-        // `goto` transfers control unconditionally and never falls through to the next statement,
-        // so it exits the current block like `return`/`throw`/`continue`. This lets a `catch`/`if`
-        // branch that ends in `goto` count as terminating (e.g. Twig's `getAttribute`).
-        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue(_) | StmtKind::Goto(_) => {
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Continue(_) => {
             TerminalEffect::ExitsCurrentBlock
         }
         StmtKind::Break(1) => TerminalEffect::Breaks,
@@ -359,10 +356,6 @@ fn block_may_leave_current_switch_before_function_exit(
 fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> bool {
     match &stmt.kind {
         StmtKind::Break(level) => *level >= breakable_depth_to_loop,
-        // A `goto` may jump to a label outside the loop, so conservatively assume it can leave the
-        // loop. This keeps `while (true) { ... goto end; } end:` from being treated as an infinite
-        // loop whose trailing code is unreachable.
-        StmtKind::Goto(_) => true,
         StmtKind::Synthetic(stmts)
         | StmtKind::NamespaceBlock { body: stmts, .. }
         | StmtKind::IncludeOnceGuard { body: stmts, .. } => stmts
@@ -457,8 +450,6 @@ fn stmt_may_leave_current_switch(stmt: &Stmt, breakable_depth_to_switch: usize) 
         StmtKind::Break(level) | StmtKind::Continue(level) => {
             *level >= breakable_depth_to_switch
         }
-        // A `goto` may jump to a label outside the switch; assume conservatively that it leaves.
-        StmtKind::Goto(_) => true,
         StmtKind::Synthetic(stmts)
         | StmtKind::NamespaceBlock { body: stmts, .. }
         | StmtKind::IncludeOnceGuard { body: stmts, .. } => stmts

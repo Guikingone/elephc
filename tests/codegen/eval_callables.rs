@@ -9,7 +9,7 @@
 //! - Fixtures verify by-reference writeback through string, callable-array, and
 //!   first-class callable forms instead of only direct method/function syntax.
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_regex};
 
 /// Verifies eval string and first-class AOT function callables preserve by-ref writeback.
 #[test]
@@ -1385,7 +1385,7 @@ D:NoSuchDynamicCallable::missing"
 /// Verifies eval callable arrays resolve `self`, `static`, and `parent` in method scope.
 #[test]
 fn test_eval_special_class_callable_arrays_follow_method_scope() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 echo eval('class EvalSpecialCallableArrayBase {
     public static function parentStatic(): string {

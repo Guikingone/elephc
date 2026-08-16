@@ -50,10 +50,10 @@ pub struct RuntimeFnDescriptor {
 pub enum RuntimeFnId {
     ArrayAll,
     ArrayAny,
-    ArrayChangeKeyCase,
     ArrayChunk,
     ArrayColumn,
     ArrayCombine,
+    ArrayCountValues,
     ArrayDiff,
     ArrayDiffAssoc,
     ArrayDiffKey,
@@ -76,6 +76,12 @@ pub enum RuntimeFnId {
     ArrayMultisort,
     ArrayPad,
     ArrayPop,
+    /// Resolves the next internal-array-pointer cursor for `reset`/`end`/`next`/`prev`.
+    ArrayPtrSeek,
+    /// Boxes the key at an internal-array-pointer cursor for `key()`.
+    ArrayPtrKey,
+    /// Boxes the value at an internal-array-pointer cursor for `current()` and friends.
+    ArrayPtrValue,
     ArrayProduct,
     ArrayPush,
     ArrayRand,
@@ -123,7 +129,7 @@ pub enum RuntimeFnId {
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
-    GetDefinedFunctions,
+    GetLoadedExtensions,
     GetParentClass,
     InterfaceExists,
     IsA,
@@ -148,6 +154,7 @@ pub enum RuntimeFnId {
     ElephcPharSetZipPassword,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcZipStatEntries,
     Basename,
     Chdir,
     Chgrp,
@@ -186,7 +193,6 @@ pub enum RuntimeFnId {
     Fprintf,
     Fputcsv,
     Fread,
-    Fscanf,
     Fseek,
     Fsockopen,
     Fstat,
@@ -259,6 +265,7 @@ pub enum RuntimeFnId {
     StreamContextGetParams,
     StreamContextSetDefault,
     StreamContextSetOption,
+    StreamContextSetOptions,
     StreamContextSetParams,
     StreamCopyToStream,
     StreamFilterAppend,
@@ -307,24 +314,44 @@ pub enum RuntimeFnId {
     Asin,
     Atan,
     Atan2,
+    BaseConvert,
+    BcAdd,
+    BcCeil,
+    BcComp,
+    BcDiv,
+    BcDivmod,
+    BcFloor,
+    BcMod,
+    BcMul,
+    BcPow,
+    BcPowmod,
+    BcRound,
+    BcScale,
+    BcSqrt,
+    BcSub,
     Ceil,
     Clamp,
     Cos,
     Cosh,
+    Bindec,
+    Decbin,
+    Dechex,
+    Decoct,
     Deg2rad,
     Exp,
     Fdiv,
     Floor,
     Fmod,
+    Hexdec,
     Hypot,
     Intdiv,
-    Intval,
     Log,
     Log10,
     Log2,
     Max,
     Min,
     MtRand,
+    Octdec,
     Pi,
     Pow,
     Rad2deg,
@@ -336,6 +363,10 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcObjectIsEnum,
+    ElephcObjectPropCount,
+    ElephcObjectPropName,
+    ElephcObjectPropValue,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -372,13 +403,24 @@ pub enum RuntimeFnId {
     SplClasses,
     SplObjectHash,
     SplObjectId,
+    Base64Decode,
     Chop,
     Chr,
+    ChunkSplit,
+    CountChars,
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
     CtypeDigit,
     CtypeSpace,
+    /// Unboxes an `array|false` builtin ARGUMENT, throwing php's TypeError for the false.
+    ///
+    /// Inserted by the argument lowering when an `array|false` union (scandir, glob, file…)
+    /// flows into an array-taking builtin: the consumer's own lowering then sees a raw array
+    /// pointer and stays untouched. Operands: the boxed value, then the message string —
+    /// composed at compile time, `{fn}(): Argument #{n} (${param}) must be of type array,
+    /// false given` — the throw uses verbatim.
+    ExpectArrayArg,
     Explode,
     GraphemeStrrev,
     Gzcompress,
@@ -393,6 +435,10 @@ pub enum RuntimeFnId {
     HashHmac,
     HashInit,
     HashUpdate,
+    OpensslCipherIvLength,
+    OpensslDecrypt,
+    OpensslEncrypt,
+    OpensslGetCipherMethods,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -407,12 +453,13 @@ pub enum RuntimeFnId {
     Md5,
     NumberFormat,
     Ord,
+    ParseUrl,
     Printf,
     Rtrim,
     Sha1,
     Sprintf,
-    Sscanf,
     StrContains,
+    StrGetcsv,
     StrEndsWith,
     StrIreplace,
     StrPad,
@@ -420,12 +467,19 @@ pub enum RuntimeFnId {
     StrReplace,
     StrSplit,
     StrStartsWith,
+    StrWordCount,
     Strcasecmp,
     Strcmp,
+    Strncasecmp,
+    Strncmp,
+    Stripos,
     Strpos,
+    Strripos,
     Strrpos,
+    Strtr,
     Strstr,
     Substr,
+    SubstrCount,
     SubstrReplace,
     Trim,
     Ucfirst,
@@ -446,12 +500,15 @@ pub enum RuntimeFnId {
     Define,
     Defined,
     Exec,
+    ExtensionLoaded,
     Getdate,
     Getenv,
     Gmdate,
     Gmmktime,
     Header,
     Hrtime,
+    HttpClearLastResponseHeaders,
+    HttpGetLastResponseHeaders,
     HttpResponseCode,
     JsonDecode,
     JsonEncode,
@@ -459,7 +516,6 @@ pub enum RuntimeFnId {
     JsonLastErrorMsg,
     JsonValidate,
     Localtime,
-    MemoryGetUsage,
     Microtime,
     Mktime,
     Passthru,
@@ -481,6 +537,7 @@ pub enum RuntimeFnId {
     GetResourceId,
     GetResourceType,
     Gettype,
+    IntvalBase,
     IsCallable,
     IsFinite,
     IsInfinite,
@@ -492,12 +549,15 @@ pub enum RuntimeFnId {
 impl RuntimeFnId {
     /// Returns the central logical ABI and backend contract for this runtime function.
     pub fn descriptor(self) -> RuntimeFnDescriptor {
-        let logical_signature = crate::builtins::registry::runtime_fn_arity_bounds(self).map(
-            |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
-                min_operands,
-                max_operands,
-            },
-        );
+        let logical_signature = self
+            .lowering_owned_arity_bounds()
+            .or_else(|| crate::builtins::registry::runtime_fn_arity_bounds(self))
+            .map(
+                |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
+                    min_operands,
+                    max_operands,
+                },
+            );
         RuntimeFnDescriptor {
             id: self,
             eir_name: self.as_eir(),
@@ -507,6 +567,26 @@ impl RuntimeFnId {
             requirements: self.requirements(),
             backend_mapping: RuntimeFnBackendMapping::TargetAwareEmitter,
             target_support: RuntimeFnTargetSupport::AllSupported,
+        }
+    }
+
+    /// Returns the operand bounds for runtime functions whose arity is owned by lowering
+    /// rather than by a PHP builtin's declared parameter list.
+    ///
+    /// The registry normally supplies these bounds by reading the declared arity of every
+    /// builtin that lists the target in its runtime-function inventory. That derivation
+    /// cannot describe the internal-array-pointer family: `key`/`current`/`next`/`prev`/
+    /// `reset`/`end` all take one PHP argument, but their lowering appends the hidden
+    /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
+    /// runtime arity here keeps EIR validation meaningful instead of switching it off.
+    const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
+        match self {
+            RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
+            RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            // Compiler-internal: no PHP builtin declares it, so the registry cannot. The two
+            // operands are the boxed `array|false` value and the TypeError message.
+            RuntimeFnId::ExpectArrayArg => Some((2, Some(2))),
+            _ => None,
         }
     }
 
@@ -525,30 +605,114 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
                 PhpType::Array(Box::new(PhpType::Mixed))
             }
+            // The removed-elements array copies the receiver's payload slots, so its element
+            // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
+            // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
+            // longer describes what the helper produces.
+            RuntimeFnId::ArraySplice => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => PhpType::Array(element),
+                _ => declared.clone(),
+            },
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
                 Some(other) => other,
                 None => declared.clone(),
             },
+            // Reversing keeps the container shape, so a synthetic or callable-dispatched
+            // `array_reverse()` with no checked call-site type still returns concrete array
+            // metadata. Without it the broad declared `mixed` reached the backend, which stored a
+            // raw array pointer into a boxed-Mixed slot: `$f = 'array_reverse'; $f([1, 2])` then
+            // read the pointer as a Mixed cell and crashed. The `$preserve_keys` hash shape needs
+            // a compile-time literal, which a dynamic wrapper cannot provide, so it is dropped
+            // from the callable ABI by `refine_runtime_callable_wrapper_sig`.
+            RuntimeFnId::ArrayReverse => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(element @ (PhpType::Array(_) | PhpType::AssocArray { .. })) => element,
+                _ => declared.clone(),
+            },
+            // A synthetic or callable-dispatched `array_chunk()` cannot pass a literal
+            // `$preserve_keys`, so it always produces the renumbered `array<array<T>>` nesting.
+            RuntimeFnId::ArrayChunk => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => {
+                    PhpType::Array(Box::new(PhpType::Array(element)))
+                }
+                _ => declared.clone(),
+            },
             RuntimeFnId::ClassAttributeArgs => PhpType::AssocArray {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
+            // `Fgetcsv` is deliberately absent: it boxes `array|false`, so its declared `Mixed`
+            // IS the representation the lowering builds. Refining it to `array<string>` here
+            // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
+            // checked call-site type — read the boxed Mixed cell as a raw array pointer and
+            // hand back its header words as integers.
+            // `Scandir`, `File` and `Glob` left this list when their results became boxed
+            // `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation
+            // the lowering builds.
             RuntimeFnId::ClassAttributeNames
+            | RuntimeFnId::BcDivmod
             | RuntimeFnId::Explode
-            | RuntimeFnId::Fgetcsv
-            | RuntimeFnId::File
-            | RuntimeFnId::Glob
-            | RuntimeFnId::Scandir
             | RuntimeFnId::SplClasses => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::ClassGetAttributes => PhpType::Array(Box::new(PhpType::Object(
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::ElephcZipStatEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
+            // A CSV row is `?string[]`: php answers `[null]` for a wholly empty subject, so the
+            // runtime widens every row to boxed Mixed cells. A callable-dispatched
+            // `$f = 'str_getcsv'; $f("")` has no checked call-site type and would otherwise read
+            // those cells as raw string pointer/length pairs.
+            RuntimeFnId::StrGetcsv => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
+        }
+    }
+
+    /// Reports whether a checked call-site result type is a valid EIR layout for these operands.
+    ///
+    /// `BuiltinResultType::Checked` replays the type the checker recorded for one call site, and the
+    /// checker knows more about a value than EIR does in two routine cases: call-site specialization
+    /// narrows an untyped parameter (`function top($scores)`) that
+    /// `eir_signature_with_php_param_contracts` still lowers under the boxed-`Mixed` ABI contract,
+    /// and a builtin whose EIR result was widened to `array<mixed>` keeps its precise checker type
+    /// in the variable that receives it. A runtime function that COPIES an argument's element layout
+    /// into its result must therefore re-derive that layout from the EIR-visible argument types.
+    /// Taking the checker's narrower type would describe an array of raw payload pointers where the
+    /// helper really produced boxed `Mixed` cells, and every later element read would misinterpret
+    /// them.
+    ///
+    /// `array_slice()` and `array_splice()` are the only such targets today, because they are the
+    /// only copying array helpers with a boxed-`Mixed` lowering; every other runtime function
+    /// accepts the checked type unchanged. The accepted shapes mirror
+    /// `require_array_slice_result_type` in the backend: the result element layout must equal the
+    /// source element layout, or be the `Mixed` widening the lowering emits explicitly. A non-array checked type is the key-preserving hash form, whose
+    /// values carry the source array's runtime value_type header rather than a copied static
+    /// element layout, and a source the lowering cannot slice at all is left to the backend so it
+    /// reports its own diagnostic. Rejecting here makes the caller fall back to
+    /// `fallback_result_type`, the representation-safe layout the boxed-`Mixed` lowering builds.
+    pub fn checked_result_type_fits_operands(
+        self,
+        arg_types: &[crate::types::PhpType],
+        checked: &crate::types::PhpType,
+    ) -> bool {
+        use crate::types::PhpType;
+        match self {
+            RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
+                let PhpType::Array(result_element) = checked.codegen_repr() else {
+                    return true;
+                };
+                let source_element = match arg_types.first().map(PhpType::codegen_repr) {
+                    Some(PhpType::Mixed | PhpType::Union(_)) => PhpType::Mixed,
+                    Some(PhpType::Array(element)) => element.codegen_repr(),
+                    _ => return true,
+                };
+                let result_element = result_element.codegen_repr();
+                result_element == source_element || result_element == PhpType::Mixed
+            }
+            _ => true,
         }
     }
 
@@ -600,6 +764,19 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
+            // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
+            // between an indexed array and an integer-keyed hash, so the backend needs them as
+            // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
+            // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
+            // wrapper then always produces the renumbered indexed result. `array_slice()`'s
+            // return type is pinned to the concrete indexed layout its helpers materialize,
+            // because the wrapper has no per-call-site checked type to read.
+            RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
+            RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
+            RuntimeFnId::ArraySlice => {
+                truncate_callable_params(sig, 3);
+                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            }
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
             }
@@ -625,45 +802,52 @@ impl RuntimeFnId {
     /// Returns the conservative observable effects for this typed backend operation.
     pub const fn effects(self) -> crate::ir::Effects {
         match self {
-            // `array_combine()` is intentionally NOT in the pure group below: it allocates its
-            // result hash and throws a catchable `\ValueError` on a count mismatch (the gradual
-            // `__rt_array_combine_mixed` path). Falling through to the conservative default (the
-            // same effect set as `array_filter`, which also throws a `\ValueError`) keeps it out of
-            // dead-code elimination when its result is unused and makes the optimizer preserve the
-            // enclosing try handler across the call.
+            RuntimeFnId::BcScale => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcComp => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::MAY_THROW.bits(),
+            ),
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayChangeKeyCase |
-            RuntimeFnId::ArrayChunk |
-            RuntimeFnId::ArrayColumn |
-            RuntimeFnId::ArrayDiff |
+            RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiffAssoc |
-            RuntimeFnId::ArrayDiffKey |
-            RuntimeFnId::ArrayFill |
             RuntimeFnId::ArrayFillKeys |
-            RuntimeFnId::ArrayFlip |
-            RuntimeFnId::ArrayIntersect |
             RuntimeFnId::ArrayIntersectAssoc |
-            RuntimeFnId::ArrayIntersectKey |
             RuntimeFnId::ArrayIsList |
             RuntimeFnId::ArrayKeyExists |
             RuntimeFnId::ArrayKeyFirst |
             RuntimeFnId::ArrayKeyLast |
             RuntimeFnId::ArrayKeys |
-            RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayPad |
-            RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
-            RuntimeFnId::ArrayReverse |
-            RuntimeFnId::ArraySearch |
-            RuntimeFnId::ArraySlice |
-            RuntimeFnId::ArraySum |
-            RuntimeFnId::ArrayUnique |
-            RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
+            // `base64_decode()` only reads the subject's bytes and writes its answer into a
+            // fresh concat reservation; even `$strict = true` reports a bad character as a
+            // plain `false` return rather than a diagnostic, so nothing observable is lost
+            // when an unused call is eliminated.
+            RuntimeFnId::Base64Decode |
             RuntimeFnId::Atan2 |
             RuntimeFnId::Ceil |
             RuntimeFnId::Chop |
@@ -675,9 +859,12 @@ impl RuntimeFnId {
             RuntimeFnId::CtypeAlpha |
             RuntimeFnId::CtypeDigit |
             RuntimeFnId::CtypeSpace |
+            RuntimeFnId::Bindec |
+            RuntimeFnId::Decbin |
+            RuntimeFnId::Dechex |
+            RuntimeFnId::Decoct |
             RuntimeFnId::Deg2rad |
             RuntimeFnId::Exp |
-            RuntimeFnId::Explode |
             RuntimeFnId::Fdiv |
             RuntimeFnId::Floor |
             RuntimeFnId::Fmod |
@@ -689,11 +876,15 @@ impl RuntimeFnId {
             RuntimeFnId::HashEquals |
             RuntimeFnId::Htmlentities |
             RuntimeFnId::Htmlspecialchars |
+            RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
             RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
             RuntimeFnId::InetPton |
             RuntimeFnId::Ip2long |
+            RuntimeFnId::IsFinite |
+            RuntimeFnId::IsInfinite |
+            RuntimeFnId::IsNan |
             RuntimeFnId::IsNumeric |
             RuntimeFnId::Lcfirst |
             RuntimeFnId::Log |
@@ -701,16 +892,13 @@ impl RuntimeFnId {
             RuntimeFnId::Log2 |
             RuntimeFnId::Long2ip |
             RuntimeFnId::Ltrim |
-            RuntimeFnId::Max |
             RuntimeFnId::Md5 |
-            RuntimeFnId::Min |
             RuntimeFnId::NumberFormat |
+            RuntimeFnId::Octdec |
             RuntimeFnId::Ord |
             RuntimeFnId::Pi |
             RuntimeFnId::Pow |
             RuntimeFnId::Rad2deg |
-            RuntimeFnId::Range |
-            RuntimeFnId::Round |
             RuntimeFnId::Rtrim |
             RuntimeFnId::Sha1 |
             RuntimeFnId::Sin |
@@ -719,15 +907,10 @@ impl RuntimeFnId {
             RuntimeFnId::StrContains |
             RuntimeFnId::StrEndsWith |
             RuntimeFnId::StrIreplace |
-            RuntimeFnId::StrPad |
-            RuntimeFnId::StrRepeat |
             RuntimeFnId::StrReplace |
-            RuntimeFnId::StrSplit |
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
-            RuntimeFnId::Strpos |
-            RuntimeFnId::Strrpos |
             RuntimeFnId::Strstr |
             RuntimeFnId::Substr |
             RuntimeFnId::SubstrReplace |
@@ -735,13 +918,188 @@ impl RuntimeFnId {
             RuntimeFnId::Tanh |
             RuntimeFnId::Trim |
             RuntimeFnId::Ucfirst |
-            RuntimeFnId::Ucwords |
-            RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
+            RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
+            // These raise reference PHP's catchable `ValueError` for out-of-range
+            // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
+            // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
+            // empty separator, `str_pad()` empty pad string or bad pad type,
+            // `str_repeat()` negative count, `str_split()` non-positive length,
+            // `str_word_count()` unknown format, `count_chars()` unknown mode,
+            // `range()` zero/negative/oversized `$step`, `round()` unknown rounding mode,
+            // `strncmp()`/`strncasecmp()` negative compare length,
+            // `strpos()`/`strrpos()`/`stripos()`/`strripos()` `$offset` outside the haystack,
+            // `substr_count()` empty needle or out-of-subject offset/length,
+            // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
+            // empty array, `parse_url()` unknown `$component` identifier), so they must not
+            // be treated
+            // as removable pure calls: dead-code elimination would drop the diagnostic, and
+            // the try-prefix hoist would move the call out of the `try` that must catch it.
+            // These accept an `array|false` union argument (scandir, glob, file) through the
+            // lowering's unbox-or-throw wrap (`ARRAY_OR_FALSE_ARG_SITES`): a runtime `false`
+            // raises php's catchable TypeError at the argument. Claiming purity let DCE drop
+            // an unused call — and its throw — and let the try-prefix hoist move the call out
+            // of the `try` that must catch it, so the TypeError escaped as uncaught.
+            RuntimeFnId::ArrayColumn
+            | RuntimeFnId::ArrayDiff
+            | RuntimeFnId::ArrayDiffKey
+            | RuntimeFnId::ArrayFlip
+            | RuntimeFnId::ArrayIntersect
+            | RuntimeFnId::ArrayIntersectKey
+            | RuntimeFnId::ArrayMerge
+            | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::ArrayReverse
+            | RuntimeFnId::ArraySearch
+            | RuntimeFnId::ArraySlice
+            | RuntimeFnId::ArraySum
+            | RuntimeFnId::ArrayUnique
+            | RuntimeFnId::ArrayValues
+            // These raise reference PHP's catchable `ValueError` for out-of-range arguments.
+            | RuntimeFnId::ArrayChunk
+            | RuntimeFnId::ArrayFill
+            | RuntimeFnId::CountChars
+            | RuntimeFnId::ArrayPad
+            | RuntimeFnId::Clamp
+            | RuntimeFnId::Explode
+            | RuntimeFnId::Max
+            | RuntimeFnId::Min
+            | RuntimeFnId::Range
+            | RuntimeFnId::Round
+            | RuntimeFnId::StrPad
+            | RuntimeFnId::StrRepeat
+            | RuntimeFnId::StrSplit
+            | RuntimeFnId::StrWordCount
+            | RuntimeFnId::Strncasecmp
+            | RuntimeFnId::Strncmp
+            | RuntimeFnId::Stripos
+            | RuntimeFnId::Strpos
+            | RuntimeFnId::Strripos
+            | RuntimeFnId::Strrpos
+            | RuntimeFnId::SubstrCount
+            | RuntimeFnId::BaseConvert
+            | RuntimeFnId::ChunkSplit
+            | RuntimeFnId::ParseUrl
+            | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::FunctionExists
+            | RuntimeFnId::Defined
+            | RuntimeFnId::JsonLastError
+            | RuntimeFnId::JsonLastErrorMsg
+            | RuntimeFnId::DateDefaultTimezoneGet
+            | RuntimeFnId::ObGetLevel => crate::ir::Effects::READS_GLOBAL,
+            RuntimeFnId::SplAutoloadExtensions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::WRITES_GLOBAL.bits(),
+            ),
+            RuntimeFnId::SplAutoloadFunctions => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_GLOBAL.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::GetClass
+            | RuntimeFnId::GetParentClass
+            | RuntimeFnId::ElephcObjectIsEnum
+            | RuntimeFnId::ElephcObjectPropCount
+            | RuntimeFnId::ElephcObjectPropName
+            | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // Re-boxing a property slot allocates the Mixed cell it hands back.
+            RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
+            RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
+            RuntimeFnId::BufferLen => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Time => crate::ir::Effects::READS_PROCESS,
+            RuntimeFnId::Microtime | RuntimeFnId::Hrtime => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_HEAP.bits(),
+                )
+            }
+            RuntimeFnId::Getenv | RuntimeFnId::Gethostname => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits(),
+                )
+            }
+            RuntimeFnId::PhpUname => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
+            RuntimeFnId::Phpversion => crate::ir::Effects::PURE,
+            RuntimeFnId::Rand => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits(),
+            ),
+            // `mt_rand()` and `random_int()` raise a catchable `ValueError` for an inverted
+            // `[min, max]` range; `rand()` silently swaps the bounds instead.
+            RuntimeFnId::MtRand | RuntimeFnId::RandomInt => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_PROCESS.bits()
+                        | crate::ir::Effects::WRITES_PROCESS.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
+                )
+            }
+            RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            // `intval($value, $base)` only inspects the subject's bytes: the string parser
+            // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
+            // handing a non-string payload to the ordinary integer cast.
+            RuntimeFnId::IntvalBase => crate::ir::Effects::READS_HEAP,
+            // `strtr()` reads the replacement-pair hash and materializes its result through
+            // the shared concat reservation front end; it never throws or warns.
+            RuntimeFnId::Strtr => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
+            RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
+                crate::ir::Effects::from_bits_retain(
+                    crate::ir::Effects::READS_HEAP.bits()
+                        | crate::ir::Effects::ALLOC_CONCAT.bits()
+                        | crate::ir::Effects::MAY_WARN.bits(),
+                )
+            }
             _ => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::REFCOUNT_OP.bits()
                     & !crate::ir::Effects::WRITES_GLOBAL.bits(),
             ),
+        }
+    }
+
+    /// Returns effects intrinsic to a callback builtin before invoking user code.
+    ///
+    /// Optimizer effect analysis combines this base with a statically-known closure or
+    /// first-class-callable summary. Dynamic callbacks still use [`Self::effects`].
+    pub const fn intrinsic_effects(self) -> crate::ir::Effects {
+        use crate::ir::Effects as E;
+        match self {
+            RuntimeFnId::ArrayAll
+            | RuntimeFnId::ArrayAny
+            | RuntimeFnId::ArrayFilter
+            | RuntimeFnId::ArrayFind
+            | RuntimeFnId::ArrayMap
+            | RuntimeFnId::ArrayReduce
+            | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive
+            | RuntimeFnId::ArrayUdiff
+            | RuntimeFnId::ArrayUintersect => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            RuntimeFnId::PregReplaceCallback => E::from_bits_retain(
+                E::READS_HEAP.bits() | E::ALLOC_HEAP.bits() | E::MAY_WARN.bits(),
+            ),
+            RuntimeFnId::Uasort
+            | RuntimeFnId::Uksort
+            | RuntimeFnId::Usort => {
+                E::from_bits_retain(
+                    E::READS_HEAP.bits() | E::WRITES_HEAP.bits() | E::REFCOUNT_OP.bits(),
+                )
+            }
+            RuntimeFnId::CallUserFunc => E::PURE,
+            RuntimeFnId::CallUserFuncArray => E::READS_HEAP,
+            _ => self.effects(),
         }
     }
 
@@ -751,6 +1109,20 @@ impl RuntimeFnId {
     ) -> &'static [crate::builtins::semantics::BuiltinRequirement] {
         use crate::builtins::semantics::BuiltinRequirement;
         match self {
+            RuntimeFnId::BcAdd
+            | RuntimeFnId::BcCeil
+            | RuntimeFnId::BcComp
+            | RuntimeFnId::BcDiv
+            | RuntimeFnId::BcDivmod
+            | RuntimeFnId::BcFloor
+            | RuntimeFnId::BcMod
+            | RuntimeFnId::BcMul
+            | RuntimeFnId::BcPow
+            | RuntimeFnId::BcPowmod
+            | RuntimeFnId::BcRound
+            | RuntimeFnId::BcScale
+            | RuntimeFnId::BcSqrt
+            | RuntimeFnId::BcSub => &[BuiltinRequirement::Bridge("elephc_bcmath")],
             RuntimeFnId::ElephcPharBzip2Archive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharDecompressArchive => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharGetFileMetadata => &[BuiltinRequirement::Bridge("elephc_phar")],
@@ -766,6 +1138,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcZipStatEntries => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -778,6 +1151,12 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashInit => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashUpdate => &[BuiltinRequirement::Bridge("elephc_crypto")],
+            RuntimeFnId::OpensslCipherIvLength
+            | RuntimeFnId::OpensslDecrypt
+            | RuntimeFnId::OpensslEncrypt
+            | RuntimeFnId::OpensslGetCipherMethods => {
+                &[BuiltinRequirement::Bridge("elephc_crypto")]
+            }
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -792,9 +1171,6 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::Abs
                 | RuntimeFnId::Gettype
-                | RuntimeFnId::Intval
-                | RuntimeFnId::PregMatch
-                | RuntimeFnId::PregMatchAll
                 | RuntimeFnId::Trim
         )
     }
@@ -818,22 +1194,6 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::Gettype => true,
-            RuntimeFnId::Intval => source.is_none_or(|ty| {
-                matches!(
-                    ty,
-                    PhpType::Bool
-                        | PhpType::Float
-                        | PhpType::Int
-                        | PhpType::Mixed
-                        | PhpType::Never
-                        | PhpType::Str
-                        | PhpType::Union(_)
-                        | PhpType::Void
-                )
-            }),
-            RuntimeFnId::PregMatch | RuntimeFnId::PregMatchAll => {
-                source.is_none_or(|ty| matches!(ty, PhpType::Str))
-            }
             RuntimeFnId::Trim => source.is_none_or(|ty| matches!(ty, PhpType::Str)),
             _ => false,
         }
@@ -861,6 +1221,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::ElephcPharListEntries
+                | RuntimeFnId::ElephcZipStatEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -884,7 +1245,9 @@ impl RuntimeFnId {
     /// Returns the callback operand inspected for runtime string dispatch, if any.
     pub const fn string_callback_operand_index(self) -> Option<usize> {
         match self {
-            RuntimeFnId::ArrayMap => Some(0),
+            RuntimeFnId::ArrayMap
+            | RuntimeFnId::CallUserFunc
+            | RuntimeFnId::CallUserFuncArray => Some(0),
             RuntimeFnId::ArrayFilter
             | RuntimeFnId::ArrayReduce
             | RuntimeFnId::ArrayWalk
@@ -926,16 +1289,45 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
+        // in the default `MayAliasArguments` bucket would keep an owned subject temporary
+        // alive for the integer's whole lifetime, which is the leak shape already documented
+        // for `Strpos` and `Strtr` below.
+        if matches!(
+            self,
+            RuntimeFnId::IntvalBase | RuntimeFnId::BcComp | RuntimeFnId::BcScale
+        ) {
+            return BuiltinResultOwnership::NonHeap;
+        }
         if matches!(
             self,
             RuntimeFnId::Abs
-                | RuntimeFnId::ArrayChangeKeyCase
+                | RuntimeFnId::BcAdd
+                | RuntimeFnId::BcCeil
+                | RuntimeFnId::BcDiv
+                | RuntimeFnId::BcDivmod
+                | RuntimeFnId::BcFloor
+                | RuntimeFnId::BcMod
+                | RuntimeFnId::BcMul
+                | RuntimeFnId::BcPow
+                | RuntimeFnId::BcPowmod
+                | RuntimeFnId::BcRound
+                | RuntimeFnId::BcSqrt
+                | RuntimeFnId::BcSub
                 | RuntimeFnId::ArrayChunk
                 | RuntimeFnId::ArrayColumn
                 | RuntimeFnId::ArrayCombine
                 | RuntimeFnId::ArrayDiff
                 | RuntimeFnId::ArrayFill
                 | RuntimeFnId::ArrayFillKeys
+                // Every `array_flip` lowering allocates its destination table before writing a
+                // single entry — `__rt_hash_flip` calls `__rt_hash_new`, the indexed helpers
+                // call `__rt_array_new` — so the result can never alias the source. The default
+                // `MayAliasArguments` bucket suppressed the release of an owned source
+                // temporary, which leaked the whole source table on `array_flip(build())` while
+                // the same call through a named local stayed clean. Its Fresh-owning siblings
+                // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
+                | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
@@ -943,6 +1335,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
+                // `key()`/`current()` and the seek family all hand back a cell built by
+                // `__rt_mixed_from_value`, which persists strings and increfs containers, so
+                // the box is independently owned and never aliases the receiving array.
+                | RuntimeFnId::ArrayPtrKey
+                | RuntimeFnId::ArrayPtrValue
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse
@@ -950,28 +1347,128 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
+                // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH
+                // arms into a fresh Mixed cell and `__rt_mixed_from_value` persists (copies)
+                // the decoded payload. Nothing handed back points into the encoded subject,
+                // so the default `MayAliasArguments` bucket would only keep an owned subject
+                // temporary alive for the boxed result's whole lifetime.
+                | RuntimeFnId::Base64Decode
+                // hexdec()/bindec()/octdec() box their `int|float` answer through
+                // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
+                // that cannot alias the parsed subject string.
+                // Every `count_chars()` shape allocates its own result: modes 0-2 build a
+                // brand-new tally hash and modes 3-4 hand back a `__rt_str_persist`-owned
+                // byte list, so nothing returned can alias the subject string.
+                | RuntimeFnId::CountChars
+                | RuntimeFnId::Bindec
+                | RuntimeFnId::Hexdec
+                | RuntimeFnId::Octdec
+                // Every property slot is re-boxed through `__rt_mixed_from_value`,
+                // which persists strings and increfs containers, so the cell handed
+                // back is independently owned and never aliases the source object's
+                // storage — the caller may release it like any other temporary.
+                | RuntimeFnId::ElephcObjectPropValue
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // `getcwd()` takes NO arguments, so its result cannot alias one by
+                // construction; `__rt_getcwd` copies the kernel's buffer out through
+                // `__rt_str_persist`. The default `MayAliasArguments` bucket made
+                // `value_is_scratch_string` treat that owned block as concat scratch and skip
+                // its release, leaking one block per call — measured unbounded, 10 calls left
+                // 10 live blocks, so a `--web` worker calling it per request grows forever.
+                | RuntimeFnId::Getcwd
                 | RuntimeFnId::IteratorToArray
+                // `json_encode()` builds its text in fresh storage and persists it; the result
+                // is new bytes, never a slice of the encoded value. Same leak shape as the
+                // three siblings already documented below.
+                | RuntimeFnId::JsonEncode
+                // `microtime()` formats into fresh storage from the clock; it has no string
+                // argument to alias. Its float mode is non-heap and unaffected.
+                | RuntimeFnId::Microtime
+                // Every `min()` / `max()` return path materializes fresh storage rather
+                // than handing back argument storage: the scalar forms return a plain
+                // register value, a `Mixed` result is boxed through
+                // `__rt_mixed_from_value` (which persists strings and increfs heap
+                // children), and the single-array string reduction runs its borrowed
+                // winner through `__rt_str_persist`. Leaving them in the default
+                // `MayAliasArguments` bucket suppressed nothing useful and leaked the
+                // boxed `Mixed` result of `min([...])`.
+                | RuntimeFnId::Max
+                | RuntimeFnId::Min
                 | RuntimeFnId::ObGetClean
                 | RuntimeFnId::ObGetContents
                 | RuntimeFnId::ObGetFlush
                 | RuntimeFnId::ObGetLength
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
+                | RuntimeFnId::OpensslCipherIvLength
+                | RuntimeFnId::OpensslDecrypt
+                | RuntimeFnId::OpensslEncrypt
+                | RuntimeFnId::OpensslGetCipherMethods
+                | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregSplit
+                // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
+                // copies those bytes out through `__rt_str_persist`, so every mode returns
+                // storage that is freshly allocated and cannot alias an argument: return mode
+                // yields an owned heap string, echo mode a non-heap `true`, and the runtime-flag
+                // mode a fresh Mixed cell. The default `MayAliasArguments` bucket made
+                // `value_is_scratch_string` classify the return-mode string as concat scratch and
+                // skip its release, leaking one block per `print_r($v, true)` call.
+                | RuntimeFnId::PrintR
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
+                // Every `str_word_count()` shape allocates its own result: format 0 is a plain
+                // integer, format 1 pushes persisted copies into a brand-new indexed array, and
+                // format 2 persists each word before inserting it into a brand-new hash. Nothing
+                // handed back can alias the subject or the character-list argument.
+                | RuntimeFnId::StrWordCount
+                | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
+                | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
+                // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
+                // copies the finished bytes into owned heap storage through `__rt_str_persist`,
+                // releasing the reservation afterwards, so the result is caller-owned and can
+                // never alias the subject, the pair array, or the byte lists.
+                | RuntimeFnId::Strtr
+                // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
+                // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
+                // payload — it no longer hands back a borrowed slice of the haystack. Leaving
+                // it in the default `MayAliasArguments` bucket kept an owned haystack
+                // temporary alive for the boxed result's whole lifetime, which leaked one
+                // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
+                | RuntimeFnId::Strstr
+                // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
+                // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
+                // `__rt_str_persist` — it is neither of its two argument strings. This was the
+                // declared debt; measuring it showed the leak is PER CALL, not the reported
+                // constant 48 bytes, and that `sys_get_temp_dir()` and `tmpfile()` — named
+                // alongside it in that report — are both clean.
+                | RuntimeFnId::Tempnam
+                // `array_splice()` always answers with the array `__rt_array_new` allocated for
+                // the removed window; the receiver is mutated through its by-reference slot and
+                // is never handed back. The default `MayAliasArguments` bucket suppressed the
+                // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
+                // leaked the literal replacement array on every call.
+                | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
         } else if matches!(
             self,
-            RuntimeFnId::Htmlentities
+            RuntimeFnId::BaseConvert
+                // `__rt_chunk_split` always writes into a reservation taken from
+                // `__rt_concat_reserve`, so the split result can never alias the subject or
+                // the separator. The default `MayAliasArguments` bucket kept an owned subject
+                // temporary alive for the result's whole lifetime, leaking one block per
+                // `chunk_split(build())` call.
+                | RuntimeFnId::ChunkSplit
+                | RuntimeFnId::Decbin
+                | RuntimeFnId::Dechex
+                | RuntimeFnId::Decoct
+                | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
                 | RuntimeFnId::Implode
         ) {
@@ -984,9 +1481,9 @@ impl RuntimeFnId {
     /// Returns the stable textual EIR spelling for diagnostics and snapshots.
     pub fn as_eir(self) -> &'static str {
         match self {
+            RuntimeFnId::ExpectArrayArg => "expect_array_arg",
             RuntimeFnId::ArrayAll => "array_all",
             RuntimeFnId::ArrayAny => "array_any",
-            RuntimeFnId::ArrayChangeKeyCase => "array_change_key_case",
             RuntimeFnId::ArrayChunk => "array_chunk",
             RuntimeFnId::ArrayColumn => "array_column",
             RuntimeFnId::ArrayCombine => "array_combine",
@@ -997,6 +1494,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayFillKeys => "array_fill_keys",
             RuntimeFnId::ArrayFilter => "array_filter",
             RuntimeFnId::ArrayFind => "array_find",
+            RuntimeFnId::ArrayCountValues => "array_count_values",
             RuntimeFnId::ArrayFlip => "array_flip",
             RuntimeFnId::ArrayIntersect => "array_intersect",
             RuntimeFnId::ArrayIntersectAssoc => "array_intersect_assoc",
@@ -1012,6 +1510,9 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMultisort => "array_multisort",
             RuntimeFnId::ArrayPad => "array_pad",
             RuntimeFnId::ArrayPop => "array_pop",
+            RuntimeFnId::ArrayPtrSeek => "array_ptr_seek",
+            RuntimeFnId::ArrayPtrKey => "array_ptr_key",
+            RuntimeFnId::ArrayPtrValue => "array_ptr_value",
             RuntimeFnId::ArrayProduct => "array_product",
             RuntimeFnId::ArrayPush => "array_push",
             RuntimeFnId::ArrayRand => "array_rand",
@@ -1059,7 +1560,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",
-            RuntimeFnId::GetDefinedFunctions => "get_defined_functions",
+            RuntimeFnId::GetLoadedExtensions => "get_loaded_extensions",
             RuntimeFnId::GetParentClass => "get_parent_class",
             RuntimeFnId::InterfaceExists => "interface_exists",
             RuntimeFnId::IsA => "is_a",
@@ -1077,6 +1578,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharGetStub => "__elephc_phar_get_stub",
             RuntimeFnId::ElephcPharGzipArchive => "__elephc_phar_gzip_archive",
             RuntimeFnId::ElephcPharListEntries => "__elephc_phar_list_entries",
+            RuntimeFnId::ElephcZipStatEntries => "__elephc_zip_stat_entries",
             RuntimeFnId::ElephcPharSetCompression => "__elephc_phar_set_compression",
             RuntimeFnId::ElephcPharSetFileMetadata => "__elephc_phar_set_file_metadata",
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",
@@ -1122,7 +1624,6 @@ impl RuntimeFnId {
             RuntimeFnId::Fprintf => "fprintf",
             RuntimeFnId::Fputcsv => "fputcsv",
             RuntimeFnId::Fread => "fread",
-            RuntimeFnId::Fscanf => "fscanf",
             RuntimeFnId::Fseek => "fseek",
             RuntimeFnId::Fsockopen => "fsockopen",
             RuntimeFnId::Fstat => "fstat",
@@ -1195,6 +1696,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamContextGetParams => "stream_context_get_params",
             RuntimeFnId::StreamContextSetDefault => "stream_context_set_default",
             RuntimeFnId::StreamContextSetOption => "stream_context_set_option",
+            RuntimeFnId::StreamContextSetOptions => "stream_context_set_options",
             RuntimeFnId::StreamContextSetParams => "stream_context_set_params",
             RuntimeFnId::StreamCopyToStream => "stream_copy_to_stream",
             RuntimeFnId::StreamFilterAppend => "stream_filter_append",
@@ -1243,18 +1745,37 @@ impl RuntimeFnId {
             RuntimeFnId::Asin => "asin",
             RuntimeFnId::Atan => "atan",
             RuntimeFnId::Atan2 => "atan2",
+            RuntimeFnId::BcAdd => "bcadd",
+            RuntimeFnId::BcCeil => "bcceil",
+            RuntimeFnId::BcComp => "bccomp",
+            RuntimeFnId::BcDiv => "bcdiv",
+            RuntimeFnId::BcDivmod => "bcdivmod",
+            RuntimeFnId::BcFloor => "bcfloor",
+            RuntimeFnId::BcMod => "bcmod",
+            RuntimeFnId::BcMul => "bcmul",
+            RuntimeFnId::BcPow => "bcpow",
+            RuntimeFnId::BcPowmod => "bcpowmod",
+            RuntimeFnId::BcRound => "bcround",
+            RuntimeFnId::BcScale => "bcscale",
+            RuntimeFnId::BcSqrt => "bcsqrt",
+            RuntimeFnId::BcSub => "bcsub",
             RuntimeFnId::Ceil => "ceil",
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",
             RuntimeFnId::Cosh => "cosh",
+            RuntimeFnId::Bindec => "bindec",
+            RuntimeFnId::BaseConvert => "base_convert",
+            RuntimeFnId::Decbin => "decbin",
+            RuntimeFnId::Dechex => "dechex",
+            RuntimeFnId::Decoct => "decoct",
             RuntimeFnId::Deg2rad => "deg2rad",
             RuntimeFnId::Exp => "exp",
             RuntimeFnId::Fdiv => "fdiv",
             RuntimeFnId::Floor => "floor",
             RuntimeFnId::Fmod => "fmod",
+            RuntimeFnId::Hexdec => "hexdec",
             RuntimeFnId::Hypot => "hypot",
             RuntimeFnId::Intdiv => "intdiv",
-            RuntimeFnId::Intval => "intval",
             RuntimeFnId::Log => "log",
             RuntimeFnId::Log10 => "log10",
             RuntimeFnId::Log2 => "log2",
@@ -1272,6 +1793,10 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
+            RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
+            RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
+            RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",
@@ -1308,8 +1833,11 @@ impl RuntimeFnId {
             RuntimeFnId::SplClasses => "spl_classes",
             RuntimeFnId::SplObjectHash => "spl_object_hash",
             RuntimeFnId::SplObjectId => "spl_object_id",
+            RuntimeFnId::Base64Decode => "base64_decode",
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
+            RuntimeFnId::ChunkSplit => "chunk_split",
+            RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
@@ -1323,12 +1851,16 @@ impl RuntimeFnId {
             RuntimeFnId::Gzuncompress => "gzuncompress",
             RuntimeFnId::Hash => "hash",
             RuntimeFnId::HashAlgos => "hash_algos",
-            RuntimeFnId::HashCopy => "hash_copy",
+            RuntimeFnId::HashCopy => "__elephc_hash_ctx_copy",
             RuntimeFnId::HashEquals => "hash_equals",
-            RuntimeFnId::HashFinal => "hash_final",
+            RuntimeFnId::HashFinal => "__elephc_hash_ctx_final",
             RuntimeFnId::HashHmac => "hash_hmac",
-            RuntimeFnId::HashInit => "hash_init",
-            RuntimeFnId::HashUpdate => "hash_update",
+            RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
+            RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
+            RuntimeFnId::OpensslCipherIvLength => "openssl_cipher_iv_length",
+            RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
+            RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
+            RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",
@@ -1342,13 +1874,15 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrlen => "mb_strlen",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
+            RuntimeFnId::Octdec => "octdec",
             RuntimeFnId::Ord => "ord",
+            RuntimeFnId::ParseUrl => "parse_url",
             RuntimeFnId::Printf => "printf",
             RuntimeFnId::Rtrim => "rtrim",
             RuntimeFnId::Sha1 => "sha1",
             RuntimeFnId::Sprintf => "sprintf",
-            RuntimeFnId::Sscanf => "sscanf",
             RuntimeFnId::StrContains => "str_contains",
+            RuntimeFnId::StrGetcsv => "str_getcsv",
             RuntimeFnId::StrEndsWith => "str_ends_with",
             RuntimeFnId::StrIreplace => "str_ireplace",
             RuntimeFnId::StrPad => "str_pad",
@@ -1356,12 +1890,19 @@ impl RuntimeFnId {
             RuntimeFnId::StrReplace => "str_replace",
             RuntimeFnId::StrSplit => "str_split",
             RuntimeFnId::StrStartsWith => "str_starts_with",
+            RuntimeFnId::StrWordCount => "str_word_count",
             RuntimeFnId::Strcasecmp => "strcasecmp",
             RuntimeFnId::Strcmp => "strcmp",
+            RuntimeFnId::Strncasecmp => "strncasecmp",
+            RuntimeFnId::Strncmp => "strncmp",
+            RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
+            RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
+            RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
             RuntimeFnId::Substr => "substr",
+            RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",
             RuntimeFnId::Trim => "trim",
             RuntimeFnId::Ucfirst => "ucfirst",
@@ -1382,12 +1923,15 @@ impl RuntimeFnId {
             RuntimeFnId::Define => "define",
             RuntimeFnId::Defined => "defined",
             RuntimeFnId::Exec => "exec",
+            RuntimeFnId::ExtensionLoaded => "extension_loaded",
             RuntimeFnId::Getdate => "getdate",
             RuntimeFnId::Getenv => "getenv",
             RuntimeFnId::Gmdate => "gmdate",
             RuntimeFnId::Gmmktime => "gmmktime",
             RuntimeFnId::Header => "header",
             RuntimeFnId::Hrtime => "hrtime",
+            RuntimeFnId::HttpClearLastResponseHeaders => "http_clear_last_response_headers",
+            RuntimeFnId::HttpGetLastResponseHeaders => "http_get_last_response_headers",
             RuntimeFnId::HttpResponseCode => "http_response_code",
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",
@@ -1395,7 +1939,6 @@ impl RuntimeFnId {
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
             RuntimeFnId::JsonValidate => "json_validate",
             RuntimeFnId::Localtime => "localtime",
-            RuntimeFnId::MemoryGetUsage => "memory_get_usage",
             RuntimeFnId::Microtime => "microtime",
             RuntimeFnId::Mktime => "mktime",
             RuntimeFnId::Passthru => "passthru",
@@ -1417,6 +1960,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
             RuntimeFnId::Gettype => "gettype",
+            RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",
             RuntimeFnId::IsFinite => "is_finite",
             RuntimeFnId::IsInfinite => "is_infinite",

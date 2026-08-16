@@ -182,59 +182,6 @@ fn test_intval_float_form_and_partial_strings() {
     assert_eq!(out, "1000|3|12|-5|0");
 }
 
-/// php-verified base-aware `intval($value, $base)` matrix (H5): hex/octal/binary prefixes
-/// (with and without explicit base), auto-detect via `$base = 0`, whitespace/sign handling,
-/// prefix-stop parsing (`"12abc"`-style), out-of-range bases yielding 0, and letters up to
-/// base 36. Exercises the dedicated `__rt_intval_base` runtime parser (never `strtol`).
-#[test]
-fn test_intval_base_matrix() {
-    let out = compile_and_run(
-        r#"<?php
-        echo intval("0x1A", 16), "|";
-        echo intval("1A", 16), "|";
-        echo intval("0x1A", 0), "|";
-        echo intval("012", 8), "|";
-        echo intval("012", 0), "|";
-        echo intval("0b101", 2), "|";
-        echo intval("0b101", 0), "|";
-        echo intval("  42", 10), "|";
-        echo intval("  -42", 10), "|";
-        echo intval("+42", 10), "|";
-        echo intval("42abc", 10), "|";
-        echo intval("abc", 10), "|";
-        echo intval(42, 16), "|";
-        echo intval("42", 1), "|";
-        echo intval("42", 37), "|";
-        echo intval("-0x1A", 16), "|";
-        echo intval("z", 36), "|";
-        echo intval("1.5e2", 10), "|";
-        echo intval("1.5e2", 0);
-        "#,
-    );
-    assert_eq!(
-        out,
-        "26|26|26|10|10|5|5|42|-42|42|42|0|42|0|0|-26|35|150|1"
-    );
-}
-
-/// php-verified saturating overflow matrix for `intval($value, $base)` (H5 JURY ADDENDUM):
-/// both directions saturate to the EXACT `PHP_INT_MAX`/`PHP_INT_MIN`, not `-PHP_INT_MAX`,
-/// for non-decimal bases handled by the dedicated `__rt_intval_base` parser.
-#[test]
-fn test_intval_base_overflow_saturates() {
-    let out = compile_and_run(
-        r#"<?php
-        echo intval("0xffffffffffffffff", 16), "|";
-        echo intval("-ffffffffffffffffffff", 16), "|";
-        echo intval("-7777777777777777777777", 8);
-        "#,
-    );
-    assert_eq!(
-        out,
-        "9223372036854775807|-9223372036854775808|-9223372036854775808"
-    );
-}
-
 /// Regression: `intval()` of a runtime float must truncate toward zero (like the `(int)` cast), not
 /// reinterpret the raw IEEE-754 bits. A non-constant float (`$x`, and a division result) exercises
 /// the runtime codegen path rather than constant folding.

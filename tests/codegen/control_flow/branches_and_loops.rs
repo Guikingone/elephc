@@ -171,71 +171,6 @@ fn test_for_loop() {
     assert_eq!(out, "01234");
 }
 
-/// Verifies a `for` loop with comma-separated init and update clauses: two counters advance
-/// together (`$i` up, `$j` down), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)`.
-#[test]
-fn test_for_comma_separated_init_and_update() {
-    let out = compile_and_run(
-        "<?php $s = \"\"; for ($i = 0, $j = 10; $i < 5; $i++, $j--) { $s .= $i . \":\" . $j . \" \"; } echo $s;",
-    );
-    assert_eq!(out, "0:10 1:9 2:8 3:7 4:6 ");
-}
-
-/// Verifies a fully empty `for (;;)` header with an immediate `break` compiles and exits,
-/// so statements after the loop still run (regression guard for the empty-clause fast path).
-#[test]
-fn test_for_empty_clauses_with_break() {
-    let out = compile_and_run("<?php for (;;) { break; } echo \"ok\";");
-    assert_eq!(out, "ok");
-}
-
-/// Verifies an arbitrary call expression in the `for` init clause: a by-ref user function
-/// initializes the counter, matching PHP's `for (f($k); $k < 2; $k++)` printing `01`.
-#[test]
-fn test_for_init_clause_call_expression() {
-    let out = compile_and_run(
-        r#"<?php
-function f(&$k): void { $k = 0; }
-$k = 5;
-for (f($k); $k < 2; $k++) {
-    echo $k;
-}
-"#,
-    );
-    assert_eq!(out, "01");
-}
-
-/// Verifies an arbitrary call expression in the `for` update clause: a by-ref step function
-/// advances the counter each iteration, matching PHP's output `0;2;4;`.
-#[test]
-fn test_for_update_clause_call_expression() {
-    let out = compile_and_run(
-        r#"<?php
-function step_(&$i): void { $i += 2; }
-for ($i = 0; $i < 6; step_($i)) {
-    echo $i, ";";
-}
-"#,
-    );
-    assert_eq!(out, "0;2;4;");
-}
-
-/// Verifies a mixed comma list in `for` clauses: an assignment plus an effect-only call in
-/// the init clause, and a call plus an increment in the update clause, all run in source
-/// order each time the clause executes, matching PHP's output `L;0;L;1;L;`.
-#[test]
-fn test_for_mixed_comma_clause_list() {
-    let out = compile_and_run(
-        r#"<?php
-function log_(): void { echo "L;"; }
-for ($i = 0, log_(); $i < 2; log_(), $i++) {
-    echo $i, ";";
-}
-"#,
-    );
-    assert_eq!(out, "L;0;L;1;L;");
-}
-
 /// Verifies break exits the for loop when $i reaches 3, producing 012.
 #[test]
 fn test_for_break() {
@@ -312,27 +247,6 @@ if ($x) {
 fn test_while_null_no_loop() {
     let out = compile_and_run("<?php $x = null; while ($x) { echo \"bad\"; } echo \"ok\";");
     assert_eq!(out, "ok");
-}
-
-/// Verifies a local assigned a more-derived class inside an `if`/`else` branch is typed as that
-/// derived class for the reads that follow it ON THAT PATH: the `else` branch calls a
-/// `Derived`-only method right after `$n = new Derived()`, which resolves, while the read after the
-/// merge dispatches the base method on the conservative join. Runtime output matches PHP.
-#[test]
-fn test_branch_local_assignment_is_flow_sensitive_to_derived_class() {
-    let out = compile_and_run(
-        r#"<?php
-        class Base { public function b(): string { return "b"; } }
-        class Derived extends Base { public function d(): int { return 7; } }
-        function run(bool $f): string {
-            if ($f) { $n = new Base(); }
-            else { $n = new Derived(); return (string)$n->d(); }
-            return $n->b();
-        }
-        echo run(false), run(true);
-        "#,
-    );
-    assert_eq!(out, "7b");
 }
 
 // --- Ternary operator ---

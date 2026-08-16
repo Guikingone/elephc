@@ -9,9 +9,8 @@
 //!   protected/private slots do not leak as public dynamic properties.
 
 eval_builtin! {
-    name: "get_object_vars",
+    contract: "get_object_vars",
     area: Symbols,
-    params: [object],
     direct: Symbols,
     values: Symbols,
 }

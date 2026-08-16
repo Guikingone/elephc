@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, StrBitKind};
+use crate::ir::Instruction;
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -237,45 +237,6 @@ pub(super) fn lower_str_concat(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Lowers a PHP bytewise string operator (`&`/`|`/`^`) into a `__rt_str_bitwise` call.
-///
-/// Both operands must be strings. The operator kind travels in the instruction's
-/// `Immediate::StrBitOp` and is passed to the runtime helper as a mode integer
-/// (0=And, 1=Or, 2=Xor) so a single helper resolves the result length and per-byte
-/// op once at entry. The string operands are loaded into the same ABI registers as
-/// `__rt_concat`; the mode register is loaded last so the string loads cannot clobber it.
-pub(super) fn lower_str_bitwise(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let lhs = expect_operand(inst, 0)?;
-    let rhs = expect_operand(inst, 1)?;
-    require_string(ctx.value_php_type(lhs)?, inst)?;
-    require_string(ctx.value_php_type(rhs)?, inst)?;
-    let mode = expect_str_bit_op(inst)?.as_mode();
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
-            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
-            abi::emit_load_int_immediate(ctx.emitter, "x5", mode);
-        }
-        Arch::X86_64 => {
-            ctx.load_string_value_to_regs(lhs, "rax", "rdx")?;
-            ctx.load_string_value_to_regs(rhs, "rdi", "rsi")?;
-            abi::emit_load_int_immediate(ctx.emitter, "rcx", mode);
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_str_bitwise");
-    store_if_result(ctx, inst)
-}
-
-/// Extracts the `StrBitKind` mode carried by a `StrBitwise` instruction's immediate.
-fn expect_str_bit_op(inst: &Instruction) -> Result<StrBitKind> {
-    match inst.immediate {
-        Some(Immediate::StrBitOp(kind)) => Ok(kind),
-        _ => Err(CodegenIrError::unsupported(
-            "str_bitwise without a string bitwise op immediate",
-        )),
-    }
-}
-
 /// Lowers a string length opcode by returning the string-pair length word.
 pub(super) fn lower_str_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
@@ -343,62 +304,6 @@ pub(super) fn lower_str_char_at(ctx: &mut FunctionContext<'_>, inst: &Instructio
         }
     }
     store_if_result(ctx, inst)
-}
-
-/// Lowers a PHP string offset assignment (`$s[$i] = $c`) into a `__rt_string_offset_set` call.
-///
-/// Operands are the source string, the integer byte offset, and the replacement string.
-/// The runtime helper never mutates the source in place: it copies the source bytes into
-/// the shared concat scratch, right-pads with spaces when the offset is past the end, and
-/// writes the replacement's first byte at the offset, returning a fresh scratch string.
-/// Because the source is only read, aliases stay copy-on-write safe; the fresh result is
-/// persisted into the destination local by the surrounding `store_local` lowering.
-///
-/// The offset value is loaded first so the subsequent string frame-slot loads (which target
-/// distinct ABI registers) cannot clobber the offset when it homes in a string ABI register.
-///
-/// PHP rejects an empty replacement outright — `$s[0] = '';`, `$s[0] = null;` and `$s[0] = false;`
-/// all raise `Error: Cannot assign an empty string to a string offset` — so the emitted code tests
-/// the replacement length once it is loaded and throws that catchable `Error` instead of falling
-/// into the helper's copy-through path. The guard sits between the replacement and subject loads:
-/// it never returns, so clobbering the already-loaded argument registers on the throwing edge is
-/// harmless.
-pub(super) fn lower_str_offset_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let string = expect_operand(inst, 0)?;
-    let index = expect_operand(inst, 1)?;
-    let replacement = expect_operand(inst, 2)?;
-    require_string(ctx.value_php_type(string)?, inst)?;
-    require_string(ctx.value_php_type(replacement)?, inst)?;
-    let non_empty = ctx.next_label("str_offset_set_nonempty");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            require_integer_like(ctx.load_value_to_reg(index, "x3")?, inst)?;
-            ctx.load_string_value_to_regs(replacement, "x4", "x5")?;
-            ctx.emitter.instruction(&format!("cbnz x5, {}", non_empty)); // a non-empty replacement performs the write
-            emit_empty_string_offset_error(ctx);
-            ctx.emitter.label(&non_empty);
-            ctx.load_string_value_to_regs(string, "x1", "x2")?;
-        }
-        Arch::X86_64 => {
-            require_integer_like(ctx.load_value_to_reg(index, "rdi")?, inst)?;
-            ctx.load_string_value_to_regs(replacement, "rsi", "rcx")?;
-            ctx.emitter.instruction("test rcx, rcx");                           // is the replacement string empty?
-            ctx.emitter.instruction(&format!("jnz {}", non_empty));             // a non-empty replacement performs the write
-            emit_empty_string_offset_error(ctx);
-            ctx.emitter.label(&non_empty);
-            ctx.load_string_value_to_regs(string, "rax", "rdx")?;
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_string_offset_set");
-    store_if_result(ctx, inst)
-}
-
-/// Throws PHP's catchable `Error` for an empty string-offset replacement.
-///
-/// The wording is PHP 8's verbatim message, so a `try { $s[0] = null; } catch (\Error $e)` reads
-/// identically to `php -n`.
-fn emit_empty_string_offset_error(ctx: &mut FunctionContext<'_>) {
-    super::exceptions::emit_error(ctx, "Cannot assign an empty string to a string offset");
 }
 
 /// Lowers string persistence by copying the string into runtime-owned storage.
@@ -486,11 +391,7 @@ fn lower_loaded_tagged_scalar_to_string(ctx: &mut FunctionContext<'_>) -> Result
 }
 
 /// Converts the loaded boolean result to PHP string ABI registers.
-///
-/// `pub(super)` (rather than private) so `filter_var()`'s `FILTER_DEFAULT`
-/// lowering (`crate::codegen::lower_inst::builtins::filter`) can reuse the
-/// exact same bool-to-string conversion instead of duplicating it.
-pub(super) fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
+fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let false_label = ctx.next_label("bool_to_str_false");
@@ -515,4 +416,34 @@ pub(super) fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Resu
         }
     }
     Ok(())
+}
+
+/// Lowers `Op::StrIncDec`: PHP's `++` / `--` applied to a string value.
+///
+/// The operand is either a concrete `Str` payload or a boxed `Mixed` cell, and the result is
+/// ALWAYS a freshly allocated boxed `Mixed` cell because the operator can change the value's
+/// type (`"9"++` is `int(10)`, `"az"++` is `"ba"`). A concrete string goes straight to
+/// `__rt_str_inc_dec`; a boxed value goes through `__rt_mixed_inc_dec`, which routes a string
+/// payload to the same helper and keeps every other payload on the existing numeric path.
+///
+/// The `i64` immediate carries the delta and is `+1` for `++` and `-1` for `--`.
+pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let delta = super::expect_i64(inst)?;
+    let operand_ty = ctx.value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
+    let delta_reg = match (ctx.emitter.target.arch, &operand_ty) {
+        (Arch::AArch64, PhpType::Str) => "x3",
+        (Arch::AArch64, _) => "x1",
+        (Arch::X86_64, PhpType::Str) => "rcx",
+        (Arch::X86_64, _) => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, delta_reg, delta);
+    let helper = if matches!(operand_ty, PhpType::Str) {
+        "__rt_str_inc_dec"
+    } else {
+        "__rt_mixed_inc_dec"
+    };
+    abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
 }

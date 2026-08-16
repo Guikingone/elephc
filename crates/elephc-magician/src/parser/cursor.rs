@@ -68,12 +68,36 @@ impl Parser {
             self.pos += 1;
         }
     }
+
+    /// Returns true when the current token is the keyword `name`, compared case-insensitively.
+    pub(super) fn at_keyword(&self, name: &str) -> bool {
+        matches!(self.current(), TokenKind::Ident(actual) if ident_eq(actual, name))
+    }
+
+    /// Returns true when the current token is any of the keywords in `names`.
+    pub(super) fn at_any_keyword(&self, names: &[&str]) -> bool {
+        names.iter().any(|name| self.at_keyword(name))
+    }
+
+    /// Consumes the keyword `name` or returns a parse error.
+    pub(super) fn expect_keyword(&mut self, name: &str) -> Result<(), EvalParseError> {
+        if self.at_keyword(name) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(EvalParseError::UnexpectedToken)
+        }
+    }
 }
 
 /// Returns true when the current token closes or starts a switch case arm.
+///
+/// `endswitch` counts as a boundary so an alternative-syntax case body stops there instead of
+/// trying to parse the terminator as a statement.
 pub(super) fn is_switch_case_boundary(token: &TokenKind) -> bool {
     matches!(token, TokenKind::RBrace)
-        || matches!(token, TokenKind::Ident(name) if ident_eq(name, "case") || ident_eq(name, "default"))
+        || matches!(token, TokenKind::Ident(name)
+            if ident_eq(name, "case") || ident_eq(name, "default") || ident_eq(name, "endswitch"))
 }
 
 /// Maps simple variable assignment tokens to an optional compound EvalIR operator.

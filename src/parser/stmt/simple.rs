@@ -1,16 +1,12 @@
 //! Purpose:
 //! Parses simple statement forms with minimal nested structure.
-//! Handles includes, echo, expression statements, returns, throws, `$this` statements, constants,
-//! and `declare(...)` directives.
+//! Handles includes, echo, expression statements, returns, throws, `$this` statements, and constants.
 //!
 //! Called from:
 //! - `crate::parser::stmt::parse_stmt()`.
 //!
 //! Key details:
 //! - Include statements preserve their path expression for resolver include discovery and loading.
-//! - `declare(...)` directives (`strict_types`, `ticks`, `encoding`) are parsed and discarded:
-//!   elephc type-checks statically and does not support tick handlers or alternate source
-//!   encodings, so the statement form lowers to a no-op and the block form keeps only its body.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
@@ -18,7 +14,7 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
-use super::assign::try_parse_postfix_assignment;
+use super::assign::{try_parse_postfix_assignment, try_parse_postfix_incdec};
 use super::{expect_semicolon, expect_token};
 
 /// Parses `include`/`require` (with optional `_once`) statements.
@@ -73,11 +69,7 @@ pub(super) fn parse_include(
 /// `ExprKind::IncludeValue` marker that the resolver expands by inlining the included file's
 /// statements into the caller's statement list (sharing scope) and capturing its top-level
 /// `return` into a hidden temporary.
-///
-/// Visible across `crate::parser` (not just `crate::parser::stmt`) so the general prefix
-/// expression parser (`crate::parser::expr::prefix`) can also parse `include`/`require` as an
-/// operand in arbitrary expression position (e.g. `$x ??= require F;`, `f(require F)`).
-pub(in crate::parser) fn try_parse_value_include(
+pub(in crate::parser::stmt) fn try_parse_value_include(
     tokens: &[SpannedToken],
     pos: &mut usize,
 ) -> Result<Option<Expr>, CompileError> {
@@ -241,6 +233,11 @@ pub(super) fn parse_this_stmt(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     if let Some(stmt) = try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    // `$this->n++` and `$this->arr[0]++` are read-modify-write statements, exactly like
+    // `$obj->n++`; without this the `++` would be left for `expect_semicolon` to reject.
+    if let Some(stmt) = try_parse_postfix_incdec(tokens, pos, span)? {
         return Ok(stmt);
     }
 

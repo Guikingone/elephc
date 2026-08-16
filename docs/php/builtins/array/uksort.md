@@ -2,7 +2,7 @@
 title: "uksort()"
 description: "Sorts an array by keys using a user-defined comparison function."
 sidebar:
-  order: 63
+  order: 69
 ---
 
 ## uksort()
@@ -25,12 +25,6 @@ Sorts an array by keys using a user-defined comparison function.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/uksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/uksort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

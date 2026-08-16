@@ -10,6 +10,9 @@
 //!   so their values persist across function calls without using frame slots.
 //! - Initializers transfer their freshly-created owner into the static slot;
 //!   assignments retain refcounted values before publishing a second owner.
+//! - Both symbols come from `crate::names::static_local_symbol()` /
+//!   `static_local_init_symbol()`, which encode the (function, variable) pair injectively.
+//!   Building them by string concatenation merged unrelated statics onto one cell.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -17,7 +20,7 @@ use crate::ir::{Instruction, LocalSlot, LocalSlotId, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
-use super::{coerce_loaded_local_to_result_type, expect_local_slot, expect_operand, store_if_result};
+use super::{coerce_loaded_local_to_result_type, expect_local_slot, expect_operand};
 use crate::codegen::{CodegenIrError, Result};
 
 /// Resolved function static-local metadata for symbol-backed storage.
@@ -81,23 +84,17 @@ pub(super) fn lower_store_static_local(ctx: &mut FunctionContext<'_>, inst: &Ins
     Ok(())
 }
 
-/// Lowers a static-local initializer commit: stores the already-computed value into the
-/// persistent slot, then marks the slot initialized.
-///
-/// This instruction no longer re-checks the once-flag itself: `crate::ir_lower::stmt::
-/// lower_static_var` now wraps the WHOLE initializer evaluation (this instruction's value
-/// operand included) in an EIR-level `CondBr` keyed on `Op::StaticLocalInitialized`, so
-/// `Op::InitStaticLocal` is only ever reached on a call path that observed the flag unset. The
-/// flag is set AFTER the store completes here (not before, unlike the old inline once-check this
-/// replaces) so a crash between the two, or a reentrant call recursing back into the same
-/// function mid-initializer, both still observe "uninitialized" — matching PHP's own
-/// `static $x; $x ??= <init>;` reentrancy behavior (see `Op::StaticLocalInitialized`'s doc
-/// comment for the php-verified matrix).
+/// Lowers a static-local declaration initializer guarded by the per-slot marker.
 pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     let slot = resolve_static_local_slot(ctx, inst)?;
     ensure_static_local_type_supported(&slot, inst)?;
     ensure_static_local_value_supported(ctx, &slot, value, inst)?;
+    let initialized_label = ctx.next_label("static_local_initialized");
+    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
+    abi::emit_branch_if_int_result_nonzero(ctx.emitter, &initialized_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
     let mut loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
     // Narrow Mixed to Int when the static local slot is Int-typed.
     if matches!(slot.php_type.codegen_repr(), PhpType::Int)
@@ -127,20 +124,8 @@ pub(super) fn lower_init_static_local(ctx: &mut FunctionContext<'_>, inst: &Inst
     let store_ty = slot.php_type.codegen_repr();
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &store_ty, false);
     clear_static_local_high_word_if_needed(ctx, &slot);
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
+    ctx.emitter.label(&initialized_label);
     Ok(())
-}
-
-/// Lowers a static-local once-flag read into a `Bool` result, without mutating the flag or
-/// touching the value slot. Emitted as the once-guard `CondBr`'s condition in
-/// `crate::ir_lower::stmt::lower_static_var` — a flag-true result skips straight past the
-/// initializer's instructions (and `Op::InitStaticLocal`) instead of only skipping the final
-/// store, so a side-effecting or heap-allocating initializer runs exactly once across calls.
-pub(super) fn lower_static_local_initialized(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let slot = resolve_static_local_slot(ctx, inst)?;
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &slot.init_symbol, 0);
-    store_if_result(ctx, inst)
 }
 
 /// Resolves a local-slot immediate into static-local symbol metadata.
@@ -154,15 +139,14 @@ fn resolve_static_local_slot(
         CodegenIrError::invalid_module(format!("{} static local is missing a source name", inst.op.name()))
     })?;
     let php_type = local.php_type.codegen_repr();
-    let function_fragment = static_local_function_fragment(&ctx.function.name);
-    let symbol = format!("_static_{}_{}", function_fragment, name);
-    let init_symbol = format!("{}_init", symbol);
+    let symbol = crate::names::static_local_symbol(&ctx.function.name, &name);
+    let init_symbol = crate::names::static_local_init_symbol(&ctx.function.name, &name);
     ctx.data.add_comm(symbol.clone(), 16);
     ctx.data.add_comm(init_symbol.clone(), 8);
     // Record this static so the `--web` `__rt_web_reset` routine can release and
     // zero it between requests. Deduped by symbol inside the recorder, so the
     // repeated resolves on every load/store/init of this static cost nothing.
-    ctx.data.record_static_local(crate::codegen_support::data_section::StaticLocalRecord {
+    ctx.data.record_static_local(crate::codegen::data_section::StaticLocalRecord {
         symbol: symbol.clone(),
         init_symbol: init_symbol.clone(),
         php_type: php_type.clone(),
@@ -187,22 +171,10 @@ fn local_slot<'a>(
 }
 
 /// Verifies that this backend slice knows how to represent the static-local type.
-///
-/// `PhpType::Callable` (a one-word closure/first-class-callable descriptor) is accepted
-/// alongside the refcounted types even though `PhpType::is_refcounted()` does not cover it:
-/// `Ownership::php_type_needs_lifetime_tracking` already groups it with `Str`/`Buffer` as
-/// needing retain/release, and `emit_incref_if_refcounted`/`emit_decref_if_refcounted`
-/// (`crate::codegen::abi::values`) already dispatch it to the dedicated
-/// `callable_descriptor::{emit_retain_current_descriptor, emit_release_current_descriptor}`
-/// helpers — the call sites here just need to route through them (see
-/// `lower_store_static_local`'s incref gate and `abi::emit_store_result_to_symbol`'s
-/// release-previous gate, both widened alongside this check).
 fn ensure_static_local_type_supported(slot: &StaticLocalSlot, inst: &Instruction) -> Result<()> {
     let ty = slot.php_type.codegen_repr();
-    if matches!(
-        ty,
-        PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void | PhpType::Callable
-    ) || ty.is_refcounted()
+    if matches!(ty, PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Void)
+        || ty.is_refcounted()
     {
         return Ok(());
     }
@@ -262,19 +234,4 @@ fn clear_static_local_high_word_if_needed(ctx: &mut FunctionContext<'_>, slot: &
     if !matches!(slot.php_type.codegen_repr(), PhpType::Str | PhpType::TaggedScalar) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &slot.symbol, 8);
     }
-}
-
-/// Builds an assembly-safe function fragment for a static-local storage symbol.
-fn static_local_function_fragment(name: &str) -> String {
-    let mut fragment = String::new();
-    for ch in name.chars() {
-        match ch {
-            'A'..='Z' | 'a'..='z' | '0'..='9' => fragment.push(ch),
-            '_' => fragment.push_str("_u_"),
-            '\\' => fragment.push_str("_N_"),
-            ':' => fragment.push_str("_C_"),
-            _ => fragment.push('_'),
-        }
-    }
-    fragment
 }

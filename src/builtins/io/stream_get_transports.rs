@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_get_transports",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "stream_get_transports",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetTransports,
     ),
-    summary: "Retrieves list of registered socket transports.",
-    php_manual: "function.stream-get-transports",
 }
 
 /// Returns `Array(Str)` as the precise return type for `stream_get_transports`.

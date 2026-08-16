@@ -7,8 +7,6 @@
 //! Key details:
 //! - PHP string truthiness is special: only `""` and `"0"` are false.
 //! - Mixed predicates unbox the runtime cell before comparing the concrete tag.
-//! - Predicate dispatch follows the effective codegen representation, so a source `int|null`
-//!   union uses inline `TaggedScalar` truthiness rather than boxed-Mixed helpers.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -22,7 +20,7 @@ use crate::codegen::{CodegenIrError, Result};
 /// Lowers scalar PHP truthiness into a concrete boolean integer result.
 pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
+    match ctx.raw_value_php_type(value)? {
         PhpType::Bool | PhpType::False | PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_nonzero_bool(ctx);
@@ -44,12 +42,6 @@ pub(super) fn lower_is_truthy(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
         }
         PhpType::Resource(_) => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        }
-        PhpType::Object(_) => {
-            // A non-null object is always truthy in PHP boolean context (there is no
-            // `__toBool`); a nullable receiver would lower as Mixed/Union and take the branch
-            // above. Statically known objects fold straight to `true`.
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
         }
         other => {
@@ -119,7 +111,34 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_tagged_scalar_null_bool(ctx);
             Ok(())
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        // Bool-typed slots carry the in-band null sentinel even under `--null-repr=tagged`:
+        // `array_access_element_result_type` only widens *Int* element reads to the
+        // null-capable `TaggedScalar`, so a missed read of a `bool`/`false` element still
+        // returns the raw `NULL_SENTINEL` word. Answering "never null" for those (as the
+        // tagged shortcut below does for Int) made `$a[$k] ?? false` take the *value* branch
+        // on a miss and leak the sentinel — rendering as `true` (or as the literal
+        // 9223372036854775806 in string context). A genuine bool is only ever 0 or 1, so the
+        // sentinel comparison is exact here and never misfires on a real value.
+        PhpType::Bool | PhpType::False => {
+            ctx.load_value_to_result(value)?;
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
+        // Float-typed slots have no tagged representation either, so a silent miss on a
+        // `float` element marks itself with the in-band `NULL_SENTINEL` word reinterpreted as
+        // a quiet NaN (`emit_float_null_sentinel`). Answering a constant "never null" here —
+        // which the catch-all arm below used to do — made `$a[$k] ?? $d` take the *value*
+        // branch on a miss and hand the caller `0` instead of the default. The comparison is
+        // on raw bits, not a float compare: `fcmp`/`ucomisd` report a NaN as *unordered*, and
+        // the sentinel payload differs from the `NAN` a PHP program can store, so a genuine
+        // stored `NAN` element is never mistaken for a miss.
+        PhpType::Float => {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_float_result_bits_to_int_result(ctx.emitter);
+            emit_int_result_null_sentinel_bool(ctx);
+            Ok(())
+        }
+        PhpType::Int | PhpType::Callable => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
                 return Ok(());
@@ -304,19 +323,60 @@ pub(super) fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits a float nonzero check into the canonical integer result register.
+///
+/// PHP treats every float except `0.0`/`-0.0` as truthy, and that INCLUDES `NAN`
+/// (`var_dump((bool)NAN)` prints `bool(true)` on every supported version). Both arms below
+/// have to say so, which takes explicit work only on x86_64 — see
+/// `emit_x86_64_float_nonzero_from_flags`.
+///
+/// Under `--php-version 8.5` the coercion is also REPORTED, so a NAN probe runs first; see
+/// `emit_nan_bool_coercion_probe`.
 pub(super) fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // AArch64 `fcmp` reports unordered as `N=0 Z=0 C=1 V=1`, so `ne` (Z==0) already
+            // answers true for a NAN. No parity fixup is needed on this arch.
             ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the float truthiness operand against zero
             ctx.emitter.instruction("cset x0, ne");                             // materialize nonzero float truthiness as boolean 1
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for comparison
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the float truthiness operand against zero
-            ctx.emitter.instruction("setne al");                                // materialize nonzero float truthiness in the low byte
+            emit_x86_64_float_nonzero_from_flags(ctx);
             ctx.emitter.instruction("movzx rax, al");                           // widen the truthiness byte into the integer result register
         }
     }
+}
+
+/// Materializes "this float is not zero" from x86_64 `ucomisd` flags, counting NAN as nonzero.
+///
+/// `ucomisd` sets `ZF=PF=CF=1` for an UNORDERED compare, so a bare `setne al` reads a NAN as
+/// EQUAL to zero and answers `false` — the exact inverse of PHP, and of what the AArch64 arm
+/// produces from the same source. Folding `PF` back in with `or` restores `(bool)NAN === true`
+/// and leaves every ordered comparison untouched (`PF=0` there). This mirrors the `!=` branch of
+/// `comparisons::emit_x86_64_float_equality_result`, which had the fixup from the start.
+fn emit_x86_64_float_nonzero_from_flags(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("setne al");                                        // materialize ordered nonzero float truthiness in the low byte
+    ctx.emitter.instruction("setp r10b");                                       // materialize whether the comparison was unordered (a NAN)
+    ctx.emitter.instruction("or al, r10b");                                     // PHP counts NAN as truthy, so merge the unordered case in
+}
+
+/// Emits PHP 8.5's `unexpected NAN value was coerced to bool` probe ahead of a float
+/// truthiness materialization.
+///
+/// Emits nothing at all on pre-8.5 profiles, where php-src coerces NAN silently — verified
+/// against php 8.2.31 (no warning) and php 8.5.6 (warning at every coercion site).
+///
+/// The probe is deliberately placed at the MATERIALIZATION site rather than at the value's
+/// definition, because php-src warns once per coercion REACHED: a `while ($nan)` header that
+/// runs two condition checks warns twice, and a NAN that is never coerced never warns.
+pub(super) fn emit_nan_bool_coercion_probe(ctx: &mut FunctionContext<'_>) {
+    if !crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        return;
+    }
+    let skip_label = ctx.next_label("nan_bool_warn_skip");
+    crate::codegen_support::runtime::emit_nan_bool_coercion_probe(ctx.emitter, &skip_label);
 }
 
 /// Emits PHP string truthiness, where `""` and `"0"` are false.

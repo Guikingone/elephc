@@ -72,44 +72,6 @@ pub(crate) fn patch_magic_method_signatures(checker: &mut Checker) {
     }
 }
 
-/// Finalizes any `__call`/`__callStatic` signature whose forwarded-argument
-/// array parameter (`params[1]`) is still `Array(Never)` after all expression
-/// inference and per-site specialization have run, widening it to
-/// `Array(Mixed)`.
-///
-/// `Array(Never)` means no singular-receiver call site ever pinned the element
-/// type: specialization only fires for a concrete receiver, so a `__call`
-/// reachable exclusively through a Mixed / non-singular receiver keeps the seed
-/// type. Such forwarded arguments are genuinely heterogeneous, so their only
-/// correct representation is boxed `Mixed` (8-byte cells) — matching what
-/// `emit_magic_call_args_array` builds for a Mixed receiver. Signatures already
-/// specialized to a concrete element type (e.g. `Array(Str)`) are not
-/// `Array(Never)` and are left untouched, so the concrete-receiver dispatch
-/// path is unchanged.
-///
-/// Must run after all inference/specialization and before the signatures are
-/// consumed by EIR lowering / codegen.
-pub(crate) fn finalize_magic_call_arg_signatures(checker: &mut Checker) {
-    let never_array = PhpType::Array(Box::new(PhpType::Never));
-    let mixed_array = PhpType::Array(Box::new(PhpType::Mixed));
-    for class_info in checker.classes.values_mut() {
-        if let Some(sig) = class_info.methods.get_mut("__call") {
-            if let Some(param) = sig.params.get_mut(1) {
-                if param.1 == never_array {
-                    param.1 = mixed_array.clone();
-                }
-            }
-        }
-        if let Some(sig) = class_info.static_methods.get_mut("__callstatic") {
-            if let Some(param) = sig.params.get_mut(1) {
-                if param.1 == never_array {
-                    param.1 = mixed_array.clone();
-                }
-            }
-        }
-    }
-}
-
 /// Validates that user-declared magic methods (`__toString`, `__get`, `__set`,
 /// `__isset`, `__unset`, `__call`, `__callStatic`, `__invoke`, `__clone`,
 /// `__destruct`)

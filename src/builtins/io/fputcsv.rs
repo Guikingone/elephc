@@ -7,27 +7,18 @@
 //! Key details:
 //! - `check` validates the `stream` argument is a stream resource and returns `Int`.
 //! - Arguments are pre-inferred by the registry before the hook runs.
+//! - PHP 8.1+: `eol` defaults to `"\n"`.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fputcsv",
-    area: Io,
-    params: [
-        stream: Mixed,
-        fields: Mixed,
-        separator: Str = DefaultSpec::Str(","),
-        enclosure: Str = DefaultSpec::Str("\"")
-    ],
-    returns: Int,
+    contract: "fputcsv",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fputcsv,
     ),
-    summary: "Format line as CSV and write to file pointer.",
-    php_manual: "function.fputcsv",
 }
 
 /// Validates the stream argument is a stream resource and returns `Int`.

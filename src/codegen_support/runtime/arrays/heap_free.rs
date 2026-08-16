@@ -60,6 +60,16 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("cmp x12, x17");                                        // would the candidate payload overrun the live heap?
     emitter.instruction("b.hi __rt_heap_free_done");                            // yes — reject the invalid block before free-list insertion
 
+    // -- return this block's PHP object handle to the pool before the storage goes --
+    // This is the SINGLE release chokepoint for object identity: every object dies
+    // by having its storage reclaimed here, whatever released it (refcount drop,
+    // deep free, cycle collection). The helper falls out after one load for the
+    // strings/arrays/hashes/descriptors that never held a handle, and it preserves
+    // every register, so only x30 has to be saved around the branch.
+    emitter.instruction("stp x0, x30, [sp, #-16]!");                            // preserve the freed pointer and caller return address across the handle release
+    emitter.instruction("bl __rt_object_handle_release");                       // hand this block's PHP object handle back to the LIFO pool
+    emitter.instruction("ldp x0, x30, [sp], #16");                              // restore the freed pointer and caller return address
+
     // -- debug mode: validate the free list before mutating it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
@@ -126,7 +136,11 @@ pub fn emit_heap_free(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x12");                                   // x10 = address of the chosen small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_heap_debug_enabled");
     emitter.instruction("ldr x16, [x16]");                                      // load the heap-debug enabled flag
-    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("cbnz x16, __rt_heap_free_cache_small_dupscan");        // heap-debug mode active, scan the bin for a double free
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x16", "_web_heap_guard_enabled");
+    emitter.instruction("ldr x16, [x16]");                                      // load the web heap-guard enabled flag
+    emitter.instruction("cbz x16, __rt_heap_free_cache_small_insert");          // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("ldr x12, [x10]");                                      // x12 = current cached block while checking for duplicates
     emitter.label("__rt_heap_free_cache_small_scan");
     emitter.instruction("cbz x12, __rt_heap_free_cache_small_insert");          // a null next pointer means the block is not already cached
@@ -309,6 +323,25 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("test rax, rax");                                       // ignore null pointers so the x86_64 heap runtime matches the shared heap_free contract
     emitter.instruction("jz __rt_heap_free_done");                              // null payloads do not own heap storage and therefore need no release work
+
+    // -- validate the pointer RANGE before any header is read, as the AArch64 path does --
+    // Callers are invited by contract to hand this helper a pointer that is not a heap block:
+    // `__rt_fputcsv` passes whatever `__rt_mixed_cast_string` returned, which for an int, float
+    // or bool is an address inside the shared concat arena, and for null is nothing at all. The
+    // marker check further down is what implements that contract — but it reads `[rax - 8]` to
+    // do it, so a foreign pointer was dereferenced OUTSIDE the heap to decide it was foreign,
+    // and it only takes those eight neighbouring bytes carrying the marker for the arena to be
+    // threaded onto the free list. AArch64 bounds the pointer first and so never reads them.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_buf");
+    emitter.instruction("lea r9, [r8 + 16]");                                   // the first address a payload can occupy
+    emitter.instruction("cmp rax, r9");                                         // is the candidate below the first heap payload?
+    emitter.instruction("jb __rt_heap_free_done");                              // yes — a non-heap or interior pointer owns nothing here
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_heap_off");
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // the current bump offset
+    emitter.instruction("lea r9, [r8 + r9]");                                   // the live heap end
+    emitter.instruction("cmp rax, r9");                                         // is the candidate at or beyond it?
+    emitter.instruction("jae __rt_heap_free_done");                             // yes — outside the live heap, so not ours to free
+
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before mutating free-list state
     emitter.instruction("test r8, r8");                                         // is heap-debug validation enabled for this free path?
@@ -342,6 +375,12 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used to distinguish owned heap payloads from foreign pointers
     emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that this payload belongs to the x86_64 heap runtime before mutating allocator state
     emitter.instruction("jne __rt_heap_free_done");                             // silently ignore foreign/static pointers so callers can safely pass literals or concat-buffer storage
+
+    // -- return this block's PHP object handle to the pool before the storage goes --
+    // Single release chokepoint for object identity, matching the AArch64 path: the
+    // helper preserves every register including rax, so no spill is needed here.
+    emitter.instruction("call __rt_object_handle_release");                     // hand this block's PHP object handle back to the LIFO pool
+
     emitter.instruction("lea r9, [rax - 16]");                                  // recover the internal block header address from the user payload pointer
     emitter.instruction("mov r11d, DWORD PTR [r9]");                            // load the block payload size from the uniform heap header before releasing it
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
@@ -399,8 +438,13 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r10, rcx");                                        // r10 = address of the selected small-bin head slot
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the heap-debug enabled flag before checking cached-bin duplicates
-    emitter.instruction("test r8, r8");                                         // is duplicate detection enabled for the small-bin cache?
-    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // skip duplicate detection when heap-debug mode is disabled
+    emitter.instruction("test r8, r8");                                         // is heap-debug duplicate detection enabled?
+    emitter.instruction("jnz __rt_heap_free_cache_small_dupscan");              // heap-debug mode active, scan the bin for a double free
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_web_heap_guard_enabled");
+    emitter.instruction("mov r8, QWORD PTR [r8]");                              // reload the web heap-guard enabled flag
+    emitter.instruction("test r8, r8");                                         // is the web heap-guard double-free detection enabled?
+    emitter.instruction("jz __rt_heap_free_cache_small_insert");                // neither guard active, skip duplicate detection
+    emitter.label("__rt_heap_free_cache_small_dupscan");
     emitter.instruction("mov rdx, QWORD PTR [r10]");                            // start scanning the cached small-bin chain for duplicate headers
     emitter.label("__rt_heap_free_cache_small_scan");
     emitter.instruction("test rdx, rdx");                                       // did the cached small-bin scan reach the tail?
@@ -537,4 +581,50 @@ fn emit_heap_free_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_heap_free");                                  // delegate in-range candidates to the normal free path
     emitter.label("__rt_heap_free_safe_skip");
     emitter.instruction("ret");                                                 // return without touching foreign/static storage
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// `__rt_heap_free` must bound the pointer BEFORE it reads any header from it.
+    ///
+    /// The contract callers rely on is "hand me anything; I ignore what is not mine", and
+    /// `__rt_fputcsv` uses it on every non-string field: `__rt_mixed_cast_string` renders an int,
+    /// a float or a bool into the shared concat arena and returns a pointer into THAT, not into
+    /// the heap. Implementing the contract by reading the candidate's kind word first inverts it
+    /// — the foreign pointer is dereferenced outside the heap in order to decide it is foreign,
+    /// and if those bytes happen to carry the marker the arena is threaded onto the free list.
+    ///
+    /// This is pinned on the emitted assembly because this host runs one architecture, and the
+    /// two halves disagreed: AArch64 bounded first, x86_64 did not.
+    /// The check is scoped against the DEBUG-MODE flag rather than against the header load, and
+    /// that scoping is the whole test. Both halves range-check inside the heap-debug block, so
+    /// "does a range check appear before the first header read" was already true of the broken
+    /// x86_64 form and would have passed with the defect present. What distinguishes them is
+    /// whether the bound is taken UNCONDITIONALLY — before `_heap_debug_enabled` is even read —
+    /// or only when heap-debug happens to be on, which is off in every ordinary run.
+    #[test]
+    fn test_heap_free_bounds_the_pointer_before_reading_its_header() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_heap_free(&mut emitter);
+            let asm = emitter.output();
+            let at = asm
+                .find("__rt_heap_free:")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must be labelled"));
+            let bounded = asm[at..]
+                .find("_heap_buf")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must name the heap base"));
+            let debug_gate = asm[at..]
+                .find("_heap_debug_enabled")
+                .unwrap_or_else(|| panic!("{arch:?}: the helper must consult the debug flag"));
+            assert!(
+                bounded < debug_gate,
+                "{arch:?}: the pointer must be bounded before the debug gate, or an ordinary \
+                 run reads the header of a pointer that was never ours"
+            );
+        }
+    }
 }

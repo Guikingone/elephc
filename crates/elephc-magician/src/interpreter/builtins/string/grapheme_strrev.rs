@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the grapheme string reverse hook.
 
 eval_builtin! {
-    name: "grapheme_strrev",
+    contract: "grapheme_strrev",
     area: String,
-    params: [string],
     direct: GraphemeStrrev,
     values: GraphemeStrrev,
 }

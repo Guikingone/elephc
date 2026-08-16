@@ -21,10 +21,7 @@ use super::super::expect_semicolon;
 ///
 /// Dispatches to postfix assignment, post-increment/decrement, property access with
 /// compound assignment, closure calls, or regular/compound assignment based on the
-/// token that follows the variable. When the variable is not immediately followed by
-/// an assignment operator, it is treated as an operand of a larger expression (e.g. a
-/// comparison, ternary, logical, or `instanceof` expression) and parsed as a bare
-/// expression statement.
+/// token that follows the variable.
 ///
 /// # Arguments
 /// - `tokens` — the token stream
@@ -46,20 +43,6 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         Token::Variable(n) => n.clone(),
         _ => unreachable!(),
     };
-
-    // A statement beginning with `$GLOBALS` never reaches the expression parser's own refusal,
-    // so the same rule is applied here. Without it `$GLOBALS = [...]` compiled and kept running
-    // past the point where PHP raises its fatal — a silent divergence, and the single shape this
-    // module must never allow. `$GLOBALS['name'] = ...` is the supported form and is left alone.
-    if name == "GLOBALS" {
-        let next = tokens.get(*pos + 1).map(|(t, _)| t);
-        if let Some(message) = crate::globals_array::unsupported_use_message(
-            matches!(next, Some(Token::LBracket)),
-            matches!(next, Some(Token::Assign)),
-        ) {
-            return Err(CompileError::new(span, message));
-        }
-    }
 
     if let Some(stmt) = postfix::try_parse_postfix_assignment(tokens, pos, span)? {
         return Ok(stmt);
@@ -132,34 +115,6 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         return Ok(Stmt::new(StmtKind::ExprStmt(expr), span));
     }
 
-    // Regular or compound assignment, only when an assignment operator directly
-    // follows the variable; otherwise the variable is an operand of a larger
-    // expression statement (comparison, ternary, logical, `instanceof`, bare use, …).
-    if *pos + 1 < tokens.len()
-        && compound::assignment_operator(&tokens[*pos + 1].0).is_some()
-    {
-        return compound::parse_assign(tokens, pos, span);
-    }
-
-    // A literal or variable directly after the variable (`$x "hi";`, `$x 5;`, `$x $y;`)
-    // can never continue the `$x` expression: the only legal statement shape there is an
-    // assignment whose `=` is missing, so report that instead of a misleading
-    // "Expected ';'" from the generic expression fallback. Only prefix-exclusive tokens
-    // are matched — operators like `-`, `(`, or `[` legitimately continue `$x` as infix
-    // or postfix syntax and must keep the expression-statement path.
-    if *pos + 1 < tokens.len()
-        && matches!(
-            tokens[*pos + 1].0,
-            Token::StringLiteral(_)
-                | Token::IntLiteral(_)
-                | Token::FloatLiteral(_)
-                | Token::Variable(_)
-        )
-    {
-        return Err(CompileError::new(span, "Expected '=' after variable name"));
-    }
-
-    let expr = parse_expr(tokens, pos)?;
-    expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+    // Regular or compound assignment
+    compound::parse_assign(tokens, pos, span)
 }

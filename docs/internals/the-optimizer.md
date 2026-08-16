@@ -54,16 +54,16 @@ By the time codegen sees this, it can already emit constants instead of calling 
 
 Current folding coverage includes:
 
-- scalar arithmetic: `+`, `-`, `*`, `/`, `%`, `**`
-- bitwise and shift ops on integers
+- scalar arithmetic: `+`, `-`, `*`, `/`, `%`, `**`, keeping PHP's result *types* and overflow rules — `6 / 3` stays `int(2)` while `7 / 2` becomes `float(3.5)`, `2 ** 3` stays `int(8)`, and results that leave the `i64` range (`PHP_INT_MAX + 1`, `-PHP_INT_MIN`, `PHP_INT_MIN / -1`) promote to float. Operations PHP turns into a runtime error (`% 0`, `/ 0`, a negative shift count) are left unfolded so the error still happens.
+- bitwise and shift ops on integers, including PHP's out-of-width shift results (`1 << 64` is `0`, `-1 >> 64` is `-1`)
 - unary `-`, `!`, and `~`
 - string-literal concatenation with `.`
-- strict comparisons and numeric comparisons
+- comparisons (`==`, `!=`, `===`, `!==`, `<`, `>`, `<=`, `>=`) through a reimplementation of PHP 8's `zend_compare()` in `src/optimize/fold/compare.rs`. Integers are compared as integers rather than through `f64`, numeric strings are classified with PHP's `is_numeric_string()` grammar, and a number against a non-numeric string follows PHP 8's stringify-and-compare rule. A float against a non-numeric string is left unfolded because the answer depends on float-to-string formatting.
 - logical `&&` / `||` when both sides are scalar constants
 - spaceship `<=>`
 - `??`, ternary, and `match` when the selected result is already known
-- scalar indexed and associative array-literal reads such as `[2, 9][0]` and `["a" => 2]["a"]` when every literal entry is scalar
-- scalar casts such as `(int)"42"` or `(bool)"0"` when the semantics are unambiguous
+- scalar indexed and associative array-literal reads such as `[2, 9][0]` and `["a" => 2]["a"]` when every literal entry is scalar. Keys are normalized with PHP's array-key rules first (`false` and `0` are the same slot, `"1"` is the integer `1`, `null` is `""`), and duplicate normalized keys are last-wins. A float key PHP would report as a lossy implicit conversion is left unfolded so the deprecation still fires.
+- scalar casts such as `(int)"42"` or `(bool)"0"`. String-to-number casts use PHP's leading-numeric-prefix grammar, so `(int)"12abc"` is `12` and `(float)"INF"` is `0` — PHP's numeric strings have no `INF`, `NAN`, hexadecimal, or `_` separator forms.
 - recursive folding inside:
   - function and method bodies
   - closures and arrow functions
@@ -217,6 +217,9 @@ Current dead-code-elimination coverage includes:
 - internal `if` regions pruned when outer pure variable guards or strict boolean checks already determine a nested branch outcome, with guard invalidation on relevant local writes to stay conservative
 - guard-based pruning now also understands simple pure `&&` / `||` combinations, so contradictions like `if ($a && $b) { if (!$a || !$b) ... }` can be removed without needing constant folding first
 - loose equality and safe relational-comparison complements now feed the same guard model, so nested checks like `$x == 0` followed by `$x != 0`, or `$x > 10` followed by `$x <= 10`, can be pruned when the outer branch proves the contradiction
+- integer range facts accumulate from `$x <op> int` branches only after `$x` has a proven integer domain (an `int` parameter, a completed exact-`int` typed local declaration, or an exact-int guard), so transitive bounds like `$x > 10` proving `$x > 5`, strict-int contradictions outside the interval, and impossible `switch ($x)` int cases can be pruned without treating nullable ints, floats, NaN, or PHP string comparisons as discrete integers
+- cross-variable relational and strict-equality atoms (`$x === $y`, `$y > $x`, …) are recorded with safe complements and operand-swapped forms; an exact int / point-range fact on one side derives the corresponding structural var/int atom, and `StrictEq` substitution installs the same full exact, truthiness, point-range, and integer-domain facts as a direct literal guard, while non-equality relations strengthen the other side's range only with a proven integer domain
+- pure, non-throwing `while` and `for` conditions extend the path-local guards at body entry with taken-true polarity; loop-carried body/update writes are invalidated through the shared write model and sequential writes clear the facts before later body statements. `do...while` deliberately does not receive this strengthening because its first body execution precedes the condition
 - strict scalar guards now feed the same pruning: after checks like `$x === null`, `$x === 0`, or `$x === ""`, nested regions that contradict the exact known value can be removed
 - negative branches of strict scalar checks now contribute exclusion facts too, so `else` paths after checks like `$x === 0` or the true path of `$x !== null` can prune nested contradictions without needing a full exact replacement value
 - the same strict scalar guard machinery now covers exact floats as well as PHP-falsy strings like `""` and `"0"`, so nested truthiness checks and strict literal contradictions can be pruned when those values are already known or excluded
@@ -267,9 +270,19 @@ The optimizer now maintains a small local effect-analysis layer that sits undern
 Current coverage includes:
 
 - known pure / non-throwing builtins such as `strlen()`
+- registry builtins with argument-sensitive shared effects, such as a typed
+  `count(array)` read versus a dynamic `count(mixed)` fallback
 - user-defined functions whose bodies are themselves pure / non-throwing
 - user-defined static methods with the same conservative summary inference
-- private instance methods called on `$this`, where dispatch is statically known
+- instance methods on `$this`, `new Class`, `new self`, `new parent`, and
+  `new static`: fixed constructions plus final/private targets stay exact, while
+  virtual calls union every concrete override in the checked class hierarchy
+- named and literal-dynamic property reads on bounded receivers: untyped slots
+  are ordinary reads, typed slots can throw when uninitialized, and property
+  hooks or `__get` inherit their callable summaries
+- indexed and associative literal reads: a proven-present offset is an ordinary
+  read, a proven miss keeps its PHP warning but is not mislabeled catchable, and
+  runtime-dependent offsets retain the conservative barrier
 - direct closure calls and local closure aliases
 - named first-class callables and expr-calls on those callables
 - callable aliases that survive merges through:
@@ -282,7 +295,13 @@ Current coverage includes:
   - `match`
   when every surviving branch agrees on the same callable effect
 
-This analysis is still intentionally local. It does not try to solve general whole-program purity. Instead, it focuses on the small set of call shapes that matter most for AST rewriting today.
+The AST analysis is intentionally syntax-bounded. After lowering, a second
+target-independent fixed point uses checked EIR types and the complete class
+table to refine direct calls, virtual calls, and property reads. This gives the
+EIR optimizer the same safety distinctions without asking the AST pass to
+reconstruct checker state. A runtime `eval` bridge invalidates closed-world
+subclass expansion in both layers; exact fixed constructions and statically
+bound final/private targets remain eligible for refinement.
 
 ### Example
 
@@ -333,9 +352,11 @@ The optimizer is intentionally conservative about what counts as "pure" or "non-
 It now recognizes a useful subset of call expressions precisely, but it still does **not** assume purity for broad dynamic operations such as:
 
 - unknown function or method calls
-- dynamic instance dispatch beyond the statically-known `$this` / private-method case
+- runtime-computed method names, mixed receivers, eval-defined classes, and
+  instance targets outside the checked closed-world hierarchy
 - object creation
-- most property and array reads where runtime hooks or dynamic behavior could matter
+- runtime-computed property names when hooks/dynamic storage may intervene, and
+  array offsets whose presence cannot be proven
 - buffer allocation
 - increment/decrement
 - `throw`
@@ -432,7 +453,6 @@ The current optimizer is still intentionally local. It does not yet implement:
 - full fixed-point/basic-block constant propagation across arbitrary loops and general path merges
 - object/property facts, nested-array facts, and per-class constructor effect summaries beyond the current array-literal facts and unioned by-ref signatures
 - exact exception-type reachability, nested rethrow modeling, and less conservative `finally` invalidation beyond the current path-aware `try` heuristics
-- broader guard reasoning for range facts and multi-variable relationships beyond the current boolean, scalar, loose-comparison, and safe relational-complement facts
 - broader control-flow normalization beyond the current local AST shell rewrites
 - backend-specific peephole cleanup
 - elimination of the `adrp/add/stur` instruction triple at the FCC assignment site when the wrapper is stubbed (the stub address still gets loaded and stored even though both are dead)
@@ -449,7 +469,11 @@ fixed-point pass driver (`src/ir_passes/driver.rs`) after lowering, starting wit
 identity arithmetic folding (`x + 0`, `x * 1`, `x ^ x`, …) and local peephole
 patterns (box/unbox cancellation, scalar load/store forwarding, paired
 acquire/release cancellation, string-literal concat folding, redundant
-`move`/`borrow` cleanup), then per-block constant folding that collapses
+`move`/`borrow` cleanup), then immutable integer-local classification and
+integer-sink specialization for checked add/subtract/multiply. Those passes make
+proven-stable local loads pure and replace transient boxed Mixed arithmetic with
+allocation-free `ichecked_*_to_int` operations only when every use observes an
+integer. Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
 scalar load/store forwarding, propagates constants through EIR value ids and

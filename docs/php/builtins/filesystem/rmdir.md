@@ -2,19 +2,20 @@
 title: "rmdir()"
 description: "Removes a directory."
 sidebar:
-  order: 149
+  order: 156
 ---
 
 ## rmdir()
 
 ```php
-function rmdir(string $directory): bool
+function rmdir(string $directory, mixed $context = null): bool
 ```
 
 Removes a directory.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 
@@ -24,12 +25,6 @@ Removes a directory.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/rmdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/rmdir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

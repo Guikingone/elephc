@@ -64,6 +64,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the JsonException payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object
     emitter.instruction("str x9, [x0, #-8]");                                   // tag the allocation as an object in the uniform header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
 
     // Stamp the per-program JsonException class id into [obj+0].
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_json_exception_class_id");
@@ -78,6 +79,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("str x2, [x0, #16]");                                   // obj.message_len
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the saved error code for $code field
     emitter.instruction("str x10, [x0, #24]");                                  // obj.code (matches Exception's `code` property layout)
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
 
     // Publish the new exception object via _exc_value and longjmp to the
@@ -164,6 +166,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // allocate the JsonException payload (rax = payload ptr)
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // tag the allocation as an object in the uniform header
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_json_exception_class_id", 0); // load JsonException's runtime class id (-1 when absent)
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at the object header slot
@@ -177,6 +180,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // obj.message_len
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the saved error code for $code field
     emitter.instruction("mov QWORD PTR [rax + 24], rcx");                       // obj.code (matches Exception's `code` property layout)
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
 
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = JsonException pointer

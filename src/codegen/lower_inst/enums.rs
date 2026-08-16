@@ -14,7 +14,7 @@ use crate::codegen::abi;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::ir::Instruction;
-use crate::names::{enum_case_symbol, php_symbol_key};
+use crate::names::php_symbol_key;
 use crate::types::{EnumCaseValue, EnumInfo, PhpType};
 
 use super::super::context::FunctionContext;
@@ -123,8 +123,11 @@ fn emit_enum_case_store(
     len_reg: &str,
 ) {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    let case_label = enum_case_symbol(enum_name, case_name);
-    abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &case_label, 0);
+    // `E::cases()` materializes every case, in DECLARATION order, exactly as PHP
+    // does: the loop that fills the array walks the cases in order and each read
+    // creates its case if it does not exist yet, so a first-ever `cases()` call
+    // hands out handles 1..n in declaration order and a later one reuses them.
+    crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
     abi::emit_incref_if_refcounted(ctx.emitter, elem_ty);
     abi::emit_load_temporary_stack_slot(ctx.emitter, array_ptr_reg, 0);
     if index == 0 {
@@ -169,6 +172,15 @@ fn lower_enum_from_like(
             input_ty
         )));
     }
+    // PHP materializes EVERY case of a backed enum when `from()`/`tryFrom()` runs,
+    // including when the lookup matches nothing (verified on 8.5.6: after
+    // `S::tryFrom('nope')` on a three-case enum the next object is `#4`). The scan
+    // below compares against compile-time literals and only touches a case slot on
+    // a match, so the materialization has to be requested explicitly here. It runs
+    // AFTER the argument is loaded because PHP evaluates the argument first, and the
+    // materializer preserves every caller-saved integer register so the loaded input
+    // survives the call.
+    crate::codegen::enum_singletons::emit_materialize_all_cases(ctx, enum_name);
     emit_enum_from_scan(ctx, enum_name, &enum_info, &backing_ty, is_try)?;
     store_if_result(ctx, inst)
 }
@@ -313,8 +325,10 @@ fn emit_string_case_compare(
 
 /// Loads one enum singleton object into the integer result register.
 fn emit_load_enum_case_singleton(ctx: &mut FunctionContext<'_>, enum_name: &str, case_name: &str) {
-    let case_label = enum_case_symbol(enum_name, case_name);
-    abi::emit_load_symbol_to_reg(ctx.emitter, abi::int_result_reg(ctx.emitter), &case_label, 0);
+    // The scan's entry already materialized every case (see `lower_enum_from_like`),
+    // so this read always takes the guarded fast path; going through the lazy load
+    // anyway keeps a single way to reach a case slot.
+    crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
     // `from()`/`tryFrom()` return an owned reference to the case singleton: the caller's
     // lowering acquires the result for its destination and releases the temporary, so the
     // matched singleton must be retained here. Without this incref the singleton's refcount
@@ -421,6 +435,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
+    ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_value_error_class_id", 0);
     ctx.emitter.instruction("str x9, [x0]");                                    // store ValueError class id at object header
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
@@ -428,6 +443,7 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
     abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
     ctx.emitter.instruction("str x9, [x0, #16]");                               // store dynamic exception message length
     ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
     ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -440,6 +456,7 @@ fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
+    ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_value_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store ValueError class id at object header
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
@@ -447,6 +464,7 @@ fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_
     abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
     ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store dynamic exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
     ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -634,11 +652,11 @@ fn emit_float_payload_to_int(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg));         // move the raw double bits into the float register
-            ctx.emitter.instruction("fcvtzs x0, d0");                           // truncate the double toward zero into the int result
+            abi::emit_php_float_to_int(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg));       // move the raw double bits into the float register
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // truncate the double toward zero into the int result
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
         }
     }
 }
@@ -669,6 +687,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp allocation as a runtime object
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
             ctx.emitter.instruction("str x9, [x0]");                            // store TypeError class id at object header
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
@@ -676,6 +695,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store dynamic exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -686,6 +706,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store TypeError class id at object header
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
@@ -693,6 +714,7 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
             ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");           // store dynamic exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -711,6 +733,7 @@ fn emit_throw_enum_from_type_error_aarch64(
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     ctx.emitter.instruction("mov x9, #6");                                      // heap kind 6 = throwable object instance
     ctx.emitter.instruction("str x9, [x0, #-8]");                               // stamp allocation as a runtime object
+    ctx.emitter.instruction("bl __rt_object_handle_acquire");                   // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_type_error_class_id", 0);
     ctx.emitter.instruction("str x9, [x0]");                                    // store TypeError class id at object header
     abi::emit_symbol_address(ctx.emitter, "x9", message_label);
@@ -718,6 +741,7 @@ fn emit_throw_enum_from_type_error_aarch64(
     abi::emit_load_int_immediate(ctx.emitter, "x9", message_len as i64);
     ctx.emitter.instruction("str x9, [x0, #16]");                               // store static exception message length
     ctx.emitter.instruction("str xzr, [x0, #24]");                              // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
     ctx.emitter.instruction("str xzr, [x0, #40]");                              // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "x0", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");
@@ -733,6 +757,7 @@ fn emit_throw_enum_from_type_error_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
     ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
+    ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
     ctx.emitter.instruction("mov QWORD PTR [rax], r10");                        // store TypeError class id at object header
     abi::emit_symbol_address(ctx.emitter, "r10", message_label);
@@ -740,6 +765,7 @@ fn emit_throw_enum_from_type_error_x86_64(
     abi::emit_load_int_immediate(ctx.emitter, "r10", message_len as i64);
     ctx.emitter.instruction("mov QWORD PTR [rax + 16], r10");                   // store static exception message length
     ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");                     // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
     ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");                     // previous defaults to null
     abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);
     abi::emit_jump(ctx.emitter, "__rt_throw_current");

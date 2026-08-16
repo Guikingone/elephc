@@ -101,26 +101,6 @@ $entries = &$bag->items;
 $entries = [10, 20, 30];         // elements are boxed to match the property
 echo implode(", ", $bag->items), "\n"; // 10, 20, 30
 
-// --- Reference assignment INTO a property target (`$obj->prop = &$source`) ---
-// The property becomes an alias of the source; writing the source is observed
-// through the property. The source can be a variable or another object property.
-class Box
-{
-    public $value;
-}
-
-$box = new Box();
-$n = 5;
-$box->value = &$n;       // the property now aliases the local variable $n
-$n = 9;                  // writing $n is observed through the property
-echo $box->value, "\n";  // 9
-
-// Property-to-property: both properties share one storage cell afterwards.
-$left = new Bag();
-$right = new Bag();
-$right->items = &$left->items;     // $right->items aliases $left->items
-$left->items[] = "shared";
-echo implode(", ", $right->items), "\n"; // shared
 // --- Aliasing an indexed-array element (write-through both ways) ---
 $nums = [1, 2, 3];
 $second = &$nums[1];             // $second aliases the array's element 1

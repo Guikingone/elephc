@@ -314,6 +314,7 @@ Ownership operations:
 | Op | Operand | Result | Effects | Lowering |
 |---|---|---|---|---|
 | `Acquire` | refcounted/string/callable value | `Void` or retained value alias | `REFCOUNT_OP`, maybe `WRITES_HEAP` | `__rt_incref`, string persist/retain, callable descriptor retain if added |
+| `Acquire` + `Bool` immediate | same | same | same | same; the immediate marks a *lifetime pin* and only opts the pair out of acquire/release cancellation |
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
@@ -350,8 +351,11 @@ optimizer reasoning, and summaries for source wrappers.
 
 ## Effects
 
-Each instruction and terminator carries an immutable `Effects` summary assigned
-by the builder. Effects are conservative and PHP-observable.
+Each instruction and terminator carries an `Effects` summary. The builder
+assigns a conservative opcode or semantic-descriptor default; after the complete
+module is lowered, an effect-refinement fixed point may replace the summary on
+explicitly refinable direct calls, instance calls, and property reads. Final
+effects are immutable after validation and remain PHP-observable.
 
 ```rust
 pub struct Effects {
@@ -397,7 +401,18 @@ Effect sources:
 - Scalar arithmetic and comparison: hardcoded by opcode.
 - Registry builtins: from `BuiltinSemantics::effects`, either a fixed bitset or a
   shared resolver over normalized argument types.
-- User functions/methods/closures: from analyzed function body effects.
+- User functions/methods/closures: from a whole-module monotone fixed point over
+  lowered bodies. Direct calls inherit the target summary; virtual instance calls
+  union every concrete implementation reachable from the checked receiver type,
+  while a fixed `object_new` receiver remains exact. A runtime eval bridge keeps
+  non-exact class dispatch conservative because it can register new subclasses.
+- Array/hash reads: typed opcodes distinguish ordinary/silent reads from
+  warning-producing misses; they do not claim a catchable exception merely
+  because a PHP warning is observable.
+- Property reads: checked class layouts distinguish declared untyped slots,
+  typed-slot initialization errors, missing-property warnings, synthetic
+  property hooks, and `__get`. Runtime-computed names retain warning/deopt and
+  any reachable typed-slot or magic-method effects.
 - Callable aliases and first-class callables: from `src/optimize/effects/calls.rs`
   and descriptor metadata.
 - Extern calls: conservative unless the extern declaration later gains explicit
@@ -409,6 +424,12 @@ Pure means no flags set. A pure operation may be CSE'd or removed if its result
 is unused. Any operation with `may_throw`, `may_fatal`, `may_warn`, `output`,
 `writes_*`, `alloc_*`, or `refcount_op` is observable unless a later pass proves
 otherwise.
+
+`may_throw` is reserved for catchable PHP exceptions. A warning, fatal path, or
+dynamic deoptimization remains observable through its own flag but does not by
+itself make a surrounding `catch` reachable. Unknown calls and reads keep the
+conservative union; refinement only removes flags proved impossible from
+checked module metadata.
 
 ## Instruction Set
 
@@ -474,8 +495,7 @@ preserves PHP exponentiation result rules.
 |---|---|---|---|
 | `ICmp(predicate)` | `I64`, `I64` | `I64` bool | pure |
 | `FCmp(predicate)` | `F64`, `F64` | `I64` bool | pure |
-| `StrEq`, `StrLooseEq` | `Str`, `Str` | `I64` or compare int | `reads_heap` only if non-static bytes require helper reads |
-| `StrCmp(predicate)` | string/number/`Mixed` pair | `I64` bool | PHP 8 ordered comparison via `__rt_php_compare` (numeric vs lexicographic); `reads_heap` |
+| `StrEq`, `StrCmp`, `StrLooseEq` | `Str`, `Str` | `I64` or compare int | `reads_heap` only if non-static bytes require helper reads |
 | `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted |
 | `LooseEq`, `LooseNotEq`, `Spaceship` | typed values | `I64` or compare int | may coerce, `reads_heap`, `may_warn`, `may_deopt` |
 | `IsNull`, `IsTruthy`, `IsEmpty` | typed value | `I64` bool | pure for scalars, `reads_heap` for mixed/containers |
@@ -492,6 +512,7 @@ preserves PHP exponentiation result rules.
 | `ResourceToStr` | `I64` resource | `Str` | may allocate, may warn |
 | `Cast(to_php_type)` | typed value | matching IR type | PHP cast effects |
 | `MixedBox` | non-mixed value | `Heap(Mixed)` | `alloc_heap`, maybe `refcount_op` |
+| `MixedClone` | `Heap(Mixed)` | owned `Heap(Mixed)` value read | `reads_heap`, `alloc_heap`, `refcount_op` |
 | `MixedUnbox(expected)` | `Heap(Mixed)` | expected storage | `reads_heap`, `may_fatal` |
 | `MixedTagOf` | `Heap(Mixed)` | `I64` | `reads_heap` |
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
@@ -522,6 +543,8 @@ across a reset point.
 | `ArrayLen`, `HashLen` | container | `I64` | `reads_heap` |
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
+| `ArrayGetForWrite` | array, index (`I64`) | retained boxed `Mixed` cell or typed **borrowed** element | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
+| `HashGetForWrite` | hash, key | retained boxed `Mixed` cell or typed **borrowed** value | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayPush`, `HashAppend` | container, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
@@ -533,9 +556,91 @@ across a reset point.
 | `OffsetUnset` | container, key | `Void` | `writes_heap`, `refcount_op` |
 | `ListUnpack` | array value, slot list | `Void` | `reads_heap`, `writes_local` |
 
+Ordinary `ArrayGet`/`HashGet` reads of boxed `Mixed` values materialize an independent zval cell,
+preserving PHP value semantics. Resource payloads are the intentional exception: the read retains
+the existing resource cell so aliases share the cursor and close/destructor lifetime, as PHP
+resources do. Nested assignments use the explicit `*GetForWrite` operations with a `Mixed` result
+for their parent read instead: the root container is COW-normalized and stored back first, then the
+selected stored cell is returned with a retained reference. Typed entries are promoted to boxed
+storage in place. The following `RuntimeCall` writer can therefore publish copy-on-write
+replacements back into the owning slot without making ordinary reads alias.
+The dynamic `MixedArrayGetForWrite` equivalent additionally COW-normalizes a runtime indexed array
+or associative hash, republishes a possibly split container in its cloned owning Mixed cell, and
+detaches the selected zval; the ordinary dynamic read clones that cell without mutating storage.
+
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
+
+With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
+side of that rule for a container element that is about to be mutated through an
+alias — today, the source of a by-reference `foreach` (issue #580). Unlike the
+`Mixed` form, the typed form takes no reference for the caller; it separates the
+receiver, then splits the element from any co-owner and stores the separated
+container back into the receiver's element slot, so the result is owned by the
+parent and unique. That is
+what lets `foreach ($a[0] as &$v)` and `foreach ($h['a'] as &$v)` write through
+to their sources: the plain retaining read left the element shared, and
+`IterStart`'s own copy-on-write split then gave the loop a private copy to mutate
+and discard.
+
+The two differ only in how they address the element slot. `ArrayGetForWrite`
+scales an integer key into the indexed payload, so it requires an `I64` key.
+`HashGetForWrite` cannot compute an address, so it takes the matching entry's
+address from `__rt_hash_get` (returned in `x4` on AArch64, `r8` on x86_64, null
+on a miss) and splits the container that entry holds; string and integer keys are
+both fine, since the lookup normalizes them. Both require an array or hash
+element, each split with its own runtime helper, and both keep the plain read's
+missing-key warning and null-container sentinel. Every other shape — a `Mixed`
+element in particular, whose read can materialize a fresh box instead of the
+slot's own storage — keeps the retaining read. The receiver split only happens
+for a receiver that came from a local slot, since the new container has to be
+published somewhere.
+
+Because the result is borrowed, the parent's element slot is its only owner, and
+the loop body can drop that parent (`$a = []`, `unset($a)`) while the iterator is
+still running. The by-reference `foreach` therefore takes a **lifetime pin** on
+the source — an `Acquire` marked with a `Bool(true)` immediate — emitted *after*
+`IterStart`, and releases it on every exit: the loop's own exit block for normal
+termination and `break`, and `emit_innermost_loop_cleanups` for `break N`,
+`return`, and `throw`. The ordering is load-bearing in both directions. Earlier
+than `IterStart` and the extra reference makes that instruction's
+`__rt_array_ensure_unique` split, handing the loop the private copy this whole
+mechanism exists to avoid; later than the last exit and the element outlives the
+program's need for it. PHP gets the same effect for free: its by-reference
+`foreach` holds a reference to the iterated array itself.
+
+`PropGetForWrite` is the same rule for an object PROPERTY receiver (issue #642).
+It splits the property's container and stores the separated container back into
+the property slot, returning it borrowed. The property case was not merely losing
+writes like the element case: `PropGet` retains, so the container sat at refcount
+2, `IterStart`'s split CONSUMED that reference, and the loop-exit `release`
+consumed a second one — taking the property's own container to refcount 0 and
+freeing storage the property still pointed at. Taking no reference at all is what
+removes both halves: refcount 1 leaves `IterStart` nothing to copy, and a borrowed
+result has no exit release. The op covers array and hash property slots whether or
+not the property is declared with a type, and covers a slot promoted to a
+reference cell by `$r = &$o->x` — there the container lives inside the cell, so the
+split reads and republishes through the cell and every alias of the reference sees
+the result.
+
+The receiver has to be reachable through stable backing storage: a variable or
+`$this`, optionally followed by a chain of plain declared object properties
+(`$o->inner->x`). Proving only that the syntactic ROOT is a variable is not enough,
+because an intermediate step can be a `get` hook or a `__get` returning a fresh
+object; the read drops its receiver as soon as it takes the borrow, which would
+free the container the loop is about to iterate. Dynamic property names, hooked
+properties, `Mixed` and nullable receivers, packed fields, and receivers over a
+temporary all keep the retaining read.
+
+The frontend gate in `src/ir_lower/expr/property_fetch_for_write.rs` and the lowering in
+`src/codegen/lower_inst/objects/property_fetch_for_write.rs` classify slots from the same `ClassInfo`
+metadata, and the backend has NO fallback: a slot it cannot split is a hard
+`unsupported` error rather than a plain read. A plain read there would be unsound,
+because the result is already marked `Borrowed` — skipping the split would leave
+the loop borrowing a shared container whose split inside `IterStart` consumes the
+reference the property itself holds. Failing loudly keeps the two sides from
+drifting apart silently.
 
 ### Iterables, SPL, and Foreach
 
@@ -559,6 +664,7 @@ proofs make it unnecessary.
 | `ObjectNew(class_id, args)` | constructor args | `Heap(Object)` | `alloc_heap`, constructor effects |
 | `DynamicObjectNew(class_expr, fallback, required_parent, args)` | class-string and args | `Heap(Object)` | `reads_global`, `alloc_heap`, `may_fatal`, `may_deopt` |
 | `PropGet(class_id, property)` | object | property type | `reads_heap`, maybe `may_deopt` |
+| `PropGetForWrite(property)` | object | property type, **borrowed** | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_throw`, `may_warn`, `may_deopt` |
 | `PropSet(class_id, property, value)` | object, value | `Void` | `writes_heap`, `refcount_op`, maybe `may_deopt` |
 | `DynamicPropGet`, `DynamicPropSet` | object, property string/value | value or `Void` | `reads_heap`/`writes_heap`, `may_deopt`, maybe `may_warn` |
 | `NullsafePropGet`, `NullsafeMethodCall` | nullable object and metadata | nullable result | branch plus underlying op effects |
@@ -592,7 +698,7 @@ closure bodies lower as normal `Function` values.
 | `PipeCall` | value, callable | callable return | evaluates value before callable invocation |
 
 Call argument rules are not reimplemented in each opcode. EIR lowering consumes
-the shared semantic planner in `src/types/call_args.rs` and preserves the
+the shared semantic planner in `src/types/call_args/` and preserves the
 observable order:
 
 1. Evaluate arguments in PHP source order.
@@ -659,9 +765,12 @@ outside PHP's heap.
 | `GeneratorYieldFrom` | iterable | yielded values | iterator/generator effects |
 | `GeneratorReturn` | value | `Void` | writes generator return state |
 
-`Yield` and `YieldFrom` are not emitted through the normal expression result
-path today. EIR must model them through generator state-machine lowering rather
-than ordinary expression instructions.
+`Yield` and `YieldFrom` are ordinary EIR instructions inside a generator body.
+The backend emits that body as a normal Mixed-returning function on a dedicated
+stackful coroutine stack. `GeneratorYield` records the boxed key/value and calls
+`__rt_gen_suspend`; resuming supplies the instruction result. `GeneratorYieldFrom`
+drives a generator delegate through `__rt_gen_delegate`, while array delegation
+is expanded into an iterator loop during EIR lowering.
 
 ### Include and Resolver Artifacts
 
@@ -808,7 +917,8 @@ Textual syntax requirements:
 
 Validation has two modes:
 
-- **Structural mode:** cheap, runs after builder operations and after every pass.
+- **Structural mode:** cheap, runs after builder operations and every pass that
+  declares itself applicable to the current function.
 - **Full mode:** structural + dominance + ownership + effects, runs before
   printing for tests and before EIR backend codegen.
 
@@ -885,10 +995,12 @@ A pass implements the `IrPass` trait: a stable `name()` and a
 reports whether it changed anything. The `DataPool` is the module's shared
 literal pool, threaded through so passes that materialize new constants (the
 peephole string-literal fold interns the joined string) can do so; passes that
-need no new literals ignore it. The driver runs the registered passes over each
-function-like body (functions, methods, closures, trampolines, invokers)
-repeatedly until a full sweep reports no change, capped at a fixed iteration
-budget.
+need no new literals ignore it. The driver runs the applicable registered passes
+over each function-like body (functions, methods, closures, trampolines,
+invokers) repeatedly until a full sweep reports no change, capped at a fixed
+iteration budget. Candidate-driven passes can cheaply declare themselves
+inapplicable to a function; skipped passes perform neither analysis nor the
+debug-build post-pass validation.
 
 The whole pipeline runs to a **module-level fixed point**: `optimize_module`
 interleaves the cross-function [small-function inliner](#small-function-inlining)
@@ -900,8 +1012,9 @@ candidates. The first round reproduces the prior "inline once, then optimize"
 behavior, so later rounds only optimize further and never change semantics.
 
 In debug and test builds (`debug_assertions`), the driver re-validates the
-function with `validate_function` after every pass and panics — naming the
-offending pass — if any pass produced malformed IR. The same builds panic if a
+function with `validate_function` after every pass that runs and panics — naming
+the offending pass — if it produced malformed IR. A pass skipped by its
+applicability predicate cannot mutate the function. The same builds panic if a
 pass set fails to converge within the cap, which only happens for a
 non-converging pass bug. Both guards compile out of `--release`, where hitting
 the cap simply stops and proceeds with the current IR.
@@ -957,15 +1070,67 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   scalar slots are not aliased.
 - **Paired acquire/release cancellation** — an `acquire` whose result is used
   exactly once, by its `release`, drops both. The single-use guard makes this
-  refcount-neutral on every path regardless of distance between the two ops.
+  refcount-neutral on every path regardless of distance between the two ops. An
+  `acquire` carrying an immediate is a **lifetime pin** and is exempt: its result
+  is deliberately never read, because the reference exists so the value survives
+  an interval in which another owner may release it, and that raised refcount is
+  exactly what the program observes.
 - **String-literal concat folding** — `str_concat(const_str a, const_str b)`
   interns `a ++ b` into the data pool and becomes a single `const_str` marked
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
 
+### Immutable Integer-Local Loads
+
+The third registered transform (`src/ir_passes/immutable_local_loads.rs`) refines
+the effect of a concrete integer `load_local` from a frame read to `pure` only
+when the slot cannot change for the lifetime of the function. It accepts two
+closed-world cases:
+
+- an unwritten, non-reference, non-variadic integer parameter, or the top-level
+  `$argc` slot; and
+- a concrete integer PHP local with exactly one store in the entry block, where
+  that store dominates every load and the entry block has no predecessor.
+
+Hidden temporaries, Mixed storage, reference cells, static locals, multiple or
+non-entry stores, and any alias or otherwise unknown local-slot operation fail
+closed. The pass changes only the load's effect metadata; its result value,
+storage type, and ownership are unchanged. This gives CSE and LICM a sound way
+to reuse or hoist integer reads that lowering represents through frame slots.
+
+The analysis starts from effectful integer loads that could actually be refined.
+Already-pure loads and functions without eligible loads return before dominance
+analysis. The default issue-623 pipeline schedules this pass only for functions
+that also contain boxed checked integer arithmetic, keeping unrelated functions
+out of both the analysis and its debug-build validation.
+
+### Checked Integer Sink Specialization
+
+The fourth registered transform (`src/ir_passes/checked_int_sink.rs`) removes the
+transient Mixed allocation from checked integer add, subtract, and multiply when
+the producer's complete use graph observes only a PHP integer. It rewrites
+`ichecked_add`/`ichecked_sub`/`ichecked_mul` to the corresponding
+`ichecked_*_to_int` operation, changes the result to non-owning `I64`, redirects
+integer casts to that value, and removes the now-redundant acquire/release
+scaffolding.
+
+The proof accepts explicit integer casts, stores into concrete integer locals or
+integer ref cells, and unpinned acquire/release chains. A terminator use, output,
+call, comparison, Mixed store, lifetime pin, or unknown opcode rejects the whole
+candidate, preserving the original boxed result whenever overflow promotion can
+still be observed. Before running the full use-graph proof, the driver requires
+an integer cast/store whose value traces through transparent acquires to checked
+arithmetic. The pass also returns before building its use graph when a function
+contains no checked-arithmetic candidate.
+
+Codegen keeps the in-range path in scalar registers. On signed overflow it
+recomputes the operation as a double and applies the shared PHP float-to-int
+conversion, so removing the box does not change PHP's overflow semantics. The
+typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+
 ### Constant Folding
 
-The third registered transform (`src/ir_passes/const_fold.rs`) folds operations
+The fifth registered transform (`src/ir_passes/const_fold.rs`) folds operations
 whose operands are all compile-time constants into a single `const_*`
 instruction, rewriting the instruction in place and keeping its result value id
 (no use-rewrite needed). A single forward scan over the instruction table tracks
@@ -994,7 +1159,7 @@ instruction elimination.
 
 ### Common Subexpression Elimination
 
-The fourth registered transform (`src/ir_passes/cse.rs`) removes a pure
+The sixth registered transform (`src/ir_passes/cse.rs`) removes a pure
 computation whose identical predecessor already dominates it, redirecting the
 redundant result to the earlier value (RAUW) and neutralizing it to `nop`. It
 covers per-block and cross-block redundancy in one dominator-tree value-numbering
@@ -1024,7 +1189,7 @@ redirect unsound — the same restriction branch simplification uses. CSE uses t
 
 ### Loop-Invariant Code Motion
 
-The fifth registered transform (`src/ir_passes/licm.rs`) moves a pure computation
+The seventh registered transform (`src/ir_passes/licm.rs`) moves a pure computation
 whose operands do not change across a loop out of the loop body into the loop
 preheader, so it runs once instead of per iteration. It builds the
 [loop forest](#loop-analysis) on the [dominator tree](#dominance-analysis), then
@@ -1050,7 +1215,7 @@ pass's reach grows as more values flow as SSA across loops.)
 
 ### Dead Instruction Elimination
 
-The sixth registered transform (`src/ir_passes/dead_inst.rs`) removes
+The eighth registered transform (`src/ir_passes/dead_inst.rs`) removes
 result-producing instructions whose values are not live over the CFG and whose
 effect metadata says they are pure. It computes liveness with successor live-in
 sets, initializes each block's backward walk with those live-out values plus
@@ -1066,7 +1231,7 @@ through the fixed-point pass driver after liveness is recomputed.
 
 ### Dead Store Elimination
 
-The seventh registered transform (`src/ir_passes/dead_store.rs`) removes
+The ninth registered transform (`src/ir_passes/dead_store.rs`) removes
 `store_local` instructions whose stored value is never read on any path before
 the slot is overwritten or the function exits. Unlike dead instruction
 elimination, which works at SSA-value granularity, this pass reasons about local
@@ -1111,7 +1276,7 @@ instruction elimination on a later driver sweep.
 
 ### Branch Simplification
 
-The eighth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+The tenth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
 CFG in three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a
@@ -1320,8 +1485,8 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ScopedConstantAccess` | Resolve class constant or enum case metadata; emit scalar/object result. |
 | `NewScopedObject` | Allocate `self`, `parent`, or late-static object and call constructor. |
 | `MagicConstant` | Must not reach EIR; validator rejects it because magic constants are lowered earlier. |
-| `Yield` | Lower through generator state-machine path; emits `GeneratorYield`/`GeneratorSuspend`. |
-| `YieldFrom` | Lower iterable forwarding through generator state-machine path. |
+| `Yield` | Emit `GeneratorYield`; codegen records the key/value and suspends the stackful coroutine through `__rt_gen_suspend`. |
+| `YieldFrom` | Emit `GeneratorYieldFrom` for generator delegation; array delegation is expanded into an iterator loop that re-yields each entry. |
 
 ### Binary Operators
 

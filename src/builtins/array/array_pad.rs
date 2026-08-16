@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_pad",
-    area: Array,
-    params: [array: Mixed, length: Mixed, value: Mixed],
-    returns: Mixed,
+    contract: "array_pad",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayPad,
     ),
-    summary: "Pads an array to the specified length with a value.",
-    php_manual: "https://www.php.net/manual/en/function.array-pad.php",
 }
 
 /// Returns the (shape-preserving) array type for an `array_pad` call.
@@ -36,6 +31,9 @@ builtin! {
 /// (exactly 3) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,

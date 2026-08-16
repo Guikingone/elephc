@@ -407,7 +407,7 @@ return $d;
 /// preserving the concrete class of the start object (`DateTime` or `DateTimeImmutable`).
 fn date_period_current() -> ClassMethod {
     let tokens = crate::lexer::tokenize(CURRENT_SRC).expect("current body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("current body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("current body must parse");
     method(
         "current",
         Vec::new(),
@@ -455,7 +455,7 @@ return $d;
 /// concrete class that was passed to the constructor.
 fn date_period_get_start_date() -> ClassMethod {
     let tokens = crate::lexer::tokenize(GET_START_DATE_SRC).expect("getStartDate body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("getStartDate body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("getStartDate body must parse");
     method(
         "getStartDate",
         Vec::new(),
@@ -468,7 +468,7 @@ fn date_period_get_start_date() -> ClassMethod {
 /// when the period was constructed with a recurrence count.
 fn date_period_get_end_date() -> ClassMethod {
     let tokens = crate::lexer::tokenize(GET_END_DATE_SRC).expect("getEndDate body must tokenize");
-    let body = crate::parser::parse(&tokens).expect("getEndDate body must parse");
+    let body = crate::parser::parse_internal(&tokens).expect("getEndDate body must parse");
     method(
         "getEndDate",
         Vec::new(),
@@ -604,7 +604,7 @@ return new DatePeriod($start_dt, $iv, $recurrences, $options);
 fn date_period_create_from_iso8601_string() -> ClassMethod {
     let tokens = crate::lexer::tokenize(CREATE_FROM_ISO8601_SRC)
         .expect("createFromISO8601String body source must tokenize");
-    let body = crate::parser::parse(&tokens)
+    let body = crate::parser::parse_internal(&tokens)
         .expect("createFromISO8601String body source must parse");
     ClassMethod {
         name: "createFromISO8601String".to_string(),

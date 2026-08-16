@@ -25,9 +25,8 @@ impl Checker {
     ///
     /// For non-static methods, `$this` is inserted into the per-method `TypeEnv` as an
     /// `Object` of the declaring class. Parameters are resolved against declared type hints
-    /// or inferred from the class signature. An untyped parameter that has no observed call-site
-    /// specialization is checked as gradual `Mixed`, matching its EIR ABI; variadic parameters
-    /// use `PhpType::Array(Int)` as a fallback.
+    /// or inferred from the class signature; variadic parameters use `PhpType::Array(Int)`
+    /// as a fallback.
     ///
     /// Sets `self.current_class`, `self.current_method`, and `self.current_method_is_static`
     /// during body checking to enable context-sensitive diagnostics.
@@ -62,12 +61,6 @@ impl Checker {
                             .and_then(|c| c.methods.get(&method_key))
                             .map(|s| s.params.clone())
                     };
-                    // Params whose resolved type is `callable` — mirrors the free-function
-                    // `callable_param_names`/`declared_callable_param_names` split in
-                    // `functions::resolution::signature::resolve_function_signature`, scoped
-                    // per method by the class-qualified cross-call cache key below.
-                    let mut callable_param_names: Vec<String> = Vec::new();
-                    let mut declared_callable_param_names: Vec<String> = Vec::new();
                     for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
                         let ty = if let Some(type_ann) = type_ann {
                             let declared = self.resolve_declared_param_type_hint(
@@ -99,12 +92,11 @@ impl Checker {
                                 declared
                             }
                         } else {
-                            let inferred = sig_params
+                            sig_params
                                 .as_ref()
                                 .and_then(|p| p.get(i))
                                 .map(|(_, t)| t.clone())
-                                .unwrap_or(PhpType::Int);
-                            self.method_body_param_type(class, method, i, inferred)
+                                .unwrap_or(PhpType::Int)
                         };
                         // PHP's __unserialize($data) always receives the associative
                         // array produced by __serialize(); a bare `array` hint resolves
@@ -121,12 +113,6 @@ impl Checker {
                         } else {
                             ty
                         };
-                        if ty == PhpType::Callable {
-                            callable_param_names.push(pname.clone());
-                            if type_ann.is_some() {
-                                declared_callable_param_names.push(pname.clone());
-                            }
-                        }
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
@@ -145,6 +131,7 @@ impl Checker {
                     if method_key == "__construct" {
                         self.patch_constructor_method_env(class, method, &mut method_env);
                     }
+                    self.patch_stream_contract_method_env(class, method, &mut method_env);
 
                     self.current_class = Some(class.name.clone());
                     self.current_method = Some(method_key.clone());
@@ -163,92 +150,21 @@ impl Checker {
                         .filter(|(_, _, _, is_ref)| *is_ref)
                         .map(|(name, _, _, _)| name.clone())
                         .collect();
-                    // Cross-call cache key for this method's OWN callable-typed params:
-                    // the DECLARING/flattened-owner class (`class.name` here, since
-                    // `flattened_classes` only lists a method under the class that
-                    // physically owns its body — inherited-without-override methods are
-                    // checked once, under their original declaring class) qualified with
-                    // the method name, matching what call-site checking
-                    // (`inference::objects::methods`) writes and what the active EIR
-                    // lowering (`ir_lower::context::Context::callable_param_signature`)
-                    // already reads via `owner_name = "{class}::{method}"`.
-                    let method_callable_scope_key = format!("{}::{}", class.name, method_key);
-                    // Start this method's body check with an EMPTY slate for every
-                    // variable-name-keyed callable side table — see
-                    // `Checker::enter_callable_var_scope` for why this is required (methods
-                    // previously had NO such scoping at all, unlike free functions, so a
-                    // closure assigned to a same-named local in one method leaked into every
-                    // other method/function checked afterward).
-                    let saved_callable_var_scope = self.enter_callable_var_scope();
-                    for pname in &declared_callable_param_names {
-                        self.callable_param_names.insert(pname.clone());
-                    }
-                    for pname in &callable_param_names {
-                        if let Some(sig) = self
-                            .callable_param_sigs
-                            .get(&(method_callable_scope_key.clone(), pname.clone()))
-                            .cloned()
-                        {
-                            self.closure_return_types
-                                .insert(pname.clone(), sig.return_type.clone());
-                            self.callable_sigs.insert(pname.clone(), sig);
-                        }
-                        // No cached signature yet: pre-specialization fallback (validated
-                        // only by count/by-ref when this method's body invokes it).
-                    }
                     let mut method_errors = Vec::new();
-                    let body_check_result =
-                        self.with_local_storage_context(method_ref_params, |checker| {
-                            for s in &method.body {
-                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                    method_errors.extend(error.flatten());
-                                }
-                            }
-                            Ok(())
-                        });
-                    if let Err(error) = &body_check_result {
-                        // A structural error from `with_local_storage_context` itself (not a
-                        // per-statement error collected into `method_errors`) still needs the
-                        // callable side tables restored before propagating, same as any other
-                        // early-return path.
-                        let error = error.clone();
-                        for pname in &callable_param_names {
-                            if let Some(sig) = self.callable_sigs.get(pname).cloned() {
-                                self.callable_param_sigs
-                                    .insert((method_callable_scope_key.clone(), pname.clone()), sig);
+                    self.with_local_storage_context(method_ref_params, |checker| {
+                        for s in &method.body {
+                            if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                method_errors.extend(error.flatten());
                             }
                         }
-                        self.exit_callable_var_scope(saved_callable_var_scope);
-                        return Err(error);
-                    }
-                    let Ok((_, observed_return_infos)) = body_check_result else {
-                        unreachable!("method body structural errors return above")
-                    };
+                        Ok(())
+                    })?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
-                    // Callable metadata must stay live while return callable/array signatures are
-                    // collected. Scalar/object return types themselves come from the observations
-                    // captured at each flow-sensitive `return` checking point.
                     if !method_has_errors {
-                        self.update_method_return_type(
-                            class,
-                            method,
-                            &method_env,
-                            &observed_return_infos,
-                            &mut pass_errors,
-                        );
+                        self.update_method_return_type(class, method, &method_env, &mut pass_errors);
                     }
-                    // Persist any specialization this method's body produced for its OWN
-                    // declared callable params into the cross-call cache BEFORE restoring the
-                    // caller's snapshot.
-                    for pname in &callable_param_names {
-                        if let Some(sig) = self.callable_sigs.get(pname).cloned() {
-                            self.callable_param_sigs
-                                .insert((method_callable_scope_key.clone(), pname.clone()), sig);
-                        }
-                    }
-                    self.exit_callable_var_scope(saved_callable_var_scope);
                     self.current_class = None;
                     self.current_method = None;
                     self.current_method_is_static = false;
@@ -269,35 +185,6 @@ impl Checker {
         Ok(())
     }
 
-    /// Returns the effective body-checking type for one untyped method parameter.
-    ///
-    /// Class schemas retain `Int` as the legacy unspecialized sentinel. A real call records the
-    /// parameter in `param_specialization_seen`, including the all-integer case where the stored
-    /// type remains `Int`. Without that evidence, PHP's untyped parameter is gradual `Mixed`;
-    /// using the sentinel in its body creates false diagnostics and disagrees with
-    /// `eir_signature_with_php_param_contracts()`, which already boxes the parameter.
-    fn method_body_param_type(
-        &self,
-        class: &FlattenedClass,
-        method: &ClassMethod,
-        index: usize,
-        inferred: PhpType,
-    ) -> PhpType {
-        if inferred != PhpType::Int {
-            return inferred;
-        }
-        let owner = if method.is_static {
-            format!("static:{}::{}", class.name, method.name)
-        } else {
-            format!("{}::{}", class.name, php_symbol_key(&method.name))
-        };
-        if self.param_specialization_seen.contains(&(owner, index)) {
-            inferred
-        } else {
-            PhpType::Mixed
-        }
-    }
-
     /// Builds the PHP-local base environment shared by all method bodies.
     ///
     /// Methods can read request superglobals without a `global` declaration, but
@@ -308,6 +195,92 @@ impl Checker {
             .iter()
             .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type()))
             .collect()
+    }
+
+    /// Patches an untyped stream-wrapper contract parameter with the type PHP documents for it.
+    ///
+    /// A wrapper's methods are reached through a runtime vtable with raw fixed-ABI arguments, so
+    /// `normalize_method_map_for_eir` deliberately leaves their untyped parameters alone rather
+    /// than widening them to boxed Mixed, which would desynchronize the dispatcher from the body.
+    /// The consequence was that they kept the `Int` an untyped parameter is seeded with, and an
+    /// ordinary `stream_write($data) { return strlen($data); }` — the signature the manual shows —
+    /// failed to compile with `strlen() argument must be string`.
+    ///
+    /// The dispatcher's argument types are not unknown, only undeclared: PHP specifies them. So
+    /// they are seeded here instead of widened, which leaves the fixed ABI exactly as it was and
+    /// lets the body use its own arguments. Only parameters WITHOUT a type hint are touched, and
+    /// only in a class that really is a wrapper — a lone `stream_write()` on an unrelated class
+    /// keeps its inference, because a method name is not a contract.
+    fn patch_stream_contract_method_env(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        method_env: &mut TypeEnv,
+    ) {
+        let Some(ci) = self.classes.get(&class.name).cloned() else {
+            return;
+        };
+        if !declares_stream_wrapper_marker(&ci) {
+            return;
+        }
+        let key = crate::names::php_symbol_key(&method.name);
+        let Some(contract) = stream_wrapper_contract_param_types(&key) else {
+            return;
+        };
+        for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
+            if type_ann.is_some() {
+                continue;
+            }
+            let Some(ty) = contract.get(i) else { continue };
+            method_env.insert(pname.clone(), ty.clone());
+            if let Some(ci_mut) = self.classes.get_mut(&class.name) {
+                if let Some(sig) = ci_mut.methods.get_mut(&key) {
+                    if i < sig.params.len() {
+                        sig.params[i].1 = ty.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pins the return type of an undeclared stream-wrapper contract method to the contract's.
+    ///
+    /// The wrapper's methods are reached through a runtime vtable with a FIXED ABI, and that ABI
+    /// is chosen by the return type: `stream_read()` and `dir_readdir()` are read back out of the
+    /// string-result pair (x1/x2 on AArch64, rax/rdx on x86_64), while every scalar return travels
+    /// in the single result register. Inference does not know that, so an ordinary
+    /// `stream_read($n) { return fread($this->fh, $n); }` — `fread()` answers `string|false`, so the
+    /// method infers `mixed` — returned a BOXED cell where the dispatcher reads a pointer/length
+    /// pair, and the wrapper handed back the box's own bytes instead of the data it read.
+    ///
+    /// On AArch64 the boxed cell lands in x0 while the dispatcher reads x1/x2, which the body
+    /// happened to leave holding the last string it built, so the defect stayed invisible; on
+    /// x86_64 the boxed cell lands in rax, which IS the pointer half of the pair, and the wrapper
+    /// answered three bytes of the box. Pinning the type here converts at the return instead, so
+    /// both arches hand over the same pair — the same seeding [`patch_stream_contract_method_env`]
+    /// already does for the contract's PARAMETERS, and for the same reason.
+    ///
+    /// Only methods WITHOUT a return hint are touched, only on a class that really is a wrapper,
+    /// and only when the body returns values at all: a hint is the author's own answer, a lone
+    /// `stream_read()` on an unrelated class is not a contract, and a body with no value return
+    /// keeps the `void` it infers rather than being promised a string it never produces.
+    fn stream_contract_return_type(
+        &self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        raw_inferred: &Option<PhpType>,
+    ) -> Option<PhpType> {
+        if method.is_static {
+            return None;
+        }
+        if raw_inferred.is_none() {
+            return None;
+        }
+        let class_info = self.classes.get(&class.name)?;
+        if !declares_stream_wrapper_marker(class_info) {
+            return None;
+        }
+        stream_wrapper_contract_return_type(&crate::names::php_symbol_key(&method.name))
     }
 
     /// Patches untyped constructor parameters with property types when the constructor
@@ -362,23 +335,25 @@ impl Checker {
     /// return statements produces a compile error. Generic array hints are passed
     /// through as-is to preserve inference.
     ///
-    /// Generator methods (bodies containing `yield`/`yield from`) short-circuit to
-    /// an effective return type of `Object("Generator")`, mirroring the free-function
-    /// path: the declared hint is only validated for `Generator` acceptance (via
-    /// `generator_return_type_accepts`), and `require_declared_return_coverage` plus
-    /// the per-`return` compatibility checks are skipped because a generator body has
-    /// no `return`-on-every-path obligation.
+    /// A method body containing `yield` is a generator: calling it produces a
+    /// `Generator` object regardless of what the body's `return` statements say, so
+    /// generator detection short-circuits the whole inference/validation chain the
+    /// same way the free-function path in `functions::resolution::signature` does.
+    /// Without that short-circuit an unhinted generator method infers `void` (the
+    /// body has no value return) and a `: Generator` hint trips the
+    /// "must return a value on every path" coverage check.
     fn update_method_return_type(
         &mut self,
         class: &FlattenedClass,
         method: &ClassMethod,
         method_env: &TypeEnv,
-        return_infos: &[super::functions::ReturnInfo],
         pass_errors: &mut Vec<CompileError>,
     ) {
+        let mut return_infos = Vec::new();
         let mut callable_return_sigs = Vec::new();
         let mut callable_array_return_sigs = Vec::new();
         for stmt in &method.body {
+            self.collect_return_infos(stmt, method_env, &mut return_infos);
             self.collect_return_callable_sigs(stmt, method_env, &mut callable_return_sigs);
             self.collect_return_callable_array_sigs(
                 stmt,
@@ -396,49 +371,19 @@ impl Checker {
             Some(widest)
         };
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
-        // Generator methods: a body containing `yield`/`yield from` returns a
-        // `Generator` object, NOT the value(s) named by `return`/the declared hint.
-        // Mirror the function path (`functions/resolution/signature.rs`): validate the
-        // declared hint accepts a `Generator`, set the effective return to `Generator`,
-        // and SKIP `require_declared_return_coverage` (a generator body legitimately has
-        // no `return` on every path) and the per-return compatibility checks.
         let effective_return = if crate::types::checker::yield_validation::body_contains_yield(
             &method.body,
         ) {
-            let generator_ty = PhpType::Object("Generator".to_string());
-            if let Some(type_ann) = method.return_type.as_ref() {
-                match self.resolve_declared_return_type_hint(
-                    type_ann,
-                    method.span,
-                    &format!("Method '{}::{}'", class.name, method.name),
-                ) {
-                    Ok(declared) => {
-                        if !self.generator_return_type_accepts(&declared) {
-                            if let Err(error) = self.require_compatible_return_type(
-                                &declared,
-                                &generator_ty,
-                                true,
-                                method.span,
-                                &format!("Method '{}::{}' return type", class.name, method.name),
-                            ) {
-                                pass_errors.extend(error.flatten());
-                                self.current_class = None;
-                                self.current_method = None;
-                                self.current_method_is_static = false;
-                                return;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        pass_errors.extend(error.flatten());
-                        self.current_class = None;
-                        self.current_method = None;
-                        self.current_method_is_static = false;
-                        return;
-                    }
+            match self.generator_method_return_type(class, method) {
+                Ok(generator_ty) => generator_ty,
+                Err(error) => {
+                    pass_errors.extend(error.flatten());
+                    self.current_class = None;
+                    self.current_method = None;
+                    self.current_method_is_static = false;
+                    return;
                 }
             }
-            generator_ty
         } else if let Some(type_ann) = method.return_type.as_ref() {
             match self.resolve_declared_return_type_hint(
                 type_ann,
@@ -476,7 +421,7 @@ impl Checker {
                     // :never methods are allowed to have no return statements (they always throw/exit/loop).
                     let skip_compat_check = matches!(declared, PhpType::Never);
                     if !skip_compat_check {
-                        for return_info in return_infos {
+                        for return_info in &return_infos {
                             if let Err(error) = self.require_compatible_return_type(
                                 &declared,
                                 &return_info.ty,
@@ -509,7 +454,8 @@ impl Checker {
                 }
             }
         } else {
-            inferred_return
+            self.stream_contract_return_type(class, method, &raw_inferred)
+                .unwrap_or(inferred_return)
         };
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
@@ -529,6 +475,39 @@ impl Checker {
             &callable_return_sigs,
             &callable_array_return_sigs,
         );
+    }
+
+    /// Resolves the return type of a method whose body contains `yield`.
+    ///
+    /// The result is always `Generator`, because that is the object PHP hands back when
+    /// the generator method is called. A declared return hint is still resolved and
+    /// validated: hints that accept a `Generator` (`Generator`, `Traversable`,
+    /// `iterable`, `mixed`, …) pass through, anything else is reported as an
+    /// incompatible return type. Unlike the non-generator path there is no
+    /// return-coverage check — a generator body legitimately has no `return` at all.
+    fn generator_method_return_type(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+    ) -> Result<PhpType, CompileError> {
+        let generator_ty = PhpType::Object("Generator".to_string());
+        if let Some(type_ann) = method.return_type.as_ref() {
+            let declared = self.resolve_declared_return_type_hint(
+                type_ann,
+                method.span,
+                &format!("Method '{}::{}'", class.name, method.name),
+            )?;
+            if !self.generator_return_type_accepts(&declared) {
+                self.require_compatible_return_type(
+                    &declared,
+                    &generator_ty,
+                    true,
+                    method.span,
+                    &format!("Method '{}::{}' return type", class.name, method.name),
+                )?;
+            }
+        }
+        Ok(generator_ty)
     }
 
     /// Updates callable-return metadata for one checked method body.
@@ -601,4 +580,59 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
+}
+
+/// Whether a class declares a method the `streamWrapper` protocol reserves.
+///
+/// Shares [`is_user_wrapper_marker_method`] with the EIR normalizer on purpose: the two gates
+/// decide the SAME question — does the fixed raw-argument ABI apply to this class — and a class
+/// only one of them accepts gets a body expecting a boxed Mixed fed a (ptr,len) pair.
+///
+/// [`is_user_wrapper_marker_method`]: crate::codegen_support::runtime::is_user_wrapper_marker_method
+fn declares_stream_wrapper_marker(class_info: &crate::types::schema::ClassInfo) -> bool {
+    class_info
+        .methods
+        .keys()
+        .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key))
+}
+
+/// The parameter types PHP documents for each `streamWrapper` contract method.
+///
+/// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth
+/// parameter is by-reference `?string`, and is seeded as a string because that is what the body
+/// may assign into it. Filter classes are deliberately absent: `filter()`'s first two parameters
+/// are bucket brigades, which have no PHP type to seed.
+fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>> {
+    let ints = |n: usize| vec![PhpType::Int; n];
+    Some(match method_key {
+        "stream_open" => vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],
+        "stream_write" => vec![PhpType::Str],
+        "stream_read" | "stream_truncate" | "stream_lock" | "stream_cast" => ints(1),
+        "stream_seek" => ints(2),
+        "stream_set_option" => ints(3),
+        "unlink" => vec![PhpType::Str],
+        "rename" => vec![PhpType::Str, PhpType::Str],
+        "url_stat" | "rmdir" | "dir_opendir" => vec![PhpType::Str, PhpType::Int],
+        "mkdir" => vec![PhpType::Str, PhpType::Int, PhpType::Int],
+        // `$value` carries whatever the option needs: an [mtime, atime] array for
+        // STREAM_META_TOUCH, an int for ACCESS/OWNER/GROUP, a string for the
+        // *_NAME options. Only Mixed spans all three, and the ABI keeps a boxed
+        // Mixed in one register, so the pair-carrying `$path` stays aligned.
+        "stream_metadata" => vec![PhpType::Str, PhpType::Int, PhpType::Mixed],
+        _ => return None,
+    })
+}
+
+/// The return type each `streamWrapper` contract method's FIXED runtime ABI is built around.
+///
+/// Only the slots the dispatcher reads out of the string-result pair appear. The scalar slots need
+/// no entry: `bool`, `int` and a boxed `mixed` all travel in the same single result register, so an
+/// inference that lands on the wrong one of those still reaches the dispatcher intact. The stat
+/// slots are deliberately absent for the opposite reason — `stream_stat()`/`url_stat()` hand back a
+/// boxed Mixed cell on purpose, which is why the vtable documents them as having to stay untyped.
+fn stream_wrapper_contract_return_type(method_key: &str) -> Option<PhpType> {
+    match method_key {
+        "stream_read" | "dir_readdir" => Some(PhpType::Str),
+        _ => None,
+    }
 }

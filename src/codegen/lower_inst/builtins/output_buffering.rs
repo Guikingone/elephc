@@ -26,7 +26,7 @@ use crate::codegen_support::runtime::{
     OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_NTC_CREATE_FAIL,
     OB_WARN_BAD_CALLBACK_GENERIC, OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
 };
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::callables::runtime_string_descriptor_cases;
@@ -56,11 +56,19 @@ pub(crate) fn lower_ob_start(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             }
             PhpType::Str => {
                 super::io::load_string_to_result(ctx, callback, "ob_start callback name")?;
-                emit_push_string_handler_triple(ctx, callback)?;
+                emit_push_string_handler_triple(
+                    ctx,
+                    callback,
+                    super::super::instruction_strict_php_profile(inst),
+                )?;
             }
             PhpType::Mixed | PhpType::Union(_) => {
                 load_value_to_first_int_arg(ctx, callback)?;
-                emit_push_mixed_handler_triple(ctx, callback)?;
+                emit_push_mixed_handler_triple(
+                    ctx,
+                    callback,
+                    super::super::instruction_strict_php_profile(inst),
+                )?;
             }
             ty => {
                 return Err(CodegenIrError::unsupported(format!(
@@ -189,13 +197,15 @@ fn emit_push_descriptor_handler_triple(ctx: &mut FunctionContext<'_>) {
 fn emit_push_string_handler_triple(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
+    strict_php: bool,
 ) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let (ptr_reg, len_reg) = (ptr_reg.to_string(), len_reg.to_string());
     abi::emit_push_reg_pair(ctx.emitter, &ptr_reg, &len_reg);
     let call_reg = abi::nested_call_reg(ctx.emitter);
     let candidate_names = ctx.runtime_callable_candidates(callback);
-    let cases = runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref())?;
+    let cases =
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
     let matched_join = ctx.next_label("ob_start_cb_matched");
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
         ptr_offset: 0,
@@ -273,6 +283,7 @@ fn emit_push_string_handler_triple(
 fn emit_push_mixed_handler_triple(
     ctx: &mut FunctionContext<'_>,
     callback: ValueId,
+    strict_php: bool,
 ) -> Result<()> {
     let desc_case = ctx.next_label("ob_start_mixed_desc");
     let string_case = ctx.next_label("ob_start_mixed_string");
@@ -310,7 +321,7 @@ fn emit_push_mixed_handler_triple(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rax, rdi");                                // string pointer = the unboxed low payload word
     }
-    emit_push_string_handler_triple(ctx, callback)?;
+    emit_push_string_handler_triple(ctx, callback, strict_php)?;
     abi::emit_jump(ctx.emitter, &staged);
     ctx.emitter.label(&null_case);
     emit_push_default_handler_triple(ctx);
@@ -620,184 +631,4 @@ fn ensure_arg_count_between(inst: &Instruction, name: &str, min: usize, max: usi
         max,
         inst.operands.len()
     )))
-}
-
-/// Lowers `headers_sent(?string &$file = null, ?int &$line = null): bool`.
-/// `$file`/`$line` are always written `""`/`0` (see the file-level doc
-/// comment); the by-ref writes happen AFTER the runtime call, both preserving
-/// the returned bool across them (via the shared `LocalSlotId` writer helpers).
-pub(crate) fn lower_headers_sent(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "headers_sent", 0, 2)?;
-    abi::emit_call_label(ctx.emitter, "__rt_headers_sent");
-    let file_slot = match inst.operands.first().copied() {
-        Some(v) => source_load_local_slot(ctx, v)?,
-        None => None,
-    };
-    let line_slot = match inst.operands.get(1).copied() {
-        Some(v) => source_load_local_slot(ctx, v)?,
-        None => None,
-    };
-    if file_slot.is_none() && line_slot.is_none() {
-        return store_if_result(ctx, inst);
-    }
-    let (empty_sym, _) = ctx.data.add_string(b"");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the returned bool across the out-param writes
-            if let Some(slot) = file_slot {
-                abi::emit_symbol_address(ctx.emitter, "x9", &empty_sym);
-                store_string_output_to_local(ctx, slot, "x9", "xzr")?;
-            }
-            if let Some(slot) = line_slot {
-                store_int_output_to_local(ctx, slot, "xzr")?;
-            }
-            abi::emit_pop_reg(ctx.emitter, "x0");
-        }
-        Arch::X86_64 => {
-            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the returned bool across the out-param writes
-            if let Some(slot) = file_slot {
-                abi::emit_symbol_address(ctx.emitter, "r9", &empty_sym);
-                ctx.emitter.instruction("xor r10, r10");                        // zero-length empty string
-                store_string_output_to_local(ctx, slot, "r9", "r10")?;
-            }
-            if let Some(slot) = line_slot {
-                ctx.emitter.instruction("xor r10, r10");
-                store_int_output_to_local(ctx, slot, "r10")?;
-            }
-            abi::emit_pop_reg(ctx.emitter, "rax");
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `flush(): void` as a sound no-op: elephc's stdout writes are
-/// already unbuffered syscalls (or `--web` per-request appends), so there is
-/// nothing to flush at the syscall layer — a true no-op is PHP-faithful here
-/// (php -n verified: `flush()` returns `NULL`/void, and CLI output is
-/// observably identical with or without the call).
-pub(crate) fn lower_flush(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "flush", 0)?;
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `header_remove(?string $name)` through the `--web`-gated
-/// `__rt_header_remove` (a genuine no-op outside `--web`). No argument means
-/// "remove every header" (`name_len = -1`, the in-band sentinel the bridge
-/// expects — see `crate::codegen::runtime::io::http_response`); a `Str`
-/// argument removes only the matching header. Any other argument type is
-/// unsupported (loud), never silently coerced.
-pub(crate) fn lower_header_remove(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "header_remove", 0, 1)?;
-    match inst.operands.first().copied() {
-        Some(name) => {
-            let ty = ctx.load_value_to_result(name)?.codegen_repr();
-            if ty != PhpType::Str {
-                return Err(CodegenIrError::unsupported(format!(
-                    "header_remove() argument must be a string in AOT mode (got {:?})",
-                    ty
-                )));
-            }
-            super::io::load_string_to_result(ctx, name, "header_remove name")?;
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    ctx.emitter.instruction("mov x0, x1");                      // name pointer -> first argument register
-                    ctx.emitter.instruction("mov x1, x2");                      // name length -> second argument register
-                }
-                Arch::X86_64 => {
-                    ctx.emitter.instruction("mov rdi, rax");                    // name pointer -> first argument register
-                    ctx.emitter.instruction("mov rsi, rdx");                    // name length -> second argument register
-                }
-            }
-        }
-        None => match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("mov x0, #0");                          // no name pointer needed
-                ctx.emitter.instruction("mov x1, #-1");                         // "no argument" sentinel: remove every header
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("xor edi, edi");                        // no name pointer needed
-                ctx.emitter.instruction("mov rsi, -1");                         // "no argument" sentinel: remove every header
-            }
-        },
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_header_remove");
-    store_if_result(ctx, inst)
-}
-
-/// Stores a string output (`""`) into a local slot, boxing it when the slot
-/// is `Mixed` (mirrors `builtins/io.rs`'s `store_string_output_to_local`).
-fn store_string_output_to_local(
-    ctx: &mut FunctionContext<'_>,
-    slot: crate::ir::LocalSlotId,
-    ptr_reg: &str,
-    len_reg: &str,
-) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
-    if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("mov x1, {}", ptr_reg));       // move the empty-string pointer into the canonical string result register
-                ctx.emitter.instruction(&format!("mov x2, {}", len_reg));       // move the empty-string length into the canonical string result register
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("mov rax, {}", ptr_reg));      // move the empty-string pointer into the canonical string result register
-                ctx.emitter.instruction(&format!("mov rdx, {}", len_reg));      // move the empty-string length into the canonical string result register
-            }
-        }
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
-        abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-        return Ok(());
-    }
-    abi::store_at_offset_scratch(ctx.emitter, ptr_reg, offset, "x13");
-    abi::store_at_offset_scratch(ctx.emitter, len_reg, offset - 8, "x13");
-    Ok(())
-}
-
-/// Stores an integer output (`0`) into a local slot, boxing it when the slot
-/// is `Mixed` (mirrors `builtins/io.rs`'s `store_int_output_to_local`).
-fn store_int_output_to_local(
-    ctx: &mut FunctionContext<'_>,
-    slot: crate::ir::LocalSlotId,
-    value_reg: &str,
-) -> Result<()> {
-    let offset = ctx.local_offset(slot)?;
-    if ctx.local_php_type(slot)?.codegen_repr() == PhpType::Mixed {
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("mov x0, {}", value_reg));     // move the int payload into the canonical integer result register
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("mov rax, {}", value_reg));    // move the int payload into the canonical integer result register
-            }
-        }
-        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-        abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-        return Ok(());
-    }
-    abi::store_at_offset_scratch(ctx.emitter, value_reg, offset, "x13");
-    Ok(())
-}
-
-/// Returns the local slot loaded by a `headers_sent()` by-ref operand when it
-/// came from `load_local` (mirrors the same helper duplicated across several
-/// `builtins/*.rs` files for their own by-ref out-params).
-fn source_load_local_slot(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<Option<crate::ir::LocalSlotId>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    if inst_ref.op == Op::LoadLocal {
-        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
-            return Ok(Some(slot));
-        }
-    }
-    Ok(None)
 }

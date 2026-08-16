@@ -37,16 +37,15 @@ impl Checker {
                     ));
                     continue;
                 }
-                if let Some(builtin) =
+                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
-                {
-                    if !crate::types::checker::builtins::is_prelude_overridable_builtin(&builtin) {
-                        errors.push(CompileError::new(
-                            stmt.span,
-                            &format!("Cannot redeclare built-in function: {}", builtin),
-                        ));
-                        continue;
-                    }
+                });
+                if let Some(builtin) = builtin {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Cannot redeclare built-in function: {}", builtin),
+                    ));
+                    continue;
                 }
                 self.function_variant_groups
                     .insert(name.clone(), variants.clone());
@@ -72,16 +71,15 @@ impl Checker {
                     ));
                     continue;
                 }
-                if let Some(builtin) =
+                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
-                {
-                    if !crate::types::checker::builtins::is_prelude_overridable_builtin(&builtin) {
-                        errors.push(CompileError::new(
-                            stmt.span,
-                            &format!("Cannot redeclare built-in function: {}", builtin),
-                        ));
-                        continue;
-                    }
+                });
+                if let Some(builtin) = builtin {
+                    errors.push(CompileError::new(
+                        stmt.span,
+                        &format!("Cannot redeclare built-in function: {}", builtin),
+                    ));
+                    continue;
                 }
                 let param_names: Vec<String> =
                     params.iter().map(|(n, _, _, _)| n.clone()).collect();

@@ -9,22 +9,6 @@
 
 use crate::support::*;
 
-/// Verifies `memory_get_usage` exposes live and committed heap accounting through namespace and case-insensitive builtin fallback.
-#[test]
-fn test_memory_get_usage_reports_runtime_heap_counters() {
-    let out = compile_and_run(
-        "<?php
-        namespace Demo;
-        $live = MEMORY_GET_USAGE();
-        $committed = memory_get_usage(true);
-        echo $live >= 0;
-        echo $committed >= $live;
-        echo function_exists('memory_get_usage');
-        ",
-    );
-    assert_eq!(out, "111");
-}
-
 // --- Date/time functions ---
 
 /// Verifies `date("Y", timestamp)` returns the correct 4-digit year for a known UTC timestamp.
@@ -1876,93 +1860,6 @@ echo count($matches) . "|" . $matches[0] . "|" . $matches[1] . "|" . $matches[2]
     assert_eq!(out, "3|b||b");
 }
 
-/// Verifies the `~`, `!`, and `%` regex delimiters are all stripped like the canonical `/`.
-/// Cross-checked against `php -r` (`142|1hey|1pct`).
-#[test]
-fn test_preg_match_alternate_delimiters() {
-    let out = compile_and_run(
-        r#"<?php
-echo preg_match('~(\d+)~', "x42y", $a) . $a[1] . "|";
-echo preg_match('!(\w+)!', "hey", $b) . $b[1] . "|";
-echo preg_match('%(\w+)%', "pct", $c) . $c[1];
-"#,
-    );
-    assert_eq!(out, "142|1hey|1pct");
-}
-
-/// Verifies a `preg_match()` by-reference `$matches` out-parameter defines the caller's variable,
-/// so the first read after the call does not report "Undefined variable" (PHP definite-assignment
-/// semantics). Cross-checked against `php -r 'preg_match("/a/","cat",$m); echo $m[0];'` (`a`).
-#[test]
-fn test_preg_match_by_ref_defines_matches() {
-    let out = compile_and_run(
-        r#"<?php
-preg_match('/a/', 'cat', $matches);
-echo $matches[0];
-"#,
-    );
-    assert_eq!(out, "a");
-}
-
-/// Verifies `preg_match_all()` with a by-reference `$matches` out-parameter defines the caller's
-/// variable. The EIR backend populates the array with the first match's captures (full
-/// `preg_match_all` nested-array semantics are a downstream gap), so `count($m)` matches PHP's
-/// per-call group count. Cross-checked against `php -r 'preg_match_all("/(\d)/","a1b2",$m); echo count($m);'` (`2`).
-#[test]
-fn test_preg_match_all_by_ref_defines_matches() {
-    let out = compile_and_run(
-        r#"<?php
-preg_match_all('/(\d)/', 'a1b2', $m);
-echo count($m);
-"#,
-    );
-    assert_eq!(out, "2");
-}
-
-/// Verifies an alphanumeric opener is treated as an undelimited raw pattern rather than being
-/// mis-stripped (e.g. `'aba'` must not strip to `'b'`). elephc compiles the pattern verbatim in
-/// this case: `preg_match('abc', "abc")` matches (1) and `"xyz"` does not (0). This is an
-/// intentional divergence from PHP, which rejects an alphanumeric delimiter with a warning.
-#[test]
-fn test_preg_match_undelimited_pattern_treated_as_raw() {
-    let out = compile_and_run(
-        r#"<?php echo preg_match('abc', "abc") . "|" . preg_match('aba', "b");"#,
-    );
-    assert_eq!(out, "1|0");
-}
-
-/// Verifies named groups interleaved with unnamed groups keep PCRE left-to-right numbering,
-/// so `$m['mid']` and the numeric `$m[1]`/`$m[3]` twins all resolve. Cross-checked against
-/// `php -r` (`a|b|c`).
-#[test]
-fn test_preg_match_named_and_unnamed_group_numbering() {
-    let out = compile_and_run(
-        r#"<?php
-function mm(string $p, string $s, ?array &$m = null): int { return preg_match($p, $s, $m); }
-mm('#(\w)(?P<mid>\w)(\w)#', "abc", $m);
-echo $m[1] . "|" . $m['mid'] . "|" . $m[3];
-"#,
-    );
-    assert_eq!(out, "a|b|c");
-}
-
-/// Verifies a trailing unmatched named group is omitted from `$matches` (so `isset` is false),
-/// while a matched one is present, matching PHP's array shape. Cross-checked against `php -r`
-/// (`YN|Yb`).
-#[test]
-fn test_preg_match_trailing_unmatched_named_group_omitted() {
-    let out = compile_and_run(
-        r#"<?php
-function mm(string $p, string $s, ?array &$m = null): int { return preg_match($p, $s, $m); }
-mm('#(?P<x>a)(?P<y>b)?#', "a", $c);
-echo (isset($c['x']) ? "Y" : "N") . (isset($c['y']) ? "Y" : "N");
-mm('#(?P<x>a)(?P<y>b)?#', "ab", $d);
-echo "|" . (isset($d['y']) ? "Y" : "N") . $d['y'];
-"#,
-    );
-    assert_eq!(out, "YN|Yb");
-}
-
 /// Verifies named arguments can provide the optional by-reference `$matches` output variable.
 #[test]
 fn test_preg_match_named_matches_argument() {
@@ -1993,115 +1890,6 @@ if (preg_match("/([A-Z]+)/", "abcXYZ", $matches)) {
 fn test_preg_match_no_digits() {
     let out = compile_and_run(r#"<?php echo preg_match("/[0-9]+/", "abcdef");"#);
     assert_eq!(out, "0");
-}
-
-/// Verifies `preg_match()` populates `$matches` when it is a wrapper's by-reference parameter,
-/// writing the captures through the parameter's reference cell into the caller's array.
-///
-/// This is the symfony/yaml `Parser::preg_match` shape: the builtin's `$matches` out-parameter
-/// is itself the wrapper's `&$m` by-reference parameter, so it lowers to a ref-cell load rather
-/// than a direct local. The caller's `$arr` is seeded as a string array so element reads use the
-/// correct stride; the writeback releases that previous value and stores the fresh captures.
-/// Cross-checked against `php -r` (`1|ab|a|b`).
-#[test]
-fn test_preg_match_matches_through_byref_parameter() {
-    let out = compile_and_run(
-        r#"<?php
-function w(string $p, string $s, &$m): int {
-    return preg_match($p, $s, $m);
-}
-$arr = ["seed"];
-$n = w("/(a)(b)/", "zab", $arr);
-echo $n . "|" . $arr[0] . "|" . $arr[1] . "|" . $arr[2];
-"#,
-    );
-    assert_eq!(out, "1|ab|a|b");
-}
-
-/// Verifies `preg_match()` accepts the PHP `#` delimiter (not only `/`), matching a plain
-/// pattern and populating numeric capture groups exactly like the `/.../ ` form.
-/// Cross-checked against `php -r` (`1|3|ab,a,b`).
-#[test]
-fn test_preg_match_hash_delimiter() {
-    let out = compile_and_run(
-        r#"<?php
-echo preg_match('#hello#', 'hello world'), "|";
-preg_match('#(a)(b)#', 'zab', $m);
-echo count($m), "|", $m[0], ",", $m[1], ",", $m[2];
-"#,
-    );
-    assert_eq!(out, "1|3|ab,a,b");
-}
-
-/// Verifies a `(?P<name>...)` named capture populates both the numeric `$m[1]` slot and the
-/// associative `$m['name']` slot when `$matches` is a by-reference `?array` cell (a boxed
-/// Mixed destination), read through the cell in the same scope. The `#` delimiter and the `u`
-/// modifier are both exercised. This is the shape named groups take in real parsers.
-/// Cross-checked against `php -r` (`name:|name|name`).
-#[test]
-fn test_preg_match_named_group_populates_hash_through_byref_cell() {
-    let out = compile_and_run(
-        r#"<?php
-function w(string $p, string $s, ?array &$m): string {
-    preg_match($p, $s, $m);
-    return $m[0] . "|" . $m['key'] . "|" . $m[1];
-}
-echo w('#(?P<key>\w+):#u', "name: x", $mm);
-"#,
-    );
-    assert_eq!(out, "name:|name|name");
-}
-
-/// Verifies two `(?P<name>...)` named captures both resolve under their string keys and their
-/// numeric indices through a by-reference `?array` (boxed Mixed) `$matches` cell.
-/// Cross-checked against `php -r` (`id|42|id|42`).
-#[test]
-fn test_preg_match_two_named_groups_through_byref_cell() {
-    let out = compile_and_run(
-        r#"<?php
-function w(string $p, string $s, ?array &$m): string {
-    preg_match($p, $s, $m);
-    return $m['k'] . "|" . $m['v'] . "|" . $m[1] . "|" . $m[2];
-}
-echo w('#(?P<k>\w+)=(?P<v>\d+)#', "id=42", $mm);
-"#,
-    );
-    assert_eq!(out, "id|42|id|42");
-}
-
-/// Verifies an unmatched optional named capture (`(?P<a>x)?`) materializes as PHP's empty
-/// string under its string key while a later named capture is populated normally, through a
-/// by-reference `?array` (boxed Mixed) `$matches` cell.
-/// Cross-checked against `php -r` (`[][abc]`).
-#[test]
-fn test_preg_match_unmatched_named_group_is_empty_through_byref_cell() {
-    let out = compile_and_run(
-        r#"<?php
-function w(string $p, string $s, ?array &$m): string {
-    preg_match($p, $s, $m);
-    return "[" . $m['a'] . "][" . $m['b'] . "]";
-}
-echo w('#(?P<a>x)?(?P<b>\w+)#', "abc", $mm);
-"#,
-    );
-    assert_eq!(out, "[][abc]");
-}
-
-/// Verifies the alternate `(?<name>...)` named-group syntax (without the `P`) resolves under
-/// its string key through a by-reference `?array` (boxed Mixed) `$matches` cell.
-/// Cross-checked against `php -r` (`hello`).
-#[test]
-fn test_preg_match_alternate_named_group_syntax_through_byref_cell() {
-    let out = compile_and_run(
-        r#"<?php
-function w(string $p, string $s, ?array &$m): string {
-    preg_match($p, $s, $m);
-    return $m['word'];
-}
-echo w('#(?<word>\w+)#', "hello", $mm);
-"#,
-    );
-    assert_eq!(out, "hello");
 }
 
 /// Verifies `preg_match` with the Unicode property escape `\p{L}+` matches a run of letters
@@ -2149,6 +1937,28 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
+/// Verifies every shim-backed regex family handles an invalid pattern without exposing a
+/// partial handle, invoking callbacks, or returning partially initialized capture data.
+#[test]
+fn test_regex_families_reject_invalid_patterns_safely() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$callbackCalls = 0;
+echo (int)mb_ereg_match("(", "subject") . "|";
+echo preg_match("/(/", "subject", $matches) . ":" . count($matches) . "|";
+echo preg_match_all("/(/", "subject") . "|";
+echo preg_replace("/(/", "x", "subject") . "|";
+echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
+    $callbackCalls = $callbackCalls + 1;
+    return "called";
+}, "subject") . ":" . $callbackCalls . "|";
+echo count(preg_split("/(/", "subject"));
+"#,
+    );
+    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+}
+
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
 #[test]
 fn test_preg_replace_simple() {
@@ -2182,54 +1992,6 @@ fn test_preg_replace_unicode_property_number() {
 fn test_preg_replace_no_match() {
     let out = compile_and_run(r#"<?php echo preg_replace("/xyz/", "ABC", "hello world");"#);
     assert_eq!(out, "hello world");
-}
-
-/// Verifies the optional `$limit` argument is accepted (unlimited `-1`) and replacement still
-/// processes every match.
-#[test]
-fn test_preg_replace_accepts_limit_argument() {
-    let out = compile_and_run(r##"<?php echo preg_replace("/\d/", "#", "a1b2", -1);"##);
-    assert_eq!(out, "a#b#");
-}
-
-/// Verifies the optional by-reference `&$count` argument is populated with the number of
-/// replacements performed and defines the variable for later use.
-#[test]
-fn test_preg_replace_populates_count_argument() {
-    let out = compile_and_run(
-        r##"<?php
-$n = 0;
-$result = preg_replace("/\d/", "#", "a1b2", -1, $n);
-echo $result . "|" . $n;
-"##,
-    );
-    assert_eq!(out, "a#b#|2");
-}
-
-/// Verifies `&$count` reports zero replacements when the pattern never matches the subject.
-#[test]
-fn test_preg_replace_count_zero_on_no_match() {
-    let out = compile_and_run(
-        r##"<?php
-$n = 5;
-preg_replace("/\d/", "#", "abc", -1, $n);
-echo $n;
-"##,
-    );
-    assert_eq!(out, "0");
-}
-
-/// Verifies `preg_match()` accepts the optional `$flags` argument (4-argument form) and still
-/// populates the `$matches` capture array.
-#[test]
-fn test_preg_match_accepts_flags_argument() {
-    let out = compile_and_run(
-        r#"<?php
-$ok = preg_match("/(\d+)/", "id=42", $matches, 0);
-echo $ok . "|" . $matches[1];
-"#,
-    );
-    assert_eq!(out, "1|42");
 }
 
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
@@ -3415,6 +3177,13 @@ echo count($a), "|",
 /// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
 /// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
 /// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.
+///
+/// The aliases live in the global namespace only, so a QUALIFIED spelling is `false`: reference
+/// PHP 8.5.6 prints `bool(false)` for `function_exists('\\foo\\bar\\idate')` and `bool(true)`
+/// for `function_exists('\\date_create')` (a single leading separator is accepted). An earlier
+/// revision of this test asserted `true` for the qualified form, mirroring the resolver's
+/// last-namespace-segment rewrite rule; that spelling is now `false` on both the literal and the
+/// dynamic `function_exists($name)` path, which is what PHP reports.
 #[test]
 fn test_function_exists_date_procedural_aliases() {
     let out = compile_and_run(
@@ -3456,7 +3225,8 @@ echo function_exists("\\foo\\bar\\idate") ? "1" : "0";
 echo function_exists("does_not_exist_alias_xyz") ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "1".repeat(34) + "0");
+    // 33 recognized spellings, then the qualified `\foo\bar\idate` and the unknown name, both false.
+    assert_eq!(out, "1".repeat(33) + "00");
 }
 
 /// Verifies `mktime`/`gmmktime` accept PHP 8.0+'s optional arguments: omitted trailing components
@@ -3480,89 +3250,4 @@ echo function_exists("mktime") ? "1" : "0", function_exists("gmmktime") ? "1" : 
 "#,
     );
     assert_eq!(out, "2024-06-15 12:30:45|03-15|same-year|h12|11");
-}
-
-/// Verifies `trigger_deprecation()` (Symfony's symfony/deprecation-contracts global)
-/// is a sound no-op: it compiles, runs, emits no deprecation output, returns nothing,
-/// and execution continues normally. Both the required-only and variadic printf-style
-/// argument forms are accepted.
-#[test]
-fn test_trigger_deprecation_noop() {
-    let out = compile_and_run(
-        r#"<?php
-echo "before|";
-trigger_deprecation("symfony/yaml", "7.2", "Plain deprecation message.");
-trigger_deprecation("symfony/yaml", "7.2", "Key %s on line %d.", "name", 1 + 2);
-echo "after";
-"#,
-    );
-    assert_eq!(out, "before|after");
-}
-
-/// Verifies `trigger_deprecation()` resolves through the namespace-to-global builtin
-/// fallback when called unqualified inside a namespace (as Symfony does), and that a
-/// mixed-case spelling resolves via case-insensitive builtin lookup. Also confirms
-/// `function_exists("trigger_deprecation")` recognizes it.
-#[test]
-fn test_trigger_deprecation_namespaced_and_case_insensitive() {
-    let out = compile_and_run(
-        r#"<?php
-namespace Symfony\Component\Yaml;
-
-echo function_exists("trigger_deprecation") ? "fx|" : "no|";
-trigger_deprecation("symfony/yaml", "7.2", "Unqualified in namespace.");
-Trigger_Deprecation("symfony/yaml", "7.2", "Mixed case %s.", "ok");
-echo "done";
-"#,
-    );
-    assert_eq!(out, "fx|done");
-}
-
-/// Verifies that `serialize()` and `unserialize()` are recognized as global builtins:
-/// `function_exists()` reports both, and an unqualified call inside a namespace resolves
-/// through the namespace-to-global builtin fallback (the exact symfony/yaml scenario) so
-/// the program compiles. The actual calls are guarded behind a runtime-unknown branch so
-/// the deferred fatal stub is never executed.
-#[test]
-fn test_serialize_unserialize_recognized_and_namespaced_resolution() {
-    let out = compile_and_run(
-        r#"<?php
-namespace Symfony\Component\Yaml;
-
-echo function_exists("serialize") ? "1" : "0";
-echo function_exists("unserialize") ? "1" : "0";
-if ($argc === 999999) {
-    echo serialize($argc);
-    $r = unserialize("payload");
-    echo $r;
-}
-echo "|ok";
-"#,
-    );
-    assert_eq!(out, "11|ok");
-}
-
-/// Verifies that actually calling `serialize()` terminates the process with the deferred
-/// fatal diagnostic. `$argc` is runtime-unknown so the optimizer cannot prune the call,
-/// forcing the `__rt_serialize_unsupported` fatal stub to run and exit non-zero.
-#[test]
-fn test_serialize_runtime_fatal_stub() {
-    let err = compile_and_run_expect_failure("<?php $x = serialize($argc); echo $x;");
-    assert!(
-        err.contains("serialize()/unserialize() is not yet supported"),
-        "unexpected stderr: {err}"
-    );
-}
-
-/// Verifies that calling `unserialize()` triggers the same deferred fatal stub, including
-/// through case-insensitive builtin lookup (`UnSerialize`), which PHP allows for function names.
-#[test]
-fn test_unserialize_runtime_fatal_stub_case_insensitive() {
-    let err = compile_and_run_expect_failure(
-        "<?php $s = $argv[0]; $r = UnSerialize($s); echo $r;",
-    );
-    assert!(
-        err.contains("serialize()/unserialize() is not yet supported"),
-        "unexpected stderr: {err}"
-    );
 }

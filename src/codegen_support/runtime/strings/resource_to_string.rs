@@ -15,7 +15,9 @@ use crate::codegen_support::platform::Arch;
 /// Formats a native resource payload as the PHP display string "Resource id #N".
 ///
 /// Uses the global concat buffer to build the result: copies the 13-byte prefix
-/// `"Resource id #"`, then appends the decimal digits of `(payload + 1)`. Updates
+/// `"Resource id #"`, then appends the decimal digits of the payload's PHP
+/// resource id, resolved through `__rt_resource_id_of` (see
+/// `runtime::resource_ids`). Updates
 /// `_concat_off` to reflect the total bytes written (prefix + digits). Returns the
 /// final string pointer in x1 and length in x2.
 ///
@@ -64,7 +66,7 @@ pub fn emit_resource_to_string(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, #13");                                   // move the scratch cursor after the copied prefix
     emitter.instruction("str x10, [x9]");                                       // let itoa write its temporary digits after the prefix
     emitter.instruction("ldr x0, [sp]");                                        // reload the native resource payload
-    emitter.instruction("add x0, x0, #1");                                      // convert the native payload into the 1-based display id
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the display id as temporary decimal digits
     emitter.instruction("ldr x12, [sp, #24]");                                  // reload the final output start
     emitter.instruction("add x12, x12, #13");                                   // compute the final digit destination after the prefix
@@ -120,7 +122,7 @@ fn emit_resource_to_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, 13");                                          // move the scratch cursor after the copied prefix
     emitter.instruction("mov QWORD PTR [r8], r9");                              // let itoa write its temporary digits after the prefix
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the native resource payload
-    emitter.instruction("add rax, 1");                                          // convert the native payload into the 1-based display id
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // format the display id as temporary decimal digits
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the final output start
     emitter.instruction("lea r11, [r11 + 13]");                                 // compute the final digit destination after the prefix

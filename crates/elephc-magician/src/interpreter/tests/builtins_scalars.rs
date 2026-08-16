@@ -117,7 +117,14 @@ return call_user_func("is_resource", $handle);"#,
     assert_eq!(values.output, "R:resource");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
-/// Verifies eval resource introspection builtins expose stream type and one-based id.
+/// Verifies eval resource introspection builtins expose stream type and registry id.
+///
+/// The expected id is 5, NOT `payload + 1`. A resource's PHP id comes from the
+/// runtime registry's counter, which starts at 5 and advances in creation order,
+/// so the first resource a program creates reports 5 whatever its native payload
+/// happens to be — confirmed against PHP 8.5.6, where a program whose only stream
+/// is one `fopen()` prints `5`. This assertion read `stream:7` for as long as the
+/// fake modelled the pre-registry `payload + 1` rule.
 #[test]
 fn execute_program_dispatches_resource_introspection_builtins() {
     let program = parse_fragment(
@@ -136,7 +143,7 @@ return function_exists("get_resource_id");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    assert_eq!(values.output, "stream:7:stream:7:1");
+    assert_eq!(values.output, "stream:5:stream:5:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 /// Verifies eval cast builtins return boxed scalar cells directly and by callable.

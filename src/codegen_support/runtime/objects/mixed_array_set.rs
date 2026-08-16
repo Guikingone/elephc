@@ -8,7 +8,7 @@
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
 //! - The helper consumes the boxed Mixed value pointer when the write succeeds.
-//! - A container payload that is null, boxed false, or the in-band null-container sentinel
+//! - A container payload that is null or the in-band null-container sentinel
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is autovivified as a real PHP array before the keyed write (issues #585/#592).
 //! - A string key on an indexed payload promotes the payload to hash storage
@@ -28,7 +28,7 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 /// arguments via registers `x0`–`x3`; on x86_64 it uses the SysV convention (`rdi`, `rsi`,
 /// `rdx`, `rcx`). The key tuple encoding matches `emit_normalized_hash_key`: integer keys
 /// use `key_hi = -1`. The helper consumes the boxed Mixed value pointer when the write
-/// succeeds, autovivifies writable Mixed null/false cells, and releases the value if the target
+/// succeeds, autovivifies writable Mixed null cells, and releases the value if the target
 /// pointer is absent or its non-null payload type is incompatible.
 pub fn emit_mixed_array_set(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -48,8 +48,7 @@ pub fn emit_mixed_array_set(emitter: &mut Emitter) {
 ///
 /// Behavior:
 /// - If `x0` is null, the value is released via `__rt_decref_mixed` and the helper returns.
-/// - Canonical or legacy container-shaped null payloads — and boxed false — autovivify as
-///   indexed arrays in place.
+/// - Canonical or legacy container-shaped null payloads autovivify as indexed arrays in place.
 /// - Indexed arrays mutate slots directly; string and negative keys first promote to hash
 ///   storage, while existing associative arrays call `__rt_hash_set`.
 /// - Array capacity is grown via `__rt_array_grow` if the target index exceeds current capacity.
@@ -80,11 +79,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_set_object");                    // route runtime-managed ArrayAccess objects to offsetSet
     emitter.instruction("cmp x9, #8");                                          // is the target a canonical Mixed null?
     emitter.instruction("b.eq __rt_mixed_array_set_autovivify");                // PHP keyed writes autovivify null into an array
-    emitter.instruction("cmp x9, #3");                                          // is the Mixed payload boolean?
-    emitter.instruction("b.ne __rt_mixed_array_set_drop");                      // reject non-array scalar payloads
-    emitter.instruction("ldr x10, [x0, #8]");                                   // load the boolean payload
-    emitter.instruction("cbnz x10, __rt_mixed_array_set_drop");                 // true cannot be auto-vivified as an array
-    emitter.instruction("b __rt_mixed_array_set_autovivify");                   // boxed false auto-vivifies as an empty array, like null
+    emitter.instruction("b __rt_mixed_array_set_drop");                         // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the indexed-array pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "x10", "x9", "__rt_mixed_array_set_autovivify");
@@ -256,8 +251,7 @@ fn emit_mixed_array_set_aarch64(emitter: &mut Emitter) {
 /// - `rdx`: key high word (integer-key sentinel `-1` or hash high word)
 /// - `rcx`: pointer to the boxed `Mixed` value being written
 ///
-/// Boxed null and false targets are auto-vivified before mutation. Other behavior mirrors the
-/// ARM64 version with x86_64-specific register and instruction encoding.
+/// Behavior mirrors the ARM64 version with x86_64-specific register and instruction encoding.
 /// The helper frame is 64 bytes; callee-saved register `rbp` is preserved.
 fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.blank();
@@ -284,11 +278,7 @@ fn emit_mixed_array_set_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_set_object");                      // route runtime-managed ArrayAccess objects to offsetSet
     emitter.instruction("cmp r10, 8");                                          // is the target a canonical Mixed null?
     emitter.instruction("je __rt_mixed_array_set_autovivify");                  // PHP keyed writes autovivify null into an array
-    emitter.instruction("cmp r10, 3");                                          // is the Mixed payload boolean?
-    emitter.instruction("jne __rt_mixed_array_set_drop");                       // reject non-array scalar payloads
-    emitter.instruction("cmp QWORD PTR [rdi + 8], 0");                          // is the boolean payload false?
-    emitter.instruction("jne __rt_mixed_array_set_drop");                       // true cannot be auto-vivified as an array
-    emitter.instruction("jmp __rt_mixed_array_set_autovivify");                 // boxed false auto-vivifies as an empty array, like null
+    emitter.instruction("jmp __rt_mixed_array_set_drop");                       // non-array Mixed payloads cannot be mutated here
     emitter.label("__rt_mixed_array_set_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the indexed-array pointer from the Mixed payload
     emit_branch_if_null_container(emitter, "r10", "r11", "__rt_mixed_array_set_autovivify");

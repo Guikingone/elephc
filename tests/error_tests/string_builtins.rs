@@ -16,40 +16,25 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
-    test_error_strcspn_wrong_args,
-    "<?php strcspn(\"abc\");",
-    "strcspn() takes 2 to 4 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_strspn_wrong_args,
-    "<?php strspn(\"abc\");",
-    "strspn() takes 2 to 4 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_strpbrk_wrong_args,
-    "<?php strpbrk(\"abc\");",
-    "strpbrk() takes exactly 2 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_hexdec_wrong_args,
-    "<?php hexdec();",
-    "hexdec() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_hexdec_too_many_args,
-    "<?php hexdec(\"ff\", \"00\");",
-    "hexdec() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
     test_error_rawurlencode_wrong_args,
     "<?php rawurlencode();",
     "rawurlencode() takes exactly 1 argument"
 );
+
+expect_builtin_arity_error!(
+    test_error_parse_url_wrong_args,
+    "<?php parse_url();",
+    "parse_url() takes 1 or 2 arguments"
+);
+
+/// Verifies that `parse_url()` rejects a statically non-integer component selector.
+#[test]
+fn test_error_parse_url_component_type() {
+    expect_error(
+        "<?php parse_url('https://example.com', 'host');",
+        "parse_url() component must be int",
+    );
+}
 
 expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
@@ -59,7 +44,7 @@ expect_builtin_arity_error!(
 
 expect_builtin_arity_error!(
     test_error_base64_decode_too_many_args,
-    "<?php base64_decode(\"aGk=\", true, 1);",
+    "<?php base64_decode(\"SGk=\", true, 1);",
     "base64_decode() takes 1 or 2 arguments"
 );
 
@@ -154,22 +139,6 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
-    test_error_ctype_upper_wrong_args,
-    "<?php ctype_upper();",
-    "ctype_upper() takes exactly 1 argument"
-);
-
-/// Verifies `ctype_upper(mixed): bool` is recognized (no "Undefined function") and its bool
-/// result flows into a boolean context. It is recognition-only (no runtime lowering yet).
-#[test]
-fn test_ctype_upper_recognized() {
-    assert!(
-        check_source("<?php $b = ctype_upper(\"ABC\"); echo $b ? \"y\" : \"n\";").is_ok(),
-        "ctype_upper() should type-check as a recognized bool-returning builtin",
-    );
-}
-
-expect_builtin_arity_error!(
     test_error_chop_wrong_args,
     "<?php chop();",
     "chop() takes 1 or 2 arguments"
@@ -182,6 +151,9 @@ fn test_error_substr_wrong_args() {
 }
 
 /// Verifies that `strpos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is now accepted, so the derived phrasing is a
+/// range rather than an exact count.
 #[test]
 fn test_error_strpos_wrong_args() {
     expect_error(
@@ -190,61 +162,50 @@ fn test_error_strpos_wrong_args() {
     );
 }
 
-/// Verifies that `strpos()` with four arguments produces the correct arity error.
+/// Verifies that `stripos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is accepted, so the derived phrasing is a range
+/// rather than an exact count, exactly like `strpos()`.
 #[test]
-fn test_error_strpos_too_many_args() {
+fn test_error_stripos_wrong_args() {
     expect_error(
-        "<?php strpos(\"hi\", \"i\", 0, 1);",
-        "strpos() takes 2 or 3 arguments",
+        "<?php stripos(\"hi\");",
+        "stripos() takes 2 or 3 arguments",
     );
 }
 
-/// Verifies that `strstr()` with four arguments produces the correct arity error.
+/// Verifies that `strripos()` with four arguments produces the correct arity error.
 #[test]
-fn test_error_strstr_too_many_args() {
+fn test_error_strripos_too_many_args() {
     expect_error(
-        "<?php strstr(\"hi\", \"i\", true, 1);",
-        "strstr() takes 2 or 3 arguments",
+        "<?php strripos(\"hi\", \"h\", 0, 1);",
+        "strripos() takes 2 or 3 arguments",
     );
 }
 
-/// Verifies that `octdec()` with no arguments produces the correct arity error.
+/// Verifies that `quoted_printable_encode()` with no arguments produces the correct arity error.
 #[test]
-fn test_error_octdec_wrong_args() {
-    expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
-}
-
-/// Verifies that `octdec()` with two arguments produces the correct arity error.
-#[test]
-fn test_error_octdec_too_many_args() {
+fn test_error_quoted_printable_encode_wrong_args() {
     expect_error(
-        "<?php octdec(\"17\", \"77\");",
-        "octdec() takes exactly 1 argument",
+        "<?php quoted_printable_encode();",
+        "quoted_printable_encode() takes exactly 1 argument",
     );
 }
 
-/// Verifies that `substr_count()` with only one argument produces the correct arity error.
+/// Verifies that `quoted_printable_encode()` with two arguments produces the correct arity error.
 #[test]
-fn test_error_substr_count_wrong_args() {
+fn test_error_quoted_printable_encode_too_many_args() {
     expect_error(
-        "<?php substr_count(\"hi\");",
-        "substr_count() takes 2 to 4 arguments",
+        "<?php quoted_printable_encode(\"a\", \"b\");",
+        "quoted_printable_encode() takes exactly 1 argument",
     );
 }
 
-/// Verifies that `substr_count()` with five arguments produces the correct arity error.
+/// Verifies that a function returning `int` that returns `strpos()` directly is rejected,
+/// because `strpos()` returns `Int|Bool` (false on miss), not `int`. This is a type
+/// incompatibility regression test.
 #[test]
-fn test_error_substr_count_too_many_args() {
-    expect_error(
-        "<?php substr_count(\"hi\", \"i\", 0, 1, 2);",
-        "substr_count() takes 2 to 4 arguments",
-    );
-}
-
-/// Verifies returning `strpos()` (typed `Int|False`) from an `: int` function is rejected:
-/// the `false` miss marker must be handled before the scalar return boundary.
-#[test]
-fn test_error_strpos_false_return_into_int_return_type() {
+fn test_error_strpos_false_return_rejects_int_return_type() {
     expect_error(
         r#"<?php
 function pos(): int {
@@ -282,8 +243,6 @@ fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
-/// Verifies that `explode()` with only one argument produces the correct arity
-/// error. `explode` accepts 2 or 3 arguments (the trailing `$limit` is optional).
 /// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
 /// an undefined variable passed as an argument produces the correct diagnostic.
 ///
@@ -299,16 +258,48 @@ fn test_error_ord_undefined_variable_arg() {
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
+///
+/// The reported range covers the optional `$limit` third parameter.
 #[test]
 fn test_error_explode_wrong_args() {
-    expect_error("<?php explode(\",\");", "explode() takes 2 or 3 arguments");
+    expect_error(
+        "<?php explode(\",\");",
+        "explode() takes 2 or 3 arguments",
+    );
 }
 
-/// Verifies that the optional `$limit` third argument (`explode(",", $s, 2)`)
-/// type-checks cleanly now that the arity accepts 2 or 3 arguments.
+/// Verifies that `explode()` rejects a fourth argument now that `$limit` is accepted.
 #[test]
-fn test_explode_with_limit_type_checks() {
-    expect_ok("<?php $s = \"a,b,c\"; $p = explode(\",\", $s, 2);");
+fn test_error_explode_too_many_args() {
+    expect_error(
+        "<?php explode(\",\", \"a,b\", 1, 2);",
+        "explode() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `explode()` accepts the optional `$limit`, positionally and by name.
+#[test]
+fn test_explode_limit_argument_type_checks() {
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", -1);").is_ok(),
+        "explode() must accept a negative positional $limit",
+    );
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", limit: 2);").is_ok(),
+        "explode() must accept $limit as a named argument",
+    );
+}
+
+/// Verifies that `str_pad()`'s padding-mode constants are predefined like PHP's.
+#[test]
+fn test_str_pad_mode_constants_are_predefined() {
+    assert!(
+        check_source(
+            "<?php $a = str_pad(\"x\", 4, \"-\", STR_PAD_LEFT) . str_pad(\"x\", 4, \"-\", STR_PAD_RIGHT) . str_pad(\"x\", 4, \"-\", STR_PAD_BOTH);"
+        )
+        .is_ok(),
+        "STR_PAD_LEFT/STR_PAD_RIGHT/STR_PAD_BOTH must resolve as predefined constants",
+    );
 }
 
 /// Verifies that `str_pad()` with only one argument produces the correct arity error.
@@ -331,8 +322,6 @@ fn test_error_sha1_wrong_args() {
     expect_error("<?php sha1();", "sha1() takes 1 or 2 arguments");
 }
 
-/// Verifies that `htmlspecialchars()` with no arguments produces the correct arity
-/// error (PHP allows 1–4).
 /// Verifies that `htmlspecialchars()` with no arguments produces the correct arity error.
 /// htmlspecialchars() accepts optional `$flags` and `$encoding` arguments, so the message
 /// reports 1 to 3 args.
@@ -340,17 +329,7 @@ fn test_error_sha1_wrong_args() {
 fn test_error_htmlspecialchars_wrong_args() {
     expect_error(
         "<?php htmlspecialchars();",
-        "htmlspecialchars() takes 1 to 4 arguments",
-    );
-}
-
-/// Verifies that `htmlspecialchars()` rejects five arguments (PHP allows 1–4: string,
-/// flags, encoding, double_encode).
-#[test]
-fn test_error_htmlspecialchars_too_many_args() {
-    expect_error(
-        r#"<?php htmlspecialchars("x", 3, "UTF-8", true, 1);"#,
-        "htmlspecialchars() takes 1 to 4 arguments",
+        "htmlspecialchars() takes 1 to 3 arguments",
     );
 }
 
@@ -402,25 +381,60 @@ fn test_error_hash_family_wrong_args() {
             "<?php hash_algos(1);",
             "hash_algos() takes no arguments",
         ),
+        // CHANGED CELLS. `hash_init`/`hash_update`/`hash_final`/`hash_copy` are no
+        // longer builtins: they are elephc-PHP wrappers injected by
+        // `elephc::hash_prelude` so that `hash_init()` can return a real `HashContext`
+        // OBJECT (PHP 8 parity). Arity is therefore diagnosed by the ordinary
+        // user-function check, which phrases it differently. What matters is preserved:
+        // every one of these is still rejected AT COMPILE TIME with a message naming the
+        // function and the expected count.
+        //
+        // The `hash_init` message lost its bespoke "use hash_hmac() for HMAC" hint,
+        // which the old builtin carried via `arity_error`. HMAC STREAMING IS STILL
+        // UNSUPPORTED and still rejected — the wrapper deliberately keeps a
+        // one-parameter signature so `hash_init($algo, HASH_HMAC, $key)` stays a
+        // compile-time error rather than being silently accepted. `docs/php/strings.md`
+        // carries the pointer to `hash_hmac()` that the diagnostic no longer does.
         (
             "<?php hash_init();",
-            "hash_init() flags/HASH_HMAC streaming mode is not supported; use hash_hmac() for HMAC",
+            "Function 'hash_init' expects 1 arguments, got 0",
+        ),
+        (
+            r#"<?php hash_init("sha256", 1, "key");"#,
+            "Function 'hash_init' expects 1 arguments, got 3",
         ),
         (
             "<?php hash_update();",
-            "hash_update() takes exactly 2 arguments",
+            "Function 'hash_update' expects 2 arguments, got 0",
         ),
         (
             "<?php hash_final();",
-            "hash_final() takes 1 or 2 arguments",
+            "Function 'hash_final' expects 1 to 2 arguments, got 0",
         ),
         (
             "<?php hash_copy();",
-            "hash_copy() takes exactly 1 argument",
+            "Function 'hash_copy' expects 1 arguments, got 0",
         ),
     ] {
         expect_error(source, message);
     }
+}
+
+/// Verifies `HashContext` CANNOT BE CONSTRUCTED DIRECTLY, matching PHP's private
+/// constructor.
+///
+/// Reference PHP 8.5.6 rejects `new HashContext()` at RUNTIME with
+/// `Error: Call to private HashContext::__construct() from global scope`. elephc's
+/// prelude gives the class the same private constructor, and the checker rejects it at
+/// COMPILE TIME instead — stricter than PHP, never more permissive, and there is no
+/// legal program this refuses that PHP would have run. `hash_init()` remains the only
+/// way to obtain a context on either side.
+#[test]
+fn test_error_hash_context_cannot_be_constructed_directly() {
+    expect_error(
+        "<?php $c = new HashContext();",
+        "Cannot access private constructor: HashContext::__construct",
+    );
 }
 
 /// Verifies that `sscanf()` with only one argument produces the correct arity error.
@@ -429,6 +443,22 @@ fn test_error_sscanf_wrong_args() {
     expect_error(
         r#"<?php sscanf("hi");"#,
         "sscanf() takes at least 2 arguments",
+    );
+}
+
+/// Regression: `sscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+///
+/// Measured with `php -n` (8.5.6): `$name = "unset"; $age = -1;
+/// $n = sscanf("alice 30", "%s %d", $name, $age);` yields `int(2)`, `"alice"`, `int(30)`.
+/// This backend compiled the call, returned the ARRAY `["alice", "30"]` as `$n`, and left both
+/// variables untouched — wrong on the return value AND on every assignment, with no diagnostic.
+/// The by-ref tail cannot be expressed today: `ParamSpec` carries `by_ref`, but the contract's
+/// `variadic: Some("vars")` is a bare NAME with no by-ref marker.
+#[test]
+fn test_error_sscanf_by_ref_vars_form_is_refused() {
+    expect_error(
+        r#"<?php $name = "unset"; $age = -1; sscanf("alice 30", "%s %d", $name, $age);"#,
+        "sscanf(): the by-ref $vars output form is not supported",
     );
 }
 
@@ -510,226 +540,61 @@ fn test_error_vprintf_wrong_args() {
     );
 }
 
-expect_builtin_arity_error!(
-    test_error_bindec_wrong_args,
-    "<?php bindec();",
-    "bindec() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_dechex_wrong_args,
-    "<?php dechex();",
-    "dechex() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_decoct_wrong_args,
-    "<?php decoct();",
-    "decoct() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_decbin_wrong_args,
-    "<?php decbin();",
-    "decbin() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_preg_last_error_msg_wrong_args,
-    "<?php preg_last_error_msg(1);",
-    "preg_last_error_msg() takes exactly 0 arguments"
-);
-
-// -- Recognition-layer coverage for newly registered string builtins --
-// These builtins are recognized at type-check time (catalog + signature +
-// checker return type + first-class-callable sig); their EIR/runtime lowering
-// is deferred, so only type-check recognition is asserted here (no
-// compile_and_run, which would fail at the deferred codegen stage).
-
-/// Verifies that `strtr()` type-checks and returns a string in both the 3-arg
-/// char-translation form and the 2-arg key=>value map form.
+/// Verifies that `join()` with no arguments produces the correct arity error.
+/// `join()` mirrors PHP's `implode()` signature, whose `$array` parameter is optional,
+/// so the enforced contract is one or two arguments.
 #[test]
-fn test_strtr_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-$a = strtr("hello", "el", "ip");
-$b = strtr("hi", ["h" => "j"]);
-echo $a . $b;
-"#
-        )
-        .is_ok(),
-        "strtr() should be recognized in both the 3-arg and 2-arg map forms",
-    );
+fn test_error_join_wrong_args() {
+    expect_error("<?php join();", "join() takes 1 or 2 arguments");
 }
 
-/// Verifies that `stripos()`/`strripos()` are recognized and return `int|false`,
-/// which flows into an `int` return under gradual typing (false coerces to int),
-/// mirroring the existing strpos/strrpos behavior.
+/// Verifies that `join()` with three arguments produces the correct arity error.
 #[test]
-fn test_stripos_strripos_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-function a(): int { return stripos("Hello", "L"); }
-function b(): int { return strripos("Hello", "l", 1); }
-"#
-        )
-        .is_ok(),
-        "stripos()/strripos() should be recognized and return int|false",
-    );
+fn test_error_join_too_many_args() {
+    expect_error("<?php join(\"a\", [\"b\"], \"c\");", "join() takes 1 or 2 arguments");
 }
 
-/// Verifies that `strncmp`/`strncasecmp` type-check and return an int.
+/// Verifies that `substr_count()` with a single argument produces the correct arity error.
 #[test]
-fn test_strncmp_strncasecmp_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-$x = strncmp("abc", "abd", 2);
-$y = strncasecmp("ABC", "abd", 2);
-echo $x + $y;
-"#
-        )
-        .is_ok(),
-        "strncmp()/strncasecmp() should be recognized and return int",
-    );
-}
-
-/// Verifies that `substr_compare` accepts both its 3-arg and full 5-arg forms.
-#[test]
-fn test_substr_compare_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-$x = substr_compare("Hello", "llo", 2);
-$y = substr_compare("Hello", "LLO", 2, 3, true);
-echo $x + $y;
-"#
-        )
-        .is_ok(),
-        "substr_compare() should be recognized in its 3-arg and 5-arg forms",
-    );
-}
-
-/// Verifies that `strip_tags` (1- and 2-arg) and `levenshtein` (2- and 5-arg)
-/// type-check.
-#[test]
-fn test_strip_tags_levenshtein_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-$t = strip_tags("<b>hi</b>");
-$t2 = strip_tags("<b>hi</b>", "<b>");
-$l = levenshtein("kitten", "sitting");
-$l2 = levenshtein("a", "b", 1, 2, 1);
-echo $t . $t2 . $l . $l2;
-"#
-        )
-        .is_ok(),
-        "strip_tags()/levenshtein() should be recognized",
-    );
-}
-
-/// Verifies that `parse_str()` accepts an as-yet-undefined by-reference
-/// `$result` out-parameter (PHP auto-vivifies it) without a spurious
-/// "Undefined variable" diagnostic, and that `$result` is usable afterward —
-/// mirroring the preg_match `$matches` out-parameter handling.
-#[test]
-fn test_parse_str_byref_out_param_recognized() {
-    assert!(
-        check_source(
-            r#"<?php
-parse_str("a=1&b=2", $result);
-echo $result["a"];
-"#
-        )
-        .is_ok(),
-        "parse_str() should define its by-ref $result out-parameter",
-    );
-}
-
-/// Verifies that `strtr` is usable through first-class-callable syntax so
-/// callable-passing call sites (common in Symfony) type-check.
-#[test]
-fn test_strtr_first_class_callable_recognized() {
-    assert!(
-        check_source("<?php $f = strtr(...); echo is_callable($f);").is_ok(),
-        "strtr(...) first-class callable syntax should type-check",
-    );
-}
-
-expect_builtin_arity_error!(
-    test_error_strtr_wrong_args,
-    "<?php strtr(\"abc\", \"a\", \"b\", \"c\");",
-    "strtr() takes 2 or 3 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_strncmp_wrong_args,
-    "<?php strncmp(\"a\", \"b\");",
-    "strncmp() takes exactly 3 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_substr_compare_wrong_args,
-    "<?php substr_compare(\"a\", \"b\");",
-    "substr_compare() takes 3 to 5 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_levenshtein_wrong_args,
-    "<?php levenshtein(\"a\");",
-    "levenshtein() takes 2 to 5 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_parse_str_wrong_args,
-    "<?php parse_str(\"a=1\");",
-    "parse_str() takes exactly 2 arguments"
-);
-
-/// Verifies that `parse_str()` rejects a non-variable by-ref `$result` argument.
-#[test]
-fn test_error_parse_str_result_must_be_variable() {
+fn test_error_substr_count_wrong_args() {
     expect_error(
-        "<?php parse_str(\"a=1\", [\"x\"]);",
-        "parse_str() parameter $result must be passed a variable",
+        "<?php substr_count(\"abc\");",
+        "substr_count() takes 2 to 4 arguments",
     );
 }
 
-expect_builtin_arity_error!(
-    test_error_strval_wrong_args,
-    "<?php strval(1, 2);",
-    "strval() takes exactly 1 argument"
-);
+/// Verifies that `substr_count()` with five arguments produces the correct arity error.
+#[test]
+fn test_error_substr_count_too_many_args() {
+    expect_error(
+        "<?php substr_count(\"abc\", \"b\", 0, 1, 2);",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
 
-expect_builtin_arity_error!(
-    test_error_strrchr_wrong_args,
-    "<?php strrchr(\"abc\");",
-    "strrchr() takes exactly 2 arguments"
-);
+/// Verifies that `strncmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncmp_wrong_args() {
+    expect_error(
+        "<?php strncmp(\"a\", \"b\");",
+        "strncmp() takes exactly 3 arguments",
+    );
+}
 
-expect_builtin_arity_error!(
-    test_error_addcslashes_wrong_args,
-    "<?php addcslashes(\"abc\");",
-    "addcslashes() takes exactly 2 arguments"
-);
+/// Verifies that `strncasecmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncasecmp_wrong_args() {
+    expect_error(
+        "<?php strncasecmp(\"a\", \"b\");",
+        "strncasecmp() takes exactly 3 arguments",
+    );
+}
 
-expect_builtin_arity_error!(
-    test_error_stripcslashes_wrong_args,
-    "<?php stripcslashes(\"a\", \"b\");",
-    "stripcslashes() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_strnatcmp_wrong_args,
-    "<?php strnatcmp(\"a\");",
-    "strnatcmp() takes exactly 2 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_strnatcasecmp_wrong_args,
-    "<?php strnatcasecmp(\"a\", \"b\", \"c\");",
-    "strnatcasecmp() takes exactly 2 arguments"
-);
+/// Verifies `openssl_encrypt()` rejects a non-variable GCM tag output argument.
+#[test]
+fn test_error_openssl_encrypt_tag_must_be_variable() {
+    expect_error(
+        r#"<?php openssl_encrypt("data", "aes-256-gcm", "key", 1, "iv", "tag");"#,
+        "openssl_encrypt() parameter $tag must be passed a variable",
+    );
+}

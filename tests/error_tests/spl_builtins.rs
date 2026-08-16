@@ -130,46 +130,24 @@ fn test_error_spl_autoload_extensions_rejects_dynamic_string_setter() {
     );
 }
 
-// Tests that `spl_object_id()` gradually accepts a `mixed`-typed argument.
-// Fixture: typed `mixed` parameter (the boxed value may be an object at runtime,
-// e.g. an instance of an uninstalled/unknown class inferred as `Mixed`).
-/// Verifies that `spl_object_id()` accepts a `mixed`-typed argument with no
-/// "argument must be an object" type error (gradual object acceptance).
+// Tests that `spl_object_id()` argument must be an object.
+// Fixture: typed `mixed` parameter in a user function, passed a non-object.
+/// Verifies that error SPL object ID rejects mixed.
 #[test]
-fn test_spl_object_id_accepts_mixed() {
-    expect_ok("<?php function id(mixed $value): int { return spl_object_id($value); }");
-}
-
-// Tests that `spl_object_hash()` gradually accepts a `mixed`-typed argument.
-// Fixture: typed `mixed` parameter (the boxed value may be an object at runtime,
-// e.g. an instance of an uninstalled/unknown class inferred as `Mixed`).
-/// Verifies that `spl_object_hash()` accepts a `mixed`-typed argument with no
-/// "argument must be an object" type error (gradual object acceptance).
-#[test]
-fn test_spl_object_hash_accepts_mixed() {
-    expect_ok(
-        "<?php function hash_value(mixed $value): string { return spl_object_hash($value); }",
-    );
-}
-
-// Negative control: `spl_object_id()` must still reject a bare scalar so genuine
-// "not an object" bugs keep surfacing under the gradual acceptance rule.
-/// Verifies that `spl_object_id()` still rejects a bare `Str` argument.
-#[test]
-fn test_error_spl_object_id_rejects_string() {
+fn test_error_spl_object_id_rejects_mixed() {
     expect_error(
-        "<?php spl_object_id(\"x\");",
+        "<?php function id(mixed $value): int { return spl_object_id($value); }",
         "spl_object_id() argument must be an object",
     );
 }
 
-// Negative control: `spl_object_hash()` must still reject a bare scalar so genuine
-// "not an object" bugs keep surfacing under the gradual acceptance rule.
-/// Verifies that `spl_object_hash()` still rejects a bare `Int` argument.
+// Tests that `spl_object_hash()` argument must be an object.
+// Fixture: typed `mixed` parameter in a user function, passed a non-object.
+/// Verifies that error SPL object hash rejects mixed.
 #[test]
-fn test_error_spl_object_hash_rejects_int() {
+fn test_error_spl_object_hash_rejects_mixed() {
     expect_error(
-        "<?php spl_object_hash(42);",
+        "<?php function hash_value(mixed $value): string { return spl_object_hash($value); }",
         "spl_object_hash() argument must be an object",
     );
 }
@@ -420,21 +398,36 @@ fn test_error_filesystem_spl_classes_cannot_be_redeclared() {
 }
 
 /// Verifies that Phase 8 SPL filesystem constructors validate argument types.
-///
-/// A concrete `int` filename/pattern/directory argument now weak-coerces into the `string`
-/// parameter (PHP's weak mode; `weak_boundary_coercion_accepts`) — covered by
-/// `test_spl_filesystem_constructors_weak_coerce_int_filename` — so only the NON-coercible
-/// mismatches (string→`int`, unrelated object) remain hard errors here.
 #[test]
 fn test_error_filesystem_spl_constructors_validate_types() {
     for (source, expected) in [
+        (
+            "<?php $info = new SplFileInfo(123);",
+            "Constructor 'SplFileInfo::__construct' parameter $filename expects Str, got Int",
+        ),
+        (
+            "<?php $file = new SplFileObject(123);",
+            "Constructor 'SplFileObject::__construct' parameter $filename expects Str, got Int",
+        ),
         (
             "<?php $tmp = new SplTempFileObject(\"bad\");",
             "Constructor 'SplTempFileObject::__construct' parameter $maxMemory expects Int, got Str",
         ),
         (
+            "<?php $it = new DirectoryIterator(123);",
+            "Constructor 'DirectoryIterator::__construct' parameter $directory expects Str, got Int",
+        ),
+        (
             "<?php $it = new FilesystemIterator(\".\", \"bad\");",
             "Constructor 'FilesystemIterator::__construct' parameter $flags expects Int, got Str",
+        ),
+        (
+            "<?php $it = new GlobIterator(123);",
+            "Constructor 'GlobIterator::__construct' parameter $pattern expects Str, got Int",
+        ),
+        (
+            "<?php $it = new RecursiveDirectoryIterator(123);",
+            "Constructor 'RecursiveDirectoryIterator::__construct' parameter $directory expects Str, got Int",
         ),
         (
             "<?php $it = new RecursiveCachingIterator(new ArrayIterator([]));",
@@ -442,25 +435,6 @@ fn test_error_filesystem_spl_constructors_validate_types() {
         ),
     ] {
         expect_error(source, expected);
-    }
-}
-
-/// Locks the PHP weak-mode coercion of a concrete `int` filename/pattern argument into the
-/// `string` parameter of the SPL filesystem constructors — PHP coerces (`new SplFileInfo(123)` sees
-/// `"123"`), and the call codegen emits the same `IToStr` cast, so the constructor type-checks.
-#[test]
-fn test_spl_filesystem_constructors_weak_coerce_int_filename() {
-    for source in [
-        "<?php $info = new SplFileInfo(123);",
-        "<?php $file = new SplFileObject(123);",
-        "<?php $it = new DirectoryIterator(123);",
-        "<?php $it = new GlobIterator(123);",
-        "<?php $it = new RecursiveDirectoryIterator(123);",
-    ] {
-        assert!(
-            check_source(source).is_ok(),
-            "int filename should weak-coerce to string for `{source}`",
-        );
     }
 }
 

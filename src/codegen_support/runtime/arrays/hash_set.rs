@@ -181,8 +181,6 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     // -- update existing entry's value --
     emitter.label("__rt_hash_set_update");
     emitter.instruction("ldr x13, [x12, #40]");                                 // load the overwritten entry's per-entry value_tag
-    emitter.instruction("cmp x13, #11");                                        // is the existing element a reference (write-through target)?
-    emitter.instruction("b.eq __rt_hash_set_update_ref");                       // write the new value through the shared cell instead of replacing the bucket
     emitter.instruction("cmp x13, #8");                                         // is the overwritten value null?
     emitter.instruction("b.eq __rt_hash_set_write_value");                      // null has no heap pointer, skip release
     emitter.instruction("cmp x13, #1");                                         // is the overwritten value a string?
@@ -192,19 +190,6 @@ pub fn emit_hash_set(emitter: &mut Emitter) {
     emitter.instruction("cmp x13, #4");                                         // is the overwritten value a heap-backed payload?
     emitter.instruction("b.hs __rt_hash_set_release_any");                      // tags 4-7 all release through the uniform dispatcher
     emitter.instruction("b __rt_hash_set_write_value");                         // scalars/bools/floats do not need release before overwrite
-
-    // -- write-through: the existing element is a reference; update the shared cell in place --
-    emitter.label("__rt_hash_set_update_ref");
-    emitter.instruction("ldr x9, [x12, #24]");                                  // load the existing reference cell pointer from the bucket
-    emitter.instruction("str x9, [sp, #48]");                                   // preserve the cell across the inner-value release
-    emitter.instruction("ldr x0, [x9]");                                        // load the cell's previous inner value
-    emitter.instruction("bl __rt_decref_any");                                  // release the previous inner value (scalars self-skip on the heap guard)
-    emitter.instruction("ldr x9, [sp, #48]");                                   // reload the reference cell after the release helper
-    emitter.instruction("ldr x13, [sp, #24]");                                  // load the new value word
-    emitter.instruction("str x13, [x9]");                                       // write the new value into the cell at cell+0
-    emitter.instruction("ldr x13, [sp, #40]");                                  // load the new value-tag
-    emitter.instruction("str x13, [x9, #8]");                                   // write the new inner value-tag into the cell at cell+8
-    emitter.instruction("b __rt_hash_set_done");                                // the bucket keeps the cell pointer and tag 11
 
     emitter.label("__rt_hash_set_release_any");
     emitter.instruction("ldr x0, [x12, #24]");                                  // load the previous heap-backed value pointer from the entry
@@ -376,8 +361,6 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_hash_set_update");
     emitter.instruction("mov r13, QWORD PTR [r12 + 40]");                       // load the overwritten entry's runtime value tag before replacing it
-    emitter.instruction("cmp r13, 11");                                         // is the existing element a reference (write-through target)?
-    emitter.instruction("je __rt_hash_set_update_ref_x");                       // write the new value through the shared cell instead of replacing the bucket
     emitter.instruction("cmp r13, 8");                                          // check whether the overwritten value is PHP null
     emitter.instruction("je __rt_hash_set_write_value_x");                      // null owns no heap payload and can be overwritten directly
     emitter.instruction("cmp r13, 1");                                          // check whether the overwritten value is an owned string
@@ -387,23 +370,6 @@ fn emit_hash_set_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r13, 4");                                          // check whether the overwritten value is heap backed
     emitter.instruction("jae __rt_hash_set_release_any_x");                     // arrays, hashes, objects, and boxed mixed values need release
     emitter.instruction("jmp __rt_hash_set_write_value_x");                     // scalar values own no heap payload
-
-    // -- write-through: the existing element is a reference; update the shared cell in place --
-    emitter.label("__rt_hash_set_update_ref_x");
-    emitter.instruction("mov r14, QWORD PTR [r12 + 24]");                       // hold the existing cell pointer in a callee-saved register across the release
-    emitter.instruction("mov rax, QWORD PTR [r14]");                            // load the cell's previous inner value
-    emitter.instruction("call __rt_decref_any");                                // release the previous inner value (scalars self-skip on the heap guard)
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // load the new value word
-    emitter.instruction("mov QWORD PTR [r14], rax");                            // write the new value into the cell at cell+0
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // load the new value-tag
-    emitter.instruction("mov QWORD PTR [r14 + 8], rax");                        // write the new inner value-tag into the cell at cell+8
-    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the unchanged hash-table pointer
-    emitter.instruction("mov r14, QWORD PTR [rbp - 88]");                       // restore the caller's r14 before leaving the write-through path
-    emitter.instruction("mov r13, QWORD PTR [rbp - 80]");                       // restore the caller's r13 before leaving the write-through path
-    emitter.instruction("mov r12, QWORD PTR [rbp - 72]");                       // restore the caller's r12 before leaving the write-through path
-    emitter.instruction("add rsp, 96");                                         // release the local spill area before leaving the write-through path
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
-    emitter.instruction("ret");                                                 // return with the unchanged hash-table pointer in rax
 
     emitter.label("__rt_hash_set_release_any_x");
     emitter.instruction("mov rax, QWORD PTR [r12 + 24]");                       // pass the overwritten heap-backed payload to the uniform release dispatcher

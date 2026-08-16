@@ -334,21 +334,6 @@ fn lower_nullsafe_postfix_segment(
     }
 }
 
-/// Returns whether a `?->` receiver needs a runtime null check before dispatch.
-///
-/// Besides a statically nullable type (`?T`), a boxed value — `Mixed` or any `Union`,
-/// which both lower to the boxed-cell representation — can hold null at runtime even when
-/// its static type does not syntactically include `void`. Such receivers must be guarded
-/// so `$mixed?->m()` short-circuits to null instead of dispatching (and faulting) on a
-/// null-holding cell. Concrete non-null types skip the guard.
-fn nullsafe_receiver_may_be_null(
-    ctx: &LoweringContext<'_, '_>,
-    value: crate::ir::ValueId,
-) -> bool {
-    value_is_nullable(ctx, value)
-        || matches!(ctx.builder.value_php_type(value).codegen_repr(), PhpType::Mixed)
-}
-
 /// Branches to the chain-null block when a `?->` receiver is null.
 fn guard_nullsafe_chain_receiver(
     ctx: &mut LoweringContext<'_, '_>,
@@ -360,7 +345,7 @@ fn guard_nullsafe_chain_receiver(
         branch_to(ctx, null_block);
         return false;
     }
-    if !nullsafe_receiver_may_be_null(ctx, current.value) {
+    if !value_is_nullable(ctx, current.value) {
         return true;
     }
     let is_null = ctx.emit_value(

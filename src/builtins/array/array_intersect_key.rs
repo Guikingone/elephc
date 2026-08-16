@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_intersect_key",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_intersect_key",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayIntersectKey,
     ),
-    summary: "Computes the intersection of arrays using keys for comparison.",
-    php_manual: "https://www.php.net/manual/en/function.array-intersect-key.php",
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.
@@ -40,10 +32,10 @@ builtin! {
 /// argument once for side effects. The result preserves the first-operand array shape.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Gradual boundary: accept a concrete array, `Mixed`, or a union containing an
-    // array for the first (result-shaping) argument; a concretely non-array first
-    // argument stays a compile error.
-    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty1) {
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty1 = ty1.array_or_false_member().cloned().unwrap_or(ty1);
+    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(
             cx.span,
             &format!("{}() first argument must be array", cx.name),

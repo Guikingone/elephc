@@ -21,6 +21,16 @@ macro_rules! impl_lifecycle_scalar_ops {
         }
     }
 
+    /// Returns the PHP object handle reported by `spl_object_id()`.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        let handle = unsafe { __elephc_eval_value_object_handle(object.as_ptr()) };
+        if handle == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(handle)
+        }
+    }
+
     /// Returns the object payload that the next release would destroy, when known.
     fn final_object_identity_for_release(
         &mut self,
@@ -46,11 +56,25 @@ macro_rules! impl_lifecycle_scalar_ops {
     }
 
     /// Emits one PHP warning through the generated runtime diagnostic helper.
+    ///
+    /// A non-zero `@` depth swallows the message entirely, mirroring the compiled
+    /// runtime's `__rt_diag_push_suppression` counter for eval-originated diagnostics.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.suppress_depth > 0 {
+            return Ok(());
+        }
         unsafe {
             __elephc_eval_warning(message.as_ptr(), message.len() as u64);
         }
         Ok(())
+    }
+
+    fn suppress_begin(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_add(1);
+    }
+
+    fn suppress_end(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_sub(1);
     }
 
     /// Creates a boxed null Mixed cell through the generated runtime wrapper.
@@ -71,6 +95,16 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Creates a boxed resource Mixed cell through the generated runtime wrapper.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_resource(value) })
+    }
+
+    /// Creates a boxed inert hash-context Mixed cell through the generated runtime wrapper.
+    ///
+    /// The wrapper stamps resource kind 5, so `__rt_mixed_from_value` skips PHP id
+    /// binding and `__rt_mixed_free_deep` runs no destructor: PHP counts a
+    /// `HashContext` in the object-handle space, and the native context behind this key
+    /// is owned by `crate::stream_resources::EvalHashContext`.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_hash_context(value) })
     }
 
     /// Creates a boxed float Mixed cell through the generated runtime wrapper.

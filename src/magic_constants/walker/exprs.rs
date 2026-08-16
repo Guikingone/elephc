@@ -63,10 +63,6 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             callable: Box::new(walk_expr(*callable, pass)),
         },
-        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
-            vars,
-            value: Box::new(walk_expr(*value, pass)),
-        },
         ExprKind::Assignment {
             target,
             value,
@@ -283,20 +279,6 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
-        }
-        // `$obj::CONST` — walk the object sub-expression; the constant name is not a magic constant.
-        ExprKind::DynamicClassConstantAccess { object, name } => {
-            ExprKind::DynamicClassConstantAccess {
-                object: Box::new(walk_expr(*object, pass)),
-                name,
-            }
-        }
-        // `self::${$expr}` — walk the dynamic property-name expression for magic constants.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            ExprKind::DynamicStaticPropertyAccess {
-                receiver,
-                property: Box::new(walk_expr(*property, pass)),
-            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,

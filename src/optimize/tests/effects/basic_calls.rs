@@ -43,11 +43,9 @@ fn test_effect_analysis_treats_eval_as_dynamic_barrier() {
     assert!(expr_is_observable(&expr));
 }
 
-/// Verifies that property accesses (`.`) are pure (no side effects) but may
-/// throw (uninitialized typed property guard), while array accesses (`[]`)
-/// are observable and may throw (e.g., undefined index).
+/// Verifies unknown property and array reads remain conservative dynamic barriers.
 #[test]
-fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observable() {
+fn test_effect_analysis_keeps_unknown_property_and_array_reads_observable() {
     let property = Expr::new(
         ExprKind::PropertyAccess {
             object: Box::new(Expr::var("entry")),
@@ -63,11 +61,107 @@ fn test_effect_analysis_treats_property_reads_as_pure_and_array_reads_as_observa
         Span::dummy(),
     );
 
-    assert!(!expr_has_side_effects(&property));
+    assert!(expr_has_side_effects(&property));
     assert!(expr_effect(&property).may_throw);
     assert!(expr_has_side_effects(&array));
     assert!(expr_effect(&array).may_throw);
     assert!(expr_is_observable(&array));
+}
+
+/// Verifies literal array reads distinguish present offsets from warning-only misses.
+#[test]
+fn test_effect_analysis_refines_literal_array_reads() {
+    let array = Expr::new(
+        ExprKind::ArrayLiteral(vec![Expr::int_lit(10), Expr::int_lit(20)]),
+        Span::dummy(),
+    );
+    let present = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(array.clone()),
+            index: Box::new(Expr::int_lit(1)),
+        },
+        Span::dummy(),
+    );
+    let missing = Expr::new(
+        ExprKind::ArrayAccess {
+            array: Box::new(array),
+            index: Box::new(Expr::int_lit(4)),
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_is_observable(&present));
+    assert!(!expr_effect(&present).may_throw);
+    assert!(expr_is_observable(&missing));
+    assert!(!expr_effect(&missing).may_throw);
+}
+
+/// Verifies a read-only runtime registry probe no longer inherits the all-effects fallback.
+#[test]
+fn test_effect_analysis_refines_read_only_builtin_metadata() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("function_exists"),
+            args: vec![Expr::string_lit("strlen")],
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&expr));
+    assert!(!expr_effect(&expr).may_throw);
+    assert!(!expr_is_observable(&expr));
+}
+
+/// Verifies catchable builtin validation errors remain visible to try/catch pruning.
+#[test]
+fn test_effect_analysis_preserves_throwing_builtin_metadata() {
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("clamp"),
+            args: vec![
+                Expr::int_lit(5),
+                Expr::int_lit(10),
+                Expr::int_lit(0),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    assert!(expr_effect(&expr).may_throw);
+    assert!(expr_is_observable(&expr));
+
+    let statement = Stmt::new(StmtKind::ExprStmt(expr), Span::dummy());
+    assert_eq!(
+        prune_constant_control_flow(vec![statement.clone()]),
+        vec![statement.clone()]
+    );
+    assert_eq!(eliminate_dead_code(vec![statement.clone()]), vec![statement]);
+}
+
+/// Verifies callback builtins combine a known callback summary with intrinsic array work.
+#[test]
+fn test_effect_analysis_refines_builtin_with_known_pure_callback() {
+    let callback = Expr::new(
+        ExprKind::FirstClassCallable(CallableTarget::Function(Name::from("strlen"))),
+        Span::dummy(),
+    );
+    let expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::from("array_map"),
+            args: vec![
+                callback,
+                Expr::new(
+                    ExprKind::ArrayLiteral(vec![Expr::string_lit("a")]),
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    assert!(!expr_has_side_effects(&expr));
+    assert!(!expr_effect(&expr).may_throw);
+    assert!(!expr_is_observable(&expr));
 }
 
 /// Verifies that a user-defined function whose body consists solely of a pure

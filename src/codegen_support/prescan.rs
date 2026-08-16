@@ -17,23 +17,12 @@ use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::filter_constants::FILTER_INT_CONSTANTS;
-use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
-use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
-use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
-use crate::types::php_runtime_constants::{
-    PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS, PHP_SAPI_STR, PHP_VERSION_STR,
-};
-use crate::types::preg_constants::{PCRE_VERSION_STR, PREG_INT_CONSTANTS};
+use crate::types::math_constants::MATH_INT_CONSTANTS;
+use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
+use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
-use crate::types::sort_constants::SORT_INT_CONSTANTS;
-use crate::types::stream_constants::{GLOB_PLATFORM_CONSTANTS, STREAM_INT_CONSTANTS};
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
 use crate::types::string_constants::STRING_INT_CONSTANTS;
-use crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS;
-use crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS;
-use crate::types::url_constants::URL_INT_CONSTANTS;
-use crate::types::xml_constants::XML_INT_CONSTANTS;
-use crate::types::date_constants::DATE_STRING_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -43,6 +32,17 @@ use crate::types::PhpType;
 /// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
 /// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
 /// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
+///
+/// The PHP VERSION SURFACE (`PHP_VERSION`, `PHP_VERSION_ID`, `PHP_MAJOR_VERSION`,
+/// `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`, `PHP_EXTRA_VERSION`) and `PHP_SAPI` are baked
+/// here through exactly the same mechanism as `PHP_OS`: a literal seeded into this map, whose
+/// type is declared in `types::checker::driver::init` and whose name bypasses symbol-table
+/// resolution in `name_resolver::names::is_builtin_global_constant`. Their values come from the
+/// compilation's `--php-version` profile and `--web` mode, read from the codegen thread-local
+/// pair (`compile_php_version` / `compile_is_web_sapi`) rather than from a parameter, because
+/// this function sits under `ir_lower::lower` which does not carry the profile. See
+/// `web_prelude::PhpVersion::version_string` for the version rule and `web_prelude::sapi_name`
+/// for the SAPI mapping.
 pub(crate) fn collect_constants(
     program: &Program,
     target_platform: Platform,
@@ -52,6 +52,59 @@ pub(crate) fn collect_constants(
         "PHP_OS".to_string(),
         (
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
+    let php_version = crate::codegen_support::compile_php_version();
+    constants.insert(
+        "PHP_VERSION".to_string(),
+        (
+            ExprKind::StringLiteral(php_version.version_string().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_VERSION_ID".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.version_id())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_MAJOR_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.major())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_MINOR_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.minor())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_RELEASE_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.release())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_EXTRA_VERSION".to_string(),
+        (
+            ExprKind::StringLiteral(php_version.extra_version().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_SAPI".to_string(),
+        (
+            ExprKind::StringLiteral(
+                crate::web_prelude::sapi_name(crate::codegen_support::compile_is_web_sapi())
+                    .to_string(),
+            ),
             PhpType::Str,
         ),
     );
@@ -79,6 +132,21 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    for (name, value) in [
+        ("PHP_URL_SCHEME", 0),
+        ("PHP_URL_HOST", 1),
+        ("PHP_URL_PORT", 2),
+        ("PHP_URL_USER", 3),
+        ("PHP_URL_PASS", 4),
+        ("PHP_URL_PATH", 5),
+        ("PHP_URL_QUERY", 6),
+        ("PHP_URL_FRAGMENT", 7),
+    ] {
+        constants.insert(
+            name.to_string(),
+            (ExprKind::IntLiteral(value), PhpType::Int),
+        );
+    }
     for (name, value) in ENT_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -108,15 +176,15 @@ pub(crate) fn collect_constants(
     );
     constants.insert(
         "STDIN".to_string(),
-        (ExprKind::IntLiteral(0), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0001), PhpType::stream_resource()),
     );
     constants.insert(
         "STDOUT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0002), PhpType::stream_resource()),
     );
     constants.insert(
         "STDERR".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::stream_resource()),
+        (ExprKind::IntLiteral(0x1_0000_0003), PhpType::stream_resource()),
     );
     constants.insert(
         "LOCK_SH".to_string(),
@@ -140,7 +208,25 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in STRING_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in JSON_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in MATH_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in OPENSSL_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),
@@ -152,6 +238,16 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+    let pf_inet6: i64 = match target_platform {
+        Platform::MacOS => 30,
+        Platform::Linux => 10,
+        Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+    };
+    constants.insert(
+        "STREAM_PF_INET6".to_string(),
+        (ExprKind::IntLiteral(pf_inet6), PhpType::Int),
+    );
     for (name, value) in PREG_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -176,16 +272,6 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
-    // debug_backtrace() option flags: the checker registers their Int type, but their
-    // literal values must be materialized here for constant folding (echo/comparison).
-    constants.insert(
-        "DEBUG_BACKTRACE_IGNORE_ARGS".to_string(),
-        (ExprKind::IntLiteral(2), PhpType::Int),
-    );
-    constants.insert(
-        "DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(),
-        (ExprKind::IntLiteral(1), PhpType::Int),
-    );
     // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
     constants.insert(
         "PHP_INT_MAX".to_string(),
@@ -269,149 +355,6 @@ pub(crate) fn collect_constants(
             PhpType::Str,
         ),
     );
-    for (name, value) in PHP_RUNTIME_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in LOCALE_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in STRING_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in SORT_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in MBSTRING_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in FILTER_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in PCNTL_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in UPLOAD_ERR_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in URL_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in TOKENIZER_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    for (name, value) in XML_INT_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    // Platform-conditional user signals (SIGUSR1/SIGUSR2): select the value from
-    // the COMPILE target (not `cfg(target_os)`, since elephc cross-compiles).
-    // macOS: SIGUSR1=30, SIGUSR2=31. Linux (x86_64 and aarch64): SIGUSR1=10,
-    // SIGUSR2=12. Mirrors the fnmatch `match target_platform` pattern above.
-    for (name, macos_value, linux_value) in PCNTL_PLATFORM_SIGNALS {
-        let value = match target_platform {
-            Platform::MacOS => macos_value,
-            Platform::Linux => linux_value,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        };
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    // Platform-conditional runtime constants (PHP_MAXPATHLEN): same
-    // compile-target selection as the pcntl user signals above.
-    for (name, macos_value, linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
-        let value = match target_platform {
-            Platform::MacOS => macos_value,
-            Platform::Linux => linux_value,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        };
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    // Platform-conditional glob() bit flags (GLOB_MARK/NOSORT/BRACE/...): BSD
-    // (macOS) and glibc (Linux) assign different bit positions to the same flag
-    // names — same compile-target selection as the constants above.
-    for (name, macos_value, linux_value) in GLOB_PLATFORM_CONSTANTS {
-        let value = match target_platform {
-            Platform::MacOS => macos_value,
-            Platform::Linux => linux_value,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        };
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
-        );
-    }
-    constants.insert(
-        "PCRE_VERSION".to_string(),
-        (
-            ExprKind::StringLiteral(PCRE_VERSION_STR.to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_SAPI".to_string(),
-        (
-            ExprKind::StringLiteral(PHP_SAPI_STR.to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_VERSION".to_string(),
-        (
-            ExprKind::StringLiteral(PHP_VERSION_STR.to_string()),
-            PhpType::Str,
-        ),
-    );
-    constants.insert(
-        "PHP_OS_FAMILY".to_string(),
-        (
-            ExprKind::StringLiteral(target_platform.php_os_family().to_string()),
-            PhpType::Str,
-        ),
-    );
-    // DATE_* format-string constants (DATE_ATOM, DATE_RFC3339, ...).
-    for (name, value) in DATE_STRING_CONSTANTS {
-        constants.insert(
-            (*name).to_string(),
-            (ExprKind::StringLiteral((*value).to_string()), PhpType::Str),
-        );
-    }
     collect_constant_decls(program, &mut constants);
     constants
 }
@@ -434,103 +377,23 @@ fn collect_constant_decls(
                     .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
             }
             StmtKind::ExprStmt(expr) => {
-                register_define_from_expr(&expr.kind, constants);
+                if let ExprKind::FunctionCall { name, args } = &expr.kind {
+                    if name.as_str() == "define" && args.len() == 2 {
+                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
+                            constants.entry(const_name.clone()).or_insert((
+                                args[1].kind.clone(),
+                                constant_expr_type(&args[1].kind),
+                            ));
+                        }
+                    }
+                }
             }
-            StmtKind::Return(Some(expr)) => {
-                register_define_from_expr(&expr.kind, constants);
-            }
-            StmtKind::FunctionDecl { body, .. }
-            | StmtKind::IncludeOnceGuard { body, .. }
-            | StmtKind::NamespaceBlock { body, .. } => {
+            StmtKind::IncludeOnceGuard { body, .. } | StmtKind::Synthetic(body) => {
                 collect_constant_decls(body, constants);
-            }
-            StmtKind::Synthetic(body) => {
-                collect_constant_decls(body, constants);
-            }
-            StmtKind::ClassDecl { methods, .. }
-            | StmtKind::TraitDecl { methods, .. }
-            | StmtKind::EnumDecl { methods, .. } => {
-                for method in methods {
-                    collect_constant_decls(&method.body, constants);
-                }
-            }
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_constant_decls(then_body, constants);
-                for (_, body) in elseif_clauses {
-                    collect_constant_decls(body, constants);
-                }
-                if let Some(body) = else_body {
-                    collect_constant_decls(body, constants);
-                }
-            }
-            StmtKind::While { body, .. }
-            | StmtKind::DoWhile { body, .. }
-            | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => collect_constant_decls(body, constants),
-            StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_constant_decls(try_body, constants);
-                for catch_clause in catches {
-                    collect_constant_decls(&catch_clause.body, constants);
-                }
-                if let Some(body) = finally_body {
-                    collect_constant_decls(body, constants);
-                }
-            }
-            StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    collect_constant_decls(body, constants);
-                }
-                if let Some(body) = default {
-                    collect_constant_decls(body, constants);
-                }
             }
             _ => {}
         }
     }
-}
-
-/// Registers a literal `define('NAME', <scalar literal>)` call found in expression
-/// position. AOT approximation: the constant is registered program-wide regardless of
-/// whether or when the enclosing code actually runs; `.or_insert` keeps the first-found
-/// (top-level statements are walked first, so a top-level define shadows an in-function
-/// one). Non-literal values are skipped — they cannot be folded at compile time.
-fn register_define_from_expr(
-    kind: &ExprKind,
-    constants: &mut HashMap<String, (ExprKind, PhpType)>,
-) {
-    if let ExprKind::FunctionCall { name, args } = kind {
-        if name.as_str() == "define" && args.len() == 2 {
-            if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                if is_scalar_literal(&args[1].kind) {
-                    constants
-                        .entry(const_name.clone())
-                        .or_insert((args[1].kind.clone(), constant_expr_type(&args[1].kind)));
-                }
-            }
-        }
-    }
-}
-
-/// Returns true for expression kinds that are replayable scalar literals (int, float,
-/// string, bool, null) — the only `define()` values the prescan can register statically.
-fn is_scalar_literal(kind: &ExprKind) -> bool {
-    matches!(
-        kind,
-        ExprKind::IntLiteral(_)
-            | ExprKind::FloatLiteral(_)
-            | ExprKind::StringLiteral(_)
-            | ExprKind::BoolLiteral(_)
-            | ExprKind::Null
-    )
 }
 
 /// Infers the `PhpType` for a constant expression from its `ExprKind` variant.

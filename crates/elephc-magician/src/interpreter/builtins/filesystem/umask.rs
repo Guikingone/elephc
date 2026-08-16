@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the process umask helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "umask",
+    contract: "umask",
     area: Filesystem,
-    params: [mask = EvalBuiltinDefaultValue::Null],
     direct: Filesystem,
     values: Filesystem,
 }

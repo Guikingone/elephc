@@ -8,8 +8,6 @@
 //! Key details:
 //! - Conversion performs COW first, then transfers each existing entry payload
 //!   into a Mixed box so by-reference foreach can alias a stable pointer slot.
-//! - Reference entries (value-tag 11, kind-6 cell) are left untouched — boxing the
-//!   cell pointer would break aliasing and hide the tag from tag-aware readers.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -51,8 +49,6 @@ pub fn emit_hash_to_mixed(emitter: &mut Emitter) {
     emitter.instruction("str x6, [sp, #40]");                                   // save the mutable entry value address
     emitter.instruction("cmp x5, #7");                                          // does this entry already hold a boxed Mixed cell?
     emitter.instruction("b.eq __rt_hash_to_mixed_entry_ready");                 // already-mixed entries only need metadata normalization
-    emitter.instruction("cmp x5, #11");                                         // does this entry hold a kind-6 reference cell (value-tag 11)?
-    emitter.instruction("b.eq __rt_hash_to_mixed_loop");                        // keep the shared cell + tag untouched so aliasing and tag-aware reads survive
     emitter.instruction("mov x0, x5");                                          // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov x1, x3");                                          // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov x2, x4");                                          // pass the entry high payload word to the owned-box helper
@@ -139,8 +135,6 @@ fn emit_hash_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mutable entry value address
     emitter.instruction("cmp r9, 7");                                           // does this entry already hold a boxed Mixed cell?
     emitter.instruction("je __rt_hash_to_mixed_x86_entry_ready");               // already-mixed entries only need metadata normalization
-    emitter.instruction("cmp r9, 11");                                          // does this entry hold a kind-6 reference cell (value-tag 11)?
-    emitter.instruction("je __rt_hash_to_mixed_x86_loop");                      // keep the shared cell + tag untouched so aliasing and tag-aware reads survive
     emitter.instruction("mov rax, r9");                                         // pass the source runtime value tag to the owned-box helper
     emitter.instruction("mov rdi, rcx");                                        // pass the entry low payload word to the owned-box helper
     emitter.instruction("mov rsi, r8");                                         // pass the entry high payload word to the owned-box helper

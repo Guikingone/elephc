@@ -42,13 +42,14 @@ pub(in crate::lexer) fn scan_variable(cursor: &mut Cursor) -> Result<Token, Comp
     }
 
     if name.is_empty() {
-        // A bare `$` followed by `{` or `$` is emitted as `Token::Dollar`. The lexer has no
-        // syntactic context, so it cannot tell `self::${$n}` (a valid dynamic static property
-        // name) from a local variable-variable `$$x` / `${expr}` (unsupported). The parser
-        // decides: after a static receiver `::` it forms a dynamic static property access;
-        // anywhere else it re-emits the "Variable variables" rejection.
+        // `$$name` / `${expr}` are variable variables: the variable name is computed at runtime.
+        // elephc allocates locals to fixed compile-time slots and has no per-frame variable-name
+        // table, so variable variables cannot be supported in the closed-world model.
         if matches!(cursor.peek(), Some('$') | Some('{')) {
-            return Ok(Token::Dollar);
+            return Err(CompileError::new(
+                cursor.span(),
+                "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
+            ));
         }
         return Err(CompileError::new(cursor.span(), "Expected variable name after '$'"));
     }
@@ -141,7 +142,6 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "for" => Ok(Token::For),
         "break" => Ok(Token::Break),
         "continue" => Ok(Token::Continue),
-        "goto" => Ok(Token::Goto),
         "function" => Ok(Token::Function),
         "return" => Ok(Token::Return),
         "yield" => Ok(Token::Yield),
@@ -172,10 +172,16 @@ pub(in crate::lexer) fn scan_keyword(cursor: &mut Cursor) -> Result<Token, Compi
         "fn" => Ok(Token::Fn),
         "use" => Ok(Token::Use),
         "namespace" => Ok(Token::Namespace),
-        "declare" => Ok(Token::Declare),
         "const" => Ok(Token::Const),
         "global" => Ok(Token::Global),
+        "declare" => Ok(Token::Declare),
         "enddeclare" => Ok(Token::EndDeclare),
+        "endif" => Ok(Token::EndIf),
+        "endwhile" => Ok(Token::EndWhile),
+        "endfor" => Ok(Token::EndFor),
+        "endforeach" => Ok(Token::EndForeach),
+        "endswitch" => Ok(Token::EndSwitch),
+        "goto" => Ok(Token::Goto),
         "static" => Ok(Token::Static),
         "self" => Ok(Token::Self_),
         "trait" => Ok(Token::Trait),

@@ -14,8 +14,8 @@
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
@@ -23,11 +23,11 @@ use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
 use crate::ir::{BasicBlock, Function, InstId, Module};
 use crate::names::{
-    enum_case_symbol, function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
+    function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
 };
 use crate::parser::ast::ExprKind;
-use crate::types::{EnumCaseInfo, EnumCaseValue, PhpType};
+use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::fibers;
@@ -38,8 +38,8 @@ use super::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
-    literal_default_value, LiteralDefaultValue,
+    emit_string_literal_default_to_result, emit_tagged_int_literal_to_result,
+    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
 };
 use super::lower_inst;
 use super::lower_term;
@@ -69,7 +69,10 @@ pub(super) fn emit_module(
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
-    if web {
+    // Reserved in every build, not only under `--web`: a CLI program reads these too, and PHP
+    // has them as arrays there. Leaving the storage absent left `$_SERVER` reading as a zeroed
+    // word — a null — which `count()` now correctly refuses instead of silently answering 0.
+    {
         let sg_type = crate::superglobals::superglobal_type();
         let sg_size = sg_type.codegen_repr().stack_size().max(8);
         for name in crate::superglobals::SUPERGLOBALS {
@@ -89,15 +92,11 @@ pub(super) fn emit_module(
     for closure in &module.closures {
         emit_user_function(module, closure, emitter, data, &mut shared, regalloc_linear)?;
     }
-    // Shared dynamic Reflection construction dispatchers (emitted once, only when a
-    // dynamic-argument `new ReflectionClass(...)` site exists in the module).
-    super::lower_inst::objects::reflection_dynamic::emit_reflection_class_dynamic_dispatch_if_needed(
-        module, emitter, data, &mut shared,
-    )?;
-    super::lower_inst::objects::reflection_members_dynamic::emit_reflection_member_dynamic_dispatch_if_needed(
-        module, emitter, data, &mut shared,
-    )?;
     emit_eir_fiber_wrappers(module, emitter);
+    // Enum case materializers are plain out-of-line functions that any user body,
+    // method or closure may call, so they must exist in every emit kind — including
+    // `Emit::Cdylib`, which returns before the main function is emitted.
+    super::enum_singletons::emit_enum_case_materializers(emitter, module, data);
     if matches!(emit, Emit::Cdylib) {
         return Ok(());
     }
@@ -345,7 +344,7 @@ fn emit_generator_function(
     // coroutine's fixed `start_args` slots; there are only `FIBER_START_ARGS_MAX` of them.
     // Reject overflow with a clear diagnostic instead of silently writing past the slots into
     // adjacent fiber fields.
-    let max_params = crate::codegen_support::runtime::FIBER_START_ARGS_MAX as usize;
+    let max_params = crate::codegen::runtime::FIBER_START_ARGS_MAX as usize;
     if param_types.len() > max_params {
         return Err(CodegenIrError::unsupported(format!(
             "generator '{}' has {} parameters including closure captures; \
@@ -445,7 +444,7 @@ fn emit_generator_constructor(
     callback_label: &str,
     param_types: &[PhpType],
 ) {
-    use crate::codegen_support::runtime::{FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET};
+    use crate::codegen::runtime::{FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET};
     let target = emitter.target;
     let n = param_types.len();
     let frame_size = gen_arg_frame_size(n);
@@ -536,11 +535,11 @@ fn emit_generator_constructor(
         }
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off))
-            } // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)) // store the owned Mixed cell into the generator start_args slot
+            }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg))
-            } // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)) // store the owned Mixed cell into the generator start_args slot
+            }
         }
     }
 
@@ -612,8 +611,8 @@ fn emit_generator_callback(
     body_label: &str,
     param_types: &[PhpType],
 ) {
-    use crate::codegen_support::runtime::generators::coro::GEN_RETURN_VALUE_OFFSET;
-    use crate::codegen_support::runtime::FIBER_START_ARGS_OFFSET;
+    use crate::codegen::runtime::generators::coro::GEN_RETURN_VALUE_OFFSET;
+    use crate::codegen::runtime::FIBER_START_ARGS_OFFSET;
     let target = emitter.target;
     let n = param_types.len();
     let frame_size = gen_arg_frame_size(n);
@@ -778,6 +777,91 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// a separate process-entry stub is emitted that calls `elephc_web_run` with
 /// argc/argv and the handler address, then exits with the bridge return value.
 #[allow(clippy::too_many_arguments)]
+/// PHP's auto-globals: the superglobals a CLI request materializes ON MENTION.
+///
+/// Two measurements of `php -n` look contradictory and are both right. Walking `$GLOBALS`
+/// reports `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` present while `$_ENV` and
+/// `$_REQUEST` are absent; yet `isset($_ENV)` answers TRUE. The difference is the mention
+/// itself: PHP compiles a reference to an auto-global into a marker and populates the variable
+/// at run time, so naming `$_ENV` is what brings it into existence. That is why the seeding
+/// below is conditional — it is not an optimisation, it is the rule PHP follows.
+///
+/// `$_SESSION` and `$GLOBALS` are deliberately absent from this list. `$_SESSION` appears only
+/// once `session_start()` has run, so seeding it would make `isset($_SESSION)` answer the
+/// opposite of PHP in a fresh script, and PHP's own regression test says so.
+pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] = &[
+    "_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST",
+];
+
+/// Gives those superglobals a live empty hash before a CLI program's first statement.
+///
+/// PHP has these as arrays in CLI — `count($_SERVER)` answers 68 there, not an error — while
+/// elephc reserved the storage only under `--web` and left it zeroed otherwise. A zeroed word
+/// reads back as null, which was invisible for as long as `count()` answered 0 for a null and
+/// surfaced the moment it started raising PHP's TypeError. Seeding an empty hash is the floor,
+/// not the finish: populating them the way PHP does is separate work.
+fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
+    for name in CLI_INITIALIZED_SUPERGLOBALS {
+        // Seed only what the program names. A superglobal no statement mentions cannot be
+        // observed, and seeding it is not free: each hash is a live heap block from the first
+        // instruction onwards, which exhausted the deliberately tiny arenas the allocator's own
+        // tests run under and made every program pay for storage it never reads.
+        if !ctx.has_global_name(name) {
+            continue;
+        }
+        let symbol = crate::names::ir_global_symbol(name);
+        // __rt_hash_new takes TWO arguments: capacity AND the value_type tag. Passing only the
+        // capacity left the tag reading whatever the register happened to hold, which built a
+        // malformed hash that boxed back as null — the symptom that looked like the seeding
+        // never happening at all.
+        let (cap_reg, tag_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rdi", "rsi"),
+        };
+        abi::emit_load_int_immediate(ctx.emitter, cap_reg, 8);
+        abi::emit_load_int_immediate(ctx.emitter, tag_reg, 7);                  // entries are boxed Mixed
+        abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        // Boxed, not raw: outside `--web` the checker leaves these names `Mixed`, so the slot is
+        // read as a tagged cell. `__rt_mixed_from_value` takes the TAG first and the payload
+        // second — handing it the pointer as the tag is what made the cell read back as null.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // the hash is the payload
+                ctx.emitter.instruction("mov x0, #5");                          // tag 5 = associative array
+                ctx.emitter.instruction("mov x2, #0");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the hash is the payload
+                ctx.emitter.instruction("mov rax, 5");                          // tag 5 = associative array
+                ctx.emitter.instruction("xor esi, esi");
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        // The boxer RETAINS the hash, so it now has two owners: this frame and the cell. Drop
+        // this one, leaving the cell as the single owner the epilogue release can free —
+        // otherwise every seeded superglobal survives to exit and a heap-debug run reports five
+        // live blocks in a program that never touched a superglobal at all.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "x0");
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                // __rt_decref_hash takes its pointer in RAX on x86, not rdi. Passing it in rdi
+                // decremented whatever rax happened to hold and corrupted the heap — a segfault
+                // at startup in every program, on the one architecture this host cannot run.
+                ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");        // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
+        }
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    }
+}
+
 fn emit_main_function(
     module: &Module,
     function: &Function,
@@ -805,11 +889,16 @@ fn emit_main_function(
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
+        emit_cli_superglobal_initializers(&mut ctx);
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
-    emit_enum_singleton_initializers(&mut ctx);
+    emit_http_response_header_deprecation(&mut ctx);
+    // Enum cases are NOT initialized here any more: each case now materializes on
+    // its first evaluation through `super::enum_singletons`, so a case that user
+    // code never touches allocates nothing and burns no object handle — which is
+    // what PHP does and what the eager prologue diverged from.
     emit_static_property_initializers(&mut ctx)?;
     emit_blocks(&mut ctx)?;
     if !ctx.epilogue_emitted {
@@ -826,136 +915,58 @@ fn emit_main_function(
     Ok(())
 }
 
+/// php-src's `E_DEPRECATED` text for naming `$http_response_header`.
+///
+/// MEASURED on `php -n` 8.5.6, where the notice reads `The predefined locally
+/// scoped $http_response_header variable is deprecated, call
+/// http_get_last_response_headers() instead`. elephc's diagnostic channel does
+/// not carry the `in %s on line %d` suffix php appends, matching every other
+/// runtime notice this backend emits.
+const HTTP_RESPONSE_HEADER_DEPRECATION: &str =
+    "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, \
+     call http_get_last_response_headers() instead\n";
+
+/// Emits php 8.5's `$http_response_header` deprecation once, before any user output.
+///
+/// php raises this notice while COMPILING a file that names the variable, so it
+/// fires once per file, before the script produces anything, and even when the
+/// naming statement never runs (`if (false) { echo $http_response_header; }` still
+/// prints it — MEASURED). elephc's equivalent of "the file names it" is the
+/// variable reaching `module.data.global_names`, and its equivalent of "before
+/// any output" is the main prologue, so the notice lands there — once, whatever
+/// the number of mentions, which is also what php does.
+fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php85 {
+        return;
+    }
+    if !ctx
+        .module
+        .data
+        .global_names
+        .iter()
+        .any(|name| name == "http_response_header")
+    {
+        return;
+    }
+    let (label, len) = ctx
+        .data
+        .add_string(HTTP_RESPONSE_HEADER_DEPRECATION.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // stderr, and `@` suppresses it
+}
+
 /// Returns true when a function is the process entry function.
 fn is_main(function: &Function) -> bool {
     function.flags.is_main || function.name == "main"
-}
-
-/// Emits global singleton objects for enum cases used by EIR user code.
-fn emit_enum_singleton_initializers(ctx: &mut FunctionContext<'_>) {
-    let allowed_enum_names = super::runtime_referenced_enum_singleton_names(ctx.module);
-    let mut sorted_enums = ctx.module.enum_infos.iter().collect::<Vec<_>>();
-    sorted_enums.sort_by_key(|(name, _)| name.as_str());
-    for (enum_name, enum_info) in sorted_enums {
-        if !allowed_enum_names.contains(enum_name) {
-            continue;
-        }
-        let Some(class_info) = ctx.module.class_infos.get(enum_name) else {
-            continue;
-        };
-        // The `name` property slot is authoritative in the class metadata; fall back to the last
-        // property slot (`8 + (count - 1) * 16`) only if it is somehow absent.
-        let name_offset = class_info
-            .property_offsets
-            .get("name")
-            .copied()
-            .unwrap_or_else(|| 8 + class_info.properties.len().saturating_sub(1) * 16);
-        for case in &enum_info.cases {
-            emit_enum_singleton_initializer(
-                ctx,
-                enum_name,
-                class_info.class_id,
-                class_info.properties.len(),
-                name_offset,
-                case,
-            );
-        }
-    }
-}
-
-/// Emits one enum case singleton allocation and publishes it to its global slot.
-fn emit_enum_singleton_initializer(
-    ctx: &mut FunctionContext<'_>,
-    enum_name: &str,
-    class_id: u64,
-    property_count: usize,
-    name_offset: usize,
-    case: &EnumCaseInfo,
-) {
-    ctx.emitter.comment(&format!(
-        "initialize enum singleton {}::{}",
-        enum_name, case.name
-    ));
-    emit_enum_object_allocation(ctx, class_id, property_count);
-    if let Some(case_value) = &case.value {
-        emit_enum_backing_value(ctx, case_value);
-    }
-    emit_enum_name_property(ctx, &case.name, name_offset);
-    let symbol = enum_case_symbol(enum_name, &case.name);
-    abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
-}
-
-/// Writes an enum case's `name` string (the case identifier) into its singleton name slot.
-///
-/// The name is interned as a static data-section string, so the pointer/length pair stored here
-/// mirrors a string-backed enum's `value` slot and needs no refcount management.
-fn emit_enum_name_property(ctx: &mut FunctionContext<'_>, case_name: &str, offset: usize) {
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    let temp_reg = abi::temp_int_reg(ctx.emitter.target);
-    let (label, len) = ctx.data.add_string(case_name.as_bytes());
-    abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
-    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset);
-    abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
-    abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, offset + 8);
-}
-
-/// Allocates an object-shaped enum singleton and zeroes its property storage.
-fn emit_enum_object_allocation(
-    ctx: &mut FunctionContext<'_>,
-    class_id: u64,
-    property_count: usize,
-) {
-    let payload_size = 8 + property_count * 16;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter
-                .instruction(&format!("mov x0, #{}", payload_size)); // request enum singleton object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks enum singletons as object instances
-            ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov x10, #{}", class_id));        // materialize the enum class id
-            ctx.emitter.instruction("str x10, [x0]");                           // store the enum class id at payload offset zero
-        }
-        Arch::X86_64 => {
-            ctx.emitter
-                .instruction(&format!("mov rax, {}", payload_size)); // request enum singleton object payload storage
-            abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!(
-                "mov r10, 0x{:x}",
-                crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            )); // materialize the x86_64 object heap kind word
-            ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the heap header before the enum singleton payload
-            ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the enum class id
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the enum class id at payload offset zero
-        }
-    }
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    for index in 0..property_count {
-        let offset = 8 + index * 16;
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset);
-        abi::emit_store_zero_to_address(ctx.emitter, object_reg, offset + 8);
-    }
-}
-
-/// Writes a backed enum case value into the singleton's first property slot.
-fn emit_enum_backing_value(ctx: &mut FunctionContext<'_>, case_value: &EnumCaseValue) {
-    let object_reg = abi::int_result_reg(ctx.emitter);
-    let temp_reg = abi::temp_int_reg(ctx.emitter.target);
-    match case_value {
-        EnumCaseValue::Int(value) => {
-            abi::emit_load_int_immediate(ctx.emitter, temp_reg, *value);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
-            abi::emit_store_zero_to_address(ctx.emitter, object_reg, 16);
-        }
-        EnumCaseValue::Str(value) => {
-            let bytes = crate::string_bytes::literal_bytes(value);
-            let (label, len) = ctx.data.add_string(&bytes);
-            abi::emit_symbol_address(ctx.emitter, temp_reg, &label);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 8);
-            abi::emit_load_int_immediate(ctx.emitter, temp_reg, len as i64);
-            abi::emit_store_to_address(ctx.emitter, temp_reg, object_reg, 16);
-        }
-    }
 }
 
 /// Initializes static-property storage before user code runs.
@@ -1113,6 +1124,9 @@ fn emit_static_property_default_value(
         LiteralDefaultValue::TaggedNull => {
             emit_tagged_null_literal_to_result(ctx);
         }
+        LiteralDefaultValue::TaggedInt(value) => {
+            emit_tagged_int_literal_to_result(ctx, *value);
+        }
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_null_literal_to_result(ctx);
         }
@@ -1167,8 +1181,8 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
-    ctx.emitter
-        .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    let block_label = ctx.block_label_for_id(block.id)?;
+    ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;

@@ -20,26 +20,25 @@ use super::super::context::FunctionContext;
 use super::{expect_operand, secondary_float_reg, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
-/// Lowers ordered comparison (`<`, `<=`, `>`, `>=`) for string/Mixed operands via PHP 8 semantics.
+/// Lowers ordered string comparison (`<`, `<=`, `>`, `>=`) via lexicographic `__rt_strcmp`.
 ///
-/// Boxes both operands as Mixed and calls `__rt_php_compare`, which yields a three-way sign
-/// (`-1`/`0`/`+1`) following PHP 8 rules: numeric and numeric-string operands compare numerically,
-/// while a non-numeric string forces a lexicographic comparison. The sign is then reduced to a PHP
-/// boolean by applying the EIR comparison predicate against zero — mirroring the integer-compare
-/// path. This opcode is emitted whenever an ordered comparison has a string or Mixed operand
-/// (concrete numeric pairs keep the direct integer/float fast paths).
+/// Loads both operands into the runtime comparator's string registers, calls `__rt_strcmp`
+/// (result `< 0` / `0` / `> 0`), then reduces it to a PHP boolean by applying the EIR
+/// comparison predicate against zero — mirroring the integer-compare path. Comparison is by
+/// byte sequence and length; PHP's numeric-string ordering rule is not applied here (the
+/// synthetic date/time methods compare single format characters, for which the two agree).
 pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     let predicate = super::expect_cmp_predicate(inst)?;
-    let lhs_ty = ctx.value_php_type(lhs)?;
-    let rhs_ty = ctx.value_php_type(rhs)?;
-    emit_php_compare_sign(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.load_string_value_to_regs(lhs, "x1", "x2")?;
+            ctx.load_string_value_to_regs(rhs, "x3", "x4")?;
+            abi::emit_call_label(ctx.emitter, "__rt_strcmp");
             ctx.emitter
-                .instruction(&format!("cmp {}, #0", result_reg));               // compare the PHP comparison sign against zero
+                .instruction(&format!("cmp {}, #0", result_reg));               // compare the lexicographic result against zero
             let set_inst = format!(
                 "cset {}, {}",
                 result_reg,
@@ -48,8 +47,11 @@ pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction(&set_inst);                                 // materialize the ordered predicate as 0 or 1
         }
         Arch::X86_64 => {
+            ctx.load_string_value_to_regs(lhs, "rdi", "rsi")?;
+            ctx.load_string_value_to_regs(rhs, "rdx", "rcx")?;
+            abi::emit_call_label(ctx.emitter, "__rt_strcmp");
             ctx.emitter
-                .instruction(&format!("cmp {}, 0", result_reg));                // compare the PHP comparison sign against zero
+                .instruction(&format!("cmp {}, 0", result_reg));                // compare the lexicographic result against zero
             ctx.emitter
                 .instruction(&format!("set{} al", super::x86_64_condition(predicate)?)); // materialize the ordered predicate in the low byte
             ctx.emitter
@@ -57,51 +59,6 @@ pub(super) fn lower_str_cmp(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     store_if_result(ctx, inst)
-}
-
-/// Computes the PHP 8 three-way comparison sign of two operands into the integer result register.
-///
-/// Boxes each operand as Mixed (skipping operands already boxed as Mixed), calls
-/// `__rt_php_compare(left, right)`, then releases any temporary boxes it created. Leaves the
-/// signed `-1`/`0`/`+1` result in the integer result register. Mirrors `emit_mixed_strict_compare`'s
-/// temporary-stack discipline so boxed string temporaries are freed on every path.
-fn emit_php_compare_sign(
-    ctx: &mut FunctionContext<'_>,
-    lhs: ValueId,
-    lhs_ty: &PhpType,
-    rhs: ValueId,
-    rhs_ty: &PhpType,
-) -> Result<()> {
-    let lhs_repr = lhs_ty.codegen_repr();
-    let rhs_repr = rhs_ty.codegen_repr();
-    let left_box_temp = !is_mixed_like(&lhs_repr);
-    let right_box_temp = !is_mixed_like(&rhs_repr);
-    materialize_value_as_mixed(ctx, lhs, &lhs_repr)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    materialize_value_as_mixed(ctx, rhs, &rhs_repr)?;
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
-            abi::emit_call_label(ctx.emitter, "__rt_php_compare");
-        }
-        Arch::X86_64 => {
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
-            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
-            abi::emit_call_label(ctx.emitter, "__rt_php_compare");
-        }
-    }
-    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    if left_box_temp {
-        decref_mixed_temp_at(ctx, 32);
-    }
-    if right_box_temp {
-        decref_mixed_temp_at(ctx, 16);
-    }
-    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    Ok(())
 }
 
 /// Lowers strict equality or inequality for scalar values.
@@ -116,6 +73,13 @@ pub(super) fn lower_strict_eq(
     let rhs_ty = ctx.value_php_type(rhs)?.codegen_repr();
     if needs_mixed_strict_compare(&lhs_ty) || needs_mixed_strict_compare(&rhs_ty) {
         emit_mixed_strict_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+        return store_if_result(ctx, inst);
+    }
+    if is_array_like(&lhs_ty) && is_array_like(&rhs_ty) {
+        // Two concrete array/hash operands compare by deep PHP structure, not pointer identity or
+        // static element type; the static element types may even differ (e.g. `Array(Int)` vs the
+        // empty `Array(Never)`) while the runtime values are structurally equal.
+        emit_array_deep_eq_call(ctx, lhs, rhs, is_equal)?;
         return store_if_result(ctx, inst);
     }
     if matches!(
@@ -175,6 +139,48 @@ fn emit_pointer_compare(
             ctx.emitter.instruction("movzx rax, al");                           // widen the pointer identity byte into the integer result register
         }
     }
+    Ok(())
+}
+
+/// Returns true when a codegen type is a concrete array or hash payload (an indexed `Array` or an
+/// associative `AssocArray`), whose strict comparison must recurse into the deep-equality helper.
+fn is_array_like(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+}
+
+/// Emits a deep structural strict-equality comparison for two concrete array/hash operands by
+/// calling `__rt_array_strict_eq` on the raw array pointers. The operands are staged through the
+/// temporary stack so the argument registers cannot clobber each other, and the boolean result is
+/// inverted for the `!==` form. No boxing or refcount mutation occurs: the helper is read-only.
+fn emit_array_deep_eq_call(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    ctx.load_value_to_result(lhs)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    ctx.load_value_to_result(rhs)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert deep array equality for inequality
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert deep array equality for inequality
+            }
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     Ok(())
 }
 
@@ -298,8 +304,8 @@ pub(super) fn lower_loose_eq(
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
-    } else if is_mixed_like(&lhs_ty) || is_mixed_like(&rhs_ty) {
-        emit_mixed_loose_eq(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
+    } else if runtime_loose_comparable(&lhs_ty) && runtime_loose_comparable(&rhs_ty) {
+        emit_mixed_loose_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for PHP types {:?} and {:?}",
@@ -311,13 +317,27 @@ pub(super) fn lower_loose_eq(
     store_if_result(ctx, inst)
 }
 
-/// Emits PHP 8 loose equality/inequality for operands where at least one side is a boxed Mixed.
+/// Returns true when a PHP type can be boxed into a `Mixed` cell and handed to
+/// `__rt_mixed_loose_eq`, the runtime implementation of PHP's full `==` table.
 ///
-/// PHP 8 `==`/`!=` are consistent with `<=>`: `$a == $b` iff `compare($a, $b) === 0`. Both
-/// operands are boxed to Mixed (concrete sides through temporary boxes that are released by
-/// `emit_php_compare_sign`) and compared with `__rt_php_compare`; the signed `-1`/`0`/`+1`
-/// result is then folded to a boolean (`== 0` for equality, `!= 0` for inequality).
-fn emit_mixed_loose_eq(
+/// Compiler-only storage (raw pointers, buffers, packed structs) has no PHP value
+/// identity, so those keep the "unsupported" diagnostic instead of silently
+/// comparing as integers.
+fn runtime_loose_comparable(ty: &PhpType) -> bool {
+    !matches!(
+        ty,
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)
+    )
+}
+
+/// Emits PHP loose equality through `__rt_mixed_loose_eq` for operand pairs whose
+/// rule cannot be decided from the static types alone: object vs object, array vs
+/// array, array vs anything, and every combination involving a boxed `Mixed`.
+///
+/// Concrete operands are boxed into temporary `Mixed` cells first (the same
+/// protocol `emit_mixed_strict_compare` uses) and released afterwards; operands
+/// that already are `Mixed` are passed straight through and stay borrowed.
+fn emit_mixed_loose_compare(
     ctx: &mut FunctionContext<'_>,
     lhs: ValueId,
     lhs_ty: &PhpType,
@@ -325,28 +345,40 @@ fn emit_mixed_loose_eq(
     rhs_ty: &PhpType,
     is_equal: bool,
 ) -> Result<()> {
-    emit_php_compare_sign(ctx, lhs, lhs_ty, rhs, rhs_ty)?;
-    fold_compare_sign_to_equality(ctx, is_equal);
-    Ok(())
-}
-
-/// Folds the `-1`/`0`/`+1` comparison sign in the integer result register to a `0`/`1` boolean.
-///
-/// For loose equality the boolean is set when the sign is zero (operands compared equal); for
-/// inequality it is set when the sign is non-zero. Leaves the boolean in the integer result
-/// register on both supported targets.
-fn fold_compare_sign_to_equality(ctx: &mut FunctionContext<'_>, is_equal: bool) {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #0");                              // test the PHP comparison sign for equality with zero
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality from the comparison sign
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_loose_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert the mixed loose-equality result for !=
+            }
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 0");                              // test the PHP comparison sign for equality with zero
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize loose equality in the low byte
-            ctx.emitter.instruction("movzx rax, al");                           // widen the loose equality byte into the integer result register
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_loose_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert the mixed loose-equality result for !=
+            }
         }
     }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
 }
 
 /// Returns true when loose equality must compare a bool with a string by PHP truthiness.
@@ -747,13 +779,6 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let rhs = expect_operand(inst, 1)?;
     let lhs_ty = ctx.value_php_type(lhs)?;
     let rhs_ty = ctx.value_php_type(rhs)?;
-    // String/Mixed spaceship needs PHP 8 numeric-string and lexicographic semantics: reuse the
-    // three-way `__rt_php_compare` sign directly (the operator already returns -1/0/1). Concrete
-    // int/float pairs keep the direct numeric comparison below.
-    if spaceship_uses_php_compare(&lhs_ty) || spaceship_uses_php_compare(&rhs_ty) {
-        emit_php_compare_sign(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
-        return store_if_result(ctx, inst);
-    }
     let uses_float_compare = lhs_ty == PhpType::Float || rhs_ty == PhpType::Float;
     if uses_float_compare {
         emit_numeric_float_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty)?;
@@ -768,12 +793,6 @@ pub(super) fn lower_spaceship(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     }
     emit_spaceship_result(ctx, uses_float_compare);
     store_if_result(ctx, inst)
-}
-
-/// Returns true when a spaceship operand requires PHP 8 string/numeric-string comparison semantics
-/// (lowered through `__rt_php_compare`) rather than the direct integer/float comparison path.
-fn spaceship_uses_php_compare(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Str | PhpType::Mixed)
 }
 
 /// Returns true for scalar values that can participate in the current loose integer path.

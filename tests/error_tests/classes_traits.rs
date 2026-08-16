@@ -9,6 +9,25 @@
 
 use super::*;
 
+/// Runs the frontend with PDO prelude injection and asserts its first diagnostic.
+fn expect_pdo_error(src: &str, expected_substr: &str) {
+    let tokens = tokenize(src).expect("PDO diagnostic fixture must tokenize");
+    let ast = parse(&tokens).expect("PDO diagnostic fixture must parse");
+    let ast = elephc::autoload::collect_aliases(ast);
+    let ast = elephc::pdo_prelude::inject_if_used(ast, false);
+    let ast = elephc::name_resolver::resolve(ast).expect("PDO fixture names must resolve");
+    let ast = elephc::optimize::fold_constants(ast);
+    let message = types::check(&ast)
+        .expect_err("PDO diagnostic fixture must fail")
+        .message;
+    assert!(
+        message.contains(expected_substr),
+        "Error '{}' doesn't contain '{}'",
+        message,
+        expected_substr
+    );
+}
+
 /// Verifies that `instanceof parent` reports "Class has no parent class" when the class
 /// has no parent.
 #[test]
@@ -47,19 +66,6 @@ class C { use A, B; }
     );
 }
 
-/// Verifies that incompatible constants imported from two traits abort class composition.
-#[test]
-fn test_error_trait_constant_conflict_must_be_compatible() {
-    expect_error(
-        r#"<?php
-trait A { public const VALUE = 1; }
-trait B { public const VALUE = 2; }
-class C { use A, B; }
-"#,
-        "incompatible duplicate trait constant 'VALUE'",
-    );
-}
-
 /// Verifies that circular trait composition (trait A uses B, B uses A) is detected
 /// and reported as an error.
 #[test]
@@ -87,46 +93,6 @@ $s = new Secret();
 echo $s->value;
 "#,
         "Cannot access protected property: Secret::value",
-    );
-}
-
-/// Verifies sibling subclasses cannot access a protected property declared by one another.
-#[test]
-fn test_error_sibling_cannot_access_child_protected_property() {
-    expect_error(
-        r#"<?php
-class ProtectedRoot {}
-class ProtectedLeft extends ProtectedRoot {
-    public static function read(ProtectedRight $right): int {
-        return $right->value;
-    }
-}
-class ProtectedRight extends ProtectedRoot {
-    protected int $value = 7;
-}
-"#,
-        "Cannot access protected property: ProtectedRight::value",
-    );
-}
-
-/// Verifies the `$this instanceof Sibling` dead-branch relaxation does NOT extend to a non-`$this`
-/// receiver: a value narrowed via `instanceof` to an unrelated class can genuinely BE that class at
-/// runtime, so a protected read from an unrelated scope must stay loud (PHP fatals here). Only a
-/// `$this` receiver is provably dead in the current class's scope.
-#[test]
-fn test_error_instanceof_narrowed_protected_on_non_this_receiver() {
-    expect_error(
-        r#"<?php
-class NarrowRight {
-    protected int $value = 7;
-}
-class NarrowProbe {
-    public function read(object $x): int {
-        return $x instanceof NarrowRight ? $x->value : 0;
-    }
-}
-"#,
-        "Cannot access protected property: NarrowRight::value",
     );
 }
 
@@ -296,18 +262,6 @@ fn test_error_new_static_validates_child_constructor() {
     expect_error(
         "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public function __construct(string $name) {} } echo Child::make();",
         "Constructor 'Child::__construct' expects 1 arguments, got 0",
-    );
-}
-
-/// Verifies that `new static(...)` inside a method of an ABSTRACT class type-checks cleanly.
-/// `static` is late static binding: it resolves at runtime to the concrete called class, which
-/// can never be abstract, so the late-bound constructor validator must skip abstract classes in
-/// the hierarchy instead of falsely reporting "Cannot instantiate abstract class". Regression for
-/// the Symfony String `AbstractString::wrap` false positive.
-#[test]
-fn test_new_static_in_abstract_class_accepts() {
-    expect_ok(
-        "<?php abstract class AbstractString { public string $s = \"\"; public function make(string $v): static { return new static($v); } public function __construct(string $v) { $this->s = $v; } } class ByteString extends AbstractString {} class UnicodeString extends AbstractString {} $b = new ByteString(\"hi\"); echo $b->make(\"x\")->s;",
     );
 }
 
@@ -696,64 +650,13 @@ fn test_error_reflection_function_constructor_unknown_function() {
     );
 }
 
-/// Verifies that `new ReflectionFunction()` accepts a string-typed dynamic function name for
-/// resolution through the runtime callable registry.
+/// Verifies that `new ReflectionFunction()` rejects dynamic function names
+/// because runtime function reflection lookup metadata is not available.
 #[test]
-fn test_reflection_function_constructor_dynamic_function_name_compiles() {
-    expect_ok(
+fn test_error_reflection_function_constructor_dynamic_function_name() {
+    expect_error(
         "<?php function reflected_function($a) {} $f = 'reflected_function'; $r = new ReflectionFunction($f);",
-    );
-}
-
-/// Verifies an assignment in a negated condition replaces an earlier reflection subtype that
-/// only exists on branches which have already returned.
-#[test]
-fn test_negated_condition_assignment_replaces_returned_branch_reflection_type() {
-    expect_ok(
-        r#"<?php
-class ReflectionFlowFactory {
-    public function getFactory(): mixed {
-        return null;
-    }
-
-    public function getClassName(): ?string {
-        return DateTime::class;
-    }
-
-    public function getReflectionClass(?string $class): ?ReflectionClass {
-        return null === $class ? null : new ReflectionClass($class);
-    }
-
-    public function resolve(): ?ReflectionFunctionAbstract {
-        if (is_string($factory = $this->getFactory())) {
-            $r = new ReflectionFunction($factory);
-            return $r;
-        }
-
-        if ($factory) {
-            return new ReflectionMethod(DateTime::class, "format");
-        }
-
-        $class = $this->getClassName();
-        if (!$r = $this->getReflectionClass($class)) {
-            return null;
-        }
-        if (!$r = $r->getConstructor()) {
-            return null;
-        }
-        return $r;
-    }
-}
-"#,
-    );
-}
-
-/// Verifies PHP's `ReflectionParameter implements Reflector` relationship is available to
-/// ordinary function-argument compatibility checks.
-#[test]
-fn test_reflection_parameter_is_assignable_to_reflector() {
-    expect_ok(
-        "<?php function accepts_reflector(Reflector $reflector): void {} function pass_parameter(ReflectionParameter $parameter): void { accepts_reflector($parameter); }",
+        "requires a string literal function name",
     );
 }
 
@@ -796,67 +699,13 @@ fn test_error_reflection_class_undefined_class() {
     );
 }
 
-/// SUPERSEDES the old `test_error_reflection_class_non_string_argument`: `new
-/// ReflectionClass($name)` with a non-`string`-typed dynamic argument is NO LONGER a compile
-/// error — PHP's real `__construct(object|string $objectOrClass)` signature accepts ANY runtime
-/// value and only rejects the wrong shape at RUNTIME (php -n verified: `new ReflectionClass(42)`
-/// compiles and throws a real `\ReflectionException`/`\TypeError` at runtime, never a parse/type
-/// error), so elephc now compiles this too (see `crate::types::checker::inference::objects::
-/// constructors::reflection_class_literal_arg` and `crate::codegen_ir::lower_inst::objects::
-/// reflection::lower_reflection_class_new_dynamic`). Full runtime-behavior coverage (weak
-/// scalar coercion, object resolution, `\TypeError` on array/resource) lives in the codegen
-/// tests in `tests/codegen/oop/reflection.rs`. K1 (see
-/// `test_reflection_method_dynamic_class_argument_compiles`) later extended the SAME
-/// class-name-argument relaxation to `ReflectionMethod`/`ReflectionProperty` too — the relaxation
-/// is no longer `ReflectionClass`-only.
+/// Verifies that `new ReflectionClass($name)` with a dynamic variable reports
+/// "requires a string literal class name".
 #[test]
-fn test_reflection_class_non_string_argument_compiles() {
-    expect_ok("<?php $name = 42; $r = new ReflectionClass($name); echo get_class($r);");
-}
-
-/// SUPERSEDES the old `test_error_reflection_method_dynamic_class_argument_stays_loud`: K1 (see
-/// `crate::codegen_ir::lower_inst::objects::reflection_members`) extends the SAME
-/// `ReflectionClass`-style dynamic-dispatch relaxation to `ReflectionMethod`'s class-name
-/// argument too (the earlier "PART C is `ReflectionClass`-only" scoping note this test's name
-/// referenced no longer holds) — a non-literal `Str`/`Mixed`/`Union`/`Object` class-name argument
-/// compiles and resolves through the J4 flat member-table dispatcher at runtime instead of
-/// erroring at compile time. Full runtime-behavior coverage (weak scalar coercion, object
-/// resolution, `\TypeError` on array) lives in `tests/codegen/oop/reflection.rs`.
-#[test]
-fn test_reflection_method_dynamic_class_argument_compiles() {
-    expect_ok(
-        "<?php $name = 'C'; class C { public function foo(): void {} } $r = new ReflectionMethod($name, 'foo'); echo $r->getName();",
-    );
-}
-
-/// Property counterpart of `test_reflection_method_dynamic_class_argument_compiles`.
-#[test]
-fn test_reflection_property_dynamic_class_argument_compiles() {
-    expect_ok(
-        "<?php $name = 'C'; class C { public int $prop = 1; } $r = new ReflectionProperty($name, 'prop'); echo $r->getName();",
-    );
-}
-
-/// The SECOND (member-name) argument of `ReflectionMethod`/`ReflectionProperty` stays loud for a
-/// non-string value. Now that a concrete `int` weak-coerces past the constructor's `Str` parameter
-/// signature (`weak_boundary_coercion_accepts`), the dedicated `reflection_member_name_arg` check
-/// (in `crate::types::checker::builtin_types::reflection`) is what rejects it: elephc resolves the
-/// reflected member at compile time and needs a real string name, not a coerced scalar, so a
-/// non-string member name remains a hard error (with its own diagnostic).
-#[test]
-fn test_error_reflection_method_non_string_member_name_argument_stays_loud() {
+fn test_error_reflection_class_dynamic_argument() {
     expect_error(
-        "<?php class C { public function foo(): void {} } $r = new ReflectionMethod('C', 42);",
-        "ReflectionMethod::__construct() method name argument must be a string",
-    );
-}
-
-/// Property counterpart of `test_error_reflection_method_non_string_member_name_argument_stays_loud`.
-#[test]
-fn test_error_reflection_property_non_string_member_name_argument_stays_loud() {
-    expect_error(
-        "<?php class C { public int $prop = 1; } $r = new ReflectionProperty('C', 42);",
-        "ReflectionProperty::__construct() property name argument must be a string",
+        "<?php $name = 'C'; class C {} $r = new ReflectionClass($name);",
+        "requires a string literal class name",
     );
 }
 
@@ -891,57 +740,6 @@ fn test_error_reflection_method_unsupported_attribute_args() {
     );
 }
 
-/// Verifies the Reflection API-completeness fix: `getAttributes(?string, int)`
-/// optional params (1- and 2-arg calls), `getClosure(?object)` optional param,
-/// the `ReflectionAttribute::IS_INSTANCEOF` class constant, and the public
-/// `name`/`class` readonly properties all type-check cleanly. Regression guard
-/// for the 8 symfony/console probe errors these pieces previously produced
-/// (`expects 0 arguments`, `Undefined class constant`, `Undefined property`).
-/// Uses string-literal reflection constructors (the only AOT-supported form) and
-/// the type-check-only `expect_ok` helper — reflection is largely unbacked at
-/// runtime, so this asserts the type-check phase alone is clean.
-#[test]
-fn test_reflection_api_completeness_accepts() {
-    expect_ok(
-        r#"<?php
-class Foo { public function bar(): void {} public int $baz = 0; }
-$rc = new ReflectionClass('Foo');
-$rc->getAttributes('Attr');
-$rc->getAttributes('Attr', ReflectionAttribute::IS_INSTANCEOF);
-echo $rc->name;
-$rm = new ReflectionMethod('Foo', 'bar');
-$rm->getClosure($rc);
-echo $rm->class, $rm->name;
-$rp = new ReflectionProperty('Foo', 'baz');
-echo $rp->class, $rp->name;
-"#,
-    );
-}
-
-/// Negative control for the Reflection API-completeness fix: an unknown
-/// `ReflectionAttribute` class constant still reports "Undefined class constant".
-/// Documents that adding `IS_INSTANCEOF` did not blanket-accept arbitrary
-/// constants.
-#[test]
-fn test_error_reflection_attribute_unknown_constant() {
-    expect_error(
-        "<?php echo ReflectionAttribute::NOT_A_REAL_CONST;",
-        "Undefined class constant",
-    );
-}
-
-/// Negative control for the Reflection API-completeness fix: an unknown property
-/// on a reflection object still reports "Undefined property". Documents that
-/// adding the public `name`/`class` props did not blanket-accept arbitrary
-/// property reads.
-#[test]
-fn test_error_reflection_unknown_property() {
-    expect_error(
-        "<?php class Foo {} $rc = new ReflectionClass('Foo'); echo $rc->notARealProp;",
-        "Undefined property",
-    );
-}
-
 /// Verifies that an anonymous class missing its body is rejected with a clear diagnostic.
 #[test]
 fn test_error_anonymous_class_missing_body() {
@@ -960,323 +758,20 @@ fn test_error_nullsafe_dynamic_method_call_named_arguments() {
     );
 }
 
-/// Verifies the covariant-return fix does not over-accept: a child override that
-/// *widens* the return type (parent returns `Dog`, child returns the supertype
-/// `Animal`) is contravariant, which PHP rejects. This guards that accepting
-/// covariant (subtype) returns did not also start accepting contravariant ones.
+/// Verifies user code cannot invoke the compiler-private PDORow constructor.
 #[test]
-fn test_error_override_contravariant_return_rejected() {
-    expect_error(
-        r#"<?php
-class Animal {}
-class Dog extends Animal {}
-class Base { public function make(): Dog { return new Dog(); } }
-class Sub extends Base { public function make(): Animal { return new Animal(); } }
-"#,
-        "incompatible return type",
+fn test_error_pdo_row_constructor_is_private() {
+    expect_pdo_error(
+        "<?php $row = new PDORow();",
+        "Cannot access private constructor: PDORow::__construct",
     );
 }
 
-/// Verifies the covariant-return fix does not over-accept for interface
-/// implementations either: an interface method declared to return `Dog` cannot be
-/// implemented with the widened (supertype) return `Animal`. Return types are
-/// covariant, not contravariant, so this must still error.
+/// Verifies user code cannot call PDOException's private driver-metadata factory.
 #[test]
-fn test_error_interface_contravariant_return_rejected() {
-    expect_error(
-        r#"<?php
-class Animal {}
-class Dog extends Animal {}
-interface I { public function f(): Dog; }
-class C implements I { public function f(): Animal { return new Animal(); } }
-"#,
-        "incompatible return type",
-    );
-}
-
-/// Checked-downcast-on-return: unrelated classes (neither a subtype of the other) stay loud
-/// at compile time even though a runtime `instanceof` guard mechanism now exists for the
-/// legitimate base→derived relaxation — that guard covers `D` a subtype/subinterface of the
-/// actual returned type only. A hopeless cast (PHP would always throw `TypeError` at runtime,
-/// with no possible matching branch) is rejected up front instead of silently compiling a
-/// guard chain that could never pass.
-#[test]
-fn test_error_checked_downcast_return_unrelated_classes_rejected() {
-    expect_error(
-        r#"<?php
-class B {}
-class D extends B {}
-class E extends B {}
-function makeD(): D {
-    return new E();
-}
-"#,
-        "expects Object(\"D\"), got Object(\"E\")",
-    );
-}
-
-/// Checked-downcast-on-return: a return type completely unrelated to any built-in/user class
-/// hierarchy (no shared ancestor at all) still stays loud.
-#[test]
-fn test_error_checked_downcast_return_wholly_unrelated_classes_rejected() {
-    expect_error(
-        r#"<?php
-class Foo {}
-class Bar {}
-function makeFoo(): Foo {
-    return new Bar();
-}
-"#,
-        "expects Object(\"Foo\"), got Object(\"Bar\")",
-    );
-}
-
-/// Verifies that an explicit `abstract` modifier on an interface method is rejected. Every
-/// interface method is implicitly abstract, and PHP 8 fatals on the redundant keyword
-/// ("Interface method I::f() must not be abstract", `php -n` verified). Applies uniformly to
-/// static and instance interface methods (see the sibling static-method test below).
-#[test]
-fn test_error_interface_method_explicit_abstract_rejected() {
-    expect_error(
-        "<?php interface I { abstract public function f(): int; }",
-        "must not be declared abstract",
-    );
-}
-
-/// Verifies the explicit-`abstract` rejection above also fires for a static interface method
-/// declaration, confirming the parser-level check does not special-case static-ness
-/// (`php -n` verified: PHP's fatal wording is identical for static and instance methods).
-#[test]
-fn test_error_interface_static_method_explicit_abstract_rejected() {
-    expect_error(
-        "<?php interface I { abstract public static function f(): int; }",
-        "must not be declared abstract",
-    );
-}
-
-/// Verifies a non-public static interface method is rejected the same way a non-public
-/// instance interface method already is (`php -n` verified: "Access type for interface
-/// method I::f() must be public").
-#[test]
-fn test_error_interface_static_method_must_be_public() {
-    expect_error(
-        "<?php interface I { protected static function f(): int; }",
-        "Interface methods must be public",
-    );
-}
-
-/// Verifies a class that implements an interface declaring `public static function f(): int;`
-/// but never defines `f` at all is rejected (PHP: "Class C contains 1 abstract method...",
-/// `php -n` verified; elephc reports the interface-contract-not-satisfied message).
-#[test]
-fn test_error_implementor_missing_static_interface_method() {
-    expect_error(
-        r#"<?php
-interface I { public static function f(): int; }
-class C implements I {}
-"#,
-        "must implement interface method I::f",
-    );
-}
-
-/// Verifies that satisfying a *static* interface contract with a non-static (instance) method
-/// is rejected loudly, matching PHP 8's exact fatal wording (`php -n` verified): "Cannot make
-/// static method I::f() non static in class C".
-#[test]
-fn test_error_implementor_makes_static_interface_method_non_static() {
-    expect_error(
-        r#"<?php
-interface I { public static function f(): int; }
-class C implements I { public function f(): int { return 1; } }
-"#,
-        "Cannot make static method I::f() non static in class C",
-    );
-}
-
-/// Verifies the reverse direction: satisfying a *non-static* interface contract with a static
-/// method is rejected loudly, matching PHP 8's exact fatal wording (`php -n` verified):
-/// "Cannot make non static method I::f() static in class C".
-#[test]
-fn test_error_implementor_makes_instance_interface_method_static() {
-    expect_error(
-        r#"<?php
-interface I { public function f(): int; }
-class C implements I { public static function f(): int { return 1; } }
-"#,
-        "Cannot make non static method I::f() static in class C",
-    );
-}
-
-/// Verifies that an interface redeclaring a parent interface's static method as an instance
-/// method (or vice versa) is rejected during interface flattening itself — before any
-/// implementor even exists — matching PHP 8's fatal wording (`php -n` verified): "Cannot make
-/// static method A::f() non static in class B".
-#[test]
-fn test_error_interface_extends_conflicting_static_kind() {
-    expect_error(
-        r#"<?php
-interface A { public static function f(): int; }
-interface B extends A { public function f(): int; }
-"#,
-        "Cannot make static method A::f() non static in class B",
-    );
-}
-
-/// Verifies that calling a static interface method directly on the interface (`I::f()`, never
-/// on a concrete implementor) is rejected at compile time. PHP defers this to a runtime `Error`
-/// ("Cannot call abstract method I::f()", `php -n` verified: interfaces have no runtime object
-/// to dispatch a call on), but elephc's closed world can detect the literal `InterfaceName::`
-/// receiver statically instead of leaving it to fail at runtime.
-#[test]
-fn test_error_direct_static_call_on_interface_rejected() {
-    expect_error(
-        r#"<?php
-interface I { public static function f(): int; }
-I::f();
-"#,
-        "Cannot call abstract method I::f()",
-    );
-}
-
-/// Verifies the direct-interface-call rejection above also fires for a non-static interface
-/// method invoked via `I::method()` — PHP's fatal wording does not distinguish between static
-/// and instance interface methods here (`php -n` verified).
-#[test]
-fn test_error_direct_static_call_on_interface_instance_method_rejected() {
-    expect_error(
-        r#"<?php
-interface I { public function f(): int; }
-I::f();
-"#,
-        "Cannot call abstract method I::f()",
-    );
-}
-
-/// Verifies that a genuine `: DeclaringClass` return (NOT `: static`) is early-bound to the
-/// declaring class and is NOT late-bound to the receiver: `Base::make(): Base` called on a `Sub`
-/// still yields `Base` (the ancestor-return intent this test guards — PHP late-binds only `: static`).
-/// The follow-up `$r->only()` on that `Base`-typed result is then accepted via PHP-faithful lenient
-/// dispatch, because a concrete subclass (`Sub`, which IS-A `Base`) declares `only` and PHP
-/// dispatches on the runtime class rather than checking method existence at compile time. Here
-/// `make()` returns `new Base()`, which lacks `only`, so this faults cleanly at runtime with a
-/// PHP-style `Error` (`php` verified: "Call to undefined method Base::only()"). It therefore COMPILES
-/// (this test) and faults at runtime, exactly like PHP, instead of the previous compile-time rejection.
-#[test]
-fn test_declaring_class_return_not_late_bound_dispatches_at_runtime() {
-    expect_ok(
-        r#"<?php
-class Base { public function make(): Base { return new Base(); } }
-class Sub extends Base { public function only(): string { return "s"; } }
-$s = new Sub();
-$r = $s->make();
-echo $r->only();
-"#,
-    );
-}
-
-/// Verifies that a `: self` return is early-bound to the declaring class (like an explicit class
-/// name) and is NOT late-bound to the receiver, mirroring PHP where only `: static` is late-bound:
-/// `Base::make(): self` on a `Sub` yields `Base` (the ancestor-return intent this test guards). The
-/// follow-up `$r->only()` on that `Base`-typed result is then accepted via PHP-faithful lenient
-/// dispatch (`Sub` IS-A `Base` declares `only`; PHP dispatches on the runtime class). Here `make()`
-/// returns `new Base()`, which lacks `only`, so it faults cleanly at runtime with a PHP-style `Error`
-/// (`php` verified: "Call to undefined method Base::only()") — COMPILES here and faults at runtime.
-#[test]
-fn test_self_return_not_late_bound_dispatches_at_runtime() {
-    expect_ok(
-        r#"<?php
-class Base { public function make(): self { return new Base(); } }
-class Sub extends Base { public function only(): string { return "s"; } }
-$s = new Sub();
-$r = $s->make();
-echo $r->only();
-"#,
-    );
-}
-
-/// SPEC G1: verifies lenient union-receiver method dispatch still errors loudly when NO union
-/// member declares the called method. Reports against the FULL union type (JURY ADDENDUM #5),
-/// not a single arbitrarily-picked member.
-#[test]
-fn test_error_union_method_no_member_resolves() {
-    expect_error(
-        r#"<?php
-class A { function foo(): string { return "A"; } }
-class B { function bar(): string { return "B"; } }
-function make(bool $b): A|B { return $b ? new A() : new B(); }
-$u = make(true);
-echo $u->frobnicate();
-"#,
-        "Undefined method: A|B::frobnicate",
-    );
-}
-
-/// Verifies real PHP does NOT declare `ReflectionProperty::getFileName()` (php -n verified: a
-/// hard "Call to undefined method ReflectionProperty::getFileName()" fatal — only
-/// `ReflectionClass` and `ReflectionFunctionAbstract`, i.e. `ReflectionFunction`/
-/// `ReflectionMethod`, have it), and elephc matches by rejecting the call at compile time rather
-/// than fabricating an answer PHP itself does not provide.
-#[test]
-fn test_error_reflection_property_has_no_get_file_name_method() {
-    expect_error(
-        r#"<?php
-class ElephcNoFileProp { public string $name = ""; }
-$rp = new ReflectionProperty("ElephcNoFileProp", "name");
-echo $rp->getFileName();
-"#,
-        "Undefined method: ReflectionProperty::getFileName",
-    );
-}
-
-/// SPEC G1 / JURY ADDENDUM #1: when TWO OR MORE union members resolve the called method but
-/// their signatures disagree on whether the call's arguments are acceptable (`A::m(int)` vs
-/// `B::m(array)`, called with an `int` argument), the call must stay loud. Codegen materializes
-/// the call's arguments once for whichever runtime branch executes; a per-branch ABI mismatch
-/// would silently pass garbage, so this is a conservative under-accept, not a checker gap.
-#[test]
-fn test_error_union_method_multi_resolving_disagreeing_signatures() {
-    expect_error(
-        r#"<?php
-class A { function m(int $x): string { return "A"; } }
-class B { function m(array $x): string { return "B"; } }
-function make(bool $b): A|B { return $b ? new A() : new B(); }
-$u = make(true);
-echo $u->m(5);
-"#,
-        "Method B::m parameter $x expects",
-    );
-}
-
-/// `ReflectionFunction::__construct(Closure|string $function)`: a `Closure`-typed value whose
-/// identity is not statically resolvable at the `new ReflectionFunction(...)` call site (here, a
-/// declared `Closure $c` parameter) is NOW ACCEPTED (M2 PART A — was rejected at compile time
-/// before this feature; see `crate::codegen_ir::lower_inst::objects::reflection_function_dynamic`
-/// and `tests/codegen/oop/reflection.rs`'s
-/// `test_reflection_function_dynamic_closure_backed_methods_and_guarded_throws` for the full
-/// runtime-behavior coverage this now compiles to). This is a type-check-only regression test
-/// confirming the call no longer raises the old compile-time rejection; see the codegen test
-/// above for the actual runtime output.
-#[test]
-fn test_reflection_function_dynamic_closure_argument_accepted() {
-    expect_ok(
-        r#"<?php
-function reflect(Closure $c) {
-    return new ReflectionFunction($c);
-}
-reflect(function ($x) { return $x; });
-"#,
-    );
-}
-
-/// `ReflectionFunction::__construct(Closure|string $function)` rejects an argument that is
-/// neither `Closure`-shaped nor a `string`, mirroring PHP's real `TypeError` for this argument
-/// (php -n verified: `new ReflectionFunction([1, 2])` throws `TypeError:
-/// ReflectionFunction::__construct(): Argument #1 ($function) must be of type Closure|string,
-/// array given`).
-#[test]
-fn test_error_reflection_function_wrong_type_argument_rejected() {
-    expect_error(
-        "<?php new ReflectionFunction([1, 2]);",
-        "must be of type Closure|string",
+fn test_error_pdo_exception_internal_factory_is_private() {
+    expect_pdo_error(
+        "<?php $error = PDOException::__elephcFromErrorInfo('x', ['HY000', 1]);",
+        "Cannot access private method: PDOException::__elephcFromErrorInfo",
     );
 }

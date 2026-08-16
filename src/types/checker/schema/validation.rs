@@ -8,13 +8,9 @@
 //! Key details:
 //! - Declaration metadata must align with name resolution, inheritance flattening, and runtime/codegen expectations.
 
-
-use std::collections::{HashMap, HashSet};
-
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
-use crate::types::traits::FlattenedClass;
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -22,10 +18,7 @@ use super::super::Checker;
 /// Builds a `FunctionSig` from a parsed class method, resolving parameter and return type
 /// annotations through the checker. Parameters without type hints default to `PhpType::Int`.
 /// Validates that each declared parameter's default value is compatible with its resolved type.
-/// Infers return type from method body when no return annotation is present. A generator method
-/// (body contains `yield`) is seeded `Object("Generator")` regardless of the declared
-/// `iterable`/`Generator`/`Traversable` hint so recursive generator-method calls resolve the
-/// correct type before the method pass runs; the declared hint is validated by the method pass.
+/// Infers return type from method body when no return annotation is present.
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
@@ -85,12 +78,6 @@ pub(crate) fn build_method_sig(
             method.span,
             &format!("Method '{}'", method.name),
         )?,
-        // A bodyless method (an interface method or an `abstract` declaration) has no body
-        // to infer from and no declared return type. PHP treats such a method as untyped:
-        // the implementor may return any value, so callers must see Mixed. Seeding Void here
-        // (as `infer_return_type_syntactic` does for an empty body) would wrongly reject using
-        // the overriding implementation's result as a value (e.g. `$c->get($id)::class`).
-        None if !method.has_body => PhpType::Mixed,
         None => super::super::infer_return_type_syntactic(&method.body),
     };
     if method.variadic.is_some() {
@@ -234,44 +221,9 @@ pub(crate) fn required_param_count(sig: &FunctionSig) -> usize {
         .count()
 }
 
-/// Returns the number of fixed (non-variadic) parameters in `sig`.
-///
-/// The trailing variadic parameter, when present, is materialized as the last
-/// entry of `sig.params` by `callable_wrapper_sig`; this excludes it so callers
-/// can reason about the positional/fixed arity separately from the variadic
-/// tail. `sig.params` always holds at least the variadic entry when
-/// `sig.variadic` is set, so the subtraction never underflows.
-fn fixed_param_count(sig: &FunctionSig) -> usize {
-    let total = sig.params.len();
-    if sig.variadic.is_some() {
-        total.saturating_sub(1)
-    } else {
-        total
-    }
-}
-
-/// Returns `true` if parameter `index` of `sig` is optional (has a default value).
-///
-/// An out-of-range `index` is treated as optional: there is no required
-/// parameter at that position, so it cannot impose a call-site requirement.
-fn param_is_optional(sig: &FunctionSig, index: usize) -> bool {
-    sig.defaults.get(index).map_or(true, |d| d.is_some())
-}
-
-/// Validates that `child_sig` is a contravariant-compatible (LSP) override of
-/// `parent_sig`.
-///
-/// PHP method-override parameters are contravariant: a child may accept *more*
-/// than the parent, never fewer. This allows a child to add trailing optional
-/// parameters, add a variadic, or make a required parent parameter optional,
-/// while still rejecting the genuinely-incompatible cases: dropping a parameter
-/// (without a covering variadic), adding a required parameter, making an
-/// optional parent parameter required, removing the parent's variadic, or
-/// changing the by-reference-ness of an overlapping parameter.
-///
-/// By-reference (`ref_params`) matching stays strict, but is compared only over
-/// the overlapping prefix so an added trailing by-value parameter does not trip
-/// it. Reports errors with `context` and `kind` (e.g., "overriding method").
+/// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
+/// Checks parameter count, ref params, defaults layout, variadic flag, and required param count.
+/// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -281,15 +233,24 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
 ) -> Result<(), CompileError> {
-    let parent_fixed = fixed_param_count(parent_sig);
-    let child_fixed = fixed_param_count(child_sig);
-    let parent_variadic = parent_sig.variadic.is_some();
-    let child_variadic = child_sig.variadic.is_some();
+    // The hidden variadic that collects surplus positional arguments for
+    // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
+    // inherited signature that does not carry it cannot dispatch to a body that does.
+    // Report that directly instead of the generic parameter-count mismatch, which names a
+    // parameter the source never wrote.
+    if crate::func_args::sig_collects_surplus_args(child_sig)
+        != crate::func_args::sig_collects_surplus_args(parent_sig)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "func_num_args()/func_get_args()/func_get_arg() are not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
+                owner_name, method_name, context, kind
+            ),
+        ));
+    }
 
-    // Count / dropped-parameter rule: the child must accept at least as many
-    // positional arguments as the parent can supply. Fewer fixed parameters is
-    // only acceptable when the child has a variadic that absorbs the tail.
-    if child_fixed < parent_fixed && !child_variadic {
+    if child_sig.params.len() != parent_sig.params.len() {
         return Err(CompileError::new(
             span,
             &format!(
@@ -299,55 +260,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    // Added-parameter rule: every child parameter beyond the parent's fixed arity
-    // must be optional (the variadic tail lives past `child_fixed`); the parent's
-    // callers never supply it, so requiring it would reject legal calls.
-    for index in parent_fixed..child_fixed {
-        if !param_is_optional(child_sig, index) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "Cannot add a required parameter when {} {}: {}::{}",
-                    context, kind, owner_name, method_name
-                ),
-            ));
-        }
-    }
-
-    // Overlapping-optionality rule: an optional parent parameter must stay
-    // optional in the child (`parent_optional[i]` implies `child_optional[i]`);
-    // making it required rejects callers who omit it.
-    let overlap = parent_fixed.min(child_fixed);
-    for index in 0..overlap {
-        if param_is_optional(parent_sig, index) && !param_is_optional(child_sig, index) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "Cannot make an optional parameter required when {} {}: {}::{}",
-                    context, kind, owner_name, method_name
-                ),
-            ));
-        }
-    }
-
-    // Variadic rule: the child may add a variadic, but may not remove the
-    // parent's (`parent_variadic` implies `child_variadic`); removing it would
-    // reject calls that pass extra arguments the parent accepts.
-    if parent_variadic && !child_variadic {
-        return Err(CompileError::new(
-            span,
-            &format!(
-                "Cannot change variadic parameter shape when {} {}: {}::{}",
-                context, kind, owner_name, method_name
-            ),
-        ));
-    }
-
-    // By-reference rule: pass-by-reference-ness must match exactly over the
-    // overlapping prefix. Trailing child parameters are excluded so an added
-    // optional by-value parameter does not trip the comparison.
-    let ref_prefix = parent_sig.ref_params.len().min(child_sig.ref_params.len());
-    if child_sig.ref_params[..ref_prefix] != parent_sig.ref_params[..ref_prefix] {
+    if child_sig.ref_params != parent_sig.ref_params {
         return Err(CompileError::new(
             span,
             &format!(
@@ -357,11 +270,37 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    // Required-parameter-count backstop: the child may require fewer parameters
-    // than the parent, never more (`child_required <= parent_required`). The
-    // rules above already cover the observable cases; this guards any residual
-    // mismatch defensively.
-    if required_param_count(child_sig) > required_param_count(parent_sig) {
+    let child_defaults: Vec<bool> = child_sig
+        .defaults
+        .iter()
+        .map(|default| default.is_some())
+        .collect();
+    let parent_defaults: Vec<bool> = parent_sig
+        .defaults
+        .iter()
+        .map(|default| default.is_some())
+        .collect();
+    if child_defaults != parent_defaults {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change optional parameter layout when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    if child_sig.variadic != parent_sig.variadic {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot change variadic parameter shape when {} {}: {}::{}",
+                context, kind, owner_name, method_name
+            ),
+        ));
+    }
+
+    if required_param_count(child_sig) != required_param_count(parent_sig) {
         return Err(CompileError::new(
             span,
             &format!(
@@ -383,6 +322,22 @@ pub(crate) fn declared_return_type_compatible(
     actual: &PhpType,
 ) -> bool {
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
+}
+
+/// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
+pub(crate) fn is_pdo_exception_get_code_contract(
+    class_name: &str,
+    method_name: &str,
+    return_type: &PhpType,
+) -> bool {
+    let PhpType::Union(types) = return_type else {
+        return false;
+    };
+    class_name.trim_start_matches('\\') == "PDOException"
+        && php_symbol_key(method_name) == "getcode"
+        && types.len() == 2
+        && types.contains(&PhpType::Str)
+        && types.contains(&PhpType::Int)
 }
 
 /// Checks a preserved late-static parent/interface return against a child declaration.
@@ -415,76 +370,12 @@ pub(crate) fn late_static_return_compatible(
     )))
 }
 
-/// Force-builds any concrete class referenced by a covariant return type — a bare
-/// `Object(name)` or any `Object(name)` member of a `Union` (e.g. a nullable `?Dog`
-/// return, `Union([Object("Dog"), Void])`) — that is not yet registered in
-/// `checker.classes`, mirroring the identical prebuild step in
-/// `schema/classes/interfaces.rs`'s interface-implementation return-type check.
-///
-/// The top-level class-building driver visits classes in `HashMap` iteration order, so a
-/// method's declared return type may reference a class from an unrelated hierarchy that
-/// has not been built yet. Without this, `Checker::is_subclass_of` (which only walks
-/// `checker.classes`) nondeterministically rejects a legal covariant override depending on
-/// build order (`Sub::make(): Dog` overriding `Base::make(): Animal`, and equally
-/// `Sub::make(): ?Dog` overriding `Base::make(): ?Animal`, intermittently failed when `Dog`
-/// had not been built yet). `class.name` itself is skipped: the class currently being
-/// built is always mid-construction here, so attempting to recursively build it would
-/// either no-op (already present) or spuriously trip the circular-inheritance guard for a
-/// method that simply returns its own class.
-fn ensure_return_type_classes_built(
-    return_type: &PhpType,
-    class_name: &str,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &mut Checker,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
-) -> Result<(), CompileError> {
-    match return_type {
-        PhpType::Object(actual_name) => {
-            if actual_name != class_name
-                && class_map.contains_key(actual_name)
-                && !checker.classes.contains_key(actual_name)
-            {
-                super::classes::build_class_info_recursive(
-                    actual_name,
-                    class_map,
-                    checker,
-                    next_class_id,
-                    building,
-                )?;
-            }
-            Ok(())
-        }
-        PhpType::Union(members) => {
-            for member in members {
-                ensure_return_type_classes_built(
-                    member,
-                    class_name,
-                    class_map,
-                    checker,
-                    next_class_id,
-                    building,
-                )?;
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
 /// return type when the parent has one or make it incompatible.
-///
-/// `class_map`/`next_class_id`/`building` let this force-build a covariant return type's
-/// class(es) on demand — see [`ensure_return_type_classes_built`].
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_override_signature(
-    checker: &mut Checker,
-    class_map: &HashMap<String, FlattenedClass>,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
+    checker: &Checker,
     class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
@@ -515,14 +406,6 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
-    ensure_return_type_classes_built(
-        &child_sig.return_type,
-        &class.name,
-        class_map,
-        checker,
-        next_class_id,
-        building,
-    )?;
     let late_static_compatible = late_static_return_compatible(
         checker,
         parent_late_static_return,
@@ -531,7 +414,11 @@ pub(crate) fn validate_override_signature(
         class_name,
         method.span,
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let return_compatible = is_pdo_exception_get_code_contract(
+        class_name,
+        &method.name,
+        &child_sig.return_type,
+    ) || late_static_compatible.unwrap_or_else(|| {
         declared_return_type_compatible(
             checker,
             &parent_sig.return_type,

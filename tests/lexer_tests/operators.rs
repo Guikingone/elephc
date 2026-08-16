@@ -47,6 +47,22 @@ fn test_comparison_operators() {
     );
 }
 
+/// Verifies `<>` tokenizes as its own `LessGreater` token instead of `Less` followed
+/// by `Greater`, while `< >` with a space still yields the two separate tokens.
+#[test]
+fn test_angle_not_equal_operator() {
+    let t = tokens("<?php <> < > <=>");
+    assert_eq!(
+        t[1..5],
+        [
+            Token::LessGreater,
+            Token::Less,
+            Token::Greater,
+            Token::Spaceship,
+        ]
+    );
+}
+
 /// Verifies `&&`, `||`, `and`, `or`, `xor` tokenize as logical operators.
 #[test]
 fn test_logical_operators() {

@@ -10,23 +10,18 @@
 //! - The `lazy_check: true` flag skips pre-inference so the hook can control inference
 //!   order when the callback signature drives argument type narrowing.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 use crate::types::checker::builtins::spl as checker_spl;
 
 builtin! {
-    name: "iterator_apply",
-    area: Spl,
-    params: [iterator: Mixed, callback: Mixed, args: Mixed = DefaultSpec::Null],
-    returns: Int,
+    contract: "iterator_apply",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IteratorApply,
     ),
-    summary: "Call a function for every element in an iterator.",
-    php_manual: "https://www.php.net/manual/en/function.iterator-apply.php",
 }
 
 /// Validates the source, resolves callback arity from the args array, and returns `Int`.

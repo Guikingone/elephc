@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_flip",
+    contract: "array_flip",
     area: Array,
-    params: [array],
     direct: ArrayFlip,
     values: ArrayFlip,
 }
@@ -47,6 +46,7 @@ pub(in crate::interpreter) fn eval_builtin_array_flip(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_flip", &[array], context, values)?;
     eval_array_flip_result(array, values)
 }
 

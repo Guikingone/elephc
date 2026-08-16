@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the stream boolean predicate helper.
 
 eval_builtin! {
-    name: "stream_supports_lock",
+    contract: "stream_supports_lock",
     area: String,
-    params: [stream],
     direct: StreamBoolPredicate,
     values: StreamBoolPredicate,
 }

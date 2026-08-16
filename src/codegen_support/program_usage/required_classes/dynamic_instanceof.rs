@@ -126,11 +126,6 @@ fn stmt_has_dynamic_instanceof(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_has_dynamic_instanceof(index) || expr_has_dynamic_instanceof(value)
         }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_has_dynamic_instanceof(property)
-                || index.as_ref().is_some_and(expr_has_dynamic_instanceof)
-                || expr_has_dynamic_instanceof(value)
-        }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_dynamic_instanceof(target) || expr_has_dynamic_instanceof(value)
         }
@@ -177,7 +172,6 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_has_dynamic_instanceof(value) || expr_has_dynamic_instanceof(callable)
         }
-        ExprKind::ListUnpack { value, .. } => expr_has_dynamic_instanceof(value),
         ExprKind::Assignment {
             target,
             value,
@@ -279,14 +273,6 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         | ExprKind::This
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
-        // `$obj::CONST` — recurse into the object, which may contain a dynamic instanceof.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            expr_has_dynamic_instanceof(object)
-        }
-        // `self::${$expr}` — recurse into the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            expr_has_dynamic_instanceof(property)
-        }
         ExprKind::Yield { key, value } => {
             key.as_ref().is_some_and(|k| expr_has_dynamic_instanceof(k))
                 || value

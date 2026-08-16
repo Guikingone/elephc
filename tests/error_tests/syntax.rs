@@ -16,49 +16,6 @@ fn test_error_missing_open_tag() {
     expect_error("echo \"hi\";", "<?php");
 }
 
-/// Verifies a token that cannot begin an expression (`=>`) is still rejected at statement
-/// position. The bare-expression-statement fallback only fires for prefix-expression starters,
-/// so genuinely invalid leading tokens keep the "statement position" diagnostic.
-#[test]
-fn test_error_non_expression_token_at_statement_position() {
-    expect_error("<?php => 5;", "statement position");
-}
-
-/// Verifies a value-led bare expression statement still requires its terminating semicolon:
-/// `0 > $x` with no `;` is reported, not silently accepted.
-#[test]
-fn test_error_value_led_statement_missing_semicolon() {
-    expect_error("<?php 0 > $x", "Expected ';'");
-}
-
-/// Verifies that binding `=` to the adjacent lvalue inside an expression does not silently accept
-/// a genuinely invalid target: `cond ?: f() = 5;` (a call result is not assignable) is still
-/// reported as an invalid assignment target rather than parsed.
-#[test]
-fn test_error_short_ternary_else_invalid_assignment_target() {
-    expect_error("<?php false ?: bar() = 5;", "Invalid assignment target");
-}
-
-/// Verifies that `goto` with no following label name is a parse error rather than a silent accept.
-#[test]
-fn test_error_goto_without_label() {
-    expect_error("<?php goto;", "expected a label name after `goto`");
-}
-
-/// Verifies that a `goto` to a label that is never defined in the same scope is reported, instead
-/// of failing an internal EIR block-terminator check.
-#[test]
-fn test_error_goto_undefined_label() {
-    expect_error("<?php echo 1; goto nowhere;", "undefined label 'nowhere'");
-}
-
-/// Verifies that defining the same label twice in one scope is rejected, since it would make any
-/// `goto` to that name an ambiguous jump target.
-#[test]
-fn test_error_duplicate_label() {
-    expect_error("<?php dup: echo 1; dup: echo 2;", "label 'dup' already defined");
-}
-
 /// Verifies the error diagnostic for unterminated string.
 #[test]
 fn test_error_unterminated_string() {
@@ -122,34 +79,6 @@ fn test_error_unexpected_character() {
     expect_error("<?php `", "Unexpected character");
 }
 
-/// Verifies that a malformed prefix increment target reports a clean diagnostic.
-/// `++$o->;` enters the complex-l-value prefix-incdec path and fails parsing the
-/// property name after `->` rather than producing a confusing fallback error.
-#[test]
-fn test_error_prefix_increment_malformed_property_target() {
-    expect_error(
-        "<?php $o = 1; ++$o->;",
-        "Expected property or method name after '->'",
-    );
-}
-
-/// Verifies that prefix-incrementing a non-l-value in expression position is rejected.
-/// `$x = ++5;` cannot increment an integer literal, matching PHP's parse-time rejection.
-#[test]
-fn test_error_prefix_increment_non_lvalue_in_expression() {
-    expect_error("<?php $x = ++5;", "Expected variable after '++'");
-}
-
-/// Verifies that incrementing a method-call result (not an l-value) is rejected, rather
-/// than silently miscompiling the complex-l-value increment desugar.
-#[test]
-fn test_error_increment_method_call_result() {
-    expect_error(
-        "<?php class C { function m() { return 1; } } $o = new C(); $x = ++$o->m();",
-        "Expected variable after '++'",
-    );
-}
-
 /// Verifies the error diagnostic for empty list destructuring pattern.
 #[test]
 fn test_error_empty_list_destructuring_pattern() {
@@ -179,62 +108,6 @@ fn test_error_list_destructuring_mixes_keyed_and_unkeyed_entries() {
 fn test_error_list_destructuring_requires_writable_target() {
     // The list pattern left-hand side must be writable; an expression like `1 + 2` is invalid.
     expect_error("<?php [1 + 2] = [3];", "Invalid list destructuring target");
-}
-
-// --- foreach array destructuring errors ---
-
-/// Verifies an empty foreach destructure pattern (`foreach ($a as [])`) is rejected.
-#[test]
-fn test_error_foreach_destructure_empty_pattern() {
-    expect_error("<?php foreach ($a as []) {}", "Cannot use empty list");
-}
-
-/// Verifies a foreach destructure pattern that mixes keyed and unkeyed entries is rejected,
-/// matching standalone list destructuring.
-#[test]
-fn test_error_foreach_destructure_mixes_keyed_and_unkeyed() {
-    expect_error(
-        "<?php foreach ($a as [$x, \"k\" => $y]) {}",
-        "Cannot mix keyed and unkeyed list entries",
-    );
-}
-
-/// Verifies a foreach destructure pattern with a non-writable target is rejected.
-#[test]
-fn test_error_foreach_destructure_invalid_target() {
-    expect_error("<?php foreach ($a as [1 + 2]) {}", "Invalid list destructuring target");
-}
-
-// --- foreach lvalue binding target errors ---
-
-/// Verifies a by-ref non-plain foreach binding (`as &$this->v`) stays a loud error:
-/// foreach by-ref write-through into a complex lvalue is intentionally unsupported.
-#[test]
-fn test_error_foreach_by_ref_property_target() {
-    expect_error(
-        "<?php foreach ($a as &$this->v) {}",
-        "Expected variable after 'as'",
-    );
-}
-
-/// Verifies a by-ref non-plain foreach VALUE binding (`as $k => &$this->v`) is rejected
-/// with the value-position diagnostic.
-#[test]
-fn test_error_foreach_by_ref_property_value_target() {
-    expect_error(
-        "<?php foreach ($a as $k => &$this->v) {}",
-        "Expected variable after '=>'",
-    );
-}
-
-/// Verifies a function-call foreach binding target (`as f()`) is rejected: only writable
-/// lvalues (variables, properties, static properties, array elements) may bind.
-#[test]
-fn test_error_foreach_call_target() {
-    expect_error(
-        "<?php foreach ($a as f()) {}",
-        "Expected variable after 'as'",
-    );
 }
 
 // --- Attribute syntax errors ---
@@ -511,26 +384,6 @@ fn test_error_missing_equals() {
     expect_error("<?php $x \"hi\";", "Expected '='");
 }
 
-/// Verifies a `declare(...)` directive missing its `= value` (e.g. `declare(strict_types);`)
-/// is rejected with a clear diagnostic instead of being silently accepted.
-#[test]
-fn test_error_declare_missing_directive_value() {
-    expect_error(
-        "<?php declare(strict_types);",
-        "Expected '=' after declare directive name",
-    );
-}
-
-/// Verifies an empty `declare()` (no directives at all) is rejected instead of silently
-/// accepted as a no-op.
-#[test]
-fn test_error_declare_empty_directives() {
-    expect_error(
-        "<?php declare();",
-        "Expected a directive name in 'declare(...)'",
-    );
-}
-
 /// Verifies the error diagnostic for unclosed paren.
 #[test]
 fn test_error_unclosed_paren() {
@@ -545,13 +398,11 @@ fn test_error_unexpected_token_in_expr() {
     expect_error("<?php echo ;", "Unexpected token");
 }
 
-/// Verifies the error diagnostic for an unexpected token in statement position. A leading
-/// binary operator like `*` cannot begin an expression, so it is rejected. (A bare value
-/// expression such as `42;` is valid PHP and now parses as an expression statement, so it is
-/// no longer an error case.)
+/// Verifies the error diagnostic for unexpected token in stmt.
 #[test]
 fn test_error_unexpected_token_in_stmt() {
-    expect_error("<?php * 5;", "Unexpected token");
+    // A bare expression statement (e.g., `42;`) in statement position produces "Unexpected token".
+    expect_error("<?php 42;", "Unexpected token");
 }
 
 /// Verifies the error diagnostic for missing function name.
@@ -626,18 +477,6 @@ fn test_error_match_missing_paren() {
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
 }
 
-/// Verifies the error diagnostic for a match arm with two patterns missing
-/// their separating comma. Only a trailing comma directly before `=>` is
-/// treated as a separator; two adjacent patterns with no comma between them
-/// (`1 2 => 1`, which `php -l` also rejects) must still fail loudly.
-#[test]
-fn test_error_match_arm_missing_comma_between_patterns() {
-    expect_error(
-        "<?php $x = match(1) { 1 2 => 1, };",
-        "Expected '=>' in match arm",
-    );
-}
-
 /// Verifies the error diagnostic for arrow function missing arrow.
 #[test]
 fn test_error_arrow_function_missing_arrow() {
@@ -674,98 +513,159 @@ fn test_error_extern_missing_function() {
     );
 }
 
-// --- Dynamic `new` with complex class-name expression errors ---
+// --- `<>` (PHP alias for `!=`) errors ---
 
-/// A dynamic-`new` class-name dereference chain without a constructor argument list
-/// (`new $arr['k']`) is valid PHP — the parentheses are optional for a zero-argument
-/// constructor — and is now supported end-to-end, so the shape must type-check.
+/// Verifies that `<>` with a missing right operand is reported as an unexpected token
+/// rather than silently parsing as `<` followed by `>`.
 #[test]
-fn test_new_dynamic_array_access_without_parens_supported() {
-    expect_ok(
-        "<?php class P {} $arr = ['k' => 'P']; $o = new $arr['k'];",
+fn test_error_angle_not_equal_missing_right_operand() {
+    expect_error("<?php $x = 1 <> ;", "Unexpected token: Semicolon");
+}
+
+/// Verifies prefix `++` on `$this` itself (not a member of it) is rejected as an invalid
+/// increment target instead of being parsed as a member increment.
+#[test]
+fn test_error_prefix_increment_on_this_itself() {
+    expect_error(
+        "<?php class C { function f() { ++$this; } }",
+        "Invalid increment target",
     );
 }
 
-/// Verifies that the PHP 8.0 parenthesized `new (expr)` form without a constructor argument
-/// list (`new (pick())` with no following `(`) is rejected.
+/// Verifies incrementing a method return value is rejected, matching PHP's
+/// "Can't use method return value in write context" fatal.
 #[test]
-fn test_error_new_dynamic_parenthesized_missing_ctor_parens() {
+fn test_error_increment_method_return_value() {
     expect_error(
-        "<?php function pick(): string { return 'P'; } $o = new (pick());",
-        "Expected '(' after class-name expression in 'new'",
-    );
-}
-
-// --- Long-form `array(...)` literal errors ---
-
-/// Verifies that a long-form `array(...)` literal missing a comma between elements is reported as
-/// an array-element error, confirming `array(` is parsed as the array-literal construct rather
-/// than a function call (which would instead complain about arguments).
-#[test]
-fn test_error_long_array_missing_comma() {
-    expect_error(
-        "<?php $x = array(1 2);",
-        "Expected ',' between array elements",
-    );
-}
-
-// --- Assignment-in-expression target errors ---
-
-/// Verifies that the lvalue-binding rule for `=` does not weaken target checking: assigning to a
-/// non-lvalue such as `($a + $b)` still produces "Invalid assignment target". The rule only lets
-/// `=` bind to an adjacent *lvalue* (e.g. `false !== $x = 3`), never to an arithmetic result.
-#[test]
-fn test_error_assignment_to_non_lvalue() {
-    expect_error(
-        "<?php $a = 1; $b = 2; ($a + $b) = 5;",
+        "<?php class C { function foo() { return 1; } function f() { $this->foo()++; } }",
         "Invalid assignment target",
     );
 }
 
-/// Reference assignment into a PROPERTY-base array element (`$o->arr[$k] = &$v`) parses but is
-/// rejected by the checker: the local-array-element form (`$a[$k] = &$v`) is supported, but a
-/// property-base element target is a follow-up slice, so the diagnostic is explicit rather than a
-/// silent miscompile.
+// --- foreach destructuring errors ---
+
+/// Verifies an empty `foreach` destructuring pattern reports PHP's "Cannot use empty list".
 #[test]
-fn test_error_reference_assign_into_property_array_element() {
+fn test_error_foreach_empty_destructuring_pattern() {
+    expect_error("<?php $m = [[1]]; foreach ($m as []) {}", "Cannot use empty list");
+}
+
+/// Verifies a `foreach` destructuring pattern that is never closed is reported as a missing
+/// `]`, not as a missing loop variable.
+#[test]
+fn test_error_foreach_unclosed_destructuring_pattern() {
     expect_error(
-        "<?php class C { public array $arr = []; } $o = new C(); $v = 1; $o->arr[\"k\"] = &$v;",
-        "Reference assignment into an array element is not supported",
+        "<?php $m = [[1, 2]]; foreach ($m as [$a, $b) {}",
+        "Expected ']' after list pattern",
     );
 }
 
-/// A class constant is not a valid `instanceof` RHS in PHP (the grammar only allows a class
-/// name, a `new_variable`, or a parenthesized expression), so `$v instanceof D::CONST` must
-/// stay a loud parse error: the static-property lookahead routes only `::$prop` forms to the
-/// expression parser, leaving `::CONST` to desync after the parsed Name exactly as before.
+/// Verifies taking a reference to the whole destructuring pattern is rejected.
 #[test]
-fn test_error_instanceof_class_constant_target() {
+fn test_error_foreach_reference_to_destructuring_pattern() {
     expect_error(
-        "<?php class D { const PROTO = \"D\"; } $v = new D(); echo $v instanceof D::PROTO ? \"y\" : \"n\";",
-        "Expected ';'",
+        "<?php $m = [[1, 2]]; foreach ($m as &[$a, $b]) {}",
+        "Cannot take a reference to a destructuring pattern in foreach",
     );
 }
 
-/// A statement-only construct (`echo`) inside a `for` clause stays a loud parse error even
-/// now that the clauses accept arbitrary comma-separated expressions: PHP's grammar allows
-/// expressions there, never statements (`php -l` rejects this snippet the same way).
+// --- Alternative control-structure syntax ---
+
+/// Verifies an alternative-syntax block that is never closed names the terminator it wants.
 #[test]
-fn test_error_for_clause_rejects_statement_construct() {
+fn test_error_alternative_syntax_missing_terminator() {
+    expect_error("<?php if (true): echo 1;", "Expected 'endif' to close");
+    expect_error("<?php while (true): echo 1;", "Expected 'endwhile' to close");
+    expect_error("<?php for ($i=0;$i<1;$i++): echo 1;", "Expected 'endfor' to close");
+    expect_error("<?php foreach ([1] as $x): echo 1;", "Expected 'endforeach' to close");
+    expect_error("<?php switch (1): case 1: echo 1;", "Expected 'endswitch' to close");
+}
+
+/// Verifies closing an alternative block with the wrong keyword reports the stray terminator
+/// rather than silently accepting a mismatched pair.
+#[test]
+fn test_error_alternative_syntax_mismatched_terminator() {
     expect_error(
-        "<?php for (echo 1; ; ) { break; }",
-        "Unexpected token: Echo",
+        "<?php foreach ([1] as $x): echo 1; endwhile;",
+        "Unexpected 'endwhile': there is no open alternative-syntax block",
     );
 }
 
-/// A comma-separated CONDITION clause (`for (; $a = 1, $a < 3 ;)`) is valid PHP (the last
-/// expression is the loop condition, earlier ones are effect-only) but remains intentionally
-/// unsupported: the condition parser takes a single full expression, so the comma stays a
-/// loud parse error rather than a silently-wrong condition. Un-pin this when comma-list
-/// conditions are implemented.
+/// Verifies a terminator keyword with no open alternative block is reported by name.
 #[test]
-fn test_error_for_condition_comma_list_stays_loud() {
+fn test_error_alternative_syntax_stray_terminator() {
     expect_error(
-        "<?php for (; $a = 1, $a < 3 ;) { break; }",
-        "Expected ';'",
+        "<?php endif;",
+        "Unexpected 'endif': there is no open alternative-syntax block",
+    );
+}
+
+/// Verifies an alternative block terminator without its mandatory `;` is reported.
+#[test]
+fn test_error_alternative_syntax_terminator_needs_semicolon() {
+    expect_error("<?php if (true): echo 1; endif", "Expected ';'");
+}
+
+/// Verifies mixing a brace `if` body with an `else:`/`elseif:` branch is rejected, as in PHP.
+#[test]
+fn test_error_alternative_syntax_cannot_mix_with_braces() {
+    expect_error(
+        "<?php if (true) { echo 1; } else: echo 2; endif;",
+        "Cannot mix brace and alternative syntax in one if statement",
+    );
+    expect_error(
+        "<?php if (true) { echo 1; } elseif (false): echo 2; endif;",
+        "Cannot mix brace and alternative syntax in one if statement",
+    );
+}
+
+/// Verifies an alternative `if` cannot take a brace `else` body, mirroring PHP's requirement
+/// that the whole chain uses one style.
+#[test]
+fn test_error_alternative_if_rejects_brace_else() {
+    expect_error(
+        "<?php if (true): echo 1; else { echo 2; } endif;",
+        "Expected ':' after 'else' in an alternative-syntax if block",
+    );
+}
+
+// --- goto (unsupported) ---
+
+/// Verifies `goto` is rejected with a diagnostic that names the construct, not a generic
+/// "unexpected token" error.
+#[test]
+fn test_error_goto_is_not_supported() {
+    expect_error("<?php goto done; done: echo 1;", "`goto` is not supported");
+}
+
+/// Verifies a `goto` target label on its own is rejected and names the label.
+#[test]
+fn test_error_goto_label_is_not_supported() {
+    expect_error("<?php done: echo 1;", "`goto` labels are not supported");
+    expect_error("<?php done: echo 1;", "the label `done:`");
+}
+
+// --- References inside array literals ---
+
+/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
+/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+#[test]
+fn test_error_reference_element_in_array_literal() {
+    expect_error(
+        "<?php $first = 1; $r = [&$first];",
+        "Reference elements in array literals (`[&$x]`) are not supported",
+    );
+}
+
+/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+#[test]
+fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
+    expect_error(
+        "<?php $a = 1; $r = [\"k\" => &$a];",
+        "Reference elements in array literals (`[&$x]`) are not supported",
+    );
+    expect_error(
+        "<?php $a = 1; $r = array(&$a);",
+        "Reference elements in array literals (`[&$x]`) are not supported",
     );
 }

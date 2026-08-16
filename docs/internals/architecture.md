@@ -54,6 +54,13 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
+│   Preludes   │  src/{pdo,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
+│              │  Injects only the compiler-owned PHP surfaces required by
+│              │  resolved source usage, forced bridge flags, or --web.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
 │ NameResolver │  src/name_resolver/
 │              │  Flattens namespace/use scopes and rewrites names to
 │              │  canonical fully-qualified names before semantic passes.
@@ -67,6 +74,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ OPcache bake │  src/opcache_prelude/
+│              │  Completes the resolved/autoloaded script manifest and
+│              │  replaces the injected placeholder bodies with baked data.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │  Optimizer   │  src/optimize/
 │   (fold)     │  Folds scalar constants and simplifies pure expressions
@@ -143,9 +157,10 @@ PHP source (.php)
      │
      ▼
 ┌───────────────┐
-│ Tooling glue  │  src/runtime_cache.rs, src/source_map.rs
-│               │  Reuses cached runtime objects, optionally emits
-│               │  sidecar source maps, and feeds timing output in CLI mode.
+│ Tooling glue  │  runtime_cache.rs, native_deps/, link_plan.rs, link_planning.rs
+│               │  Reuses cached runtime objects, resolves required managed
+│               │  artifacts read-only for final links, and builds a typed
+│               │  link plan. Source maps/timings remain optional outputs.
 └─────┬─────────┘
       │
       ▼
@@ -181,11 +196,22 @@ src/
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
-├── linker.rs                  Assembler and linker invocation
+├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
+├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
+├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
+├── native_deps/               Curated native package subsystem
+│   ├── orchestration.rs       Slim native-command state-transition coordinator
+│   ├── materialize.rs         Locked download/extract/build/receipt/publication path
+│   ├── catalog.rs             Exact trusted PCRE2 and zlib source/recipe metadata
+│   ├── cache.rs               Cache keys, advisory locks, and atomic publication
+│   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
+│   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
+│   ├── resolver.rs            Read-only compile requirement to exact archive resolution
+│   └── recipes/               Reviewed PCRE2/shim and zlib source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
-├── builtins/                  `builtin!` registry: single source of truth driving the builtin catalog, signatures, type checking, lowering dispatch, and docs
+├── builtins/                  AOT `builtin!` bindings: checker/EIR semantics joined to `elephc-builtin-contract`
 ├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
@@ -198,7 +224,6 @@ src/
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
-├── builtins/                  Single-source builtin declarations and shared validation/type/effect/ownership/requirement/callable/EIR semantics
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
@@ -348,17 +373,18 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (72 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (117 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (74 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (155 files)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
+│       ├── bcmath/            Target-aware C-ABI marshalling for exact decimal bridge calls
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
+│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
-│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
+│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (10 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -369,6 +395,7 @@ src/
     └── report.rs              Error formatting
 
 crates/
+├── elephc-bcmath/             Pure-Rust arbitrary-precision decimal bridge for PHP `bc*()` functions
 ├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
 ├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
@@ -427,7 +454,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - tracks the current `namespace` scope
 - applies `use`, `use function`, and `use const` aliases, including group-use forms
 - resolves class/interface/trait/function/constant references to canonical fully-qualified names
-- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists("name")` keeps PHP's literal-name introspection semantics instead
+- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
 `src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:

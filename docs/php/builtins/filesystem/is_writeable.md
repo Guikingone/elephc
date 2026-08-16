@@ -2,7 +2,7 @@
 title: "is_writeable()"
 description: "Tells whether the filename is writable (alias of is_writable)."
 sidebar:
-  order: 134
+  order: 141
 ---
 
 ## is_writeable()
@@ -24,12 +24,6 @@ Tells whether the filename is writable (alias of is_writable).
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_writeable.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -30,7 +30,6 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
     "ReflectionClassConstant",
     "ReflectionEnumBackedCase",
     "ReflectionEnumUnitCase",
-    "ReflectionFunctionAbstract",
     "ReflectionFunction",
     "ReflectionMethod",
     "ReflectionNamedType",
@@ -260,11 +259,6 @@ fn insert_builtin_reflection_class(
         .collect::<Vec<_>>();
     for dependency in dependencies {
         insert_builtin_reflection_class(module, &dependency, classes);
-    }
-    if canonical == "ReflectionFunctionAbstract" {
-        for concrete_class in ["ReflectionFunction", "ReflectionMethod"] {
-            insert_builtin_reflection_class(module, concrete_class, classes);
-        }
     }
 }
 

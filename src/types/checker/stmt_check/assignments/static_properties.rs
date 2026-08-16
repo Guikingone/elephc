@@ -9,15 +9,11 @@
 //! - Assignment checking must distinguish value writes, by-reference mutation, nullable access, and declared property contracts.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
+use crate::parser::ast::{Expr, StaticReceiver};
 use crate::span::Span;
 use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::properties::{
-    array_family_bool_void_union_accepts_write, is_php_array_key_type,
-    type_satisfies_array_access,
-};
 
 /// Internal data for static property assignment resolution.
 /// Holds the resolved class, declaring class, declared-type status, and current property type.
@@ -132,7 +128,7 @@ pub(super) fn check_static_property_array_push(
 
 /// Type-checks an indexed array assignment `Class::$prop[index] = value`.
 ///
-/// Infers the index and value types, resolves the property target, validates PHP array keys,
+/// Infers the index and value types, resolves the property target, validates integer index,
 /// validates element-type compatibility against declared types, merges element types when the
 /// property is untyped, and updates the property type. Short-circuits for `ArrayAccess` objects.
 pub(super) fn check_static_property_array_assign(
@@ -154,11 +150,12 @@ pub(super) fn check_static_property_array_assign(
         }
         return Ok(());
     }
-    if type_satisfies_array_access(checker, &target.prop_ty) {
-        return Ok(());
+    if let PhpType::Object(class_name) = &target.prop_ty {
+        if checker.object_type_implements_interface(class_name, "ArrayAccess") {
+            return Ok(());
+        }
     }
-    let normalized_idx_ty = normalized_array_key_type(index, idx_ty);
-    if !is_php_array_key_type(&normalized_idx_ty) {
+    if idx_ty != PhpType::Int && idx_ty != PhpType::Mixed {
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 
@@ -184,36 +181,6 @@ pub(super) fn check_static_property_array_assign(
         PhpType::Int | PhpType::Void if !target.property_has_declared_type => {
             PhpType::Array(Box::new(val_ty.clone()))
         }
-        PhpType::AssocArray { key, value } => {
-            // A string/int/mixed-key write into an associative static array — including one
-            // de-packed to a hash by a reference-alias (`self::$a[$dir] = &self::$a[$k]`). Keep it
-            // associative and widen the value type toward the written value when untyped.
-            let merged_value = if target.property_has_declared_type {
-                checker.require_compatible_arg_type(
-                    value.as_ref(),
-                    &val_ty,
-                    span,
-                    &format!("Static property {}::${}[]", target.class_name, property),
-                )?;
-                *value
-            } else if *value == val_ty {
-                *value
-            } else {
-                checker
-                    .merge_array_element_type(&value, &val_ty)
-                    .unwrap_or(PhpType::Mixed)
-            };
-            PhpType::AssocArray {
-                key,
-                value: Box::new(merged_value),
-            }
-        }
-        PhpType::Union(members) if array_family_bool_void_union_accepts_write(&members) => {
-            // PHP auto-vivifies a nullable/false array-valued static property on indexed write.
-            // Keep the declared union storage shape; EIR mutates its boxed cell in place through
-            // the same mixed-array runtime helper used for instance properties.
-            PhpType::Union(members)
-        }
         other => {
             return Err(CompileError::new(
                 span,
@@ -234,98 +201,6 @@ pub(super) fn check_static_property_array_assign(
         );
     }
     Ok(())
-}
-
-/// Type-checks a write through a dynamic-named static property (`self::${$n} = v`,
-/// `self::${$n}[$k] = v`, `self::${$n}[] = v`).
-///
-/// The property name is a runtime string, so no single candidate can be pinpointed: the receiver
-/// class must be statically known (else a loud deferred error, as in the read path) and must
-/// declare at least one static property. Operands are inferred in source order (name, index,
-/// value) for their assignment effects. Value/element type checking is intentionally permissive
-/// (gradual): since the runtime name selects among candidates, individual candidate types are not
-/// narrowed here — codegen picks and coerces the matching one.
-pub(super) fn check_dynamic_static_property_write(
-    checker: &mut Checker,
-    receiver: &StaticReceiver,
-    property: &Expr,
-    index: Option<&Expr>,
-    value: &Expr,
-    span: Span,
-    env: &mut TypeEnv,
-) -> Result<(), CompileError> {
-    let name_ty = checker.infer_type_with_assignment_effects(property, env)?;
-    if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
-        return Err(CompileError::new(
-            property.span,
-            &format!(
-                "Dynamic static property name must be a string, got `{}`",
-                name_ty
-            ),
-        ));
-    }
-    if let Some(index) = index {
-        checker.infer_type_with_assignment_effects(index, env)?;
-    }
-    checker.infer_type_with_assignment_effects(value, env)?;
-
-    let class_name = resolve_dynamic_static_write_class(checker, receiver, span)?;
-    let class_info = checker.classes.get(&class_name).ok_or_else(|| {
-        CompileError::new(
-            span,
-            "Dynamic static property access requires a statically-known class",
-        )
-    })?;
-    if class_info.static_properties.is_empty() {
-        return Err(CompileError::new(
-            span,
-            &format!("Class {} has no static properties", class_name),
-        ));
-    }
-    Ok(())
-}
-
-/// Resolves the receiver of a dynamic static property write to a statically-known class name.
-///
-/// `Named` returns the class directly; `Self_`/`Static` require a class context; `Parent` returns
-/// the current class's parent. Errors when the class is not statically resolvable so the write
-/// stays a loud deferred error rather than a silent miscompile.
-fn resolve_dynamic_static_write_class(
-    checker: &Checker,
-    receiver: &StaticReceiver,
-    span: Span,
-) -> Result<String, CompileError> {
-    match receiver {
-        StaticReceiver::Named(class_name) => Ok(class_name.as_str().to_string()),
-        StaticReceiver::Self_ | StaticReceiver::Static => checker
-            .current_class
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| {
-                CompileError::new(
-                    span,
-                    "Dynamic static property access requires a statically-known class",
-                )
-            }),
-        StaticReceiver::Parent => {
-            let current_class = checker.current_class.as_ref().ok_or_else(|| {
-                CompileError::new(
-                    span,
-                    "Dynamic static property access requires a statically-known class",
-                )
-            })?;
-            checker
-                .classes
-                .get(current_class)
-                .and_then(|info| info.parent.clone())
-                .ok_or_else(|| {
-                    CompileError::new(
-                        span,
-                        &format!("Class {} has no parent class", current_class),
-                    )
-                })
-        }
-    }
 }
 
 /// Resolves `receiver` to a class name and fetches static property metadata.
@@ -467,137 +342,6 @@ fn update_static_property_type(
             prop.1 = updated_ty.clone();
         }
     }
-}
-
-/// Type-checks `self::$a[$dir] = &self::$a[$k]`: aliasing one element of a static-property array to
-/// an element of a static-property array (SLICE 2/3).
-///
-/// The `receiver::property` target element becomes a reference alias of the source element's shared
-/// cell. Both operands must be array-typed static properties whose element fits in a single
-/// reference-cell word (an untyped `array`/`Mixed`-element array, or an already-associative array).
-/// The target — and the source when it names a different property — is de-packed program-wide from
-/// an indexed `array` to the promoted associative hash type via `update_static_property_type`, so
-/// codegen loads/stores/frees it as a hash (the static analog of retyping a local Array→AssocArray).
-///
-/// Every out-of-scope shape is a loud error rather than a silent value copy: an unknown/`Mixed`
-/// class or undefined/inaccessible property (from `resolve_static_property_assignment_target`), a
-/// non-array static property, a string element, a typed indexed-list container, or a reference
-/// source that is not itself a static-property array element.
-pub(super) fn check_ref_assign_static_prop_element(
-    checker: &mut Checker,
-    receiver: &StaticReceiver,
-    property: &str,
-    source: &Expr,
-    span: Span,
-) -> Result<(), CompileError> {
-    // Resolve + validate the TARGET static property. Unknown/`Mixed` class and undefined/
-    // inaccessible property all surface here as loud errors.
-    let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
-    validate_reference_array_static_property(&target.prop_ty, span)?;
-
-    // For this slice the reference SOURCE must itself be a static-property array element
-    // (`&self::$SRC[$k]`); any other shape is a follow-up slice, not a silent value copy.
-    let ExprKind::ArrayAccess {
-        array: src_array, ..
-    } = &source.kind
-    else {
-        return Err(reference_source_shape_error(span));
-    };
-    let ExprKind::StaticPropertyAccess {
-        receiver: src_receiver,
-        property: src_property,
-    } = &src_array.kind
-    else {
-        return Err(reference_source_shape_error(span));
-    };
-    let src_target =
-        resolve_static_property_assignment_target(checker, src_receiver, src_property, span)?;
-    validate_reference_array_static_property(&src_target.prop_ty, span)?;
-
-    // This slice covers only the same-array GATE (`self::$a[$d] = &self::$a[$k]`), where both
-    // operands are the SAME static property. A cross-array source (`self::$a[$d] = &self::$b[$k]`)
-    // needs a separate source load/store round-trip and is a follow-up slice: loud-error it rather
-    // than miscompile.
-    if (src_target.declaring_class.as_str(), src_property.as_str())
-        != (target.declaring_class.as_str(), property)
-    {
-        return Err(CompileError::new(
-            span,
-            "Reference between two different static-property arrays is not yet supported (source must alias the same static property)",
-        ));
-    }
-
-    // De-pack signal: flip the (single, shared) target/source static property from an indexed
-    // `array` to the promoted associative hash so codegen routes reads/writes/cleanup as a hash
-    // program-wide.
-    let target_assoc = promoted_static_array_type(&target.prop_ty);
-    update_static_property_type(checker, property, &target.declaring_class, target_assoc);
-    Ok(())
-}
-
-/// Validates that a static property targeted by a reference-into-element alias is an array whose
-/// element fits in a single reference-cell word.
-///
-/// Rejects (loud errors): a non-array static property, a string element (multi-word — a one-word
-/// cell would drop its length), and a concretely-typed indexed scalar list whose packed
-/// representation must stay list-shaped. An untyped `array`/`Mixed`-element array and an already
-/// associative array are accepted.
-fn validate_reference_array_static_property(
-    prop_ty: &PhpType,
-    span: Span,
-) -> Result<(), CompileError> {
-    let repr = prop_ty.codegen_repr();
-    if !matches!(repr, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return Err(CompileError::new(
-            span,
-            "Reference assignment into a static-property array element requires an array static property",
-        ));
-    }
-    let element = static_array_element_type(prop_ty);
-    if element.codegen_repr() == PhpType::Str {
-        return Err(CompileError::new(
-            span,
-            "Reference into a string-element static-property array is not yet supported",
-        ));
-    }
-    if matches!(repr, PhpType::Array(_))
-        && matches!(
-            element.codegen_repr(),
-            PhpType::Int | PhpType::Float | PhpType::Bool
-        )
-    {
-        return Err(CompileError::new(
-            span,
-            "unsupported: reference into a typed indexed-list static property",
-        ));
-    }
-    Ok(())
-}
-
-/// Returns the element type of an array/associative container (defaulting to `Mixed`).
-fn static_array_element_type(container: &PhpType) -> PhpType {
-    match container.codegen_repr() {
-        PhpType::AssocArray { value, .. } => *value,
-        PhpType::Array(element) => *element,
-        _ => PhpType::Mixed,
-    }
-}
-
-/// Builds the promoted associative-hash type an indexed/`array` static property is retyped to when
-/// one of its elements is reference-aliased.
-fn promoted_static_array_type(container: &PhpType) -> PhpType {
-    PhpType::AssocArray {
-        key: Box::new(PhpType::Mixed),
-        value: Box::new(static_array_element_type(container)),
-    }
-}
-
-/// Builds the loud error for a reference source that is not itself a static-property array element.
-fn reference_source_shape_error(span: Span) -> CompileError {
-    CompileError::new(
-        span,
-        "Reference source for a static-property array element must be another static-property array element (e.g. &self::$a[$k])",
-    )
 }
 
 /// Refines the type of a static property based on an assigned value.

@@ -5,16 +5,17 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for branches and loops, functions, booleans, assignments, nulls, and related suites.
+//! - Submodules group focused fixtures for branches and loops, alternative (`:` … `endif;`)
+//!   syntax, functions, booleans, assignments, nulls, and related suites.
 
 use crate::support::*;
 
+#[path = "control_flow/alternative_syntax.rs"]
+mod alternative_syntax;
 #[path = "control_flow/branches_and_loops.rs"]
 mod branches_and_loops;
 #[path = "control_flow/functions.rs"]
 mod functions;
-#[path = "control_flow/conditional_functions.rs"]
-mod conditional_functions;
 #[path = "control_flow/booleans.rs"]
 mod booleans;
 #[path = "control_flow/assignments/mod.rs"]
@@ -27,11 +28,3 @@ mod ternary;
 mod match_expressions;
 #[path = "control_flow/closures.rs"]
 mod closures;
-#[path = "control_flow/expression_statements.rs"]
-mod expression_statements;
-#[path = "control_flow/expression_destructuring.rs"]
-mod expression_destructuring;
-#[path = "control_flow/foreach_lvalue_targets.rs"]
-mod foreach_lvalue_targets;
-#[path = "control_flow/goto.rs"]
-mod goto;

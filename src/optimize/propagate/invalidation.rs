@@ -76,11 +76,6 @@ impl Invalidation {
 /// extraction and call handling cannot drift between two implementations.
 pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
     match &expr.kind {
-        // Campaign expression forms: list-unpack writes its targets (conservatively all);
-        // dynamic member reads only evaluate their sub-expressions.
-        ExprKind::ListUnpack { .. } => Invalidation::All,
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_invalidation(property),
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_invalidation(object),
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
         ExprKind::IncludeValue { .. } => unreachable!(
@@ -270,7 +265,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             expr_invalidation(object)
                 .union(args_invalidation(args))
                 .union(callee_inv)
-                .union(top_level_globals_guard(private_instance_method_call_effect(
+                .union(top_level_globals_guard(instance_method_call_effect(
                     object, method,
                 )))
         }
@@ -501,17 +496,32 @@ fn assignment_target_invalidation(target: &Expr) -> Invalidation {
     }
 }
 
+/// Computes all locals invalidated by a `foreach`, including an iterable root
+/// exposed through a by-reference value and the loop's key/value bindings.
+pub(crate) fn foreach_invalidation(
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    value_by_ref: bool,
+    body: &[Stmt],
+) -> Invalidation {
+    let mut inv = expr_invalidation(array).union(block_invalidation(body));
+    if value_by_ref {
+        if let Some(root) = lvalue_root(array) {
+            inv.add(root);
+        }
+    }
+    inv.add(value_var);
+    if let Some(key_var) = key_var {
+        inv.add(key_var);
+    }
+    inv
+}
+
 /// Computes the caller locals a statement can write, with the same call-aware
 /// precision as `expr_invalidation`.
 pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
     match &stmt.kind {
-        // Campaign statement forms: reference rebinding and dynamic static-property
-        // writes can alias arbitrary storage — conservatively invalidate everything.
-        StmtKind::RefAssignToTarget { .. } | StmtKind::DynamicStaticPropertyWrite { .. } => {
-            Invalidation::All
-        }
-        // `goto`/labels transfer control without writing locals themselves.
-        StmtKind::Goto(_) | StmtKind::Label(_) => Invalidation::none(),
         StmtKind::Synthetic(stmts) | StmtKind::NamespaceBlock { body: stmts, .. } => {
             block_invalidation(stmts)
         }
@@ -561,19 +571,13 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             value_var,
             value_by_ref,
             body,
-        } => {
-            let mut inv = expr_invalidation(array).union(block_invalidation(body));
-            if *value_by_ref {
-                if let Some(root) = lvalue_root(array) {
-                    inv.add(root);
-                }
-            }
-            inv.add(value_var);
-            if let Some(key_var) = key_var {
-                inv.add(key_var);
-            }
-            inv
-        }
+        } => foreach_invalidation(
+            array,
+            key_var.as_deref(),
+            value_var,
+            *value_by_ref,
+            body,
+        ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             expr_invalidation(condition).union(block_invalidation(body))
         }

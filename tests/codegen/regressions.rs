@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, and related suites.
+//! - Submodules group focused fixtures for scalars and regex, arrays, syntax edges, closures and refs, string memory, symbol collisions, and related suites.
 
 use crate::support::*;
 
@@ -33,9 +33,5 @@ mod mixed_method_dispatch;
 mod switch_and_float_params;
 #[path = "regressions/return_this_ownership.rs"]
 mod return_this_ownership;
-#[path = "regressions/prologue_param_register_clobber.rs"]
-mod prologue_param_register_clobber;
-#[path = "regressions/mixed_count_sentinel.rs"]
-mod mixed_count_sentinel;
-#[path = "regressions/gradual_int_and_iterable_count.rs"]
-mod gradual_int_and_iterable_count;
+#[path = "regressions/symbol_collisions.rs"]
+mod symbol_collisions;

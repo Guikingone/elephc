@@ -68,12 +68,6 @@ pub(crate) fn lower_main(
         top_level_env.clone(),
         top_level_env,
         &check_result.functions,
-        // `main` itself can never call func_num_args()/func_get_args()/func_get_arg() —
-        // `func_args_scan::validate_func_args_global_scope` already rejects that at the
-        // checker level — but it still needs the full set here so CALLS from `main` INTO
-        // an arity-hungry function append the hidden operand correctly.
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -84,11 +78,12 @@ pub(crate) fn lower_main(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         "main".to_string(),
         constants,
         None,
-        false,
         PhpType::Void,
         &[],
         None,
@@ -124,22 +119,10 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
     env
 }
 
-/// Collects PHP variable names that must live in program-global storage.
-///
-/// Two sources contribute, and both must, because they name the SAME storage:
-/// an explicit `global $x;` in any function-like body, and a `$GLOBALS['x']`
-/// element access anywhere in the program. Without the second source a top-level
-/// `$x = 1;` would stay in a `main` frame slot while a function's
-/// `$GLOBALS['x']` read went to `_eir_global_x`, and the read would silently
-/// observe an uninitialized slot instead of the assigned value.
+/// Collects PHP variable names that any function-like body declares with `global`.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     collect_global_var_names_in_body(statements, &mut names);
-    let mut usage = crate::ast_usage::Usage::default();
-    for stmt in statements {
-        usage.merge(crate::ast_usage::collect_stmt(stmt));
-    }
-    names.extend(usage.globals_keys);
     names
 }
 
@@ -230,440 +213,6 @@ fn collect_global_var_names_in_body(
     }
 }
 
-/// Collects the names of plain locals that are promoted to a kind-6 reference cell mid-body via a
-/// `=&$local` binding into a local array element (`$a[] =&$v`, `$a[$k][] =&$v`, `$a[$k] =&$v`).
-///
-/// `Op::LocalRefEnsure` is otherwise emitted lazily at the `=&$local` site
-/// (`ensure_local_ref_cell`), which marks the local ref-bound only for the REST of source order. In
-/// a loop body where statements earlier in source order (re-run on back-edges) read the slot as a
-/// plain value, the mid-function promotion leaves the slot holding a cell ptr that a plain
-/// `LoadLocal`+`ArrayGet` misinterprets → SEGFAULT. Hoisting the ensure to scope entry (see
-/// `lower_body_into_function`) makes the local ref-bound for its ENTIRE lifetime so every access,
-/// including across back-edges and before the original `=&` in source order, routes through
-/// `LoadRefCell`/`StoreRefCell`.
-///
-/// Only the two `LocalRefEnsure` target shapes are collected: the source is a plain `Variable`
-/// (the only shape that reaches `ensure_local_ref_cell`), and the target is a local-array-element
-/// lvalue — `$a[] =&$v` / `$a[$k][] =&$v` (`append == true`, container is `Variable` or
-/// `ArrayAccess { array: Variable, .. }`), or `$a[$k] =&$v` (`append == false`, target is
-/// `ArrayAccess { array: Variable, .. }`). Other ref forms (`BindRefCellPtr`/`AdoptRefCell`/
-/// `PromoteLocalRefCell`/`AliasLocalRefCell`, plain `$x =&$y`, foreach-by-ref, closures) are
-/// intentionally NOT collected.
-fn collect_ref_ensure_locals(body: &[Stmt]) -> std::collections::HashSet<String> {
-    let mut names = std::collections::HashSet::new();
-    collect_ref_ensure_locals_in_body(body, &mut names);
-    names
-}
-
-/// Recursive body scan backing `collect_ref_ensure_locals`, mirroring the
-/// `collect_global_var_names_in_body` walk over compound statements.
-///
-/// Besides the statement-level `RefAssignToTarget` shapes, every statement's expressions
-/// are scanned too (`collect_ref_ensure_locals_in_stmt_exprs`): the by-reference
-/// array-literal desugar hides its `RefAssignToTarget` statements inside an
-/// `ExprKind::Assignment` prelude, and those binds need the same entry-block hoist —
-/// otherwise a bind inside an untaken ternary/`??` branch leaves later `LoadRefCell`
-/// reads pointing at a raw (non-cell) slot value → SIGSEGV, and a bind inside a loop
-/// body recreates the cell every iteration.
-fn collect_ref_ensure_locals_in_body(
-    statements: &[Stmt],
-    names: &mut std::collections::HashSet<String>,
-) {
-    for stmt in statements {
-        collect_ref_ensure_locals_in_stmt_exprs(stmt, names);
-        match &stmt.kind {
-            crate::parser::ast::StmtKind::RefAssignToTarget {
-                target,
-                source,
-                append,
-            } => {
-                let source_name = match &source.kind {
-                    ExprKind::Variable(name) => name,
-                    _ => continue,
-                };
-                let target_is_local_array = match &target.kind {
-                    ExprKind::Variable(_) => *append,
-                    ExprKind::ArrayAccess { array, .. } => {
-                        matches!(&array.kind, ExprKind::Variable(_))
-                    }
-                    _ => false,
-                };
-                if target_is_local_array {
-                    names.insert(source_name.clone());
-                }
-            }
-            crate::parser::ast::StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_ref_ensure_locals_in_body(then_body, names);
-                for (_, body) in elseif_clauses {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-                if let Some(body) = else_body {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::IfDef {
-                then_body,
-                else_body,
-                ..
-            } => {
-                collect_ref_ensure_locals_in_body(then_body, names);
-                if let Some(body) = else_body {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::While { body, .. }
-            | crate::parser::ast::StmtKind::DoWhile { body, .. }
-            | crate::parser::ast::StmtKind::Foreach { body, .. }
-            | crate::parser::ast::StmtKind::FunctionDecl { body, .. }
-            | crate::parser::ast::StmtKind::NamespaceBlock { body, .. }
-            | crate::parser::ast::StmtKind::IncludeOnceGuard { body, .. }
-            | crate::parser::ast::StmtKind::Synthetic(body) => {
-                collect_ref_ensure_locals_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::For {
-                init,
-                update,
-                body,
-                ..
-            } => {
-                if let Some(init) = init {
-                    collect_ref_ensure_locals_in_body(std::slice::from_ref(init.as_ref()), names);
-                }
-                if let Some(update) = update {
-                    collect_ref_ensure_locals_in_body(std::slice::from_ref(update.as_ref()), names);
-                }
-                collect_ref_ensure_locals_in_body(body, names);
-            }
-            crate::parser::ast::StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-                if let Some(body) = default {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_ref_ensure_locals_in_body(try_body, names);
-                for catch in catches {
-                    collect_ref_ensure_locals_in_body(&catch.body, names);
-                }
-                if let Some(body) = finally_body {
-                    collect_ref_ensure_locals_in_body(body, names);
-                }
-            }
-            crate::parser::ast::StmtKind::ClassDecl { methods, .. }
-            | crate::parser::ast::StmtKind::InterfaceDecl { methods, .. }
-            | crate::parser::ast::StmtKind::TraitDecl { methods, .. } => {
-                for method in methods {
-                    collect_ref_ensure_locals_in_body(&method.body, names);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Scans one statement's expression positions for hidden `RefAssignToTarget` preludes.
-///
-/// Complements the statement-level walk in `collect_ref_ensure_locals_in_body`: the
-/// by-reference array-literal desugar carries its ref-bind statements inside
-/// `ExprKind::Assignment` preludes, which can sit in any expression position (an assign
-/// RHS, an echo/return operand, a condition, a call argument, ...). Compound-statement
-/// BODIES are not revisited here — the caller already recurses into them.
-fn collect_ref_ensure_locals_in_stmt_exprs(
-    stmt: &Stmt,
-    names: &mut std::collections::HashSet<String>,
-) {
-    use crate::parser::ast::StmtKind;
-    match &stmt.kind {
-        StmtKind::Echo(expr)
-        | StmtKind::Throw(expr)
-        | StmtKind::ExprStmt(expr)
-        | StmtKind::Return(Some(expr)) => collect_ref_ensure_locals_in_expr(expr, names),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ConstDecl { value, .. }
-        | StmtKind::StaticVar { init: value, .. }
-        | StmtKind::ListUnpack { value, .. }
-        | StmtKind::ArrayPush { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. }
-        | StmtKind::StaticPropertyArrayPush { value, .. } => {
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::RefAssign { source, .. } => collect_ref_ensure_locals_in_expr(source, names),
-        StmtKind::RefAssignToTarget { target, source, .. } => {
-            collect_ref_ensure_locals_in_expr(target, names);
-            collect_ref_ensure_locals_in_expr(source, names);
-        }
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
-            collect_ref_ensure_locals_in_expr(index, names);
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::NestedArrayAssign { target, value } => {
-            collect_ref_ensure_locals_in_expr(target, names);
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyArrayPush { object, value, .. } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::PropertyArrayAssign {
-            object,
-            index,
-            value,
-            ..
-        } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-            collect_ref_ensure_locals_in_expr(index, names);
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::DynamicStaticPropertyWrite {
-            property,
-            index,
-            value,
-            ..
-        } => {
-            collect_ref_ensure_locals_in_expr(property, names);
-            if let Some(index) = index {
-                collect_ref_ensure_locals_in_expr(index, names);
-            }
-            collect_ref_ensure_locals_in_expr(value, names);
-        }
-        StmtKind::If {
-            condition,
-            elseif_clauses,
-            ..
-        } => {
-            collect_ref_ensure_locals_in_expr(condition, names);
-            for (condition, _) in elseif_clauses {
-                collect_ref_ensure_locals_in_expr(condition, names);
-            }
-        }
-        StmtKind::While { condition, .. } | StmtKind::DoWhile { condition, .. } => {
-            collect_ref_ensure_locals_in_expr(condition, names);
-        }
-        StmtKind::For { condition, .. } => {
-            if let Some(condition) = condition {
-                collect_ref_ensure_locals_in_expr(condition, names);
-            }
-        }
-        StmtKind::Switch { subject, cases, .. } => {
-            collect_ref_ensure_locals_in_expr(subject, names);
-            for (patterns, _) in cases {
-                for pattern in patterns {
-                    collect_ref_ensure_locals_in_expr(pattern, names);
-                }
-            }
-        }
-        StmtKind::Foreach { array, .. } => collect_ref_ensure_locals_in_expr(array, names),
-        StmtKind::Include { path, .. } => collect_ref_ensure_locals_in_expr(path, names),
-        _ => {}
-    }
-}
-
-/// Recursive expression scan finding `RefAssignToTarget` statements hidden in
-/// `ExprKind::Assignment` preludes (the by-reference array-literal desugar), so their
-/// plain-local sources join the entry-block `LocalRefEnsure` hoist set.
-///
-/// Closure bodies are intentionally NOT scanned: a closure lowers through its own
-/// `lower_body_into_function` call, which runs this collection for its own scope.
-fn collect_ref_ensure_locals_in_expr(
-    expr: &crate::parser::ast::Expr,
-    names: &mut std::collections::HashSet<String>,
-) {
-    match &expr.kind {
-        // Main-side dynamic call/class-name forms: recurse into evaluated children.
-        crate::parser::ast::ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-            collect_ref_ensure_locals_in_expr(method, names);
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        crate::parser::ast::ExprKind::ObjectClassName { object } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-        }
-        // The desugared prelude is a statement list: reuse the statement walk (which finds
-        // the `RefAssignToTarget` shapes AND recurses back here for nested expressions).
-        ExprKind::Assignment {
-            target,
-            value,
-            result_target,
-            prelude,
-            ..
-        } => {
-            collect_ref_ensure_locals_in_body(prelude, names);
-            collect_ref_ensure_locals_in_expr(target, names);
-            collect_ref_ensure_locals_in_expr(value, names);
-            if let Some(result_target) = result_target {
-                collect_ref_ensure_locals_in_expr(result_target, names);
-            }
-        }
-        ExprKind::IncludeValue { path, .. } => collect_ref_ensure_locals_in_expr(path, names),
-        ExprKind::BinaryOp { left, right, .. } => {
-            collect_ref_ensure_locals_in_expr(left, names);
-            collect_ref_ensure_locals_in_expr(right, names);
-        }
-        ExprKind::InstanceOf { value, target } => {
-            collect_ref_ensure_locals_in_expr(value, names);
-            if let crate::parser::ast::InstanceOfTarget::Expr(target) = target {
-                collect_ref_ensure_locals_in_expr(target, names);
-            }
-        }
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::Throw(inner)
-        | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Print(inner)
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::NamedArg { value: inner, .. }
-        | ExprKind::Spread(inner)
-        | ExprKind::Clone(inner)
-        | ExprKind::YieldFrom(inner) => collect_ref_ensure_locals_in_expr(inner, names),
-        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            collect_ref_ensure_locals_in_expr(value, names);
-            collect_ref_ensure_locals_in_expr(default, names);
-        }
-        ExprKind::Pipe { value, callable } => {
-            collect_ref_ensure_locals_in_expr(value, names);
-            collect_ref_ensure_locals_in_expr(callable, names);
-        }
-        ExprKind::ListUnpack { value, .. } => collect_ref_ensure_locals_in_expr(value, names),
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_ref_ensure_locals_in_expr(condition, names);
-            collect_ref_ensure_locals_in_expr(then_expr, names);
-            collect_ref_ensure_locals_in_expr(else_expr, names);
-        }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::StaticMethodCall { args, .. }
-        | ExprKind::ClosureCall { args, .. }
-        | ExprKind::NewObject { args, .. }
-        | ExprKind::NewScopedObject { args, .. } => {
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        ExprKind::NewDynamic { name_expr, args } => {
-            collect_ref_ensure_locals_in_expr(name_expr, names);
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        ExprKind::NewDynamicObject {
-            class_name, args, ..
-        } => {
-            collect_ref_ensure_locals_in_expr(class_name, names);
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        ExprKind::ExprCall { callee, args } => {
-            collect_ref_ensure_locals_in_expr(callee, names);
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-            for arg in args {
-                collect_ref_ensure_locals_in_expr(arg, names);
-            }
-        }
-        ExprKind::ArrayLiteral(items) => {
-            for item in items {
-                collect_ref_ensure_locals_in_expr(item, names);
-            }
-        }
-        ExprKind::ArrayLiteralAssoc(items) => {
-            for (key, value) in items {
-                collect_ref_ensure_locals_in_expr(key, names);
-                collect_ref_ensure_locals_in_expr(value, names);
-            }
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            collect_ref_ensure_locals_in_expr(array, names);
-            collect_ref_ensure_locals_in_expr(index, names);
-        }
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            collect_ref_ensure_locals_in_expr(subject, names);
-            for (patterns, arm_value) in arms {
-                for pattern in patterns {
-                    collect_ref_ensure_locals_in_expr(pattern, names);
-                }
-                collect_ref_ensure_locals_in_expr(arm_value, names);
-            }
-            if let Some(default) = default {
-                collect_ref_ensure_locals_in_expr(default, names);
-            }
-        }
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-        }
-        ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-            collect_ref_ensure_locals_in_expr(property, names);
-        }
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            collect_ref_ensure_locals_in_expr(object, names);
-        }
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            collect_ref_ensure_locals_in_expr(property, names);
-        }
-        ExprKind::BufferNew { len, .. } => collect_ref_ensure_locals_in_expr(len, names),
-        ExprKind::Yield { key, value } => {
-            if let Some(key) = key {
-                collect_ref_ensure_locals_in_expr(key, names);
-            }
-            if let Some(value) = value {
-                collect_ref_ensure_locals_in_expr(value, names);
-            }
-        }
-        // Leaves without sub-expressions, and closures (scanned by their own lowering).
-        ExprKind::Closure { .. }
-        | ExprKind::StringLiteral(_)
-        | ExprKind::IntLiteral(_)
-        | ExprKind::FloatLiteral(_)
-        | ExprKind::BoolLiteral(_)
-        | ExprKind::Variable(_)
-        | ExprKind::Null
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
-        | ExprKind::ConstRef(_)
-        | ExprKind::StaticPropertyAccess { .. }
-        | ExprKind::FirstClassCallable(_)
-        | ExprKind::This
-        | ExprKind::ClassConstant { .. }
-        | ExprKind::ScopedConstantAccess { .. }
-        | ExprKind::MagicConstant(_) => {}
-    }
-}
-
 /// Lowers one user-defined function declaration into an EIR function.
 pub(crate) fn lower_user_function(
     name: &str,
@@ -696,14 +245,6 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
-    // Only a body that cannot derive its own argument count carries the hidden operand; the
-    // predicate is shared with every call site through
-    // `func_args_intrinsics::maybe_append_hidden_argc_operand`.
-    let is_arity_hungry = check_result.func_args_functions.contains(name)
-        && !crate::types::checker::func_args_scan::argc_is_self_derivable(signature);
-    if is_arity_hungry {
-        function.params.push(arity_hungry_hidden_argc_param());
-    }
     function.attribute_names = check_result
         .function_attribute_names
         .get(name)
@@ -715,21 +256,13 @@ pub(crate) fn lower_user_function(
         .cloned()
         .unwrap_or_else(|| collect_attribute_args(attributes));
     attach_generator_source_if_needed(&mut function, body, eir_signature.params.len());
-    let env = if is_arity_hungry {
-        env_with_arity_hungry_hidden_argc(&eir_signature, web)
-    } else {
-        env_from_signature(&eir_signature, web)
-    };
-    let body_params = params_with_arity_hungry_hidden_argc(&eir_signature.params, is_arity_hungry);
     let closures = lower_body_into_function(
         &mut function,
         &mut module.data,
         body,
-        env,
+        env_from_signature(&eir_signature, web),
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -740,13 +273,14 @@ pub(crate) fn lower_user_function(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         name.to_string(),
         constants,
         None,
-        false,
         body_return_type.clone(),
-        &body_params,
+        &eir_signature.params,
         None,
         false,
         std::collections::HashSet::new(),
@@ -822,21 +356,6 @@ pub(crate) fn lower_class_method(
         body_params.insert(0, ("this".to_string(), this_type));
     }
     function.params.extend(function_params(&signature));
-    let arity_key = format!("{}::{}", class_name, crate::names::php_symbol_key(method_name));
-    // See `lower_user_function`: a self-derivable body carries no hidden operand at all.
-    let is_arity_hungry = check_result.func_args_functions.contains(&arity_key)
-        && !crate::types::checker::func_args_scan::argc_is_self_derivable(&signature);
-    if is_arity_hungry {
-        function.params.push(arity_hungry_hidden_argc_param());
-        env.insert(
-            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
-            PhpType::Int,
-        );
-        body_params.push((
-            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
-            PhpType::Int,
-        ));
-    }
     attach_generator_source_if_needed(&mut function, body, body_params.len());
     let closures = lower_body_into_function(
         &mut function,
@@ -845,8 +364,6 @@ pub(crate) fn lower_class_method(
         env,
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -857,11 +374,12 @@ pub(crate) fn lower_class_method(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         name.clone(),
         constants,
         Some(class_name.to_string()),
-        false,
         method_body_return_type.clone(),
         &body_params,
         None,
@@ -912,8 +430,6 @@ pub(crate) fn lower_eval_aot_function(
         TypeEnv::new(),
         check_result.global_env.clone(),
         &check_result.functions,
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -924,11 +440,12 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         "main".to_string(),
         constants,
         None,
-        false,
         return_type,
         &[],
         None,
@@ -1019,8 +536,6 @@ pub(crate) fn lower_eval_aot_scope_function(
         env,
         check_result.global_env.clone(),
         &check_result.functions,
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -1031,11 +546,12 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         "main".to_string(),
         constants,
         None,
-        false,
         return_type,
         &signature.params,
         None,
@@ -1120,8 +636,6 @@ pub(crate) fn lower_property_init_thunk(
         env,
         web_gated_global_env(&check_result.global_env, web),
         &check_result.functions,
-        &check_result.func_args_functions,
-        &check_result.builtin_call_types,
         &check_result.extern_functions,
         &check_result.extern_globals,
         &check_result.callable_param_sigs,
@@ -1132,11 +646,12 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
         &check_result.loop_storage_types,
+        &check_result.string_incdec_locals,
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
-        false,
         PhpType::Void,
         &params,
         None,
@@ -1155,21 +670,6 @@ pub(crate) fn lower_property_init_thunk(
 /// A null default whose slot type cannot represent null (a scalar slot rebound by
 /// constructor-argument propagation) is skipped: those slots are always overwritten
 /// before an observable read, and the store would be unrepresentable.
-///
-/// A slot shadowed by a child redeclaration (private-parent-property shadowing, see
-/// `apply_private_parent_property_shadowing` in `types::checker::schema::classes::properties`)
-/// is also skipped: `class_info.properties`/`defaults` keep BOTH the parent's original slot
-/// and the child's fresh slot by index, but `ClassInfo::visible_property_index` — which the
-/// synthetic `$this->property = ...` statement below re-resolves by NAME through the normal
-/// property-access lowering path — only ever returns the currently-visible (child) slot.
-/// Without this filter, the parent's shadowed-but-still-defaulted slot would emit a second
-/// `$this->property = <parent default>` statement that resolves to the SAME visible slot as
-/// the child's own default, assigning the parent's (possibly differently-typed) default value
-/// into the child's slot and failing EIR codegen with a property-type mismatch. The shadowed
-/// slot itself is unreachable by any PHP-visible name lookup (mirrors `ClassInfo::visible_*`
-/// elsewhere), and the object allocator (`emit_object_allocation` / `__rt_new_by_name`) already
-/// zero-fills every property slot before this thunk runs, so leaving it at zero instead of its
-/// now-unobservable parent default is safe for both correctness and GC.
 fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
     let span = Span::dummy();
     class_info
@@ -1179,9 +679,6 @@ fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
         .filter_map(|(index, default)| {
             let default = default.as_ref()?;
             let (name, php_type) = class_info.properties.get(index)?;
-            if class_info.visible_property_index(name) != Some(index) {
-                return None;
-            }
             if matches!(default.kind, ExprKind::Null) && !php_type.null_property_default_required() {
                 return None;
             }
@@ -1210,7 +707,6 @@ fn property_init_body(class_info: &ClassInfo) -> Vec<Stmt> {
 }
 
 /// Lowers one closure literal into an EIR function plus any nested closure functions.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1222,7 +718,6 @@ pub(crate) fn lower_closure_function(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
-    is_static: bool,
     loop_storage_scope: String,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
@@ -1233,7 +728,6 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         parent.classes,
-        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     lower_closure_function_with_signature(
@@ -1243,13 +737,11 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         self_ref_callable_capture,
-        is_static,
         loop_storage_scope,
     )
 }
 
 /// Lowers one closure literal using contextual types for unannotated parameters.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1262,7 +754,6 @@ pub(crate) fn lower_closure_function_with_context(
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
-    is_static: bool,
     loop_storage_scope: String,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
@@ -1273,7 +764,6 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         parent.classes,
-        parent.current_class.as_deref(),
     );
     signature.by_ref_return = by_ref_return;
     for (idx, (_, type_ann, _, _)) in params.iter().enumerate() {
@@ -1292,7 +782,6 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         self_ref_callable_capture,
-        is_static,
         loop_storage_scope,
     )
 }
@@ -1305,7 +794,6 @@ fn lower_closure_function_with_signature(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
-    is_static: bool,
     loop_storage_scope: String,
 ) -> FunctionSig {
     // Generator closures lower their body as a Mixed-returning coroutine; see
@@ -1318,7 +806,6 @@ fn lower_closure_function_with_signature(
     );
     function.flags = FunctionFlags {
         is_closure: true,
-        is_static,
         by_ref_return: signature.by_ref_return,
         ..FunctionFlags::default()
     };
@@ -1327,15 +814,6 @@ fn lower_closure_function_with_signature(
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
     attach_generator_source_if_needed(&mut function, body, signature.params.len());
-    // A `Closure::bind($closure, $newThis, Scope::class)` rebind replaces the closure's scope, and
-    // PHP resolves `self::`/`static::`/`parent::` from that runtime scope — so the body lowers with
-    // the bind scope as its class, not the lexically enclosing one. Every `static_receiver_class_name`
-    // copy reads `ctx.current_class`, so this single swap covers all of them. Taken before the
-    // captures below so it cannot leak into a closure lowered later in the same function; `None`
-    // for every other closure, which keeps the lexical class unchanged.
-    let bind_scope_class = parent.take_bound_closure_scope_class();
-    let class_from_bind_scope = bind_scope_class.is_some();
-    let body_class = bind_scope_class.or_else(|| parent.current_class.clone());
     let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
@@ -1354,8 +832,6 @@ fn lower_closure_function_with_signature(
         env,
         parent.top_level_env.clone(),
         parent.functions,
-        parent.func_args_functions,
-        parent.builtin_call_types,
         parent.extern_functions,
         parent.extern_globals,
         parent.callable_param_sigs,
@@ -1366,11 +842,12 @@ fn lower_closure_function_with_signature(
         parent.interfaces,
         parent.packed_classes,
         parent.throw_access_sites,
+        parent.builtin_call_types,
         parent.loop_storage_types,
+        parent.string_incdec_locals,
         loop_storage_scope,
         &parent.constants,
-        body_class,
-        class_from_bind_scope,
+        parent.current_class.clone(),
         closure_body_return_type.clone(),
         &lowered_params,
         recursive_binding,
@@ -1392,8 +869,6 @@ fn lower_body_into_function(
     env: TypeEnv,
     top_level_env: TypeEnv,
     functions: &std::collections::HashMap<String, FunctionSig>,
-    func_args_functions: &std::collections::HashSet<String>,
-    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     extern_functions: &std::collections::HashMap<String, crate::types::ExternFunctionSig>,
     extern_globals: &std::collections::HashMap<String, PhpType>,
     callable_param_sigs: &std::collections::HashMap<(String, String), FunctionSig>,
@@ -1404,11 +879,12 @@ fn lower_body_into_function(
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
     loop_storage_types: &crate::types::LoopStorageTypes,
+    string_incdec_locals: &std::collections::HashSet<(String, String)>,
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
-    class_from_bind_scope: bool,
     return_php_type: PhpType,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
@@ -1439,8 +915,6 @@ fn lower_body_into_function(
         data,
         env,
         functions,
-        func_args_functions,
-        builtin_call_types,
         extern_functions,
         extern_globals,
         callable_param_sigs,
@@ -1451,7 +925,9 @@ fn lower_body_into_function(
         interfaces,
         packed_classes,
         throw_access_sites,
+        builtin_call_types,
         loop_storage_types,
+        string_incdec_locals,
         loop_storage_scope,
         constants,
         top_level_env,
@@ -1464,7 +940,6 @@ fn lower_body_into_function(
         web,
     );
     ctx.by_ref_return = function_by_ref_return;
-    ctx.class_from_bind_scope = class_from_bind_scope;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }
@@ -1475,36 +950,35 @@ fn lower_body_into_function(
             ctx.mark_ref_bound_local(name);
         }
     }
-    seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
-    // Hoist `Op::LocalRefEnsure` to scope entry for every plain local that is `=&`-promoted into a
-    // local array element ANYWHERE in this body. Without the hoist, the local's main slot is
-    // replaced with a cell ptr only at the `=&$local` site (mid-body), so statements earlier in
-    // source order — re-run on loop back-edges — treat the slot as a plain value and `array_get`
-    // on a cell ptr SEGFAULTs. Ensuring at entry makes the local ref-bound for its ENTIRE
-    // lifetime; every access (across back-edges, before the original `=&`) routes through
-    // `LoadRefCell`/`StoreRefCell`. `__rt_ref_cell_ensure` is idempotent on an existing kind-6
-    // cell, so the original `=&$local` sites remain correct (reuse). Skip by-ref params (already
-    // ref-bound at `:609`) and `global`-declared locals (separate storage path).
-    let ref_ensure_locals = collect_ref_ensure_locals(body);
-    let global_names = collect_global_var_names(body);
-    for name in &ref_ensure_locals {
-        if ctx.is_ref_bound_local(name) {
+    // PHP passes arrays BY VALUE. The call site hands the callee a `+0` borrow of the caller's
+    // array, so `__rt_array_ensure_unique` (which only splits at refcount >= 2) stayed inert and
+    // every write in the callee landed in the CALLER's storage. Re-bind each by-value container
+    // parameter to an owning shadow slot, which restores the refcount the copy-on-write split
+    // depends on. This one site is the single funnel for free functions, methods, static methods
+    // and closures, so every call flavour — including `call_user_func`, dynamic `$f(...)` and
+    // recursion — is covered without any per-flavour code.
+    //
+    // By-reference parameters are excluded by definition: `array &$a` must alias, not copy.
+    // `$this` is excluded because it is an object, never a container.
+    for (index, (name, php_type)) in params.iter().enumerate() {
+        if by_ref_params.get(index).copied().unwrap_or(false) {
             continue;
         }
-        if global_names.contains(name) {
+        if name == "this" {
             continue;
         }
-        // `LocalSlotAnalysis` classifies `LocalRefEnsure` as a ref-cell rewrite, so the
-        // function prologue retains any by-value refcounted parameter before this move adopts
-        // the slot's share. A second EIR acquire here would leave the adopted payload over-retained.
-        ctx.ensure_local_ref_cell(name, None);
-        ctx.mark_hoisted_ref_ensure_local(name);
+        if !matches!(
+            php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ) {
+            continue;
+        }
+        ctx.privatize_container_param(name, php_type, None);
     }
-    // Route the top-level body through `lower_block` (not a raw `lower_stmt` loop) so it shares
-    // the same adjacent `static $x; $x ??= <default>;` fold nested control-flow bodies get; the
-    // idiom (e.g. `ContractsTrait::doGet`'s `static $setMetadata; $setMetadata ??= Closure::bind(...)`)
-    // commonly sits directly at method-body top level, not just inside `if`/loop bodies.
-    crate::ir_lower::stmt::lower_block(&mut ctx, body);
+    seed_recursive_closure_binding(&mut ctx, recursive_closure_binding);
+    for stmt in body {
+        crate::ir_lower::stmt::lower_stmt(&mut ctx, stmt);
+    }
     terminate_open_block(&mut ctx);
     // Final storage types are now known: erase deferred loop-store releases that
     // guard slots which never widened to lifetime-tracked storage (issue #534).
@@ -1831,7 +1305,18 @@ fn magic_method_param_keeps_eir_contract(
 }
 
 /// Widens inferred container return elements that may be built from dynamic params.
+///
+/// MUST STAY IN STEP with the call-site copy in `crate::ir_lower::expr::call_return_types`:
+/// this one types the body and that one types the caller. When they disagree the caller
+/// reads the callee's return in the wrong representation, with nothing to flag it.
 fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
+    // A resource can only leave such a function BOXED. `codegen_repr()` collapses
+    // Resource to Int, so the body ended up casting its now-Mixed parameter down to a
+    // plain integer: `function f($c) { return $c; }` handed back the resource's display
+    // id, and `is_resource()` on the result answered false.
+    if matches!(return_type, PhpType::Resource(_)) {
+        return PhpType::Mixed;
+    }
     match return_type.codegen_repr() {
         PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::AssocArray { key, .. } => PhpType::AssocArray {
@@ -1846,51 +1331,6 @@ fn dynamic_param_container_return_type(return_type: &PhpType) -> PhpType {
         ),
         other => other,
     }
-}
-
-/// Builds the hidden trailing arity-count EIR ABI parameter (`__fga_argc`, plain `Int`)
-/// appended to a function/method/closure that calls `func_num_args`/`func_get_args`/
-/// `func_get_arg`. Kept OUTSIDE the checker-visible `FunctionSig::params` list (unlike the
-/// synthesized variadic tail) so caller-visible arg-count/named-argument matching never sees
-/// it — mirrors how `CALLED_CLASS_ID_PARAM`/`"this"` are appended directly to
-/// `function.params` for methods.
-fn arity_hungry_hidden_argc_param() -> FunctionParam {
-    let php_type = PhpType::Int;
-    FunctionParam {
-        name: crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
-        ir_type: value_ir_type(&php_type),
-        php_type,
-        by_ref: false,
-        variadic: false,
-    }
-}
-
-/// Returns a body-local type environment seeded from `signature`'s params plus the hidden
-/// `__fga_argc` local, for a function/method known to be arity-hungry.
-fn env_with_arity_hungry_hidden_argc(signature: &FunctionSig, web: bool) -> TypeEnv {
-    let mut env = env_from_signature(signature, web);
-    env.insert(
-        crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
-        PhpType::Int,
-    );
-    env
-}
-
-/// Returns `params` followed by the hidden `__fga_argc` local declaration when
-/// `is_arity_hungry` is set, otherwise `params` unchanged. Drives per-param
-/// `declare_local`/`mark_local_initialized` setup in `lower_body_into_function`.
-fn params_with_arity_hungry_hidden_argc(
-    params: &[(String, PhpType)],
-    is_arity_hungry: bool,
-) -> Vec<(String, PhpType)> {
-    let mut params = params.to_vec();
-    if is_arity_hungry {
-        params.push((
-            crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME.to_string(),
-            PhpType::Int,
-        ));
-    }
-    params
 }
 
 /// Converts closure captures into hidden EIR ABI parameters.
@@ -1979,41 +1419,9 @@ fn closure_signature_from_ast(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
-    current_class: Option<&str>,
 ) -> FunctionSig {
-    let parent = current_class
-        .and_then(|class_name| classes.get(class_name))
-        .and_then(|class_info| class_info.parent.as_deref());
-    let resolved_params = params
-        .iter()
-        .map(|(name, type_ann, default, by_ref)| {
-            (
-                name.clone(),
-                type_ann.as_ref().map(|type_ann| {
-                    current_class.map_or_else(
-                        || type_ann.clone(),
-                        |class_name| {
-                            type_ann.substitute_relative_class_types(class_name, parent)
-                        },
-                    )
-                }),
-                default.clone(),
-                *by_ref,
-            )
-        })
-        .collect::<Vec<_>>();
-    let resolved_return = return_type.map(|return_type| {
-        current_class.map_or_else(
-            || return_type.clone(),
-            |class_name| return_type.substitute_relative_class_types(class_name, parent),
-        )
-    });
-    let mut signature = signature_from_ast_with_variadic(
-        &resolved_params,
-        resolved_return.as_ref(),
-        variadic,
-        variadic_by_ref,
-    );
+    let mut signature =
+        signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
     if crate::types::checker::yield_validation::body_contains_yield(body) {
         signature.return_type = PhpType::Object("Generator".to_string());
         return signature;
@@ -2052,13 +1460,43 @@ fn direct_closure_return_type(
 /// which would otherwise coerce a boxed Mixed argument to an integer on return. A
 /// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
-/// rather than the syntactic integer default.
+/// rather than the syntactic integer default. An array literal built out of those same
+/// variables resolves its element/value slots the same way (see
+/// `direct_closure_return_array_element_type`).
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
+    // An array literal returned directly is stamped with this inferred type and its elements
+    // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
+    // closure signature instead of the syntactic integer default.
+    if let ExprKind::ArrayLiteral(items) = &expr.kind {
+        if !items.is_empty() {
+            return PhpType::Array(Box::new(direct_closure_return_array_element_type(
+                items, captures, params, classes,
+            )));
+        }
+    }
+    if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
+        if !pairs.is_empty() {
+            return direct_closure_return_assoc_literal_type(pairs, captures, params, classes);
+        }
+    }
+    if let ExprKind::ScopedConstantAccess {
+        receiver: crate::parser::ast::StaticReceiver::Named(class_name),
+        name,
+    } = &expr.kind
+    {
+        let normalized = class_name.as_str().trim_start_matches('\\');
+        if let Some(value) = classes
+            .get(normalized)
+            .and_then(|class_info| class_info.constants.get(name))
+        {
+            return crate::types::checker::infer_expr_type_syntactic(value);
+        }
+    }
     if let ExprKind::Variable(name) = &expr.kind {
         if let Some((_, php_type, _)) = captures
             .iter()
@@ -2099,6 +1537,100 @@ fn direct_closure_return_expr_type(
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
+}
+
+/// Returns the EIR storage element type for an indexed array literal returned directly
+/// from a closure, resolving every item against the closure's captures and parameters.
+///
+/// This mirrors `crate::ir_lower::expr::array_literal_type_for_ir`, which types the very
+/// same literal while lowering the body from `LoweringContext::local_types`. The two must
+/// agree: `lower_return_expr` feeds the inferred return element type back into
+/// `lower_array_literal_with_expected_type`, so a slot typed `int` here casts a boxed
+/// `Mixed` argument to an integer on the way into the array — `function (mixed $a, mixed $b)
+/// { return [$a, $b]; }` called as `(1, "z")` produced `[1, 0]`. The syntactic fallback used
+/// before this helper existed types every unrecognized item `int`, which also mis-stamped
+/// `string`, `float`, `bool`, and `array` parameters.
+fn direct_closure_return_array_element_type(
+    items: &[crate::parser::ast::Expr],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    let mut elem_ty = PhpType::Never;
+    for item in items {
+        elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
+            elem_ty,
+            direct_closure_return_array_item_type(item, captures, params, classes),
+        );
+    }
+    elem_ty
+}
+
+/// Returns the EIR storage element type contributed by one indexed array-literal item.
+///
+/// A spread contributes its source array's element type (widened to `Mixed` for an
+/// empty/unknown source, since `Void`/`Never` has no array-element representation), matching
+/// the `ExprKind::Spread` arm of `array_literal_element_type_for_ir`.
+fn direct_closure_return_array_item_type(
+    item: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    if let ExprKind::Spread(inner) = &item.kind {
+        let source = direct_closure_return_array_item_type(inner, captures, params, classes);
+        return match source.codegen_repr() {
+            PhpType::Array(elem) => match elem.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                other => other,
+            },
+            _ => PhpType::Mixed,
+        };
+    }
+    // `null` has no narrower storage than the boxed cell, exactly as the lowering-side
+    // `ExprKind::Null` arm decides.
+    if matches!(item.kind, ExprKind::Null) {
+        return PhpType::Mixed;
+    }
+    crate::ir_lower::expr::ir_array_storage_type(direct_closure_return_expr_type(
+        item, captures, params, classes,
+    ))
+}
+
+/// Returns the EIR storage type for an associative array literal returned directly from a
+/// closure, resolving each value against the closure's captures and parameters.
+///
+/// Keys keep the syntactic rules (`normalized_array_key_type` / `merge_array_key_types`)
+/// used by `assoc_array_literal_type_for_ir`; only the value slots need the signature,
+/// since a `function (string $s) { return ['k' => $s]; }` value slot typed `int` made the
+/// caller read the string payload back as a raw integer.
+fn direct_closure_return_assoc_literal_type(
+    pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    let mut key_ty = PhpType::Never;
+    let mut value_ty = PhpType::Never;
+    for (key, value) in pairs {
+        let next_key = crate::types::normalized_array_key_type(
+            key,
+            crate::types::checker::infer_expr_type_syntactic(key),
+        );
+        key_ty = if matches!(key_ty, PhpType::Never) {
+            next_key
+        } else {
+            crate::types::merge_array_key_types(key_ty, next_key)
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
+            value_ty,
+            direct_closure_return_array_item_type(value, captures, params, classes),
+        );
+    }
+    PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(value_ty),
+    }
 }
 
 /// Returns true when a statement list contains a `return <expr>` for its own function body.

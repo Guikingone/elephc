@@ -96,8 +96,6 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             ExprKind::ErrorSuppress(Box::new(propagate_expr(*inner, env)))
         }
         ExprKind::Print(inner) => ExprKind::Print(Box::new(propagate_expr(*inner, env))),
-        // `clone` reads its operand (an object) and is impure, so constant propagation only
-        // descends into the operand; the clone node itself is preserved verbatim.
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce {
             value: Box::new(propagate_expr(*value, env)),
             default: Box::new(propagate_expr(*default, env)),
@@ -105,10 +103,6 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(propagate_expr(*value, env)),
             callable: Box::new(propagate_expr(*callable, env)),
-        },
-        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
-            vars,
-            value: Box::new(propagate_expr(*value, env)),
         },
         ExprKind::Assignment {
             target,
@@ -306,7 +300,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         } => {
             let object = propagate_expr(*object, env);
             let arg_env =
-                (!private_instance_method_call_effect(&object, &method).has_side_effects)
+                (!instance_method_call_effect(&object, &method).has_side_effects)
                     .then_some(env);
             let by_ref = method_by_ref_params(&method);
             ExprKind::MethodCall {
@@ -372,21 +366,6 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
-        }
-        // `$obj::CONST` — propagate into the object sub-expression; the constant is unchanged.
-        ExprKind::DynamicClassConstantAccess { object, name } => {
-            ExprKind::DynamicClassConstantAccess {
-                object: Box::new(propagate_expr(*object, env)),
-                name,
-            }
-        }
-        // `self::${$expr}` — propagate into the dynamic property-name expression; the receiver
-        // is a static class reference and stays unchanged.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            ExprKind::DynamicStaticPropertyAccess {
-                receiver,
-                property: Box::new(propagate_expr(*property, env)),
-            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,
@@ -544,6 +523,8 @@ pub(crate) fn build_if_stmt(
                             else_body: None,
                         },
                         span,
+                        source_mode: crate::source::current_parse_mode(),
+                        strict_types: crate::source::current_strict_types(),
                         attributes: Vec::new(),
                     };
                 }
@@ -559,6 +540,8 @@ pub(crate) fn build_if_stmt(
             else_body,
         },
         span,
+        source_mode: crate::source::current_parse_mode(),
+        strict_types: crate::source::current_strict_types(),
         attributes: Vec::new(),
     }
 }

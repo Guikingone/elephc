@@ -93,14 +93,6 @@ foreach ($settings as $key => $value) {
     echo "  " . $key . " = " . $value . "\n";
 }
 
-// Normalize string keys without changing integer keys or mutating the source
-$headers = ["Content-Type" => "text/plain", "X-Trace" => "enabled", 7 => "numeric"];
-$normalizedHeaders = array_change_key_case($headers, CASE_LOWER);
-echo "\nNormalized headers:\n";
-foreach ($normalizedHeaders as $key => $value) {
-    echo "  " . $key . " = " . $value . "\n";
-}
-
 // Indexed and associative operands share the same normalized key space
 $base = ["slot 0", "slot 1"];
 $labels = ["1" => "ignored duplicate", "01" => "string key", "name" => "display"];
@@ -119,3 +111,18 @@ foreach ($profile as $key => $value) {
     echo "\n";
 }
 echo "As JSON: " . json_encode($profile) . "\n";
+
+// Sorting an associative array reorders iteration only: keys stay on their values,
+// and PHP copy-on-write keeps a copy taken before the sort in the original order.
+$scores = ["bruno" => 7, "ada" => 9, "carl" => 7, "dina" => 4];
+$asEntered = $scores;
+ksort($scores);
+echo "\nBy key:   " . implode(", ", array_keys($scores)) . "\n";
+krsort($scores);
+echo "By key desc: " . implode(", ", array_keys($scores)) . "\n";
+asort($scores);
+echo "By score: ";
+foreach ($scores as $name => $points) {
+    echo $name . "=" . $points . " ";
+}
+echo "\nAs entered: " . implode(", ", array_keys($asEntered)) . "\n";

@@ -97,6 +97,23 @@ var_dump($len);
     assert_eq!(out, "bool(false)\nint(5)\n");
 }
 
+/// Verifies eval's typed runtime bridge preserves the same length-or-false
+/// result as the AOT `ob_get_length()` lowering.
+#[test]
+fn test_eval_ob_get_length_and_false_case() {
+    let out = compile_and_run(
+        r#"<?php
+eval('var_dump(ob_get_length());
+ob_start();
+echo "12345";
+$len = ob_get_length();
+ob_end_clean();
+var_dump($len);');
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(5)\n");
+}
+
 /// Verifies the no-buffer failure modes return false with PHP's notices
 /// (`ob_get_contents`/`ob_get_clean` stay silent, the rest raise E_NOTICE).
 #[test]
@@ -747,41 +764,4 @@ eval('ob_start(function ($b, $p) { return "END[" . $b . "]"; }); echo "tail";');
 "#,
     );
     assert_eq!(out, "<ev:9>|CROSS-STATIC|END[tail]");
-}
-
-/// Verifies `headers_sent()` reflects REAL (non-buffered) output — false
-/// before any output occurs, with `$file`/`$line` overwritten to `""`/`0`
-/// even on the `false` branch (php -n verified: PHP always writes these
-/// out-params, contrary to a naive "untouched unless true" assumption) —
-/// and stays true once real output has occurred, even while a LATER
-/// `ob_start()` is active (headers_sent() reports whether output has EVER
-/// left the buffer stack, not the current buffering state).
-#[test]
-fn test_headers_sent_reflects_real_output_and_writes_by_ref_args() {
-    let out = compile_and_run(
-        r#"<?php
-$file = "SENTINEL"; $line = 424242;
-var_dump(headers_sent($file, $line));
-var_dump($file);
-var_dump($line);
-ob_start();
-echo "buffered, not real yet";
-$sent_while_buffered = headers_sent();
-ob_end_clean();
-var_dump($sent_while_buffered);
-echo "real output";
-var_dump(headers_sent());
-"#,
-    );
-    assert_eq!(
-        out,
-        "bool(false)\nstring(0) \"\"\nint(0)\nbool(true)\nreal outputbool(true)\n"
-    );
-}
-
-/// Verifies `flush()` is a sound void no-op: it changes nothing observable.
-#[test]
-fn test_flush_is_void_noop() {
-    let out = compile_and_run("<?php echo \"a\"; var_dump(flush()); echo \"b\";");
-    assert_eq!(out, "aNULL\nb");
 }

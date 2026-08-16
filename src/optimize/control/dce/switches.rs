@@ -15,10 +15,11 @@ use super::guards::{
     extend_guards_for_switch_case_no_match_subject,
     guard_literal_truthy,
     has_excluded_guard,
+    known_range_guard,
     known_condition_value,
     scalar_guard_value,
 };
-use super::state::{GuardState, TailSinkTarget};
+use super::state::{GuardLiteral, GuardState, TailSinkTarget};
 use super::tail::sink_tail_into_terminal_path;
 
 /// Classifies switch pattern matching against a known scalar subject value.
@@ -108,6 +109,14 @@ fn classify_switch_patterns_with_guards(
 
         if has_excluded_guard(guards, name, &pattern_value) {
             continue;
+        }
+
+        if let (Some(interval), GuardLiteral::Int(pattern_int)) =
+            (known_range_guard(guards, name), &pattern_value)
+        {
+            if !interval.contains(*pattern_int) {
+                continue;
+            }
         }
 
         has_unknown = true;
@@ -313,14 +322,16 @@ fn prune_switch_patterns_with_guards(
 
 /// Applies DCE to switch case bodies with guard state tracking across cases.
 ///
-/// Each case body is processed with `dce_block_with_guards` using guards extended
-/// for that case. Guard state is accumulated across cases to track which paths
-/// are reachable. Cases that terminate with `break` or exit are marked as
-/// direct-only, allowing subsequent cases to use accumulated guard state.
-/// Switch-noop breaks (a break as the sole statement) are trimmed from bodies.
+/// A direct-only case body receives the accumulated no-match guards plus its
+/// matching case guard. Once a prior body can fall through, subsequent bodies
+/// use only the outer guards because their case patterns were not evaluated on
+/// every incoming path. Terminating cases preserve direct-only entry tracking.
+/// A switch-noop break is trimmed only from the final case when no default can
+/// receive fall-through; earlier breaks remain control-flow barriers.
 fn dce_switch_cases_with_guards(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    has_default: bool,
     guards: &GuardState,
 ) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
@@ -334,16 +345,21 @@ fn dce_switch_cases_with_guards(
     let mut direct_entry_guards = guards.clone();
     let mut direct_only = true;
     let mut processed = Vec::with_capacity(cases.len());
+    let case_count = cases.len();
 
-    for (patterns, body) in cases {
+    for (index, (patterns, body)) in cases.into_iter().enumerate() {
         let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-        let base_guards = if direct_only {
-            &direct_entry_guards
+        let case_guards = if direct_only {
+            extend_guards_for_switch_case(subject, &patterns, &direct_entry_guards)
         } else {
-            guards
+            guards.clone()
         };
-        let case_guards = extend_guards_for_switch_case(subject, &patterns, base_guards);
-        let body = trim_switch_noop_break(dce_block_with_guards(body, case_guards));
+        let body = dce_block_with_guards(body, case_guards);
+        let body = if !has_default && index + 1 == case_count {
+            trim_switch_noop_break(body)
+        } else {
+            body
+        };
         if direct_only {
             direct_entry_guards =
                 extend_guards_for_switch_case_no_match_subject(subject, &patterns, &direct_entry_guards);
@@ -374,9 +390,10 @@ pub(super) fn dce_switch_stmt(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
+    let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        dce_switch_cases_with_guards(&subject, cases, guards),
+        dce_switch_cases_with_guards(&subject, cases, has_default, guards),
         default,
         guards,
     );
@@ -438,9 +455,10 @@ pub(super) fn dce_switch_stmt_with_tail(
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
+    let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        dce_switch_cases_with_guards(&subject, cases, guards),
+        dce_switch_cases_with_guards(&subject, cases, has_default, guards),
         default,
         guards,
     );
@@ -460,17 +478,6 @@ pub(super) fn dce_switch_stmt_with_tail(
 
     if tail.is_empty() {
         return dce_switch_stmt(subject, cases, default, span, guards);
-    }
-
-    // A switch without a `default` branch has an implicit no-match path: when the
-    // subject matches no case, control bypasses every case body and falls through
-    // to the following statements. Sinking the tail into the case bodies would drop
-    // it for that path (the no-match path has no body to sink into), so keep the tail
-    // after the switch whenever there is no default to catch the no-match fall-through.
-    if default.is_none() {
-        let mut stmts = dce_switch_stmt(subject, cases, default, span, guards);
-        stmts.extend(tail);
-        return stmts;
     }
 
     let reachability = analyze_switch_tail_paths(&cases, &default);

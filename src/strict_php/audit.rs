@@ -91,19 +91,6 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
     let span = stmt.span;
     audit_attribute_groups(&stmt.attributes, errors);
     match &stmt.kind {
-        // Campaign statement forms: standard PHP syntax — audit children only.
-        StmtKind::RefAssignToTarget { target, source, .. } => {
-            audit_expr(target, errors);
-            audit_expr(source, errors);
-        }
-        StmtKind::Goto(_) | StmtKind::Label(_) => {}
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, append: _, .. } => {
-            audit_expr(property, errors);
-            if let Some(index) = index {
-                audit_expr(index, errors);
-            }
-            audit_expr(value, errors);
-        }
         StmtKind::Echo(expr) => audit_expr(expr, errors),
         StmtKind::Assign { name: _, value } => audit_expr(value, errors),
         StmtKind::RefAssign { target: _, source } => audit_expr(source, errors),
@@ -485,10 +472,6 @@ fn audit_exprs(exprs: &[Expr], errors: &mut Vec<CompileError>) {
 fn audit_expr(expr: &Expr, errors: &mut Vec<CompileError>) {
     let span = expr.span;
     match &expr.kind {
-        // Campaign expression forms: standard PHP syntax — audit children only.
-        ExprKind::ListUnpack { value, .. } => audit_expr(value, errors),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => audit_expr(property, errors),
-        ExprKind::DynamicClassConstantAccess { object, .. } => audit_expr(object, errors),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)

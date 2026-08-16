@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_get_name",
-    area: Io,
-    params: [socket: Mixed, remote: Bool],
-    returns: Mixed,
+    contract: "stream_socket_get_name",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketGetName,
     ),
-    summary: "Retrieve the name of the local or remote sockets.",
-    php_manual: "function.stream-socket-get-name",
 }
 
 /// Validates arg[0] is a stream resource, then returns `Union(Str, Bool)`.

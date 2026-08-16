@@ -10,11 +10,6 @@
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
 //!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
-//! - Ternary-branch narrowing (`guard ? then : else`) mirrors the `if`/`else` narrowing: the guarded
-//!   variable is narrowed to its then-type in the then-branch and its else-type in the else-branch,
-//!   scoped to each branch so it never leaks past the ternary.
-//! - Pure `&&` conditions narrow every proven local in `if` and `while` bodies, including the
-//!   assignment-plus-`instanceof` loop shape used by Symfony's child-definition traversal.
 
 use super::*;
 
@@ -34,222 +29,6 @@ fn test_literal_false_type_and_strict_guard_runtime() {
         "#,
     );
     assert_eq!(out, "false:9");
-}
-
-/// Verifies a truthy local guard removes the nullable arm before numeric use without claiming
-/// that the false branch excludes the still-representable integer zero.
-#[test]
-fn test_truthy_guard_narrows_nullable_int_for_numeric_use() {
-    let out = compile_and_run_capture(
-        r#"<?php
-        function negateTruthy(?int $lines): int {
-            if ($lines) {
-                return -$lines;
-            }
-            return 0;
-        }
-        echo negateTruthy(3), ":", negateTruthy(null), ":", negateTruthy(0);
-        "#,
-    );
-    assert!(
-        out.success,
-        "program failed: stdout={} stderr={}",
-        out.stdout, out.stderr
-    );
-    assert_eq!(out.stdout, "-3:0:0");
-}
-
-/// Verifies a divergent negated `is_array()` guard narrows the target of an inline `??=`
-/// assignment, leaving a concrete array for a following by-reference mutation.
-#[test]
-fn test_negated_is_array_guard_narrows_null_coalesce_assignment_target() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-        function consume(array|string|null $service): int {
-            if (is_string($service)) {
-                return -1;
-            }
-            if (!is_array($service ??= [])) {
-                throw new InvalidArgumentException("array required");
-            }
-            $before = count($service);
-            array_shift($service);
-            return 10 * $before + count($service);
-        }
-        echo consume([1, 2]), ":", consume(null), ":", consume("alias");
-        "#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "21:0:-1");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected the narrowed by-ref array store-back to stay balanced, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies a truthiness-tested assignment replaces a nullable parameter's flow type on both
-/// branches, so a divergent falsey branch leaves the assigned array available to mutation.
-#[test]
-fn test_negated_truthy_assignment_replaces_nullable_array_after_return() {
-    let out = compile_and_run(
-        r#"<?php
-        function formatAlternatives(?array $alternatives = null): string {
-            if (null === $alternatives) {
-                if (!$alternatives = array_keys(["one" => 1, "two" => 2])) {
-                    return "empty";
-                }
-            }
-            $last = array_pop($alternatives);
-            return implode(",", $alternatives).":".$last;
-        }
-        echo formatAlternatives(), "|", formatAlternatives(["x", "y"]);
-        "#,
-    );
-    assert_eq!(out, "one:two|x:y");
-}
-
-/// Verifies ternary arms with different indexed element types retain their shared array container.
-#[test]
-fn test_conditional_array_reassignment_keeps_array_container_type() {
-    let out = compile_and_run(
-        r#"<?php
-function itemCount(string $value, bool $numeric): int {
-    if ('' === $value) {
-        return 0;
-    } else {
-        $value = $numeric ? [1] : explode(",", $value);
-        return count($value);
-    }
-}
-
-echo itemCount("a,b", false), ":", itemCount("x", true);
-"#,
-    );
-    assert_eq!(out, "2:1");
-}
-
-/// Verifies `??=` rebinds inferred parameter/local flow types without enforcing entry hints.
-#[test]
-fn test_null_coalesce_assignment_rebinds_nullable_inferred_locals() {
-    let out = compile_and_run(
-        r#"<?php
-function takeFirst(?array $values, mixed $fallback): string {
-    $values ??= $fallback;
-    if (!is_array($values)) {
-        return "invalid";
-    }
-    return array_shift($values);
-}
-
-function runDefault(?object $application): int {
-    $application ??= static fn () => 7;
-    return $application();
-}
-
-function canonical(?string $input): ?string {
-    $value = null;
-    if ($input && false !== $pos = strpos($input, ";")) {
-        $value = trim(substr($input, 0, $pos));
-    }
-    if (!$value ??= $input) {
-        return null;
-    }
-    return $value;
-}
-
-echo takeFirst(null, ["first"]), ":", runDefault(null), ":", canonical("text/plain");
-"#,
-    );
-    assert_eq!(out, "first:7:text/plain");
-}
-
-/// Verifies `!== false` narrows an `array_search()` result to its integer success arm
-/// inside the guarded branch before the value is reused as an indexed-array key.
-#[test]
-fn test_strict_not_false_guard_narrows_array_search_result() {
-    let out = compile_and_run(
-        r#"<?php
-        $values = ["first", "REMOTE_ADDR", "last"];
-        $index = array_search("REMOTE_ADDR", $values, true);
-        if ($index !== false) {
-            unset($values[$index]);
-        }
-        $values = array_values($values);
-        echo count($values), ":", $values[0], ":", $values[1];
-        "#,
-    );
-    assert_eq!(out, "2:first:last");
-}
-
-/// Verifies a negated `is_array()` guard around an assignment leaves the successful array arm
-/// precise after a divergent body, including a following by-reference array mutation.
-#[test]
-fn test_negated_is_array_assignment_guard_narrows_fallthrough() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-        function prependCandidate(mixed $candidate): string {
-            $values = [];
-            if (!is_array($values = $candidate)) {
-                throw new InvalidArgumentException("array required");
-            }
-            array_unshift($values, 9);
-            return count($values).":".$values[0].":".$values[1];
-        }
-        echo prependCandidate([2]);
-        "#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "2:9:2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected the narrowed Mixed-array unshift path to stay balanced, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies a `match (true)` arm result sees every narrowing proven by its `&&` condition.
-/// The first guard makes the mixed value indexable both in the second guard and in the result.
-#[test]
-fn test_match_true_and_chain_narrows_arm_result() {
-    let out = compile_and_run(
-        r#"<?php
-function firstInt(mixed $value): int {
-    return match (true) {
-        is_array($value) && is_int($value[0]) => $value[0],
-        default => 0,
-    };
-}
-
-echo firstInt([7]), ':', firstInt('no');
-"#,
-    );
-    assert_eq!(out, "7:0");
-}
-
-/// Verifies a local overwritten with the same object type on both `if` branches
-/// keeps that converged object type for a following nested property write.
-#[test]
-fn test_if_both_branches_overwrite_local_with_same_object_type() {
-    let out = compile_and_run(
-        r#"<?php
-        final class BranchBox {
-            public array $attributes = [];
-        }
-        function render(bool $alternate): string {
-            $value = "source";
-            if ($alternate) {
-                $value = new BranchBox();
-            } else {
-                $value = new BranchBox();
-            }
-            $value->attributes["language"] = "php";
-            return $value->attributes["language"];
-        }
-        echo render(false), ":", render(true);
-        "#,
-    );
-    assert_eq!(out, "php:php");
 }
 
 /// Verifies a builtin `int|false` result keeps the literal-false member precise, allowing the
@@ -391,41 +170,6 @@ fn test_instanceof_narrowing_two_object_union() {
     assert_eq!(out, "A|notA");
 }
 
-/// Verifies a subtype-only method remains available in true bodies guarded by a pure `&&`,
-/// including a `while` condition whose first operand assigns a nullable value. The narrowing must
-/// affect both checking and EIR method lowering without escaping to unguarded code.
-#[test]
-fn test_instanceof_and_chain_narrows_if_and_while_bodies() {
-    let out = compile_and_run(
-        r#"<?php
-        class Definition {
-            public function getClass(): ?string { return null; }
-        }
-        class ChildDefinition extends Definition {
-            public function getParent(): string { return "parent"; }
-        }
-        function fromIf(Definition $definition): string {
-            if ($definition instanceof ChildDefinition && strlen($definition->getParent()) > 0) {
-                return $definition->getParent();
-            }
-            return "none";
-        }
-        function fromTernary(Definition $definition): string {
-            return $definition instanceof ChildDefinition ? $definition->getParent() : "none";
-        }
-        function fromWhile(Definition $definition): string {
-            while ((null === $class = $definition->getClass()) && $definition instanceof ChildDefinition) {
-                return $definition->getParent();
-            }
-            return $class ?? "none";
-        }
-        echo fromIf(new ChildDefinition()), "|", fromTernary(new ChildDefinition()), "|",
-            fromWhile(new ChildDefinition());
-        "#,
-    );
-    assert_eq!(out, "parent|parent|parent");
-}
-
 /// Verifies the full overload pattern: an `is_int` guard stores the int into a typed property,
 /// while the else-branch calls a method on the narrowed object (dispatched on its runtime class).
 #[test]
@@ -547,392 +291,6 @@ fn test_narrowing_restores_all_narrowed_variables() {
         "#,
     );
     assert_eq!(out, "8");
-}
-
-/// Verifies `instanceof self` narrows the guarded variable to the enclosing class so that a
-/// typed property can be read off it. Before the fix the target became `Object("self")` (a
-/// non-existent class) and the property access failed to resolve. Matches PHP (`5`).
-#[test]
-fn test_instanceof_self_narrows_property_access() {
-    let out = compile_and_run(
-        r#"<?php
-        class Node {
-            public int $val = 5;
-            public function check(mixed $x): int {
-                if ($x instanceof self) { return $x->val; }
-                return 0;
-            }
-        }
-        $n = new Node();
-        echo $n->check($n);
-        "#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies `instanceof self` narrowing resolves a method on the enclosing class, including a
-/// generator method whose real `iterable`/`Generator` return type must be recognized so
-/// `yield from` accepts it. Before the fix the narrowed receiver was `Object("self")`, the
-/// method returned an `Int` fallback, and `yield from` rejected it. Matches PHP (`12`).
-#[test]
-fn test_instanceof_self_narrows_method_call_yield_from() {
-    let out = compile_and_run(
-        r#"<?php
-        class Spec {
-            public array $def = [];
-            public function g(): iterable { yield 1; yield 2; }
-            public function combined(): iterable {
-                foreach ($this->def as $item) {
-                    if ($item instanceof self) { yield from $item->g(); }
-                }
-            }
-        }
-        $s = new Spec();
-        $c = new Spec();
-        $s->def = [$c];
-        foreach ($s->combined() as $v) { echo $v; }
-        "#,
-    );
-    assert_eq!(out, "12");
-}
-
-/// Verifies `instanceof static` narrows the guarded variable to the enclosing class (a sound,
-/// conservative narrowing for the closed-world checker), letting a typed property be read.
-/// Matches PHP (`7`).
-#[test]
-fn test_instanceof_static_narrows_property_access() {
-    let out = compile_and_run(
-        r#"<?php
-        class Node {
-            public int $v = 7;
-            public function check(mixed $x): int {
-                if ($x instanceof static) { return $x->v; }
-                return 0;
-            }
-        }
-        $n = new Node();
-        echo $n->check($n);
-        "#,
-    );
-    assert_eq!(out, "7");
-}
-
-/// Verifies `instanceof parent` narrows the guarded variable to the current class's parent, so
-/// a parent-declared property resolves. Before the fix the target became `Object("parent")`.
-/// Matches PHP (`3`).
-#[test]
-fn test_instanceof_parent_narrows_property_access() {
-    let out = compile_and_run(
-        r#"<?php
-        class Base { public int $b = 3; }
-        class Sub extends Base {
-            public function check(mixed $x): int {
-                if ($x instanceof parent) { return $x->b; }
-                return 0;
-            }
-        }
-        $s = new Sub();
-        echo $s->check($s);
-        "#,
-    );
-    assert_eq!(out, "3");
-}
-
-/// Regression: an explicit class name in an `instanceof` guard still narrows (property access
-/// path), guarding the passthrough arm of the relative-name resolver. Matches PHP (`5`).
-#[test]
-fn test_instanceof_explicit_class_still_narrows_property() {
-    let out = compile_and_run(
-        r#"<?php
-        class Node {
-            public int $val = 5;
-            public function check(mixed $x): int {
-                if ($x instanceof Node) { return $x->val; }
-                return 0;
-            }
-        }
-        $n = new Node();
-        echo $n->check($n);
-        "#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies a negated `instanceof self` guard narrows the fallthrough (post-early-return) path
-/// to the enclosing class, so the property access after the guarded early return resolves. The
-/// resolved target must flow through the complement/else swap. Matches PHP (`5`).
-#[test]
-fn test_negated_instanceof_self_narrows_fallthrough() {
-    let out = compile_and_run(
-        r#"<?php
-        class Node {
-            public int $val = 5;
-            public function pick(mixed $x): int {
-                if (!($x instanceof self)) { return 0; }
-                return $x->val;
-            }
-        }
-        $n = new Node();
-        echo $n->pick($n);
-        "#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies `instanceof` narrowing applies inside a ternary's two branches. Without ternary
-/// narrowing, `$a->speak()` / `$a->bark()` on the un-narrowed `Cat|Dog` union would each be an
-/// "Undefined method" error (Dog has no `speak`, Cat has no `bark`); the guard narrows `$a` to the
-/// concrete class per branch so both dispatch. Runs the compiled binary; matches PHP (`meow\nwoof\n`).
-#[test]
-fn test_ternary_instanceof_narrowing_method_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-        class Cat { public function speak(): string { return "meow"; } }
-        class Dog { public function bark(): string { return "woof"; } }
-        function talk(Cat|Dog $a): string {
-            return $a instanceof Cat ? $a->speak() : $a->bark();
-        }
-        echo talk(new Cat()), "\n";
-        echo talk(new Dog()), "\n";
-        "#,
-    );
-    assert_eq!(out, "meow\nwoof\n");
-}
-
-/// Verifies a scalar `is_int` guard narrows both ternary branches: the then-branch uses `$x` as an
-/// int (`$x + 1`) and the else-branch as a string (`strlen($x)`), with `$x` being `int|string`.
-/// Matches PHP: `g(5)` is `6`, `g("hello")` is `5` (`6\n5\n`).
-#[test]
-fn test_ternary_is_int_narrowing() {
-    let out = compile_and_run(
-        r#"<?php
-        function g(int|string $x): int {
-            return is_int($x) ? $x + 1 : strlen($x);
-        }
-        echo g(5), "\n";
-        echo g("hello"), "\n";
-        "#,
-    );
-    assert_eq!(out, "6\n5\n");
-}
-
-/// Regression: ternary-branch narrowing must not leak into the outer scope. `is_string($x)` narrows
-/// `$x` to `string` in the then-branch, but after the ternary `$x` must still be `array|string`, so
-/// `count($x)` (which requires an array-containing type) type-checks. If the then-branch narrowing
-/// leaked, `count($x)` would become a static error. Matches PHP (`count([10,20,30]) + 2 == 5`).
-#[test]
-fn test_ternary_narrowing_does_not_leak() {
-    let out = compile_and_run(
-        r#"<?php
-        function leak(array|string $x): int {
-            $marker = is_string($x) ? 1 : 2;
-            return count($x) + $marker;
-        }
-        echo leak([10, 20, 30]), "\n";
-        "#,
-    );
-    assert_eq!(out, "5\n");
-}
-
-/// Verifies both edges of an `instanceof` guard converge after the guarded object branch
-/// overwrites the union local with the false-edge scalar type.
-#[test]
-fn test_instanceof_branch_reassignment_converges_local_type() {
-    let out = compile_and_run(
-        r#"<?php
-class TaggedName {
-    public function getTag(): string {
-        return "from-object";
-    }
-}
-
-function printTag(string $tag): void {
-    echo $tag, "\n";
-}
-
-function normalizeTag(string|TaggedName $tag): void {
-    if ($tag instanceof TaggedName) {
-        $tag = $tag->getTag();
-    }
-    printTag($tag);
-}
-
-normalizeTag(new TaggedName());
-normalizeTag("already-string");
-"#,
-    );
-    assert_eq!(out, "from-object\nalready-string\n");
-}
-
-/// Verifies an always-true null guard keeps the type assigned on its only reachable exit.
-#[test]
-fn test_null_guard_reassignment_keeps_only_reachable_type() {
-    let out = compile_and_run(
-        r#"<?php
-function printInitializedItems(): void {
-    $items = null;
-    if (null === $items) {
-        $items = ["A", "B"];
-    }
-    foreach ($items as $item) {
-        echo $item;
-    }
-}
-
-printInitializedItems();
-"#,
-    );
-    assert_eq!(out, "AB");
-}
-
-/// Verifies an unconditional sequential assignment replaces the local's current flow type.
-#[test]
-fn test_sequential_reassignment_replaces_current_flow_type() {
-    let out = compile_and_run(
-        r#"<?php
-class SequentialAssignmentValue {
-    public function label(): string {
-        return "object";
-    }
-}
-
-function printSequentialAssignment(SequentialAssignmentValue $value): void {
-    echo $value->label();
-}
-
-function replaceSequentialAssignment(): void {
-    $value = "stale";
-    $value = new SequentialAssignmentValue();
-    printSequentialAssignment($value);
-}
-
-replaceSequentialAssignment();
-"#,
-    );
-    assert_eq!(out, "object");
-}
-
-/// Verifies a diverging negative `is_numeric` guard preserves numeric strings for arithmetic
-/// without treating an unguarded string as numeric.
-#[test]
-fn test_is_numeric_guard_narrows_string_for_arithmetic() {
-    let out = compile_and_run(
-        r#"<?php
-function scaleNumericString(string $value) {
-    if (!is_numeric($value)) {
-        throw new InvalidArgumentException("not numeric");
-    }
-
-    return $value * 2;
-}
-
-echo scaleNumericString("12");
-"#,
-    );
-    assert_eq!(out, "24");
-}
-
-/// Verifies the De Morgan complement of a diverging `if ($cond || !$x instanceof I) { return; }`
-/// early-exit: reaching the code after the `if` proves `$x instanceof I`, so a method that lives
-/// only on the narrower interface `I` (not its `Wide` base) type-checks and dispatches. Without the
-/// `||` fall-through narrowing the checker keeps `$bag` at its wide `Wide` type and rejects `ph()`.
-#[test]
-fn test_or_early_exit_demorgan_narrows_interface_receiver() {
-    let out = compile_and_run(
-        r#"<?php
-interface Wide { public function w(): string; }
-interface I extends Wide { public function ph(): string; }
-class Bag implements I {
-    public function w(): string { return "w"; }
-    public function ph(): string { return "p"; }
-}
-function run(bool $cond, Wide $bag): string {
-    if ($cond || !$bag instanceof I) { return "x"; }
-    return $bag->ph();
-}
-echo run(false, new Bag());
-"#,
-    );
-    assert_eq!(out, "p");
-}
-
-/// Verifies a member-path `instanceof` carried through a `&&` chain narrows the property receiver:
-/// `if ($this->container instanceof C && true)` proves `$this->container` is the sub-interface `C`,
-/// so `$this->container->param()` (a method on `C`, not its `Wide` base) type-checks and dispatches.
-#[test]
-fn test_member_path_and_chain_narrows_interface_property() {
-    let out = compile_and_run(
-        r#"<?php
-interface Wide { public function w(): int; }
-interface C extends Wide { public function param(): int; }
-class Container implements C {
-    public function w(): int { return 1; }
-    public function param(): int { return 7; }
-}
-class App {
-    public ?Wide $container = null;
-    public function __construct() { $this->container = new Container(); }
-    public function go(): int {
-        if ($this->container instanceof C && true) { return $this->container->param(); }
-        return 0;
-    }
-}
-echo (new App())->go();
-"#,
-    );
-    assert_eq!(out, "7");
-}
-
-/// Verifies a direct property write to an *unrelated* object's slot (`$clone->pool = $repl`) keeps
-/// a prior `$this->pool` narrowing: invalidation is scoped to the exact `<root>->prop` rebound, so
-/// `$this->pool` stays proven as the sub-interface `Ns` and `$this->pool->sub()` still dispatches.
-#[test]
-fn test_direct_property_write_to_other_receiver_preserves_this_narrowing() {
-    let out = compile_and_run(
-        r#"<?php
-interface Wide { public function w(): string; }
-interface Ns extends Wide { public function sub(): string; }
-class Pool implements Ns {
-    public function w(): string { return "w"; }
-    public function sub(): string { return "s"; }
-}
-class Ad {
-    public ?Wide $pool;
-    public function __construct(Wide $pool) { $this->pool = $pool; }
-    public function go(Wide $repl): string {
-        if (!$this->pool instanceof Ns) { throw new \Exception(); }
-        $clone = clone $this;
-        $clone->pool = $repl;
-        return $this->pool->sub();
-    }
-}
-echo (new Ad(new Pool()))->go(new Pool());
-"#,
-    );
-    assert_eq!(out, "s");
-}
-
-/// Verifies the guarded `string|false` narrowing forms Symfony relies on. A value from a
-/// `string|false` source reaches a `string` parameter after each dominating guard: a
-/// `false === $x` early return, a `false !== $x` guard, a truthy `if ($x)`, and a `!$x` early
-/// return. Every form strips the `False` arm so the value is a plain `string` on the used path,
-/// and the compiled output matches PHP. An *unguarded* `string|false` still errors (covered by the
-/// checker's false-sentinel policy), so this only locks the narrowing, not over-acceptance.
-#[test]
-fn test_guarded_string_or_false_narrows_to_string() {
-    let out = compile_and_run(
-        r#"<?php
-        function needStr(string $s): string { return "[$s]"; }
-        function src(bool $b): string|false { return $b ? "hi" : false; }
-        function eqEarly(bool $b): string { $x = src($b); if (false === $x) { return "none"; } return needStr($x); }
-        function neq(bool $b): string { $x = src($b); if (false !== $x) { return needStr($x); } return "none"; }
-        function truthy(bool $b): string { $x = src($b); if ($x) { return needStr($x); } return "none"; }
-        function notEarly(bool $b): string { $x = src($b); if (!$x) { return "none"; } return needStr($x); }
-        echo eqEarly(true), eqEarly(false), "|", neq(true), neq(false), "|",
-             truthy(true), truthy(false), "|", notEarly(true), notEarly(false);
-        "#,
-    );
-    assert_eq!(out, "[hi]none|[hi]none|[hi]none|[hi]none");
 }
 
 /// Verifies a null guard whose body returns before unreachable trailing code still narrows the
@@ -1232,4 +590,137 @@ fn test_narrow_after_never_call_before_unreachable_code() {
         "#,
     );
     assert_eq!(out, "a=b");
+}
+
+/// Verifies the classic singleton: a nullable static property narrowed by an `=== null` guard
+/// whose then-branch assigns it is non-null on both merge paths, so the `: S` return checks.
+#[test]
+fn test_nullable_static_property_singleton_narrows_after_if_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v, S::get()->v;
+"#,
+    );
+    assert_eq!(out, "77");
+}
+
+/// Verifies `!isset(self::$p)` narrows the same way `self::$p === null` does.
+#[test]
+fn test_nullable_static_property_singleton_narrows_after_isset_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (!isset(self::$inst)) { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies `self::$p ??= new S();` leaves the static property non-null for the following return.
+#[test]
+fn test_nullable_static_property_narrows_after_null_coalescing_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        self::$inst ??= new S();
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies the early-return singleton shape: `!== null` narrows the guarded return, and the
+/// assignment after the `if` narrows the fall-through return.
+#[test]
+fn test_nullable_static_property_narrows_after_strict_not_null_early_return() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst !== null) { return self::$inst; }
+        self::$inst = new S();
+        return self::$inst;
+    }
+}
+echo S::get()->v, S::get()->v;
+"#,
+    );
+    assert_eq!(out, "77");
+}
+
+/// Verifies the same narrowing on an INSTANCE property, through both the guarded-assign and the
+/// `??=` shapes.
+///
+/// The two shapes live on separate classes on purpose: `$obj->prop ??= <expr>` currently
+/// miscompiles when the property is ALREADY set (an unrelated, pre-existing EIR gap that also
+/// reproduces without any narrowing), so each `??=` here runs exactly once on a null property.
+#[test]
+fn test_nullable_instance_property_lazy_initialization_narrows() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public int $v = 3; }
+class Holder {
+    private ?Node $n = null;
+    public function get(): Node {
+        if ($this->n === null) { $this->n = new Node(); }
+        return $this->n;
+    }
+}
+class Lazy {
+    private ?Node $n = null;
+    public function get(): Node {
+        $this->n ??= new Node();
+        return $this->n;
+    }
+}
+$h = new Holder();
+echo $h->get()->v, $h->get()->v;
+$l = new Lazy();
+echo $l->get()->v;
+"#,
+    );
+    assert_eq!(out, "333");
+}
+
+/// Verifies the branch join also fires when both arms assign: the merged fact is the union of the
+/// two branch-exit types, not the declared nullable type.
+#[test]
+fn test_nullable_static_property_join_across_both_branches() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); } else { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
 }

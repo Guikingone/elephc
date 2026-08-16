@@ -1,38 +1,39 @@
 //! Purpose:
-//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates or truthiness.
+//! Flow-sensitive type narrowing for `if`/`else` branches guarded by type predicates.
 //! Narrows a union- or mixed-typed variable to the guarded type in the matching branch.
 //!
 //! Called from:
-//! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If` and
-//!   `switch (true)` case bodies.
+//! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_array`/`is_object`/`is_numeric`/
-//!   `is_countable($var)` (and aliases), `$var instanceof Class`, and strict false/null guards
-//!   around a simple local assignment, optionally negated with a leading `!`. A local or simple
-//!   local assignment truthiness guard removes only representable `null`/`false` union arms on
-//!   its true edge, leaving scalar zero/empty-value possibilities conservative on its false edge.
-//!   An assignment's inferred value type replaces the prior binding on both edges. `is_object`
-//!   narrows to generic `object`; `is_numeric` preserves numeric strings through an
-//!   `int|float|string` arithmetic-safe union; `is_countable` narrows to
-//!   `array<mixed>|Countable`.
-//!   Narrowing is applied to each clause in an
-//!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
-//!   from previous guards). For a chain with no else where *every* clause body cannot fall through
-//!   to the following statement — via `src/termination.rs`'s structural analysis
+//! - Recognizes scalar, null, array, and callable `is_*($var)` predicates (and aliases),
+//!   `$var instanceof Class`, `=== null` / `=== false` and their `!==` forms, and single-operand
+//!   `isset(...)`. `!==` and `isset` are self-negating guards, which combine with a leading `!`
+//!   the same way two negations cancel. Narrowing is applied to each clause in an if/elseif*/else
+//!   chain (each subsequent clause, and the else, see the accumulated complement from previous
+//!   guards). For a chain with no else where *every* clause body cannot fall through to the
+//!   following statement — via `src/termination.rs`'s structural analysis
 //!   (return/throw/break/continue/exit/die, statically infinite loops, nested if/switch/try whose
 //!   branches all terminate, or a terminal statement before unreachable code), extended
 //!   recursively with checker-known `never` calls — the accumulated complement is applied to the
 //!   statements after the entire if construct.
-//! - `and_chain_then_narrowings` collects guard-true narrowings and assignment facts for a
-//!   single condition or pure `&&` chain, folding repeated guards cumulatively and replacing
-//!   earlier facts on a later assignment. It powers `if` and `switch (true)` bodies.
-//! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
-//!   result falls back to the original type, so valid code is never narrowed away to `Never`.
+//! - Guarded places are locals, simple instance properties (`$var->p`, `$this->p`) and simple
+//!   static properties (`self::$p`, `Cls::$p`); `static::$p` is excluded because late static
+//!   binding can select a different storage. Property places are keyed under a `\x01` sigil, so
+//!   `purge_property_narrowings` drops all of them after any call.
+//! - A completed `$this->p = <non-null>` / `self::$p = <non-null>` write re-establishes the fact
+//!   for that place (as the DECLARED type minus null), and `control_flow` joins that branch-exit
+//!   fact with the guard complement. Together these make PHP's lazy-initialization idiom
+//!   (`if (self::$p === null) { self::$p = new S(); } return self::$p;`) type-check.
+//! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, an empty narrowing
+//!   result falls back to the original type, and guard detection never raises a diagnostic of its
+//!   own — an un-typeable receiver simply is not narrowed.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, Expr, ExprKind, InstanceOfTarget, StaticReceiver, Stmt, StmtKind,
+};
 use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
@@ -48,172 +49,88 @@ pub(crate) struct GuardNarrowing {
     pub then_ty: PhpType,
     /// Type the binding has where the guard is false.
     pub else_ty: PhpType,
-    /// Extra `TypeEnv` keys that hold the SAME value as `var` on branch entry and must receive the
-    /// identical then/else narrowing. Populated for an assignment receiver `$f = $src` whose source
-    /// is a plain variable: right after `$f = $src` the two locals alias one value, so a guard on
-    /// `$f` (`!is_array($f = $src)`) narrows `$src` in each branch too. This is a branch-entry fact;
-    /// a later reassignment of either local overwrites it normally. Empty for every other receiver
-    /// shape, so ordinary guards are unaffected.
-    pub aliases: Vec<String>,
+}
+
+/// Describes an exact guard type or the element-agnostic array family.
+enum GuardTarget {
+    /// An exact scalar, null, callable, or object target.
+    Exact(PhpType),
+    /// Any indexed or associative array, regardless of its element types.
+    AnyArray,
+}
+
+impl GuardTarget {
+    /// Returns the conservative type used when the current type has no matching union member.
+    fn fallback_type(&self) -> PhpType {
+        match self {
+            Self::Exact(ty) => ty.clone(),
+            Self::AnyArray => PhpType::Mixed,
+        }
+    }
 }
 
 impl Checker {
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
     /// `is_*` predicates, `is_null`, `instanceof Class`, and `=== false` / `=== null`, each with an
-    /// optional leading `!` that swaps the branches. A bare local condition also narrows away
-    /// representable `null` and literal `false` arms on its truthy edge. The guarded receiver may be
-    /// a variable, a
-    /// simple local assignment such as `false === $parts = parse_url($dsn)`, or a simple property
-    /// access `$var->prop` / `$this->prop` (narrowed under a synthetic key that
-    /// `infer_property_access_type` consults). Returns `Ok(None)` when the condition is not a
-    /// recognized guard or the receiver's current type is unknown.
+    /// optional leading `!` that swaps the branches. The guarded receiver may be a variable
+    /// (narrowed under its name) or a simple property access `$var->prop` / `$this->prop`
+    /// (narrowed under a synthetic key that `infer_property_access_type` consults). Returns
+    /// `Ok(None)` when the condition is not a recognized guard or the receiver's current type is
+    /// unknown.
     pub(crate) fn guard_narrowing(
         &mut self,
         condition: &Expr,
         env: &TypeEnv,
     ) -> Result<Option<GuardNarrowing>, CompileError> {
-        let (cond, negated) = match &condition.kind {
+        let (cond, prefix_negated) = match &condition.kind {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
-        if let Some(narrowing) = self.truthy_binding_guard_narrowing(cond, negated, env)? {
-            return Ok(Some(narrowing));
-        }
-        let Some((receiver, target, guard_negated)) = guard_receiver_and_type(cond) else {
+        let Some((receiver, target, comparison_negated)) = guard_receiver_and_target(cond) else {
             return Ok(None);
         };
-        let negated = negated ^ guard_negated;
-        // Resolve a relative `instanceof self`/`parent`/`static` target to the concrete enclosing
-        // class before narrowing, mirroring `type_guard_narrowing`. Without this the receiver was
-        // narrowed to the literal `Object("self")`, and a later member access reported
-        // "Undefined class: self". `guard_receiver_and_type` deliberately keeps the raw name so this
-        // resolution stays in one place.
-        let target = self.resolve_relative_instanceof_target(target);
-        let Some(key) = Self::guard_env_key(receiver) else {
+        let negated = prefix_negated ^ comparison_negated;
+        let Some(key) = self.guard_env_key(receiver) else {
             return Ok(None);
         };
-        if self.property_guard_receiver_is_unstable(receiver, env)? {
+        // An un-typeable receiver is simply not narrowed. Guard detection must never be the
+        // thing that raises a diagnostic: the caller already inferred the condition through the
+        // normal path, which owns the real semantics — `isset($o->virtual)` is legal through
+        // `__isset` even though *reading* `$o->virtual` is not.
+        if self
+            .property_guard_receiver_is_unstable(receiver, env)
+            .unwrap_or(true)
+        {
             return Ok(None);
         }
-        // For a comparison-wrapped assignment, narrow the value just assigned rather than the
-        // local's storage-wide join with its previous values. In
-        // `false === $parts = parse_url($dsn)`, the assignment result is `array|false` even when
-        // `$parts` previously held the input string.
-        let current = match &receiver.kind {
-            ExprKind::Assignment {
-                value,
-                result_target: None,
-                prelude,
-                conditional_value_temp: None,
-                ..
-            } if prelude.is_empty() => self.infer_type(value, env)?,
-            // A prior narrowing (or a variable binding) wins; otherwise a property or `$this`
-            // receiver falls back to its declared type (the enclosing class for `$this`). An
-            // unbound plain variable stays un-narrowed.
-            _ => match env.get(&key) {
-                Some(ty) => ty.clone(),
-                None if matches!(
+        // A prior narrowing (or a variable binding) wins; otherwise a property receiver falls back
+        // to its declared field type. An unbound plain variable stays un-narrowed.
+        let current = match env.get(&key) {
+            Some(ty) => ty.clone(),
+            None
+                if matches!(
                     receiver.kind,
-                    ExprKind::PropertyAccess { .. } | ExprKind::This
+                    ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
                 ) =>
-                {
-                    self.infer_type(receiver, env)?
+            {
+                match self.infer_type(receiver, env) {
+                    Ok(ty) => ty,
+                    Err(_) => return Ok(None),
                 }
-                None => return Ok(None),
-            },
+            }
+            None => return Ok(None),
         };
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
+        // `!` on the condition and a self-negating guard (`isset(...)`, `!== null`) each swap the
+        // branches, so two negations cancel out — `negated` is already that XOR.
         let (then_ty, else_ty) = if negated {
             (complement, matched)
         } else {
             (matched, complement)
         };
-        // When the receiver is a simple `$f = $src` assignment whose source is a plain variable,
-        // `$f` and `$src` alias the same value on branch entry, so the narrowing applies to both.
-        let aliases = match &receiver.kind {
-            ExprKind::Assignment {
-                value,
-                result_target: None,
-                prelude,
-                conditional_value_temp: None,
-                ..
-            } if prelude.is_empty() => match &value.kind {
-                ExprKind::Variable(src) => vec![src.clone()],
-                _ => Vec::new(),
-            },
-            _ => Vec::new(),
-        };
-        Ok(Some(GuardNarrowing { var: key, then_ty, else_ty, aliases }))
-    }
-
-    /// Narrows a local binding on its truthy edge by removing only union arms whose complete value
-    /// space is falsey (`Void` for null and the literal `False` subtype). The binding may be read
-    /// directly or be the target of a simple assignment in the condition. An assignment replaces
-    /// the prior local type on both edges because PHP executes it before testing truthiness; this
-    /// remains useful even when an empty array/string subset cannot be represented more narrowly.
-    /// Integer zero, empty strings/arrays, and the false half of `Bool` stay conservative. A leading
-    /// logical `!` swaps the truthy and falsey branch facts.
-    fn truthy_binding_guard_narrowing(
-        &self,
-        condition: &Expr,
-        negated: bool,
-        env: &TypeEnv,
-    ) -> Result<Option<GuardNarrowing>, CompileError> {
-        let (var, current, overwrites) = match &condition.kind {
-            ExprKind::Variable(var) => {
-                let Some(current) = env.get(var) else {
-                    return Ok(None);
-                };
-                (var.clone(), current.clone(), false)
-            }
-            ExprKind::Assignment {
-                target,
-                result_target: None,
-                prelude,
-                conditional_value_temp: None,
-                ..
-            } if prelude.is_empty() => {
-                let ExprKind::Variable(var) = &target.kind else {
-                    return Ok(None);
-                };
-                let Some(current) = env.get(var) else {
-                    return Ok(None);
-                };
-                (var.clone(), current.clone(), true)
-            }
-            _ => return Ok(None),
-        };
-        let truthy = match &current {
-            PhpType::Union(members) => {
-                let kept: Vec<PhpType> = members
-                    .iter()
-                    .filter(|member| !matches!(member, PhpType::Void | PhpType::False))
-                    .cloned()
-                    .collect();
-                if kept.is_empty() || kept.len() == members.len() {
-                    current.clone()
-                } else {
-                    self.normalize_union_type(kept)
-                }
-            }
-            _ => current.clone(),
-        };
-        if !overwrites && truthy == current {
-            return Ok(None);
-        }
-        let (then_ty, else_ty) = if negated {
-            (current, truthy)
-        } else {
-            (truthy, current)
-        };
-        Ok(Some(GuardNarrowing {
-            var,
-            then_ty,
-            else_ty,
-            aliases: Vec::new(),
-        }))
+        Ok(Some(GuardNarrowing { var: key, then_ty, else_ty }))
     }
 
     /// Synthetic `TypeEnv` key for a narrowed simple property access `$var->prop` (`None` for a
@@ -228,45 +145,115 @@ impl Checker {
         }
     }
 
-    /// Synthetic `TypeEnv` key under which an `instanceof` narrowing of the bare `$this` receiver
-    /// is recorded (`if ($this instanceof I) { $this->onlyOnI(); }`). Mirrors
-    /// `narrowed_property_env_key`: the leading `\x01` sigil keeps it out of the variable
-    /// namespace and lets `purge_property_narrowings` drop it after a potential mutation, while its
-    /// distinct `this` segment keeps `purge_property_narrowings_for_root` (which targets
-    /// `\x01prop\x01<root>->`) from touching it — an object's class cannot change under a local
-    /// rebind. `infer_this_type` consults it so a narrowed `$this` sees the proven subtype.
-    pub(crate) fn narrowed_this_env_key() -> &'static str {
-        "\u{1}this\u{1}$this"
+    /// Synthetic `TypeEnv` key for a narrowed static property access (`self::$p`, `Cls::$p`).
+    ///
+    /// The receiver is resolved to its declaring class first, so `self::$p` and `Cls::$p` inside
+    /// `Cls` share one fact. `static::$p` is deliberately not keyed: late static binding can
+    /// select a subclass that redeclares the property, so the storage a guard observed is not
+    /// necessarily the storage a later read reaches. The key shares the `\x01` sigil with
+    /// instance-property keys, so `purge_property_narrowings` drops both after any call.
+    pub(crate) fn narrowed_static_property_env_key(
+        &self,
+        receiver: &StaticReceiver,
+        property: &str,
+        expr: &Expr,
+    ) -> Option<String> {
+        if matches!(receiver, StaticReceiver::Static) {
+            return None;
+        }
+        let class_name = self.resolve_static_property_receiver(receiver, expr).ok()?;
+        Some(format!("\u{1}sprop\u{1}{class_name}::${property}"))
     }
 
-    /// `TypeEnv` key for a guard receiver: a variable's name, an assignment's local target, or the
-    /// synthetic property key for a simple property access. Conditional/compound assignment forms
-    /// are safe here because expression-effect inference has already recorded the value stored in
-    /// the local before guard detection. `None` for receivers narrowing cannot key safely.
-    fn guard_env_key(receiver: &Expr) -> Option<String> {
+    /// Returns whether a narrowing key names a property place rather than a plain local.
+    ///
+    /// Synthetic property keys carry the `\x01` sigil, which no PHP variable name can contain.
+    /// Only these places can be re-established by a write inside a guarded branch, so the
+    /// post-`if` join in `control_flow` is limited to them.
+    pub(crate) fn narrowed_place_key_is_property(key: &str) -> bool {
+        key.starts_with('\u{1}')
+    }
+
+    /// `TypeEnv` key for a guard receiver: a variable's name, or the synthetic property key for a
+    /// simple instance/static property access. `None` for receivers narrowing can't key
+    /// (complex chains, `static::$p`).
+    fn guard_env_key(&self, receiver: &Expr) -> Option<String> {
         match &receiver.kind {
             ExprKind::Variable(var) => Some(var.clone()),
-            ExprKind::Assignment { target, .. } => match &target.kind {
-                ExprKind::Variable(var) => Some(var.clone()),
-                _ => None,
-            },
             ExprKind::PropertyAccess { object, property } => {
                 Self::narrowed_property_env_key(object, property)
             }
-            ExprKind::This => Some(Self::narrowed_this_env_key().to_string()),
+            ExprKind::StaticPropertyAccess {
+                receiver: static_receiver,
+                property,
+            } => self.narrowed_static_property_env_key(static_receiver, property, receiver),
             _ => None,
         }
     }
 
-    /// Returns whether a `TypeEnv` key holds a synthetic narrowing fact rather than a PHP variable.
+    /// Records the flow fact produced by a completed property or static-property write.
     ///
-    /// Both `narrowed_property_env_key` and `narrowed_this_env_key` prefix their key with the
-    /// `\x01` sigil, which cannot occur in a PHP variable name. Every consumer that decides whether
-    /// an environment entry belongs to the variable namespace (purging member facts after a
-    /// potential mutation, surfacing a cloned chain environment back to an outer scope) shares this
-    /// one predicate so the two never drift apart.
-    pub(crate) fn is_synthetic_narrowing_key(key: &str) -> bool {
-        key.starts_with('\u{1}')
+    /// Runs after `purge_property_narrowings` has dropped every fact the write (or the calls
+    /// inside its right-hand side) could have invalidated, so this only ever re-establishes a
+    /// fact for the exact storage that was just written. The recorded type is the property's
+    /// DECLARED type minus `null`, never the assigned expression's type: a declared property
+    /// coerces what it stores (`public ?int $x; $x = 1.0;` reads back as `int`), so narrowing
+    /// to "declared, definitely not null" is the strongest statement that stays sound.
+    ///
+    /// Nothing is recorded when the assigned value may itself be null, when the receiver is not
+    /// a simple keyable place, or when a read could run user code (`__get` / a `get` hook).
+    pub(crate) fn record_property_assignment_narrowing(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
+        let (place, value) = match &stmt.kind {
+            StmtKind::PropertyAssign {
+                object,
+                property,
+                value,
+            } => (
+                Expr::new(
+                    ExprKind::PropertyAccess {
+                        object: object.clone(),
+                        property: property.clone(),
+                    },
+                    stmt.span,
+                ),
+                value,
+            ),
+            StmtKind::StaticPropertyAssign {
+                receiver,
+                property,
+                value,
+            } => (
+                Expr::new(
+                    ExprKind::StaticPropertyAccess {
+                        receiver: receiver.clone(),
+                        property: property.clone(),
+                    },
+                    stmt.span,
+                ),
+                value,
+            ),
+            _ => return,
+        };
+        let Some(key) = self.guard_env_key(&place) else {
+            return;
+        };
+        if self
+            .property_guard_receiver_is_unstable(&place, env)
+            .unwrap_or(true)
+        {
+            return;
+        }
+        let Ok(assigned) = self.infer_type(value, env) else {
+            return;
+        };
+        if !type_is_definitely_non_null(&assigned) {
+            return;
+        }
+        let Ok(declared) = self.infer_type(&place, env) else {
+            return;
+        };
+        let non_null = self.narrow_complement(&declared, &GuardTarget::Exact(PhpType::Void));
+        env.insert(key, non_null);
     }
 
     /// Drops every synthetic property narrowing from the environment. Called after effects that
@@ -275,7 +262,7 @@ impl Checker {
     /// stale narrowing never survives a potential mutation. Variable narrowings are unaffected —
     /// visible assignments already update those bindings directly.
     pub(crate) fn purge_property_narrowings(env: &mut TypeEnv) {
-        env.retain(|key, _| !Self::is_synthetic_narrowing_key(key));
+        env.retain(|key, _| !key.starts_with('\u{1}'));
     }
 
     /// Drops synthetic property narrowings rooted at one local variable after that local is
@@ -283,28 +270,6 @@ impl Checker {
     pub(crate) fn purge_property_narrowings_for_root(env: &mut TypeEnv, root: &str) {
         let prefix = format!("\u{1}prop\u{1}{root}->");
         env.retain(|key, _| !key.starts_with(&prefix));
-    }
-
-    /// Invalidates the property narrowings a *direct* property write (`$obj->prop = …`) can affect.
-    ///
-    /// A direct assignment rebinds one object's own `prop` slot; it cannot change what a *different*
-    /// syntactic receiver's property refers to, so only the fact keyed on this exact `<root>->prop`
-    /// is dropped. Sibling facts such as `$this->pool` therefore keep their precision when the write
-    /// targets `$clone->pool` — extending the syntactic scoping `purge_property_narrowings_for_root`
-    /// already applies to local rebinds. A target that is not a simple keyable receiver (an array
-    /// element or a deeper expression that may alias and mutate a shared value through) falls back to
-    /// purging every property fact.
-    pub(crate) fn purge_property_narrowings_for_property_write(
-        env: &mut TypeEnv,
-        object: &Expr,
-        property: &str,
-    ) {
-        match Self::narrowed_property_env_key(object, property) {
-            Some(key) => {
-                env.remove(&key);
-            }
-            None => Self::purge_property_narrowings(env),
-        }
     }
 
     /// Returns whether a property guard can invoke user code on either read. Hooked or magic
@@ -333,268 +298,29 @@ impl Checker {
         }))
     }
 
-
-    /// Collects the guard-true (then) narrowings for a condition that is a single recognized guard
-    /// or a pure `&&` chain of guards (`$a instanceof X && is_int($b) && ...`). Recurses only through
-    /// `&&`; returns one `(var, then_type)` per distinct guarded variable, folding repeated guards on
-    /// the same variable cumulatively (so `$x instanceof A && $x instanceof B` intersects via
-    /// `narrow_to`). Returns an empty vector for `||`/mixed/`!`-top-level/non-guard conditions
-    /// (conservative — no narrowing rather than an unsound one). The else/complement side is
-    /// intentionally not computed: callers narrowing only a guard-true region (a `switch (true)`
-    /// case body) do not need it, and the `&&`-chain complement is a union this single-guard helper
-    /// must not approximate.
-    pub(crate) fn and_chain_then_narrowings(
-        &mut self,
-        cond: &Expr,
-        env: &TypeEnv,
-    ) -> Vec<(String, PhpType)> {
-        self.and_chain_then_facts(cond, env)
-            .into_iter()
-            .map(|(var, ty, _)| (var, ty))
-            .collect()
-    }
-
-    /// Collects ordered guard and assignment facts that hold when a pure `&&` condition is true.
-    fn and_chain_then_facts(
-        &mut self,
-        cond: &Expr,
-        env: &TypeEnv,
-    ) -> Vec<(String, PhpType, bool)> {
-        if let ExprKind::BinaryOp {
-            left,
-            op: BinOp::And,
-            right,
-        } = &cond.kind
-        {
-            // Process operands left-to-right, threading the accumulated narrowings. Each leaf's
-            // `then_ty` is already narrowed against the declared type in `env`; when two operands
-            // guard the same variable, intersect the accumulated type with the new one via
-            // `narrow_to` so repeated guards refine cumulatively.
-            let mut narrowings = self.and_chain_then_facts(left, env);
-            for (var, then_ty, overwrites) in self.and_chain_then_facts(right, env) {
-                match narrowings.iter().position(|(v, _, _)| *v == var) {
-                    Some(idx) => {
-                        if overwrites {
-                            narrowings[idx].1 = then_ty;
-                            narrowings[idx].2 = true;
-                        } else {
-                            let existing = narrowings[idx].1.clone();
-                            narrowings[idx].1 = self.narrow_to(&existing, &then_ty);
-                        }
-                    }
-                    None => narrowings.push((var, then_ty, overwrites)),
-                }
-            }
-            narrowings
-        } else {
-            if let ExprKind::Assignment {
-                target,
-                value,
-                result_target: None,
-                prelude,
-                conditional_value_temp: None,
-                ..
-            } = &cond.kind
-            {
-                if prelude.is_empty() {
-                    if let ExprKind::Variable(var) = &target.kind {
-                        if let Ok(ty) = self.infer_type(value, env) {
-                            return vec![(var.clone(), ty, true)];
-                        }
-                    }
-                }
-            }
-            match self.guard_narrowing(cond, env) {
-                Ok(Some(g)) => vec![(g.var, g.then_ty, false)],
-                // A `||` sub-condition is not a single guard, but its body edge still proves the
-                // union of its disjuncts' guard-true facts (`$v instanceof stdClass ||
-                // $v instanceof ArrayObject` inside a `&&` chain, as Yaml's `Inline::dump` writes
-                // it). Fold that union in as an ordinary chain fact.
-                Ok(None) | Err(_) => self
-                    .or_chain_then_narrowings(cond, env)
-                    .into_iter()
-                    .map(|(var, then_ty)| (var, then_ty, false))
-                    .collect(),
-            }
-        }
-    }
-
-    /// Collects the receiver narrowings that hold on the fall-through path of a *diverging*
-    /// `if (A || B || …) { <cannot fall through> }`. Reaching the statement after such an `if`
-    /// proves the whole `||` condition was false, so De Morgan gives `!A && !B && …`: every
-    /// disjunct is false. For each disjunct this takes its guard-FALSE fact (the guard's `else_ty`)
-    /// and intersects facts that name the same binding via `narrow_to` (mirroring how a `&&` chain
-    /// refines repeated guards). Returns an empty vector when the condition is not a top-level `||`
-    /// chain, so a caller may invoke it unconditionally; the caller is responsible for confirming
-    /// the guarded body cannot fall through before persisting these facts.
-    pub(crate) fn or_chain_complement_narrowings(
-        &mut self,
-        condition: &Expr,
-        env: &TypeEnv,
-    ) -> Vec<(String, PhpType)> {
-        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::Or, .. }) {
-            return Vec::new();
-        }
-        let mut disjuncts: Vec<&Expr> = Vec::new();
-        collect_or_operands(condition, &mut disjuncts);
-        let mut narrowings: Vec<(String, PhpType)> = Vec::new();
-        for disjunct in disjuncts {
-            let Ok(Some(guard)) = self.guard_narrowing(disjunct, env) else {
-                continue;
-            };
-            match narrowings.iter().position(|(v, _)| *v == guard.var) {
-                Some(idx) => {
-                    let existing = narrowings[idx].1.clone();
-                    narrowings[idx].1 =
-                        intersect_complement_types(self, &existing, &guard.else_ty);
-                }
-                None => narrowings.push((guard.var, guard.else_ty)),
-            }
-        }
-        narrowings
-    }
-
-    /// Collects the receiver narrowings that hold *inside* the body of an `if (A || B || …)`.
-    ///
-    /// The dual of [`Self::or_chain_complement_narrowings`]: reaching the body proves at least one
-    /// disjunct was true, so a binding's in-body type is the UNION of the guard-true facts its
-    /// disjuncts prove. A binding that only *some* disjuncts constrain gets no fact at all — the
-    /// remaining disjuncts leave it at its declared type, and unioning that back in would say
-    /// nothing. Returns an empty vector when the condition is not a top-level `||` chain, so a
-    /// caller may invoke it unconditionally.
-    ///
-    /// Conjunct/disjunct guards whose receiver is an in-condition assignment are refused: their
-    /// binding's value depends on which operands short-circuit, so a per-disjunct fact computed
-    /// against the pre-condition environment would not describe it.
-    pub(crate) fn or_chain_then_narrowings(
-        &mut self,
-        condition: &Expr,
-        env: &TypeEnv,
-    ) -> Vec<(String, PhpType)> {
-        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::Or, .. }) {
-            return Vec::new();
-        }
-        let mut disjuncts: Vec<&Expr> = Vec::new();
-        collect_or_operands(condition, &mut disjuncts);
-        self.short_circuit_edge_narrowings(&disjuncts, env, true)
-    }
-
-    /// Collects the receiver narrowings that hold on the fall-through edge of an
-    /// `if (A && B && …)`.
-    ///
-    /// The dual of [`Self::and_chain_then_narrowings`]: the false edge of a `&&` chain is the
-    /// disjunction `!A || !B || …`, which this environment can represent only when every conjunct
-    /// constrains the SAME binding — then the fall-through type is the union of the per-conjunct
-    /// guard-false facts. `Request::getSession`'s `!$s instanceof S && null !== $s` is the shape
-    /// this recovers: falling through proves `$s` is either a `SessionInterface` or null, so the
-    /// callable arm the chain ruled out no longer survives the `if`. A binding that only some
-    /// conjuncts constrain gets no fact, leaving it at its pre-`if` type.
-    pub(crate) fn and_chain_else_narrowings(
-        &mut self,
-        condition: &Expr,
-        env: &TypeEnv,
-    ) -> Vec<(String, PhpType)> {
-        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::And, .. }) {
-            return Vec::new();
-        }
-        let mut conjuncts: Vec<&Expr> = Vec::new();
-        collect_and_operands(condition, &mut conjuncts);
-        self.short_circuit_edge_narrowings(&conjuncts, env, false)
-    }
-
-    /// Unions the per-operand guard facts of a short-circuit chain into the facts that hold on the
-    /// edge reached when *any* operand decides the chain.
-    ///
-    /// `then_side` selects which half of each operand's guard to take: the guard-true type for the
-    /// `||` body edge, the guard-false type for the `&&` fall-through edge. Only a binding every
-    /// operand constrains yields a fact, because an unconstrained operand admits the binding's full
-    /// declared type. Each operand is evaluated against the chain's entry environment, so the
-    /// result is an over-approximation of the reachable states — sound for narrowing.
-    fn short_circuit_edge_narrowings(
-        &mut self,
-        operands: &[&Expr],
-        env: &TypeEnv,
-        then_side: bool,
-    ) -> Vec<(String, PhpType)> {
-        if !operands.iter().all(|operand| guard_receiver_is_stable_binding(operand)) {
-            return Vec::new();
-        }
-        let mut facts: Vec<(String, Vec<PhpType>)> = Vec::new();
-        for operand in operands {
-            let Ok(Some(guard)) = self.guard_narrowing(operand, env) else {
-                continue;
-            };
-            let edge_ty = if then_side { guard.then_ty } else { guard.else_ty };
-            match facts.iter().position(|(var, _)| *var == guard.var) {
-                Some(index) => facts[index].1.push(edge_ty),
-                None => facts.push((guard.var, vec![edge_ty])),
-            }
-        }
-        let mut narrowings = Vec::new();
-        for (var, members) in facts {
-            if members.len() != operands.len() {
-                continue;
-            }
-            narrowings.push((var, self.normalize_union_type(members)));
-        }
-        narrowings
-    }
-
-    /// Resolves a relative class name (`self`/`static`/`parent`, case-insensitive) inside an
-    /// `instanceof` narrowing target to the concrete enclosing class. `self`/`static` map to
-    /// `current_class`; `parent` maps to the current class's parent. A target that is not a
-    /// relative-name `Object`, or a relative name that cannot be resolved (no class context, or
-    /// `parent` on a class with no parent), is returned unchanged so the existing unknown-class
-    /// diagnostics still fire downstream. Non-`Object` targets pass through untouched.
-    fn resolve_relative_instanceof_target(&self, target: PhpType) -> PhpType {
-        let PhpType::Object(class_name) = &target else {
-            return target;
-        };
-        let concrete = match class_name.to_ascii_lowercase().as_str() {
-            "self" | "static" => self.current_class.clone(),
-            "parent" => self
-                .current_class
-                .as_ref()
-                .and_then(|c| self.classes.get(c))
-                .and_then(|ci| ci.parent.clone()),
-            _ => return target,
-        };
-        match concrete {
-            Some(name) => PhpType::Object(name),
-            None => target,
-        }
-    }
-
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
-    /// so `Mixed` and any incompatible concrete type become `target`; a `Union` keeps only its
-    /// matching members (falling back to `target` if none match); a concrete type already matching
-    /// the guard is kept as-is (preserving a more specific class for `instanceof`).
-    fn narrow_to(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
+    /// members; a concrete match is preserved, including its array element or object class type.
+    fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
                     members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
                 if kept.is_empty() {
-                    target.clone()
-                } else if kept.len() > 1 && matches!(target, PhpType::Array(_)) {
-                    // Several array arms can differ only in their inferred element type
-                    // (`array<mixed>|array<never>` after `$x ??= []`). The `is_array` proof
-                    // guarantees the common array family; collapse to its gradual element type
-                    // instead of retaining a union that array builtins reject as non-concrete.
-                    target.clone()
+                    target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
             _ if guard_matches(current, target) => current.clone(),
-            _ => target.clone(),
+            _ => target.fallback_type(),
         }
     }
 
     /// Narrows `current` to the subset incompatible with `target` (the guard-false type): a `Union`
     /// drops its matching members, while `Mixed` and concrete types are returned unchanged (the
     /// complement of `Mixed` is not representable). An empty result falls back to `current`.
-    fn narrow_complement(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
@@ -632,62 +358,6 @@ impl Checker {
             != TerminalEffect::FallsThrough
     }
 
-    /// Returns true when the body's control cannot reach past its last statement.
-    ///
-    /// A body is considered diverging if its last statement is:
-    /// - `return` or `throw`
-    /// - a call to `exit()` or `die()`
-    /// - a call to a user function whose declared return type is `never`
-    ///
-    /// This is used by type narrowing so that an `if (guard) { ... diverging ... }` (with no else)
-    /// allows the statements *after* the if to be narrowed to the complement type.
-    pub(crate) fn body_always_diverges(&self, body: &[Stmt]) -> bool {
-        let Some(last) = body.last() else {
-            return false;
-        };
-
-        match &last.kind {
-            StmtKind::Return(_) | StmtKind::Throw(_) => true,
-            StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
-            _ => false,
-        }
-    }
-
-    /// Returns true when a `switch` case body cannot fall through to the next case: its last
-    /// statement is `break`/`continue`/`return`/`throw`, or the body always diverges
-    /// (`exit`/`die`/never-returning call). Used to gate `switch (true)` case-body narrowing: a case
-    /// is only sound to narrow by its own guard when control cannot reach it by falling through from
-    /// a previous, non-terminating case (where the guard may be false at runtime).
-    pub(crate) fn case_body_terminates(&self, body: &[Stmt]) -> bool {
-        matches!(
-            body.last().map(|s| &s.kind),
-            Some(
-                StmtKind::Break(_)
-                    | StmtKind::Continue(_)
-                    | StmtKind::Return(_)
-                    | StmtKind::Throw(_)
-            )
-        ) || self.body_always_diverges(body)
-    }
-
-    /// Returns true if the expression is known to never return normally: a call to `exit()` or
-    /// `die()` (recognized by name), or a call to a user function whose declared return type is
-    /// `never`. The function name is resolved case-insensitively against the checker's function
-    /// table, matching PHP's call semantics.
-    fn expr_always_diverges(&self, expr: &Expr) -> bool {
-        let ExprKind::FunctionCall { name, .. } = &expr.kind else {
-            return false;
-        };
-        let lowered = name.to_ascii_lowercase();
-        if lowered == "exit" || lowered == "die" {
-            return true;
-        }
-        self.canonical_function_name_folded(name)
-            .and_then(|canonical| self.functions.get(&canonical))
-            .map(|sig| sig.return_type == PhpType::Never)
-            .unwrap_or(false)
-    }
-
     /// Returns true if the expression calls a user function whose declared return type is `never`.
     /// The function name is resolved case-insensitively against the checker's function table,
     /// matching PHP's call semantics. Error suppression preserves the call's divergence.
@@ -705,110 +375,51 @@ impl Checker {
     }
 }
 
-/// Flattens a left-associative `&&` chain into its conjunct operands in source order. A non-`&&`
-/// expression is a single conjunct. Used to distribute De Morgan's law over the fall-through edge
-/// of an `if (A && B) {…}`.
-fn collect_and_operands<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-    if let ExprKind::BinaryOp {
-        left,
-        op: BinOp::And,
-        right,
-    } = &expr.kind
-    {
-        collect_and_operands(left, out);
-        collect_and_operands(right, out);
-    } else {
-        out.push(expr);
-    }
-}
-
-/// Returns whether a short-circuit operand's guard receiver is a stable binding rather than an
-/// in-condition assignment.
+/// Returns whether an expression shape can be the keyed receiver of a type guard.
 ///
-/// `guard_env_key` deliberately keys an assignment guard (`false === $parts = parse_url($dsn)`) on
-/// its assignment target, which is right for a single guard but wrong for a chain edge: whether
-/// that assignment ran at all depends on which earlier operand short-circuited, so a fact computed
-/// against the pre-chain environment would not describe the binding. An operand that is not a
-/// recognized guard at all is fine — it simply contributes no fact.
-fn guard_receiver_is_stable_binding(operand: &Expr) -> bool {
-    let inner = match &operand.kind {
-        ExprKind::Not(inner) => inner.as_ref(),
-        _ => operand,
-    };
-    if matches!(inner.kind, ExprKind::Assignment { .. }) {
-        return false;
-    }
-    match guard_receiver_and_type(inner) {
-        Some((receiver, _, _)) => !matches!(receiver.kind, ExprKind::Assignment { .. }),
-        None => true,
-    }
+/// Variables and simple instance/static property accesses are the places `guard_env_key`
+/// can name; everything else is rejected here so a comparison against a complex chain is not
+/// mistaken for a guard.
+fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Variable(_)
+            | ExprKind::PropertyAccess { .. }
+            | ExprKind::StaticPropertyAccess { .. }
+    )
 }
 
-/// Flattens a left-associative `||` chain into its disjunct operands in source order. A non-`||`
-/// expression is a single disjunct. Used to distribute De Morgan's law over an `if (A || B) {…}`
-/// early-exit guard.
-fn collect_or_operands<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
-    if let ExprKind::BinaryOp {
-        left,
-        op: BinOp::Or,
-        right,
-    } = &expr.kind
-    {
-        collect_or_operands(left, out);
-        collect_or_operands(right, out);
-    } else {
-        out.push(expr);
-    }
-}
-
-/// Extracts the guarded receiver expression and the target type from a (non-negated) guard
-/// expression. Recognizes the scalar `is_*` predicates, `is_null`, `instanceof <Name>`, and
-/// `=== false` / `!== false` / `=== null` / `!== null`. The receiver may be any expression here
-/// — `guard_env_key` decides which receivers narrowing can actually key (variables, assignment
-/// results, and simple property accesses). The boolean marks a comparison whose truth edge is
-/// the complement of the literal type.
-fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
+/// Extracts the guarded receiver, the target, and whether the guard is self-negating from a
+/// (syntactically non-negated) guard expression.
+///
+/// Recognizes the scalar `is_*` predicates, `is_null`, `is_array`, `is_callable`,
+/// `instanceof <Name>`, `=== false` / `=== null`, their `!==` counterparts, and single-operand
+/// `isset()`. The third tuple element is `true` for guards that are true when the target does
+/// NOT match (`isset`, `!==`), so `guard_narrowing` can combine it with a leading `!`. The
+/// receiver may be any expression here — `guard_env_key` decides which receivers narrowing can
+/// actually key.
+fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
-            let target = match name.as_str().to_ascii_lowercase().as_str() {
-                "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" | "is_real" => PhpType::Float,
-                "is_string" => PhpType::Str,
-                "is_bool" => PhpType::Bool,
-                // `is_array($x)` proves the value is *some* array. The checker narrows to the
-                // gradual `array<mixed>` family: it is accepted by every array operation and array
-                // builtin (a union of `array|assoc-array` would be rejected by the concrete-only
-                // builtins such as `array_sum`/`array_unique`), and it does not over-refine the key
-                // or element type. The runtime indexed/associative distinction is handled where it
-                // matters — by the EIR lowering, which keeps the guarded local in its boxed Mixed
-                // representation so `foreach`/index/`count` dispatch on the runtime tag (see
-                // `ir_lower::stmt::is_array_narrowed_type`); an assoc payload no longer fatals.
-                "is_array" => PhpType::Array(Box::new(PhpType::Mixed)),
-                // `is_numeric($x)` accepts ints, floats, and numeric strings without changing
-                // the runtime value. Preserve all three possibilities so arithmetic selects
-                // mixed numeric dispatch for strings instead of pretending the value was cast.
-                "is_numeric" => PhpType::Union(vec![
-                    PhpType::Int,
-                    PhpType::Float,
-                    PhpType::Str,
-                ]),
-                // `is_object($x)` proves the boxed value carries an object pointer, but it does
-                // not identify a concrete class. Keep that distinction through generic `object`
-                // so guarded `$x::class` and other class-agnostic object operations type-check.
-                "is_object" => PhpType::Object(String::new()),
+            // `php_symbol_key` rather than a plain lowercase: it also folds the leading `\` and
+            // the namespace qualification, so `\is_int($x)` and `Ns\is_int($x)` narrow too.
+            let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
+                "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
+                "is_float" | "is_double" | "is_real" => GuardTarget::Exact(PhpType::Float),
+                "is_string" => GuardTarget::Exact(PhpType::Str),
+                "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
                 // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
                 // ?int as int on the fall-through path).
-                "is_null" => PhpType::Void,
-                // `is_countable($x)` guarantees the value is an `array` or a `Countable`
-                // object — exactly the two things `count()` accepts. Narrowing to this
-                // union lets guarded `count($x)` type-check even when `$x` is declared
-                // `iterable` (a non-Countable `Traversable` is dropped by the guard, so
-                // unguarded `count(iterable)` still errors).
-                "is_countable" => PhpType::Union(vec![
-                    PhpType::Array(Box::new(PhpType::Mixed)),
-                    PhpType::Object("Countable".to_string()),
-                ]),
+                "is_null" => GuardTarget::Exact(PhpType::Void),
+                "is_callable" => GuardTarget::Exact(PhpType::Callable),
+                "is_array" => GuardTarget::AnyArray,
+                // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
+                // exactly when the storage holds a non-null value. This is what makes
+                // `if (!isset(self::$inst)) { self::$inst = new S(); }` narrow.
+                "isset" if is_guard_receiver_shape(&args[0].kind) => {
+                    return Some((&args[0], GuardTarget::Exact(PhpType::Void), true))
+                }
                 _ => return None,
             };
             Some((&args[0], target, false))
@@ -817,32 +428,40 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            Some((value, PhpType::Object(class.as_str().to_string()), false))
+            Some((
+                value,
+                GuardTarget::Exact(PhpType::Object(class.as_str().to_string())),
+                false,
+            ))
         }
-        // `$var === false` / `$var !== false` (and reversed operands): equality narrows the
-        // then-branch to False, while inequality narrows it to the complement (e.g.
-        // int|false → int). A full `bool` member remains representable and is not stripped.
+        // `$var === false` / `false === $var`: narrow to the literal False subtype in the
+        // then-branch; the else-branch strips only that member (e.g. int|false → int) while a full
+        // `bool` member remains. Enables the common
+        // `if ($x === false) { throw; } return $x;` guard (ward-http StreamGuards::requireInt etc.).
+        // `!==` is the same guard with the branches swapped.
         ExprKind::BinaryOp {
             left,
             op: op @ (BinOp::StrictEq | BinOp::StrictNotEq),
             right,
         } => {
-            let (receiver, lit) = if let Some(receiver) =
-                strict_comparison_guard_receiver(left)
-            {
-                (receiver, &right.kind)
-            } else if let Some(receiver) = strict_comparison_guard_receiver(right) {
-                (receiver, &left.kind)
+            let negates = matches!(op, BinOp::StrictNotEq);
+            // `is_guard_receiver_shape` rather than an inline `Variable | PropertyAccess`
+            // match: it also accepts a static property, which is what lets the singleton
+            // shape `if (self::$inst === null) { self::$inst = new S(); }` narrow.
+            let (receiver, lit) = if is_guard_receiver_shape(&left.kind) {
+                (left.as_ref(), &right.kind)
+            } else if is_guard_receiver_shape(&right.kind) {
+                (right.as_ref(), &left.kind)
             } else {
                 return None;
             };
             match lit {
                 ExprKind::BoolLiteral(false) => {
-                    Some((receiver, PhpType::False, *op == BinOp::StrictNotEq))
+                    Some((receiver, GuardTarget::Exact(PhpType::False), negates))
                 }
                 // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
                 // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
-                ExprKind::Null => Some((receiver, PhpType::Void, *op == BinOp::StrictNotEq)),
+                ExprKind::Null => Some((receiver, GuardTarget::Exact(PhpType::Void), negates)),
                 _ => None,
             }
         }
@@ -850,89 +469,29 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
     }
 }
 
-/// Returns a receiver whose binding can be narrowed by a strict false/null comparison.
+/// Returns whether a type can never hold `null` on any path.
 ///
-/// Besides variables and stable property reads, this accepts an ordinary expression-position
-/// assignment to a local. Its assigned value is the current runtime value even when the local's
-/// storage type also includes values written before the assignment.
-fn strict_comparison_guard_receiver(expr: &Expr) -> Option<&Expr> {
-    match &expr.kind {
-        ExprKind::Variable(_) | ExprKind::PropertyAccess { .. } => Some(expr),
-        ExprKind::Assignment {
-            target,
-            result_target: None,
-            prelude,
-            conditional_value_temp: None,
-            ..
-        } if prelude.is_empty() && matches!(target.kind, ExprKind::Variable(_)) => Some(expr),
-        _ => None,
+/// `Mixed` and `Never` are treated as possibly-null because neither carries enough information
+/// to prove otherwise; a union is non-null only when every member is.
+fn type_is_definitely_non_null(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Void | PhpType::Never | PhpType::Mixed => false,
+        PhpType::Union(members) => members.iter().all(type_is_definitely_non_null),
+        _ => true,
     }
 }
-
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
-/// (else) members. Scalar targets require an exact variant match; an `Object` target matches an
-/// object member with the same class name (inheritance-aware narrowing is left for the future).
-/// Generic `object` matches every concrete object member so `is_object()` preserves any known
-/// classes already present in a union. The compiler's `Callable` representation is the same
-/// closure descriptor used for anonymous and first-class callables, so it matches nominal
-/// `Closure` guards as well.
-///
-/// A UNION target is deliberately NOT decomposed here. A guard's target union is a PROOF that
-/// replaces the receiver's type rather than a set to intersect with it: `is_numeric($x)` targets
-/// `Int|Float|Str` precisely so a guarded `string` widens to the numeric family and arithmetic
-/// selects mixed numeric dispatch (see the `is_numeric` arm in `guard_receiver_and_type`).
-/// Matching a union target member-wise makes `narrow_to` keep the plain `Str` instead, which
-/// measurably re-breaks that path (`Cache\ParameterNormalizer::normalizeDuration` returns a
-/// numeric string from a `: int` method, plus six arithmetic sites). Complement types that DO
-/// need intersecting are handled by `intersect_complement_types`, which does not go through here.
-fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
-    match (member, target) {
-        (PhpType::Callable, PhpType::Object(target_class))
-            if target_class
-                .trim_start_matches('\\')
-                .eq_ignore_ascii_case("Closure") =>
-        {
-            true
+/// (else) members. Exact targets require a matching variant; an `Object` target matches an object
+/// member with the same class name (inheritance-aware narrowing is left for the future), and
+/// `AnyArray` matches either array shape.
+fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+    match target {
+        GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
+        GuardTarget::Exact(PhpType::Object(target_class)) => {
+            matches!(member, PhpType::Object(member_class) if member_class == target_class)
         }
-        (PhpType::Object(member_class), PhpType::Object(target_class)) => {
-            target_class.is_empty() || member_class == target_class
-        }
-        (
-            PhpType::Array(_) | PhpType::AssocArray { .. },
-            PhpType::Array(_),
-        ) => true,
-        (PhpType::False, PhpType::Bool) => true,
-        _ => member == target,
-    }
-}
-
-/// Intersects two guard-FALSE types computed for the SAME binding against the SAME entry
-/// environment, as produced by the disjuncts of one `||` chain.
-///
-/// De Morgan makes the fall-through edge of `if (A || B || …)` the conjunction `!A && !B && …`,
-/// so the binding's type there is the INTERSECTION of the per-disjunct complements. Both sides
-/// are subsets of the binding's entry type, so intersecting is a plain member-set operation —
-/// unlike `narrow_to`, which answers the different question "what does this GUARD prove" and
-/// treats a union target as a replacement proof rather than a set (see `guard_matches`).
-///
-/// An empty intersection means the disjuncts jointly exclude every arm, i.e. the fall-through
-/// edge is unreachable. That is not representable here, so the accumulated `current` is kept:
-/// narrowing may only ever refine, never invent an arm the entry type did not have.
-fn intersect_complement_types(checker: &Checker, current: &PhpType, next: &PhpType) -> PhpType {
-    let (PhpType::Union(current_members), PhpType::Union(next_members)) = (current, next) else {
-        // A non-union side is already as narrow as this representation gets; keeping the
-        // accumulated type preserves any refinement an earlier disjunct contributed.
-        return current.clone();
-    };
-    let kept: Vec<PhpType> = current_members
-        .iter()
-        .filter(|member| next_members.contains(member))
-        .cloned()
-        .collect();
-    if kept.is_empty() {
-        current.clone()
-    } else {
-        checker.normalize_union_type(kept)
+        GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
+        GuardTarget::Exact(target) => member == target,
     }
 }

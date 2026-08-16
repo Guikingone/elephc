@@ -165,10 +165,10 @@ pub(crate) fn check(
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> BuiltinResult {
-    if args.len() < 3 || args.len() > 6 {
+    if args.len() != 3 {
         return Err(CompileError::new(
             span,
-            "preg_replace_callback() takes 3 to 6 arguments",
+            "preg_replace_callback() takes exactly 3 arguments",
         ));
     }
 

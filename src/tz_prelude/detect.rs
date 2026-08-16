@@ -181,7 +181,6 @@ fn expr_refs_tz(expr: &Expr) -> bool {
             expr_refs_tz(value) || expr_refs_tz(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_tz(value) || expr_refs_tz(callable),
-        ExprKind::ListUnpack { value, .. } => expr_refs_tz(value),
         ExprKind::Assignment {
             target,
             value,
@@ -240,9 +239,6 @@ fn expr_refs_tz(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_tz(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
-        // `$obj::CONST` — recurse into the evaluated object expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_tz(object),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_tz(property),
         ExprKind::ObjectClassName { object } => expr_refs_tz(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_tz),
         ExprKind::Yield { key, value } => {
@@ -259,12 +255,9 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no call position and no child expr/stmt.
         StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -404,11 +397,6 @@ fn stmt_refs_tz(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs_tz(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_tz(index) || expr_refs_tz(value)
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_refs_tz(property)
-                || index.as_ref().is_some_and(expr_refs_tz)
-                || expr_refs_tz(value)
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_tz(object) || expr_refs_tz(value)

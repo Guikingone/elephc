@@ -11,7 +11,7 @@
 use crate::parser::ast::{CatchClause, EnumCaseDecl, Stmt, StmtKind};
 
 use super::exprs::walk_expr;
-use super::members::{walk_class_constant, walk_class_method, walk_class_property};
+use super::members::{walk_class_method, walk_class_property};
 use super::Pass;
 
 /// Applies a magic-constant pass to a sequence of top-level statements.
@@ -30,6 +30,8 @@ pub(in crate::magic_constants) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: 
 /// Statements with no expression children are returned unchanged.
 pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
@@ -53,11 +55,6 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             value: walk_expr(value, pass),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
-            target: walk_expr(target, pass),
-            source: walk_expr(source, pass),
-            append,
-        },
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -152,19 +149,6 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             receiver,
             property,
             index: walk_expr(index, pass),
-            value: walk_expr(value, pass),
-        },
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property: Box::new(walk_expr(*property, pass)),
-            index: index.map(|i| walk_expr(i, pass)),
-            append,
             value: walk_expr(value, pass),
         },
         StmtKind::If {
@@ -308,10 +292,6 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
-            let new_constants = constants
-                .into_iter()
-                .map(|c| walk_class_constant(c, pass))
-                .collect();
             pass.leave_class();
             StmtKind::ClassDecl {
                 name,
@@ -323,7 +303,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-                constants: new_constants,
+            constants,
             }
         }
         StmtKind::TraitDecl {
@@ -342,17 +322,13 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
                 .collect();
-            let new_constants = constants
-                .into_iter()
-                .map(|c| walk_class_constant(c, pass))
-                .collect();
             pass.leave_trait();
             StmtKind::TraitDecl {
                 name,
                 trait_uses,
                 properties: new_properties,
                 methods: new_methods,
-                constants: new_constants,
+            constants,
             }
         }
         StmtKind::InterfaceDecl {
@@ -361,32 +337,19 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             properties,
             methods,
         constants,
-        } => {
-            // An interface is class-like for magic-constant purposes: `__CLASS__` in an
-            // interface constant is the interface's own FQN (php-verified). Enter the class
-            // scope so constant initializers lower with the interface as `__CLASS__`.
-            pass.enter_class(&name);
-            let new_properties = properties
+        } => StmtKind::InterfaceDecl {
+            name,
+            extends,
+            properties: properties
                 .into_iter()
                 .map(|p| walk_class_property(p, pass))
-                .collect();
-            let new_methods = methods
+                .collect(),
+            methods: methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
-                .collect();
-            let new_constants = constants
-                .into_iter()
-                .map(|c| walk_class_constant(c, pass))
-                .collect();
-            pass.leave_class();
-            StmtKind::InterfaceDecl {
-                name,
-                extends,
-                properties: new_properties,
-                methods: new_methods,
-                constants: new_constants,
-            }
-        }
+                .collect(),
+        constants,
+        },
         StmtKind::EnumDecl {
             name,
             backing_type,
@@ -396,10 +359,6 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             methods,
             constants,
         } => {
-            // An enum is class-like: `__CLASS__` in a case value or constant initializer is
-            // the enum's own FQN (php-verified). Enter the class scope before walking cases,
-            // methods, and constants so their magic constants lower with the enum as `__CLASS__`.
-            pass.enter_class(&name);
             let cases = cases
                 .into_iter()
                 .map(|case| EnumCaseDecl {
@@ -409,13 +368,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
                     attributes: case.attributes,
                 })
                 .collect();
+            pass.enter_class(&name);
             let methods = methods
                 .into_iter()
                 .map(|m| walk_class_method(m, pass))
-                .collect();
-            let constants = constants
-                .into_iter()
-                .map(|c| walk_class_constant(c, pass))
                 .collect();
             pass.leave_class();
             StmtKind::EnumDecl {
@@ -453,8 +409,6 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         // Statements with no Expr children or only simple data:
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
@@ -462,5 +416,11 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
-    Stmt { kind, span, attributes }
+    Stmt {
+        kind,
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    }
 }

@@ -16,10 +16,6 @@
 //! - `__rt_header`: the four `header()` C-ABI args are already in the integer
 //!   argument registers (`x0`=line ptr, `x1`=len, `x2`=replace, `x3`=code; x86_64
 //!   `rdi`/`rsi`/`rdx`/`rcx`); the routine forwards them unchanged. No result.
-//! - `__rt_header_remove`: the `header_remove()` C-ABI args are `x0`=name ptr,
-//!   `x1`=name len (aarch64) / `rdi`=name ptr, `rsi`=name len (x86_64), with
-//!   `len < 0` as the in-band "no argument" sentinel (a real PHP string length
-//!   is never negative) — forwarded unchanged to `elephc_web_header_remove`.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -114,47 +110,4 @@ fn emit_header_x86_64(emitter: &mut Emitter, web: bool) {
     }
 
     emitter.instruction("ret");                                                 // return to the caller (header() is void)
-}
-
-/// Emits the `__rt_header_remove` runtime helper.
-///
-/// The `header_remove()` C-ABI arguments (name pointer, name length; `len < 0`
-/// means the argument was omitted) are already in the integer argument
-/// registers when this is called. In `--web` it forwards them to
-/// `elephc_web_header_remove`; in non-web it is a no-op and never references
-/// the bridge symbol, mirroring `__rt_header`'s own web-gating.
-pub fn emit_header_remove(emitter: &mut Emitter, web: bool) {
-    if emitter.target.arch == Arch::X86_64 {
-        emit_header_remove_x86_64(emitter, web);
-        return;
-    }
-
-    emitter.blank();
-    emitter.comment("--- runtime: header_remove ---");
-    emitter.label_global("__rt_header_remove");
-
-    if web {
-        emitter.instruction("stp x29, x30, [sp, #-16]!");                       // save frame/link registers (the forward call clobbers x30)
-        emitter.instruction("mov x29, sp");                                     // establish a frame pointer for the call
-        emitter.bl_c("elephc_web_header_remove");                               // forward (x0=name ptr, x1=name len) to the bridge
-        emitter.instruction("ldp x29, x30, [sp], #16");                         // restore frame/link registers
-    }
-
-    emitter.instruction("ret");                                                 // return to the caller (header_remove() is void)
-}
-
-/// Emits the x86_64 Linux variant of `__rt_header_remove`.
-fn emit_header_remove_x86_64(emitter: &mut Emitter, web: bool) {
-    emitter.blank();
-    emitter.comment("--- runtime: header_remove ---");
-    emitter.label_global("__rt_header_remove");
-
-    if web {
-        emitter.instruction("push rbp");                                        // preserve the caller frame pointer and align rsp for the call
-        emitter.instruction("mov rbp, rsp");                                    // establish a stable frame base
-        emitter.bl_c("elephc_web_header_remove");                               // forward (rdi=name ptr, rsi=name len) to the bridge
-        emitter.instruction("pop rbp");                                         // restore the caller frame pointer
-    }
-
-    emitter.instruction("ret");                                                 // return to the caller (header_remove() is void)
 }

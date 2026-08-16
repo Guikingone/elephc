@@ -2,20 +2,19 @@
 title: "ksort()"
 description: "Sorts an array by key in ascending order."
 sidebar:
-  order: 55
+  order: 58
 ---
 
 ## ksort()
 
 ```php
-function ksort(array $array, int $flags = 0): bool
+function ksort(array $array): bool
 ```
 
 Sorts an array by key in ascending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 
@@ -25,12 +24,6 @@ Sorts an array by key in ascending order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/ksort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/ksort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

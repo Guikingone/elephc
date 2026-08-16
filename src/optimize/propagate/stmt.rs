@@ -94,16 +94,10 @@ fn env_after_expr_side_effects(mut env: ConstantEnv, exprs: &[&Expr]) -> Constan
 /// Iterates through a block of statements, propagating constants and stopping early
 /// when a terminal effect (return, throw, exit) is encountered.
 pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stmt>, ConstantEnv) {
-    // A `label:` is reachable through a `goto` even when the preceding statement terminates, so it
-    // must survive. When the block contains a label, keep every statement (the `Label` arm of
-    // `propagate_stmt` already clears the environment at each join point); labels are rare, so the
-    // retained unreachable statements are an acceptable trade.
-    let block_has_label = body.iter().any(|stmt| matches!(stmt.kind, StmtKind::Label(_)));
     let mut propagated = Vec::new();
     for stmt in body {
         let (stmt, next_env) = propagate_stmt(stmt, env);
-        let stops_here =
-            !block_has_label && !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
+        let stops_here = !matches!(stmt_terminal_effect(&stmt), TerminalEffect::FallsThrough);
         propagated.push(stmt);
         env = next_env;
         if stops_here {
@@ -117,6 +111,12 @@ pub(crate) fn propagate_block(body: Vec<Stmt>, mut env: ConstantEnv) -> (Vec<Stm
 /// propagation and computing the output environment for each statement variant.
 /// Returns the rewritten statement and the constant environment after the statement.
 pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
+    let profile = stmt.profile();
+    crate::source::with_parse_mode(profile, || propagate_stmt_in_source_mode(stmt, env))
+}
+
+/// Propagates one statement while reconstructed nodes inherit its physical source mode.
+fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv) {
     let span = stmt.span;
     match stmt.kind {
         StmtKind::Synthetic(stmts) => {
@@ -155,19 +155,6 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
             }
             (
                 Stmt::new(StmtKind::RefAssign { target, source }, span),
-                HashMap::new(),
-            )
-        }
-        StmtKind::RefAssignToTarget { target, source, append } => {
-            // The target lvalue's storage is aliased to `source`; a plain-variable
-            // source can be changed invisibly through the target, so it must not carry
-            // a constant. The target/source stay literal lvalues (never propagated to a
-            // constant) so the alias remains well-formed.
-            if let ExprKind::Variable(source_name) = &source.kind {
-                mark_reference_volatile(source_name);
-            }
-            (
-                Stmt::new(StmtKind::RefAssignToTarget { target, source, append }, span),
                 HashMap::new(),
             )
         }
@@ -285,13 +272,6 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
         } => propagate_try_stmt(try_body, catches, finally_body, span, env),
         StmtKind::Break(levels) => (Stmt::new(StmtKind::Break(levels), span), env),
         StmtKind::Continue(levels) => (Stmt::new(StmtKind::Continue(levels), span), env),
-        // `goto` transfers control unconditionally; the fall-through environment it yields is never
-        // observed (the next statement is unreachable until a label), so pass it through unchanged.
-        StmtKind::Goto(label) => (Stmt::new(StmtKind::Goto(label), span), env),
-        // A label is a join point: a `goto` elsewhere may reach it with a different variable state
-        // than the straight-line predecessor, so no constant known above the label may be assumed
-        // below it. Clear the environment, mirroring `IncludeOnceMark`.
-        StmtKind::Label(label) => (Stmt::new(StmtKind::Label(label), span), HashMap::new()),
         StmtKind::ExprStmt(expr) => {
             let expr = propagate_expr(expr, &env);
             // Targeted invalidation covers `unset` (including array-element
@@ -540,36 +520,6 @@ pub(crate) fn propagate_stmt(stmt: Stmt, env: ConstantEnv) -> (Stmt, ConstantEnv
                         receiver,
                         property,
                         index,
-                        value,
-                    },
-                    span,
-                ),
-                next_env,
-            )
-        }
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => {
-            let property = propagate_expr(*property, &env);
-            let index = index.map(|i| propagate_expr(i, &env));
-            let value = propagate_expr(value, &env);
-            let mut effect_exprs: Vec<&Expr> = vec![&property];
-            if let Some(index) = &index {
-                effect_exprs.push(index);
-            }
-            effect_exprs.push(&value);
-            let next_env = env_after_expr_side_effects(env, &effect_exprs);
-            (
-                Stmt::new(
-                    StmtKind::DynamicStaticPropertyWrite {
-                        receiver,
-                        property: Box::new(property),
-                        index,
-                        append,
                         value,
                     },
                     span,

@@ -51,10 +51,32 @@ pub(crate) fn emit_diagnostics(emitter: &mut Emitter) {
     emitter.label("__rt_diag_pop_done");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
+    emitter.label_global("__rt_diag_push_filter_suppression");
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current filter-scope suppression depth
+    emitter.instruction("add x10, x10, #1");                                    // enter one additional filter suppression scope
+    emitter.instruction("str x10, [x9]");                                       // publish the incremented filter suppression depth
+    emitter.instruction("ret");                                                 // return to the filtered open that silenced its inner opener
+
+    emitter.label_global("__rt_diag_pop_filter_suppression");
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // load the current filter-scope suppression depth
+    emitter.instruction("cbz x10, __rt_diag_pop_filter_done");                  // avoid underflow if filter scopes are already balanced
+    emitter.instruction("sub x10, x10, #1");                                    // leave one filter suppression scope
+    emitter.instruction("str x10, [x9]");                                       // publish the decremented filter suppression depth
+    emitter.label("__rt_diag_pop_filter_done");
+    emitter.instruction("ret");                                                 // return to the open that is done with its inner opener
+
     emitter.label_global("__rt_diag_warning");
     abi::emit_symbol_address(emitter, "x9", "_rt_diag_suppression");
     emitter.instruction("ldr x10, [x9]");                                       // load suppression depth before deciding whether to emit the warning
     emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress the warning while inside an active @ scope
+    // The filter machinery's own scope silences the same warnings, through a counter `@` does
+    // not touch — so a filtered open can stand its scope DOWN for the wrapper PHP it calls
+    // without ever handing back a depth `@` is still holding.
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_suppression");
+    emitter.instruction("ldr x10, [x9]");                                       // load the filter-scope suppression depth
+    emitter.instruction("cbnz x10, __rt_diag_warning_done");                    // suppress while a filtered open silences its inner opener
     emitter.instruction("mov x0, #2");                                          // fd = stderr for runtime warning diagnostics
     emitter.syscall(4);
     emitter.label("__rt_diag_warning_done");
@@ -94,10 +116,30 @@ fn emit_diagnostics_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_diag_pop_done_linux_x86_64");
     emitter.instruction("ret");                                                 // return to the expression wrapper after restoring suppression state
 
+    emitter.label_global("__rt_diag_push_filter_suppression");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_filter_suppression", 0); // load the current filter-scope suppression depth
+    emitter.instruction("add r10, 1");                                          // enter one additional filter suppression scope
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_filter_suppression", 0); // publish the incremented filter suppression depth
+    emitter.instruction("ret");                                                 // return to the filtered open that silenced its inner opener
+
+    emitter.label_global("__rt_diag_pop_filter_suppression");
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_filter_suppression", 0); // load the current filter-scope suppression depth
+    emitter.instruction("test r10, r10");                                       // check whether a filter scope is active before decrementing
+    emitter.instruction("jz __rt_diag_pop_filter_done_linux_x86_64");           // avoid underflow if filter scopes are already balanced
+    emitter.instruction("sub r10, 1");                                          // leave one filter suppression scope
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_php_filter_suppression", 0); // publish the decremented filter suppression depth
+    emitter.label("__rt_diag_pop_filter_done_linux_x86_64");
+    emitter.instruction("ret");                                                 // return to the open that is done with its inner opener
+
     emitter.label_global("__rt_diag_warning");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);    // load suppression depth before deciding whether to emit the warning
     emitter.instruction("test r10, r10");                                       // is runtime warning output currently suppressed?
     emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning while inside an active @ scope
+    // See the AArch64 counterpart: the filter machinery's scope is a SEPARATE counter, so it can
+    // stand down for a user wrapper's PHP without giving back a depth `@` is holding.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_php_filter_suppression", 0); // load the filter-scope suppression depth
+    emitter.instruction("test r10, r10");                                       // is a filtered open silencing its inner opener?
+    emitter.instruction("jnz __rt_diag_warning_done_linux_x86_64");             // suppress the warning for the length of that scope
     emitter.instruction("mov rdx, rsi");                                        // move warning length into the Linux write length register
     emitter.instruction("mov rsi, rdi");                                        // move warning pointer into the Linux write buffer register
     emitter.instruction("mov edi, 2");                                          // fd = stderr for runtime warning diagnostics

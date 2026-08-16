@@ -11,9 +11,8 @@ use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "checkdate",
+    contract: "checkdate",
     area: Time,
-    params: [month, day, year],
     direct: Time,
     values: Time,
 }

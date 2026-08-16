@@ -38,9 +38,6 @@ pub(in crate::resolver) use output::{
 /// # Arguments
 /// * `stmts` - Top-level statements to scan for include/require directives
 /// * `base_dir` - Directory from which relative paths are resolved
-/// * `lenient_dynamic_includes` - when `true`, an unresolvable runtime-dynamic include path is
-///   skipped (it exposes no statically-discoverable declarations and is degraded to a runtime
-///   fatal during expansion) instead of producing an error; statically-invalid shapes still error
 ///
 /// # Returns
 /// * `Ok(IncludeDiscovery)` with all reachable declarations grouped by source file
@@ -48,15 +45,12 @@ pub(in crate::resolver) use output::{
 pub(super) fn discover_include_declarations(
     stmts: &[Stmt],
     base_dir: &Path,
-    lenient_dynamic_includes: bool,
+    defines: &HashSet<String>,
 ) -> Result<IncludeDiscovery, CompileError> {
     let mut output = DiscoveryOutput::default();
     let mut loaded_paths = HashSet::new();
     let mut include_chain = Vec::new();
-    let mut state = ResolveState {
-        lenient_dynamic_includes,
-        ..ResolveState::default()
-    };
+    let mut state = ResolveState::with_conditional_defines(defines);
 
     discover_stmts(
         stmts,

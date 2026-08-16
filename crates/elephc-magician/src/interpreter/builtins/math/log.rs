@@ -9,12 +9,9 @@
 //!   preserve source-order argument evaluation.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "log",
+    contract: "log",
     area: Math,
-    params: [num, base = EvalBuiltinDefaultValue::Float(std::f64::consts::E)],
     direct: Log,
     values: Log,
 }

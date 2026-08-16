@@ -145,6 +145,9 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::PregReplaceCallback => "preg_replace_callback",
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",
+        BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
+        BuiltinArgumentLowering::ArraySplice => "array_splice",
+        BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),
@@ -174,14 +177,6 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         "callable": callable,
         "lowering": lowering,
     })
-}
-
-/// Returns true when a PHP-visible builtin exists in the static AOT surface:
-/// `builtin!` registry entries plus compiler-resident constructs (`isset`,
-/// `unset`, `empty`, `exit`, `die`, and dedicated `buffer_new`). Documentation tooling uses this to tell
-/// resident names apart from genuinely eval-only builtins.
-pub fn aot_php_visible_builtin_exists(name: &str) -> bool {
-    crate::types::checker::builtins::is_php_visible_builtin_function(name)
 }
 
 /// Builds the documentation JSON array for every PHP-visible registered builtin.

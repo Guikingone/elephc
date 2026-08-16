@@ -23,6 +23,9 @@ relative-to = "target"
 path = "debug/libelephc_crypto.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_bcmath.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_phar.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
@@ -49,6 +52,26 @@ slow-timeout = { period = "180s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'test(parity_function_first_class_callable_dispatch)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# PDO_ODBC surface/live fixtures compile the full versioned PDO prelude and may
+# also rebuild the optional system-client archive on a cold local cache.
+[[profile.default.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_odbc)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+# PDO_OCI loads the full PDO surface and the cold optional ODPI-C archive build
+# is appreciably slower on GitHub's shared runners.
+[[profile.default.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(pdo_oci)'
+slow-timeout = { period = "300s", terminate-after = 1 }
 
 # `lowers_examples_corpus` type-checks and lowers every program under examples/;
 # ~40s alone and past the global 60s cap on loaded runners.
@@ -104,9 +127,48 @@ filter = 'test(test_eval_aot_callable_named_ref_arg_prep_fatal_cleans_up_stack)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.default.overrides]]
+filter = 'test(test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_aot_function_by_ref_arg_prep_fatal_cleans_up_stack)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_reflection_class_new_instance_rejects_aot_non_instantiable_class_likes)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_reflection_class_new_instance_rejects_aot_non_instantiable_class_likes)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(test_eval_reflection_class_new_instance_without_constructor_rejects_aot_non_classes)'
+slow-timeout = { period = "180s", terminate-after = 1 }
+
+[[profile.default.overrides]]
 filter = 'test(test_eval_declared_method_return_type_values)'
 slow-timeout = { period = "180s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
 filter = 'test(test_eval_declared_method_return_type_values)'
 slow-timeout = { period = "180s", terminate-after = 1 }
+
+# The profile-differential corpus compiles and runs each case once per maintained
+# `--php-version`, so one test is four complete compile-link-run cycles. Most cases stay
+# around 10s, but the `eval_*` ones link the 65MB Magician archive four times and measure
+# 46-77s on an unloaded macOS host — already past the 60s guard before CI's slower
+# containerized runners are involved. The budget is larger than the 180s used elsewhere in
+# this file because the cost here is dominated by linking a large archive rather than by
+# compilation, which is exactly what a loaded runner stretches most.
+[[profile.default.overrides]]
+filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+slow-timeout = { period = "300s", terminate-after = 1 }

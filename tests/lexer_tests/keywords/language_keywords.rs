@@ -102,48 +102,6 @@ fn test_namespace_and_backslash_tokens() {
     );
 }
 
-/// Verifies `declare(strict_types=1);` tokenizes `declare` as the dedicated `Declare` keyword
-/// (not a bareword `Identifier`), so the parser can dispatch to the directive-list parser
-/// instead of misreading `strict_types=1` as a call argument assignment.
-#[test]
-fn test_declare_keyword_token() {
-    let t = tokens("<?php declare(strict_types=1);");
-    assert_eq!(
-        t,
-        vec![
-            Token::OpenTag,
-            Token::Declare,
-            Token::LParen,
-            Token::Identifier("strict_types".into()),
-            Token::Assign,
-            Token::IntLiteral(1),
-            Token::RParen,
-            Token::Semicolon,
-            Token::Eof,
-        ]
-    );
-}
-
-/// Verifies `declare` is matched case-insensitively like other PHP keywords (e.g. `DECLARE`).
-#[test]
-fn test_declare_keyword_case_insensitive() {
-    let t = tokens("<?php DECLARE(ticks=1);");
-    assert_eq!(
-        t,
-        vec![
-            Token::OpenTag,
-            Token::Declare,
-            Token::LParen,
-            Token::Identifier("ticks".into()),
-            Token::Assign,
-            Token::IntLiteral(1),
-            Token::RParen,
-            Token::Semicolon,
-            Token::Eof,
-        ]
-    );
-}
-
 /// Verifies `enum Color: int { case Red; }` token sequence.
 #[test]
 fn test_enum_tokens() {
@@ -278,12 +236,6 @@ fn test_keyword_break() {
 #[test]
 fn test_keyword_continue() {
     assert_eq!(tokens("<?php continue")[1], Token::Continue);
-}
-
-/// Verifies `goto` keyword tokenizes as `Goto`.
-#[test]
-fn test_keyword_goto() {
-    assert_eq!(tokens("<?php goto")[1], Token::Goto);
 }
 
 /// Verifies `function` keyword tokenizes as `Function`.
@@ -465,6 +417,64 @@ fn test_enddeclare_keyword() {
     assert!(t.contains(&Token::Declare));
     assert!(t.contains(&Token::Colon));
     assert!(t.contains(&Token::EndDeclare));
+}
+
+// --- Alternative control-structure syntax terminators ---
+
+/// Verifies `if (…): … endif;` lexes the colon body opener and the `endif` terminator.
+#[test]
+fn test_alternative_if_tokens() {
+    let t = tokens("<?php if (true): echo 1; endif;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::If,
+            Token::LParen,
+            Token::True,
+            Token::RParen,
+            Token::Colon,
+            Token::Echo,
+            Token::IntLiteral(1),
+            Token::Semicolon,
+            Token::EndIf,
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
+}
+
+/// Verifies each loop/switch alternative terminator keyword gets its own token kind.
+#[test]
+fn test_alternative_loop_terminator_keywords() {
+    assert!(tokens("<?php while (false): endwhile;").contains(&Token::EndWhile));
+    assert!(tokens("<?php for (;false;): endfor;").contains(&Token::EndFor));
+    assert!(tokens("<?php foreach ([] as $x): endforeach;").contains(&Token::EndForeach));
+    assert!(tokens("<?php switch (1): endswitch;").contains(&Token::EndSwitch));
+}
+
+/// Verifies the alternative terminators are lexed case-insensitively, like every PHP keyword.
+#[test]
+fn test_alternative_terminator_keywords_are_case_insensitive() {
+    let t = tokens("<?php IF (true): ENDIF; WHILE (false): ENDWHILE;");
+    assert!(t.contains(&Token::EndIf));
+    assert!(t.contains(&Token::EndWhile));
+}
+
+/// Verifies `goto` is lexed as its own reserved keyword token rather than an identifier.
+#[test]
+fn test_goto_keyword_token() {
+    let t = tokens("<?php goto done;");
+    assert_eq!(
+        t,
+        vec![
+            Token::OpenTag,
+            Token::Goto,
+            Token::Identifier("done".into()),
+            Token::Semicolon,
+            Token::Eof,
+        ]
+    );
 }
 
 // --- Reference parameter ---

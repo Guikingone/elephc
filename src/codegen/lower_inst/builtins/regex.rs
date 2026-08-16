@@ -6,9 +6,7 @@
 //! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
-//! - `preg_match()` captures support both a direct local `$matches` variable and a
-//!   by-reference parameter cell (`?array &$matches`), the latter written through the cell
-//!   into the caller's storage exactly like a user-defined `&$param` writeback.
+//! - `preg_match()` captures currently support direct local `$matches` variables.
 //! - `preg_replace_callback()` supports static string callbacks and descriptor-backed
 //!   callable values through a regex-specific callback wrapper.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
@@ -17,7 +15,6 @@ use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor};
 use crate::codegen::{CodegenIrError, Result};
 use crate::codegen_support::DeferredCallbackWrapper;
-use crate::codegen_support::emit_box_current_value_as_mixed;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::function_symbol;
 use crate::types::PhpType;
@@ -27,39 +24,21 @@ use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
-/// Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime.
-///
-/// The optional `$matches` out-parameter is populated through
-/// `__rt_preg_match_capture`. The `$flags` and `$offset` arguments are accepted
-/// (so calls type-check and lower) but are not yet honored by the EIR capture
-/// runtime; non-default flags/offset therefore behave as the defaults.
-pub(crate) fn lower_preg_match(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match", 2, 5)?;
+/// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
+pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
-    let matches_target = inst
+    let matches_slot = inst
         .operands
         .get(2)
         .copied()
-        .map(|value| matches_target(ctx, value))
+        .map(|value| matches_local_slot(ctx, value))
         .transpose()?;
     load_pattern_and_subject(ctx, pattern, subject)?;
-    if let Some(target) = &matches_target {
-        // The capture helper builds an associative hash (so `$m['name']` reads work)
-        // only when the destination is a boxed-Mixed cell and the pattern actually has
-        // named groups. Signal that permission through the flag register so plain indexed
-        // `$matches` locals keep their fast contiguous layout.
-        let allow_hash = target_allows_named_hash(target);
-        let flag_reg = match ctx.emitter.target.arch {
-            Arch::AArch64 => "x5",
-            Arch::X86_64 => "r8",
-        };
-        abi::emit_load_int_immediate(ctx.emitter, flag_reg, allow_hash as i64);
+    if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array(ctx, target)?;
+        store_matches_array(ctx, slot)?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
     }
@@ -84,65 +63,24 @@ pub(crate) fn lower_mb_ereg_match(
 }
 
 /// Lowers `preg_match_all(pattern, subject)` through the shared regex runtime helper.
-/// Lowers `preg_match_all(pattern, subject, &matches?, flags?, offset?)` through the regex runtime.
-///
-/// The optional `$matches` out-parameter is populated through `__rt_preg_match_capture` (the same
-/// helper `preg_match` uses), so the caller's variable is defined and readable after the call. The
-/// capture helper records the first match and its capture groups; full `preg_match_all` semantics
-/// (nested per-match arrays) require a dedicated runtime helper and are not yet implemented —
-/// `$flags` and `$offset` are accepted so calls type-check and lower but behave as the defaults.
 pub(crate) fn lower_preg_match_all(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_match_all", 2, 5)?;
+    super::ensure_arg_count(inst, "preg_match_all", 2)?;
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
-    let matches_target = inst
-        .operands
-        .get(2)
-        .copied()
-        .map(|value| matches_target(ctx, value))
-        .transpose()?;
     load_pattern_and_subject(ctx, pattern, subject)?;
-    if let Some(target) = &matches_target {
-        let allow_hash = target_allows_named_hash(target);
-        let flag_reg = match ctx.emitter.target.arch {
-            Arch::AArch64 => "x5",
-            Arch::X86_64 => "r8",
-        };
-        abi::emit_load_int_immediate(ctx.emitter, flag_reg, allow_hash as i64);
-        abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array(ctx, target)?;
-    } else {
-        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
-    }
+    abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
     super::store_if_result(ctx, inst)
 }
 
-/// Lowers `preg_replace(pattern, replacement, subject, limit?, &count?)`.
-///
-/// The optional `$count` out-parameter is populated with the number of
-/// replacements performed, computed via `__rt_preg_match_all` over the same
-/// pattern/subject before the replacement runs (the unlimited `limit = -1` case,
-/// which matches every supported call). The optional `$limit` argument is
-/// accepted but not yet enforced; replacement always processes every match.
-pub(crate) fn lower_preg_replace(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_replace", 3, 5)?;
+/// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
+pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "preg_replace", 3)?;
     let pattern = super::expect_operand(inst, 0)?;
     let replacement = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
-    if let Some(count_value) = inst.operands.get(4).copied() {
-        // Populate `$count` before the replacement so the regex result registers
-        // are not clobbered by the match-counting call.
-        let count_target = matches_target(ctx, count_value)?;
-        load_pattern_and_subject(ctx, pattern, subject)?;
-        abi::emit_call_label(ctx.emitter, "__rt_preg_match_all");
-        store_replacement_count(ctx, &count_target)?;
-    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace pattern")?;
@@ -164,12 +102,15 @@ pub(crate) fn lower_preg_replace_callback(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count_between(inst, "preg_replace_callback", 3, 6)?;
+    super::ensure_arg_count(inst, "preg_replace_callback", 3)?;
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
     let callback_target = preg_replace_callback_target(ctx, callback)?;
-    let env_bytes = callback_target.reserve_env(ctx)?;
+    let env_bytes = callback_target.reserve_env(
+        ctx,
+        super::super::instruction_strict_php_profile(inst),
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
@@ -197,8 +138,12 @@ struct PregReplaceCallbackTarget {
 
 impl PregReplaceCallbackTarget {
     /// Reserves any callback environment required by the regex callback runtime.
-    fn reserve_env(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
-        self.env.reserve(ctx)
+    fn reserve_env(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        strict_php: bool,
+    ) -> Result<usize> {
+        self.env.reserve(ctx, strict_php)
     }
 
     /// Releases any reserved callback environment while preserving the regex result.
@@ -220,12 +165,12 @@ enum PregReplaceCallbackEnv {
 
 impl PregReplaceCallbackEnv {
     /// Reserves the stack environment expected by the deferred regex callback wrapper.
-    fn reserve(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
+    fn reserve(&self, ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<usize> {
         match self {
             Self::None => Ok(0),
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
-                reserve_runtime_string_descriptor_callback_env(ctx, *callback)
+                reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
             }
             Self::CallableArray {
                 callable,
@@ -378,6 +323,7 @@ fn reserve_descriptor_callback_env(
 fn reserve_runtime_string_descriptor_callback_env(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
+    strict_php: bool,
 ) -> Result<usize> {
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
@@ -386,6 +332,7 @@ fn reserve_runtime_string_descriptor_callback_env(
         callable,
         &descriptor_reg,
         "preg_replace_callback",
+        strict_php,
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -533,25 +480,8 @@ fn load_mb_ereg_match_args(
     }
 }
 
-/// Storage destination for a `preg_*` out-parameter such as `$matches` or `$count`.
-///
-/// `Local` writes the captured value straight into a plain local frame slot (the historical
-/// path). `RefCell` writes it through a by-reference parameter cell into the caller's storage,
-/// mirroring the writeback that user-defined `&$param` arguments perform.
-enum MatchesTarget {
-    /// A plain local slot holding the captured value directly.
-    Local(LocalSlotId),
-    /// A by-reference parameter slot holding a pointer to the caller's storage, plus the
-    /// declared type of the value the cell points to.
-    RefCell { slot: LocalSlotId, cell_ty: PhpType },
-}
-
-/// Resolves a `preg_*` out-parameter operand (`$matches`/`$count`) to its storage destination.
-///
-/// Accepts a plain `load_local` (a direct local slot) or a `load_ref_cell` / promoted ref-cell
-/// local (a by-reference parameter). For the by-reference case it records the cell's declared
-/// type so the value can be coerced and written through the cell into the caller's storage.
-fn matches_target(ctx: &FunctionContext<'_>, value: ValueId) -> Result<MatchesTarget> {
+/// Returns the local slot represented by a `preg_match()` `$matches` operand.
+fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<LocalSlotId> {
     let value_ref = ctx
         .function
         .value(value)
@@ -565,7 +495,7 @@ fn matches_target(ctx: &FunctionContext<'_>, value: ValueId) -> Result<MatchesTa
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if inst_ref.op != Op::LoadLocal {
         return Err(CodegenIrError::unsupported(
             "preg_match matches argument that is not a local variable",
         ));
@@ -575,55 +505,11 @@ fn matches_target(ctx: &FunctionContext<'_>, value: ValueId) -> Result<MatchesTa
             "preg_match matches load missing local slot",
         ));
     };
-    if inst_ref.op == Op::LoadRefCell || ctx.local_stores_ref_cell_pointer(slot) {
-        let cell_ty = ctx.local_php_type(slot)?;
-        Ok(MatchesTarget::RefCell { slot, cell_ty })
-    } else {
-        Ok(MatchesTarget::Local(slot))
-    }
+    Ok(slot)
 }
 
-/// Returns whether a `$matches` destination may receive a named-group associative hash.
-///
-/// Only a by-reference cell whose declared type boxes to a Mixed cell (`Mixed`/`Union`, e.g.
-/// PHP `?array`) can observe string-keyed entries through `$m['name']`, and only that path
-/// boxes the runtime result kind-aware (indexed vs hash). A plain indexed local keeps its
-/// contiguous layout so numeric `$m[0]` reads stay a direct indexed load.
-fn target_allows_named_hash(target: &MatchesTarget) -> bool {
-    match target {
-        MatchesTarget::RefCell { cell_ty, .. } => {
-            matches!(cell_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
-        }
-        MatchesTarget::Local(_) => false,
-    }
-}
-
-/// Stores the `preg_replace()` replacement count (in the int result register) into its destination.
-fn store_replacement_count(ctx: &mut FunctionContext<'_>, target: &MatchesTarget) -> Result<()> {
-    match target {
-        MatchesTarget::Local(slot) => {
-            let offset = ctx.local_offset(*slot)?;
-            abi::store_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
-            Ok(())
-        }
-        MatchesTarget::RefCell { slot, cell_ty } => {
-            store_count_through_ref_cell(ctx, *slot, cell_ty)
-        }
-    }
-}
-
-/// Stores the runtime-built matches array into its destination without clobbering the match flag.
-fn store_matches_array(ctx: &mut FunctionContext<'_>, target: &MatchesTarget) -> Result<()> {
-    match target {
-        MatchesTarget::Local(slot) => store_matches_array_local(ctx, *slot),
-        MatchesTarget::RefCell { slot, cell_ty } => {
-            store_matches_array_through_ref_cell(ctx, *slot, cell_ty)
-        }
-    }
-}
-
-/// Stores the runtime-built matches array (ptr in x1/rdx) into a plain local slot.
-fn store_matches_array_local(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+/// Stores the runtime-built matches array into a local slot without clobbering the match flag.
+fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
     let offset = ctx.local_offset(slot)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -634,109 +520,6 @@ fn store_matches_array_local(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -
         }
     }
     Ok(())
-}
-
-/// Writes the runtime-built `$matches` array through a by-reference parameter cell.
-///
-/// Mirrors a user-defined `&$param` writeback: the previous value held in the caller's storage
-/// is released first, then the freshly owned matches array (built by `__rt_preg_match_capture`,
-/// ptr in x1/rdx) is written through the cell into the caller's variable. When the cell's
-/// declared type is `Mixed`, the array is boxed into a mixed cell (which retains the array), so
-/// the original array reference is released afterwards, leaving the cell the sole owner. The
-/// match flag in the int result register is preserved across every helper call.
-fn store_matches_array_through_ref_cell(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    cell_ty: &PhpType,
-) -> Result<()> {
-    let cell_repr = cell_ty.codegen_repr();
-    if !matches!(cell_repr, PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_)) {
-        return Err(CodegenIrError::unsupported(format!(
-            "preg_match $matches by-reference parameter of PHP type {:?}",
-            cell_repr
-        )));
-    }
-    let matches_reg = match ctx.emitter.target.arch {
-        Arch::AArch64 => "x1",
-        Arch::X86_64 => "rdx",
-    };
-    let int_reg = abi::int_result_reg(ctx.emitter);
-    let offset = ctx.local_offset(slot)?;
-    let boxes_to_mixed = matches!(cell_repr, PhpType::Mixed | PhpType::Union(_));
-
-    // -- preserve the match flag and the owned matches array across the writeback helpers --
-    abi::emit_reserve_temporary_stack(ctx.emitter, 32);                         // scratch frame: flag, owned array ptr, store value
-    abi::emit_store_to_sp(ctx.emitter, int_reg, 0);                             // save the preg_match flag for the final result store
-    abi::emit_store_to_sp(ctx.emitter, matches_reg, 8);                         // save the freshly owned matches array pointer
-
-    // -- release the previous value held in the caller's storage through the cell --
-    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, pointer_reg, offset);                      // load the by-reference cell pointer into the caller's storage
-    abi::emit_load_from_address(ctx.emitter, int_reg, pointer_reg, 0);          // load the previous value the caller's variable held
-    abi::emit_decref_if_refcounted(ctx.emitter, &cell_repr);                    // release the previous value (the runtime helper ignores null/non-heap)
-
-    // -- materialize the value to write through the cell from the owned matches array --
-    abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 8);              // reload the owned matches array pointer into the value register
-    if boxes_to_mixed {
-        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_array_kind");       // box kind-aware (tag 4 indexed / 5 hash) so `$m['name']` reads work; retains the child
-        abi::emit_store_to_sp(ctx.emitter, int_reg, 16);                       // save the boxed mixed-cell pointer to store through the cell
-        abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 8);          // reload the original owned array pointer for release
-        abi::emit_call_label(ctx.emitter, "__rt_decref_any");                 // drop the original array/hash reference kind-aware; the mixed cell now owns it
-        abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 16);         // reload the boxed mixed-cell pointer to write through the cell
-    }
-
-    // -- write the new value through the cell into the caller's variable --
-    let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::load_at_offset(ctx.emitter, pointer_reg, offset);                      // reload the by-reference cell pointer after the helper calls
-    abi::emit_store_to_address(ctx.emitter, int_reg, pointer_reg, 0);           // write the matches value into the caller's storage
-
-    // -- restore the match flag for the result store and release the scratch frame --
-    abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 0);             // restore the preg_match flag for `store_if_result`
-    abi::emit_release_temporary_stack(ctx.emitter, 32);
-    Ok(())
-}
-
-/// Writes the `preg_replace()` replacement count through a by-reference parameter cell.
-///
-/// The count is a plain integer in the int result register. When the cell stores an integer
-/// (or bool) it is written directly; when the cell's declared type is `Mixed` the count is
-/// boxed and the previous value released, mirroring `store_matches_array_through_ref_cell`.
-/// Unlike the matches store there is no second live result to preserve at this point.
-fn store_count_through_ref_cell(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    cell_ty: &PhpType,
-) -> Result<()> {
-    let cell_repr = cell_ty.codegen_repr();
-    let int_reg = abi::int_result_reg(ctx.emitter);
-    let offset = ctx.local_offset(slot)?;
-    match cell_repr {
-        PhpType::Int | PhpType::Bool => {
-            let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-            abi::load_at_offset(ctx.emitter, pointer_reg, offset);             // load the by-reference cell pointer into the caller's storage
-            abi::emit_store_to_address(ctx.emitter, int_reg, pointer_reg, 0);  // write the replacement count into the caller's variable
-            Ok(())
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_reserve_temporary_stack(ctx.emitter, 16);                // scratch frame: boxed count value
-            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);      // box the integer count into a mixed cell
-            abi::emit_store_to_sp(ctx.emitter, int_reg, 0);                   // save the boxed count to store after releasing the old value
-            let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-            abi::load_at_offset(ctx.emitter, pointer_reg, offset);            // load the by-reference cell pointer into the caller's storage
-            abi::emit_load_from_address(ctx.emitter, int_reg, pointer_reg, 0); // load the previous value the caller's variable held
-            abi::emit_decref_if_refcounted(ctx.emitter, &cell_repr);          // release the previous value (the runtime helper ignores null/non-heap)
-            abi::emit_load_temporary_stack_slot(ctx.emitter, int_reg, 0);     // reload the boxed count pointer to write through the cell
-            let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
-            abi::load_at_offset(ctx.emitter, pointer_reg, offset);            // reload the by-reference cell pointer after the helper calls
-            abi::emit_store_to_address(ctx.emitter, int_reg, pointer_reg, 0); // write the boxed count into the caller's storage
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
-            Ok(())
-        }
-        other => Err(CodegenIrError::unsupported(format!(
-            "preg_replace $count by-reference parameter of PHP type {:?}",
-            other
-        ))),
-    }
 }
 
 /// Returns a string literal value when `value` is defined by a `ConstStr` instruction.
@@ -787,20 +570,7 @@ fn load_string_arg(
     len_reg: &str,
     context: &str,
 ) -> Result<()> {
-    let ty = ctx.value_php_type(value)?;
-    if ty != PhpType::Str {
-        // PHP coerces a regex string operand to string, but the EIR regex bridge
-        // does not yet coerce a non-string (e.g. Mixed) operand. Emit a runtime
-        // fatal rather than miscompiling. Runtime-dead for the YAML probe: the
-        // only Mixed operand is the block-scalar `$modifiers` subject on a path
-        // the probe's simple mapping never reaches.
-        let message = format!(
-            "Fatal error: {} with PHP type {} is not yet supported by the elephc EIR backend\n",
-            context, ty
-        );
-        super::super::emit_unsupported_feature_fatal(ctx, &message);
-        return Ok(());
-    }
+    require_string(ctx.value_php_type(value)?, context)?;
     ctx.load_string_value_to_regs(value, ptr_reg, len_reg)
 }
 

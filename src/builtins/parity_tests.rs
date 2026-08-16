@@ -7,40 +7,12 @@
 //!
 //! Key details:
 //! - Registry signatures are authoritative; no parallel name-based golden table exists.
-//! - Extension and internal visibility sets remain explicitly pinned.
+//! - Extension and internal visibility derive from shared contracts.
 
 use crate::builtins::registry;
-
-/// The exact set of PHP-visible builtins that are elephc extensions (no PHP
-/// equivalent), pinned so that adding or reclassifying a builtin is a conscious,
-/// reviewable decision. `--strict-php` hides exactly this set (plus the
-/// `buffer_new` catalog-name-only entry) from user programs.
-const EXPECTED_EXTENSION_BUILTINS: &[&str] = &[
-    "buffer_free",
-    "buffer_len",
-    "class_attribute_args",
-    "class_attribute_names",
-    "class_get_attributes",
-    "ptr",
-    "ptr_get",
-    "ptr_is_null",
-    "ptr_null",
-    "ptr_offset",
-    "ptr_read16",
-    "ptr_read32",
-    "ptr_read8",
-    "ptr_read_string",
-    "ptr_set",
-    "ptr_sizeof",
-    "ptr_write16",
-    "ptr_write32",
-    "ptr_write8",
-    "ptr_write_string",
-    "zval_free",
-    "zval_pack",
-    "zval_type",
-    "zval_unpack",
-];
+use elephc_builtin_contract::{
+    aot_support, BackendImplementation, BackendSupport, BuiltinContract,
+};
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
@@ -51,13 +23,9 @@ const EXPECTED_EXTENSION_BUILTINS: &[&str] = &[
 /// `<name>(` call sites; bare mentions inside comments are tolerated.
 #[test]
 fn preludes_never_call_php_visible_extension_builtins() {
-    let mut extension_names: Vec<String> = vec!["buffer_new".to_string()];
-    for name in registry::names() {
-        let def = registry::lookup(name).expect("names() yields registered builtins");
-        if def.spec.extension && !def.spec.internal {
-            extension_names.push(def.name.to_string());
-        }
-    }
+    let extension_names = shared_php_visible_extension_contracts()
+        .map(|contract| contract.name.to_string())
+        .collect::<Vec<_>>();
 
     let prelude_sources: &[(&str, &str)] = &[
         ("pdo_prelude", crate::pdo_prelude::PDO_PRELUDE_SRC),
@@ -84,6 +52,22 @@ fn preludes_never_call_php_visible_extension_builtins() {
     );
 }
 
+/// Returns shared extension contracts visible through an AOT PHP call surface.
+fn shared_php_visible_extension_contracts(
+) -> impl Iterator<Item = &'static BuiltinContract> {
+    elephc_builtin_contract::contracts()
+        .iter()
+        .filter(|contract| contract.extension && !contract.internal)
+        .filter(|contract| {
+            matches!(
+                aot_support(contract),
+                BackendSupport::Implemented(
+                    BackendImplementation::Registry | BackendImplementation::DedicatedSyntax
+                )
+            )
+        })
+}
+
 /// Returns true when `source` contains a plain function-call site `name(`.
 ///
 /// A match is a call site only when the preceding character is not part of a
@@ -102,13 +86,9 @@ fn source_calls_function(source: &str, name: &str) -> bool {
     })
 }
 
-/// Verifies the registry's PHP-visible `extension: true` set matches the pinned
-/// list exactly, in both directions: no extension builtin missing the flag, no
-/// PHP builtin carrying it by mistake. Internal builtins are skipped: they are
-/// not PHP-visible, strict mode never hides them, and cfg(test) probes may
-/// combine `internal` with `extension` to exercise the macro.
+/// Verifies the AOT registry exposes exactly the shared registry-route extensions.
 #[test]
-fn extension_builtin_set_is_pinned() {
+fn extension_builtin_set_matches_shared_contracts() {
     let mut tagged: Vec<&str> = Vec::new();
     for name in registry::names() {
         let def = registry::lookup(name).expect("names() yields registered builtins");
@@ -117,8 +97,14 @@ fn extension_builtin_set_is_pinned() {
         }
     }
     tagged.sort_unstable();
-    assert_eq!(
-        tagged, EXPECTED_EXTENSION_BUILTINS,
-        "extension builtin set drifted from the pinned list",
-    );
+    let expected = shared_php_visible_extension_contracts()
+        .filter(|contract| {
+            matches!(
+                aot_support(contract),
+                BackendSupport::Implemented(BackendImplementation::Registry)
+            )
+        })
+        .map(|contract| contract.name)
+        .collect::<Vec<_>>();
+    assert_eq!(tagged, expected, "AOT extension contract join drifted");
 }

@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "addslashes",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "addslashes",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::AddSlashes),
         crate::ir::Effects::PURE,
     ),
-    summary: "Adds backslashes before characters that need to be escaped.",
-    php_manual: "https://www.php.net/manual/en/function.addslashes.php",
 }

@@ -67,7 +67,7 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
-    emitter.instruction("fcvtzs x0, d0");                                       // truncate the float payload toward zero
+    abi::emit_php_float_to_int(emitter, "x0");                                  // apply PHP float->int rules to the unboxed float payload
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the converted integer result
 
     emitter.label("__rt_mixed_cast_int_from_bool");
@@ -84,7 +84,8 @@ pub fn emit_mixed_cast_int(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_cast_int_done");                          // return the null-container cast result
 
     emitter.label("__rt_mixed_cast_int_from_resource");
-    emitter.instruction("add x0, x1, #1");                                      // convert the native resource payload into the 1-based display id
+    emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
+    emitter.instruction("bl __rt_resource_id_of");                              // PHP casts a resource to its RESOURCE ID, not to its native payload
 
     emitter.label("__rt_mixed_cast_int_done");
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
@@ -139,7 +140,7 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_int_from_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
-    emitter.instruction("cvttsd2si rax, xmm0");                                 // truncate the floating-point payload toward zero
+    abi::emit_php_float_to_int(emitter, "rax");                                 // apply PHP float->int rules to the unboxed float payload
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the converted integer result
 
     emitter.label("__rt_mixed_cast_int_from_bool_linux_x86_64");
@@ -157,7 +158,8 @@ fn emit_mixed_cast_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_cast_int_done_linux_x86_64");           // return the null-container cast result
 
     emitter.label("__rt_mixed_cast_int_from_resource_linux_x86_64");
-    emitter.instruction("lea rax, [rdi + 1]");                                  // convert the native resource payload into the 1-based display id
+    emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the registry argument
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // PHP casts a resource to its RESOURCE ID, not to its native payload
 
     emitter.label("__rt_mixed_cast_int_done_linux_x86_64");
     emitter.instruction("add rsp, 16");                                         // release the aligned temporary slot reserved for nested helper calls

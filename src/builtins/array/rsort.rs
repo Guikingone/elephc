@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "rsort",
-    area: Array,
-    params: [ref array: Mixed, flags: Int = crate::builtins::spec::DefaultSpec::Int(0)],
-    returns: Void,
+    contract: "rsort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rsort,
     ),
-    summary: "Sorts an array in descending order.",
-    php_manual: "https://www.php.net/manual/en/function.rsort.php",
 }
 
 /// Validates the argument type for an `rsort` call.
@@ -33,9 +28,10 @@ builtin! {
 /// pre-validated by the registry. Returns `Ok(PhpType::Void)` on success.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Accepted under the gradual boundary (concrete array, `Mixed`, or a union containing
-    // an array); a concretely non-array argument stays a compile error.
-    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the sort lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
         return Err(CompileError::new(cx.span, &format!("{}() argument must be array", cx.name)));
     }
     Ok(PhpType::Void)

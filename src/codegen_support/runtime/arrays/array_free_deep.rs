@@ -7,9 +7,8 @@
 //!
 //! Key details:
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
-//! - A block whose uniform heap kind is 3 (associative hash — e.g. a statically Array-typed
-//!   owner whose storage was de-packed at runtime) is delegated to `__rt_hash_free_deep`
-//!   instead of being walked as indexed slots (ARM64) or silently skipped (x86_64).
+//! - Runtime value_type 9 stores opaque resource handles and releases each slot
+//!   through the generation-safe resource registry rather than heap decref.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -52,14 +51,6 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, x10");                                         // beyond heap end?
     emitter.instruction("b.hs __rt_array_free_deep_done");                      // not on heap, skip
 
-    // -- kind dispatch: a statically Array-typed owner can hold de-packed hash storage --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word for this block
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind tag
-    emitter.instruction("cmp x9, #3");                                          // is this block actually associative-hash storage (kind 3)?
-    emitter.instruction("b.ne __rt_array_free_deep_indexed");                   // true indexed arrays take the slot-walking free below
-    emitter.instruction("b __rt_hash_free_deep");                               // delegate runtime hashes to the bucket-aware deep free
-
-    emitter.label("__rt_array_free_deep_indexed");
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #32");                                     // allocate stack frame
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -89,9 +80,9 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // boxed mixed values need decref_any cleanup too
     emitter.instruction("cmp x10, #7");                                         // is this an array of boxed mixed values?
     emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // boxed mixed values need decref_any cleanup too
+    emitter.instruction("cmp x10, #9");                                         // is this an array of opaque resource handles?
+    emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // resource slots release through the registry
     emitter.instruction("cmp x10, #10");                                        // is this an array of callable descriptors?
-    emitter.instruction("b.eq __rt_array_free_deep_loop_setup");                // callable descriptors need per-element cleanup
-    emitter.instruction("cmp x10, #11");                                        // is this an array of reference cells?
     emitter.instruction("b.ne __rt_array_free_deep_struct");                    // scalar arrays need no per-element cleanup
 
     // -- free each releasable element --
@@ -123,6 +114,8 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_free_deep_release");
     emitter.instruction("str x12, [sp, #8]");                                   // save index (reuse slot, length in x10)
+    emitter.instruction("cmp x10, #9");                                         // is this slot an opaque resource handle?
+    emitter.instruction("b.eq __rt_array_free_deep_release_resource");          // registry handles use resource release rather than heap decref
     emitter.instruction("cmp x10, #10");                                        // is this slot a callable descriptor payload?
     emitter.instruction("b.eq __rt_array_free_deep_release_callable");          // callable descriptors use the descriptor release helper
     emitter.instruction("bl __rt_decref_any");                                  // release the heap-backed slot payload if needed
@@ -130,6 +123,9 @@ pub fn emit_array_free_deep(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_free_deep_release_callable");
     emitter.instruction("bl __rt_callable_descriptor_release");                 // release the callable descriptor stored in this slot
+    emitter.instruction("b __rt_array_free_deep_after_release");                // skip the resource-specific release path
+    emitter.label("__rt_array_free_deep_release_resource");
+    emitter.instruction("bl __rt_resource_release");                            // release the array owner's registry reference
     emitter.label("__rt_array_free_deep_after_release");
 
     // -- advance --
@@ -183,8 +179,6 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r11d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // ignore foreign pointers that do not carry the elephc x86_64 heap marker
     emitter.instruction("jne __rt_array_free_deep_done");                       // only elephc-owned indexed arrays participate in x86_64 deep-free bookkeeping
     emitter.instruction("and r10, 0xff");                                       // isolate the low-byte uniform heap kind tag for a final ownership sanity check
-    emitter.instruction("cmp r10, 3");                                          // is this block actually associative-hash storage (kind 3)?
-    emitter.instruction("je __rt_hash_free_deep");                              // delegate de-packed hashes to the bucket-aware deep free instead of skipping them
     emitter.instruction("cmp r10, 2");                                          // is this heap-backed payload really an indexed array?
     emitter.instruction("jne __rt_array_free_deep_done");                       // other heap kinds must not be released through the indexed-array deep-free helper
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving indexed-array deep-free spill slots
@@ -212,9 +206,9 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_array_free_deep_loop_setup");                  // nested objects need decref_any cleanup
     emitter.instruction("cmp ecx, 7");                                          // does this indexed array store boxed mixed values?
     emitter.instruction("je __rt_array_free_deep_loop_setup");                  // boxed mixed values need decref_any cleanup
+    emitter.instruction("cmp ecx, 9");                                          // does this indexed array store opaque resource handles?
+    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // registry resources need per-slot release
     emitter.instruction("cmp ecx, 10");                                         // does this indexed array store callable descriptors?
-    emitter.instruction("je __rt_array_free_deep_loop_setup");                  // callable descriptors need per-element cleanup
-    emitter.instruction("cmp ecx, 11");                                         // does this indexed array store reference cells?
     emitter.instruction("jne __rt_array_free_deep_struct");                     // scalar indexed arrays need no per-element cleanup
 
     emitter.label("__rt_array_free_deep_loop_setup");
@@ -241,6 +235,8 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11 + rcx + 24]");                 // load the persisted string pointer from the current indexed-array string slot
 
     emitter.label("__rt_array_free_deep_release");
+    emitter.instruction("cmp ecx, 9");                                          // is this slot an opaque resource handle?
+    emitter.instruction("je __rt_array_free_deep_release_resource");            // registry handles bypass heap decref
     emitter.instruction("cmp ecx, 10");                                         // is this slot a callable descriptor payload?
     emitter.instruction("je __rt_array_free_deep_release_callable");            // callable descriptors use the descriptor release helper
     emitter.instruction("call __rt_decref_any");                                // release the heap-backed child payload if the current indexed-array slot owns one
@@ -248,6 +244,10 @@ fn emit_array_free_deep_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_free_deep_release_callable");
     emitter.instruction("call __rt_callable_descriptor_release");               // release the callable descriptor stored in this slot
+    emitter.instruction("jmp __rt_array_free_deep_after_release");              // skip the resource-specific release path
+    emitter.label("__rt_array_free_deep_release_resource");
+    emitter.instruction("mov rdi, rax");                                        // pass the opaque handle to the registry release ABI
+    emitter.instruction("call __rt_resource_release");                          // release the array owner's registry reference
     emitter.label("__rt_array_free_deep_after_release");
     emitter.instruction("add QWORD PTR [rbp - 24], 1");                         // advance the indexed-array loop index to the next logical slot
     emitter.instruction("jmp __rt_array_free_deep_loop");                       // continue scanning indexed-array slots until every owned child payload is released

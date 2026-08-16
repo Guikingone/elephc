@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 builtin! {
-    name: "array_flip",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_flip",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFlip,
     ),
-    summary: "Exchanges all keys with their associated values in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-flip.php",
 }
 
 /// Returns the flipped associative-array type for an `array_flip` call.
@@ -39,6 +34,9 @@ builtin! {
 /// and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::AssocArray {
             key: Box::new(array_key_type_from_value_type(*elem_ty)),
@@ -48,16 +46,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             key: Box::new(array_key_type_from_value_type(*value)),
             value: key,
         }),
-        // Gradual boundary: a `Mixed` or union-containing-array argument is accepted. The
-        // key/value element types are unknown, so both flip to `Mixed`; EIR converts the
-        // boxed operand to an owned `Mixed`-keyed/`Mixed`-valued hash and flips it through
-        // `__rt_array_flip_mixed`.
-        t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => {
-            Ok(PhpType::AssocArray {
-                key: Box::new(PhpType::Mixed),
-                value: Box::new(PhpType::Mixed),
-            })
-        }
         _ => Err(CompileError::new(
             cx.span,
             "array_flip() argument must be array",

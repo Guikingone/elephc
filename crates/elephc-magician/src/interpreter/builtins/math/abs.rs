@@ -1,40 +1,16 @@
 //! Purpose:
-//! Eval registry entry and implementation for `abs`.
+//! Joins Magician to the shared runtime builtin contract for `abs`.
 //!
 //! Called from:
-//! - `crate::interpreter::builtins::hooks`.
+//! - `crate::interpreter::builtins::registry` inventory assembly.
 //!
 //! Key details:
-//! - Runtime scalar absolute-value coercions stay delegated to `RuntimeValueOps`.
-
-use super::super::super::*;
+//! - Behavior dispatches by `RuntimeBuiltinId` through the versioned
+//!   generated-runtime boxed-cell ABI; no Magician algorithm lives here.
 
 eval_builtin! {
-    name: "abs",
+    contract: "abs",
     area: Math,
-    params: [num],
-    direct: Abs,
-    values: Abs,
-}
-
-/// Evaluates PHP `abs()` over one eval expression.
-pub(in crate::interpreter) fn eval_builtin_abs(
-    args: &[EvalExpr],
-    context: &mut ElephcEvalContext,
-    scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [num] = args else {
-        return Err(EvalStatus::RuntimeFatal);
-    };
-    let num = eval_expr(num, context, scope, values)?;
-    eval_abs_result(num, values)
-}
-
-/// Applies PHP `abs()` to one already evaluated value.
-pub(in crate::interpreter) fn eval_abs_result(
-    num: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    values.abs(num)
+    direct: none,
+    values: none,
 }

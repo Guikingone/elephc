@@ -9,6 +9,7 @@
 //! - Folding must respect PHP coercions, truthiness, numeric edge cases, and runtime error boundaries.
 
 use super::super::*;
+use super::compare::{php_numeric_prefix, PhpNumeric};
 use super::scalar::{scalar_value, ScalarValue};
 
 /// Attempts to constant-fold a cast expression.
@@ -23,10 +24,16 @@ pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> 
         CastType::Int => try_fold_cast_int(value),
         CastType::Float => try_fold_cast_float(value),
         CastType::String => try_fold_cast_string(value),
+        // A NAN is truthy, but PHP 8.5 also REPORTS the coercion
+        // (`unexpected NAN value was coerced to bool`), and a folded `BoolLiteral` would
+        // swallow that warning — `var_dump((bool)NAN)` warns in php-src even though the
+        // operand is a compile-time constant. Declining the fold sends the value through the
+        // runtime truthiness path, which owns the diagnostic. This costs one compare for a
+        // literal NAN and nothing at all for every other float, and it matches how
+        // `try_fold_cast_int`/`try_fold_cast_string` already decline non-finite operands.
+        CastType::Bool if value.is_nan_float() => None,
         CastType::Bool => Some(ExprKind::BoolLiteral(value.truthy())),
         CastType::Array => None,
-        // `(object)` allocates a stdClass at runtime; never fold to a literal.
-        CastType::Object => None,
     }
 }
 
@@ -89,35 +96,48 @@ fn truncate_float_to_i64(value: f64) -> Option<i64> {
     Some(truncated as i64)
 }
 
-/// Parses a string value for `(int)` cast folding.
+/// Parses a string value for `(int)` cast folding, reproducing PHP's `zval_get_long()`.
  ///
- /// Tries i64 parse first, then f64 parse with truncation, then falls back to
- /// all-alphabetic strings (which PHP treats as `0`). Returns `None` for strings
- /// that contain digits or mixed digit/alpha content that fail numeric parsing.
+ /// The string's leading numeric run decides the result: an integer run that fits `i64` is
+ /// used directly, anything else goes through `zend_dval_to_lval_cap` (NAN/INF become `0`,
+ /// out-of-range floats saturate). A string with no numeric prefix at all is `0`, so
+ /// `"abc"`, `"0x1A"` and `"INF"` all fold to `0` rather than being parsed as Rust numbers.
 fn parse_string_cast_int(value: &str) -> Option<i64> {
-    if let Ok(parsed) = value.parse::<i64>() {
-        return Some(parsed);
-    }
-    if let Ok(parsed) = value.parse::<f64>() {
-        return truncate_float_to_i64(parsed);
-    }
-    if value.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        return Some(0);
-    }
-    None
+    Some(match php_numeric_prefix(value) {
+        Some(PhpNumeric::Int(parsed)) => parsed,
+        Some(PhpNumeric::Float { value, .. }) => cap_float_to_i64(value),
+        None => 0,
+    })
 }
 
-/// Parses a string value for `(float)` cast folding.
+/// Parses a string value for `(float)` cast folding, reproducing PHP's `zend_strtod()`.
  ///
- /// Tries f64 parse first; if that fails and all characters are alphabetic, returns `0.0`.
- /// Any other pattern (mixed digits/alpha, punctuation, etc.) returns `None` so the
- /// cast is evaluated at runtime.
+ /// Only the leading numeric run counts, and PHP's grammar has no `INF`, `NAN`, hexadecimal
+ /// or underscore forms — unlike Rust's `str::parse::<f64>()`, which accepts `"inf"` and
+ /// `"nan"`. A string with no numeric prefix is `0.0`.
 fn parse_string_cast_float(value: &str) -> Option<f64> {
-    if let Ok(parsed) = value.parse::<f64>() {
-        return Some(parsed);
+    Some(match php_numeric_prefix(value) {
+        Some(PhpNumeric::Int(parsed)) => parsed as f64,
+        Some(PhpNumeric::Float { value, .. }) => value,
+        None => 0.0,
+    })
+}
+
+/// Saturating float-to-int conversion, PHP's `zend_dval_to_lval_cap()`.
+ ///
+ /// Non-finite values become `0`; values outside the `i64` range clamp to `PHP_INT_MAX` /
+ /// `PHP_INT_MIN`; everything else truncates toward zero. Used only by the string `(int)`
+ /// cast, which is the one PHP path that saturates instead of wrapping.
+fn cap_float_to_i64(value: f64) -> i64 {
+    if !value.is_finite() {
+        return 0;
     }
-    if value.chars().all(|ch| ch.is_ascii_alphabetic()) {
-        return Some(0.0);
+    // `i64::MAX as f64` rounds up to 2^63, so the upper bound is exclusive.
+    if value >= -(i64::MIN as f64) {
+        return i64::MAX;
     }
-    None
+    if value < i64::MIN as f64 {
+        return i64::MIN;
+    }
+    value as i64
 }

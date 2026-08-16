@@ -2,19 +2,19 @@
 title: "readdir()"
 description: "Read entry from directory handle."
 sidebar:
-  order: 205
+  order: 217
 ---
 
 ## readdir()
 
 ```php
-function readdir(resource $dir_handle): mixed
+function readdir(resource $dir_handle = null): mixed
 ```
 
 Read entry from directory handle.
 
 **Parameters**:
-- `$dir_handle` (`resource`)
+- `$dir_handle` (`resource`), default `null`, optional
 
 **Returns**: `mixed`
 
@@ -24,12 +24,6 @@ Read entry from directory handle.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/readdir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/readdir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -79,9 +79,9 @@ mod tests {
     }
 
     #[test]
-    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 93, 64, 56, 38, 79.
+    /// macOS syscall numbers 1, 4, 5, 128, 338 map to Linux aarch64 syscall numbers 94, 64, 56, 38, 79.
     fn test_map_syscall() {
-        assert_eq!(map_syscall(1), 93);
+        assert_eq!(map_syscall(1), 94);
         assert_eq!(map_syscall(4), 64);
         assert_eq!(map_syscall(5), 56);
         assert_eq!(map_syscall(29), 207);
@@ -150,7 +150,7 @@ _main:
         assert!(linux_asm.contains("mov x8, #64\n"));
         assert!(linux_asm.contains("svc #0\n"));
         assert!(linux_asm.contains("bl snprintf\n"));
-        assert!(linux_asm.contains("mov x8, #93\n"));
+        assert!(linux_asm.contains("mov x8, #94\n"));
         assert!(!linux_asm.contains("x16"));
         assert!(!linux_asm.contains("@PAGE"));
     }
@@ -168,27 +168,11 @@ _main:
     }
 
     #[test]
-    /// PCRE2 POSIX-wrapper regex structs use one layout across supported targets.
-    fn test_regex_layout_offsets() {
+    /// Directory and glob layouts retain their platform-specific offsets.
+    fn test_directory_layout_offsets() {
         assert_eq!(Platform::MacOS.dirent_name_offset(), 21);
         assert_eq!(Platform::Linux.dirent_name_offset(), 19);
         assert_eq!(Platform::MacOS.glob_pathv_offset(), 32);
         assert_eq!(Platform::Linux.glob_pathv_offset(), 8);
-        assert_eq!(Platform::MacOS.regex_t_size(), 48);
-        assert_eq!(Platform::Linux.regex_t_size(), 48);
-        assert_eq!(Platform::MacOS.regex_re_nsub_offset(), 24);
-        assert_eq!(Platform::Linux.regex_re_nsub_offset(), 24);
-        assert_eq!(Platform::MacOS.regmatch_t_size(), 8);
-        assert_eq!(Platform::Linux.regmatch_t_size(), 8);
-        assert_eq!(Platform::MacOS.regmatch_rm_eo_offset(), 4);
-        assert_eq!(Platform::Linux.regmatch_rm_eo_offset(), 4);
-        assert_eq!(
-            Platform::MacOS.regoff_load_instr("x9", "sp", 32),
-            "ldrsw x9, [sp, #32]"
-        );
-        assert_eq!(
-            Platform::Linux.regoff_load_instr("x9", "sp", 32),
-            "ldrsw x9, [sp, #32]"
-        );
     }
 }

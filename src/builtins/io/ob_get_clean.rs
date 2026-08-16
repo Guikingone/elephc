@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_get_clean",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "ob_get_clean",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObGetClean,
     ),
-    summary: "Gets the current buffer contents and deletes the current output buffer.",
-    php_manual: "function.ob-get-clean",
 }
 
 /// Returns `Union(Str, False)`: the buffered bytes on success, `false` when no

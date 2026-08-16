@@ -60,45 +60,6 @@ echo array_search(10, $a) === false ? "miss" : "zero";
     assert_eq!(out, "zero");
 }
 
-/// Verifies `array_search` with a numeric-string needle uses PHP loose comparison
-/// by default, matching the equivalent integer element.
-#[test]
-fn test_array_search_loose_string_needle_in_int_array() {
-    let out = compile_and_run(
-        r#"<?php
-$r = array_search("2", [1, 2, 3]);
-echo $r;
-"#,
-    );
-    assert_eq!(out, "1");
-}
-
-/// Verifies `array_search` with strict=true returns strict `false` when the needle
-/// type differs from the element type (string needle vs integer elements).
-#[test]
-fn test_array_search_strict_type_mismatch_is_false() {
-    let out = compile_and_run(
-        r#"<?php
-$r = array_search("2", [1, 2, 3], true);
-echo $r === false ? "miss" : "hit";
-"#,
-    );
-    assert_eq!(out, "miss");
-}
-
-/// Verifies `array_search` with strict=true still finds an element when both the
-/// needle and the elements are the same integer type.
-#[test]
-fn test_array_search_strict_same_type_found() {
-    let out = compile_and_run(
-        r#"<?php
-$r = array_search(20, [10, 20, 30], true);
-echo $r;
-"#,
-    );
-    assert_eq!(out, "1");
-}
-
 /// Verifies `array_key_exists` returns true for an existing integer key and false for a missing key.
 #[test]
 fn test_array_key_exists() {
@@ -141,53 +102,6 @@ echo $c[0] . $c[1];
 "#,
     );
     assert_eq!(out, "2:34");
-}
-
-/// Verifies `array_merge` of two string-element arrays uses the 16-byte string-slot
-/// merge path and preserves every string value in order.
-#[test]
-fn test_array_merge_string_arrays() {
-    let out = compile_and_run(
-        r#"<?php
-$a = ["x", "y"];
-$b = ["z"];
-echo implode(",", array_merge($a, $b));
-"#,
-    );
-    assert_eq!(out, "x,y,z");
-}
-
-/// Verifies `array_merge` of an `array<mixed>` and an `array<string>` widens the string
-/// operand to boxed-Mixed slots and produces an `array<mixed>` whose elements read back
-/// correctly (regression for the value_type stamp on the refcounted merge result).
-#[test]
-fn test_array_merge_mixed_and_string() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [1, "x"];
-$b = ["z"];
-$c = array_merge($a, $b);
-echo count($c), ":", $c[0], $c[1], $c[2];
-"#,
-    );
-    assert_eq!(out, "3:1xz");
-}
-
-/// Verifies `array_key_exists` with a string key on a packed indexed array follows PHP's
-/// numeric-string key coercion: a canonical integer string is bounds-checked, while a
-/// non-numeric string can never exist in an indexed array.
-#[test]
-fn test_array_key_exists_string_key_on_indexed_array() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [10, 20, 30];
-if (array_key_exists("1", $a)) { echo "a"; }
-if (!array_key_exists("foo", $a)) { echo "b"; }
-if (array_key_exists("0", $a)) { echo "c"; }
-if (!array_key_exists("5", $a)) { echo "d"; }
-"#,
-    );
-    assert_eq!(out, "abcd");
 }
 
 /// Verifies the `+` operator keeps the left operand's values when both arrays

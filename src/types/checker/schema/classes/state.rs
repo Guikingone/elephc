@@ -144,12 +144,15 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
-            // `class.constants` is the flattened declaration list, already in PHP's
-            // enumeration order (own first, then inherited); keep that order verbatim.
-            constant_order: class
+            constant_deprecations: class
                 .constants
                 .iter()
-                .map(|constant| constant.name.clone())
+                .filter_map(|constant| {
+                    crate::types::checker::schema::validation::extract_deprecation(
+                        &constant.attributes,
+                    )
+                    .map(|reason| (constant.name.clone(), reason))
+                })
                 .collect(),
             constant_types: class
                 .constants
@@ -204,16 +207,7 @@ impl ClassBuildState {
             static_property_visibilities: self.static_property_visibilities,
             declared_static_properties: self.declared_static_properties,
             final_static_properties: self.final_static_properties,
-            own_property_decl_order: class
-                .properties
-                .iter()
-                .map(|prop| prop.name.clone())
-                .collect(),
             method_decls: class.methods.clone(),
-            // Filled in by the caller (`resolve_const_default_references` runs before this
-            // class is built, so `class.methods` above is already const-fold-rewritten). See
-            // the field doc on `ClassInfo::method_decls_unfolded`.
-            method_decls_unfolded: Vec::new(),
             methods: self.method_sigs,
             static_methods: self.static_sigs,
             late_static_method_returns: self.late_static_method_returns,
@@ -234,7 +228,6 @@ impl ClassBuildState {
             static_vtable_slots: self.static_vtable_slots,
             interfaces: self.interfaces,
             constructor_param_to_prop,
-            rebound_reference_properties: Default::default(),
         })
     }
 }

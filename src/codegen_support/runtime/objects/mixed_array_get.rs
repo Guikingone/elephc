@@ -13,8 +13,6 @@
 //!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
 //!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
 //! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
-//! - Associative entries holding a reference (value-tag 11, kind-6 cell) are normalized through
-//!   `__rt_deref_if_reference` before boxing so callers read through the reference like PHP.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -82,7 +80,55 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_object");                    // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
+    emitter.instruction("cmp x9, #1");                                          // tag = 1 (string)?
+    emitter.instruction("b.eq __rt_mixed_array_get_string");                    // a string offset read, not a container lookup
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
+
+    // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
+    // A boxed string reaching here is ordinary PHP: `$s = fgets($h); $s[0]`. Without this
+    // case it fell through to null, and because `ord(null)` is 0 the mistake was silent.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("ldr x10, [x0, #8]");                                   // the string payload pointer
+    emitter.instruction("ldr x11, [x0, #16]");                                  // and its length
+    emitter.instruction("ldr x12, [sp, #8]");                                   // the offset (key_lo holds the integer key)
+    emitter.instruction("tbz x12, #63, __rt_mixed_array_get_string_abs");       // already an absolute offset
+    emitter.instruction("add x12, x12, x11");                                   // php counts a negative offset back from the end
+    emitter.label("__rt_mixed_array_get_string_abs");
+    emitter.instruction("tbnz x12, #63, __rt_mixed_array_get_string_oob");      // still negative: before the start
+    emitter.instruction("cmp x12, x11");                                        // past the last byte?
+    emitter.instruction("b.hs __rt_mixed_array_get_string_oob");                // php answers "" for either direction
+    emitter.instruction("ldrb w13, [x10, x12]");                                // the selected byte
+    emitter.instruction("str x13, [sp, #16]");                                  // park it across the reservation (key_hi is dead here)
+    emitter.instruction("mov x0, #1");                                          // one byte of storage for the result
+    emitter.instruction("bl __rt_concat_reserve");                              // scratch or heap, decided by size
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the byte
+    emitter.instruction("strb w13, [x0]");                                      // write the single character
+    emitter.instruction("mov x1, x0");                                          // publish expects the result pointer
+    emitter.instruction("mov x2, #1");                                          // and its length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch cursor for scratch-backed results
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string; publish left x1/x2 untouched
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the 1-character result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    // An out-of-range offset is "" in php, not null. php also emits
+    // `Warning: Uninitialized string offset N`, which elephc does not yet compose — that
+    // needs an integer rendered into the message, and the runtime has no such helper.
+    emitter.label("__rt_mixed_array_get_string_oob");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // an ordinary read, or isset()/`??`?
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // isset() must see the offset as ABSENT, not as ""
+    emitter.instruction("ldr x0, [sp, #8]");                                    // php names the offset AS WRITTEN, not the resolved one
+    emitter.instruction("bl __rt_warn_uninitialized_string_offset");            // `@` is suppressed inside the diagnostic itself
+    emitter.instruction("mov x0, #0");                                          // a zero-length reservation still yields a real pointer
+    emitter.instruction("bl __rt_concat_reserve");                              // so the empty result is a valid string, not a null one
+    emitter.instruction("mov x1, x0");                                          // the empty payload pointer
+    emitter.instruction("mov x2, #0");                                          // with no bytes
+    emitter.instruction("mov x0, #1");                                          // tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the empty result
+    emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the local frame
+    emitter.instruction("ret");                                                 // return Mixed* in x0
 
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
@@ -94,13 +140,6 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_array_get_null_container",
     );
-    // A value boxed with the indexed-array tag can have been promoted to an associative
-    // hash at runtime by a string/Mixed-key write (its static type stayed `array` while the
-    // storage became a hash). Probe the runtime heap-kind byte and read a promoted hash
-    // through the hash path so string keys resolve instead of missing.
-    emitter.instruction("ldrb w9, [x10, #-8]");                                 // runtime heap-kind byte of the array payload
-    emitter.instruction("cmp w9, #3");                                          // heap kind 3 = associative hash (promoted array)?
-    emitter.instruction("b.eq __rt_mixed_array_get_indexed_as_hash");           // read the promoted hash through the hash-get path
     emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
     emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
     emitter.instruction("b.ne __rt_mixed_array_get_indexed_missing_string");    // missing string keys use PHP's string-key warning
@@ -165,10 +204,6 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit the PHP warning for a missing string key
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
 
-    // Entry point for a promoted indexed array: x10 already holds the hash pointer.
-    emitter.label("__rt_mixed_array_get_indexed_as_hash");
-    emitter.instruction("b __rt_mixed_array_get_hash_from_ptr");                 // reuse the shared hash-get path below
-
     // Associative array: hash_get with normalized key.
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
@@ -179,16 +214,11 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
         "x9",
         "__rt_mixed_array_get_null_container",
     );
-    emitter.label("__rt_mixed_array_get_hash_from_ptr");                        // shared entry with x10 = hash pointer
     emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
     emitter.instruction("cbz x0, __rt_mixed_array_get_assoc_missing");          // diagnose an absent hash key for ordinary reads
-    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the
-    // current inner value + inner tag so the boxed result carries a readable value tag
-    // (PHP reads through references transparently — mirrors `hash_get`'s consumer path).
-    emitter.instruction("bl __rt_deref_if_reference");                          // deref a tag-11 reference bucket to its inner (value, tag) pair
     // For value_tag == 7 the entry already holds a boxed Mixed pointer
     // (json_decode and stdClass populate hashes this way). Anything else
     // (typed string/int/array entries from non-Mixed assoc arrays passing
@@ -361,7 +391,58 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_object");                      // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 8");                                          // tag = 8 (canonical PHP null)?
     emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
+    emitter.instruction("cmp r10, 1");                                          // tag = 1 (string)?
+    emitter.instruction("je __rt_mixed_array_get_string");                      // a string offset read, not a container lookup
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
+
+    // -- string receiver: `$s[$i]` reads one byte and answers a 1-character string --
+    // See the AArch64 half. Silent before this case existed, because `ord(null)` is 0.
+    emitter.label("__rt_mixed_array_get_string");
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // the string payload pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi + 16]");                       // and its length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the offset (key_lo holds the integer key)
+    emitter.instruction("test rsi, rsi");                                       // is it already absolute?
+    emitter.instruction("jns __rt_mixed_array_get_string_abs");                 // yes: use it as it stands
+    emitter.instruction("add rsi, r11");                                        // php counts a negative offset back from the end
+    emitter.label("__rt_mixed_array_get_string_abs");
+    emitter.instruction("test rsi, rsi");                                       // still negative: before the start
+    emitter.instruction("js __rt_mixed_array_get_string_oob");                  // php answers "" for either direction
+    emitter.instruction("cmp rsi, r11");                                        // past the last byte?
+    emitter.instruction("jae __rt_mixed_array_get_string_oob");
+    emitter.instruction("movzx eax, BYTE PTR [r10 + rsi]");                     // the selected byte
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // park it across the reservation (key_hi is dead here)
+    emitter.instruction("mov rax, 1");                                          // one byte of storage for the result
+    emitter.instruction("call __rt_concat_reserve");                            // scratch or heap, decided by size
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the byte
+    emitter.instruction("mov BYTE PTR [rax], r10b");                            // write the single character
+    emitter.instruction("mov rdx, 1");                                          // publish expects the length in rdx
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch cursor for scratch-backed results
+    emitter.instruction("mov rdi, rax");                                        // value_lo = the result pointer
+    emitter.instruction("mov rsi, rdx");                                        // value_hi = its length
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the 1-character result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    // An out-of-range offset is "" in php, not null. The accompanying
+    // `Warning: Uninitialized string offset N` is not composed yet — it needs an integer
+    // rendered into the message and the runtime has no helper for that.
+    emitter.label("__rt_mixed_array_get_string_oob");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // an ordinary read, or isset()/`??`?
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_mixed_array_get_null");                        // isset() must see the offset as ABSENT, not as ""
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // php names the offset AS WRITTEN, not the resolved one
+    emitter.instruction("call __rt_warn_uninitialized_string_offset");          // `@` is suppressed inside the diagnostic itself
+    emitter.instruction("mov rax, 0");                                          // a zero-length reservation still yields a real pointer
+    emitter.instruction("call __rt_concat_reserve");                            // so the empty result is a valid string, not a null one
+    emitter.instruction("mov rdi, rax");                                        // value_lo = the empty payload pointer
+    emitter.instruction("mov rsi, 0");                                          // value_hi = no bytes
+    emitter.instruction("mov rax, 1");                                          // tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // box the empty result
+    emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
+    emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return Mixed* in rax
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
@@ -371,12 +452,6 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
         "r11",
         "__rt_mixed_array_get_null_container",
     );
-    // A value boxed with the indexed-array tag can have been promoted to an associative
-    // hash at runtime by a string/Mixed-key write. Probe the runtime heap-kind byte and
-    // read a promoted hash through the hash path so string keys resolve instead of missing.
-    emitter.instruction("movzx r9d, BYTE PTR [r10 - 8]");                       // runtime heap-kind byte of the array payload
-    emitter.instruction("cmp r9d, 3");                                          // heap kind 3 = associative hash (promoted array)?
-    emitter.instruction("je __rt_mixed_array_get_indexed_as_hash");             // read the promoted hash through the hash-get path
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
     emitter.instruction("jne __rt_mixed_array_get_indexed_missing_string");     // missing string keys use PHP's string-key warning
@@ -445,10 +520,6 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_warn_undefined_array_key_str");              // emit the PHP warning for a missing string key
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
 
-    // Entry point for a promoted indexed array: r10 already holds the hash pointer.
-    emitter.label("__rt_mixed_array_get_indexed_as_hash");
-    emitter.instruction("jmp __rt_mixed_array_get_hash_from_ptr");              // reuse the shared hash-get path below
-
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
     emit_branch_if_null_container(
@@ -457,17 +528,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
         "r11",
         "__rt_mixed_array_get_null_container",
     );
-    emitter.label("__rt_mixed_array_get_hash_from_ptr");                        // shared entry with r10 = hash pointer
     emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
     emitter.instruction("je __rt_mixed_array_get_assoc_missing");               // diagnose an absent hash key for ordinary reads
-    // A referenced element (value-tag 11) holds a kind-6 cell pointer; normalize it to the
-    // current inner value + inner tag so the boxed result carries a readable value tag
-    // (PHP reads through references transparently — mirrors `hash_get`'s consumer path).
-    emitter.instruction("call __rt_deref_if_reference");                        // deref a tag-11 reference bucket to its inner (value, tag) pair
     // For value_tag == 7 the entry is already a boxed Mixed pointer; for
     // any other tag (typed string/int/array entries from non-Mixed assoc
     // arrays passing through a Mixed receiver) re-box (lo, hi, tag) so

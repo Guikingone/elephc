@@ -29,6 +29,17 @@ use crate::types::ClassInfo;
 
 use super::program_usage::{collect_required_class_names, program_has_dynamic_instanceof};
 
+/// A logical final-link requirement selected by compiler/runtime feature detection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LinkRequirement {
+    /// A curated project-native package resolved to exact verified archives.
+    NativePackage(&'static str),
+    /// An Elephc Rust bridge resolved by the authoritative bridge table.
+    Bridge(&'static str),
+    /// A conventional platform library resolved by the system linker.
+    SystemLibrary(String),
+}
+
 /// Runtime helper families that can be emitted independently.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RuntimeFeatures {
@@ -50,43 +61,12 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
-    /// True when the program performs a non-literal `defined()`/`constant()`/
-    /// `enum_exists()` lookup that must search the emitted closed-world constant
-    /// and enum registries at runtime (`__rt_defined`/`__rt_constant`/
-    /// `__rt_enum_exists` and their `_const_table`/`_enum_table` data). Detected
-    /// from the lowered EIR instruction stream, not the AST.
-    pub const_introspection: bool,
-    /// True when the program performs a non-literal `class_exists()`/
-    /// `interface_exists()`/`trait_exists()` lookup that must search the emitted
-    /// closed-world class/interface/trait registries at runtime
-    /// (`__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists` and their
-    /// `_class_table`/`_interface_table`/`_trait_table` data). Detected from the
-    /// lowered EIR instruction stream, not the AST. Kept as a sibling of
-    /// `const_introspection` rather than folded into it, since the two feature
-    /// families gate distinct data tables and helpers that a program may need
-    /// independently.
-    pub class_introspection: bool,
-    /// True when the program performs a `class_implements()`/`class_parents()`/
-    /// `class_uses()` lookup whose target cannot be resolved to a single known
-    /// class/interface/trait at compile time: a non-literal name, or an object
-    /// argument (whose runtime class must be resolved dynamically since the
-    /// static type is not a sound stand-in for the runtime type under
-    /// polymorphism). Gates the `_class_relation_table`/`_interface_relation_table`/
-    /// `_trait_relation_table` payload registries and their runtime search
-    /// helpers. Kept as a sibling of `class_introspection` rather than folded
-    /// into it: a program can use non-literal `class_exists()` without ever
-    /// needing the (larger) per-class relation payload tables, and vice versa.
-    pub class_relation_introspection: bool,
-
-    /// Whether `get_class_methods()` is reached with a target this compiler cannot resolve at
-    /// compile time (a non-literal class-name string, or a `Mixed`/union value). Gates the
-    /// `_class_methods_table` payload registry and `__rt_array_from_name_list`.
-    ///
-    /// A sibling of `class_relation_introspection` rather than part of it, for the same reason
-    /// that one is a sibling of `class_introspection`: the method-name payload is by far the
-    /// largest of the three registries (every method of every class), and a program using
-    /// dynamic `class_implements()` must not pay for it.
-    pub class_methods_introspection: bool,
+    /// True when the program lowers a `__elephc_pdo_adapter_addr` call (the PDO
+    /// Tier-D prelude decomposing a callback into descriptor + adapter pointers),
+    /// which takes the address of a `__rt_pdo_*` adapter. Emitting the adapter under
+    /// this bit keeps the address-of reference resolvable without pulling the body
+    /// into non-PDO programs.
+    pub pdo_udf: bool,
 }
 
 impl RuntimeFeatures {
@@ -100,10 +80,7 @@ impl RuntimeFeatures {
             eval_bridge: false,
             eval_scope: false,
             web: false,
-            const_introspection: false,
-            class_introspection: false,
-            class_relation_introspection: false,
-            class_methods_introspection: false,
+            pdo_udf: false,
         }
     }
 
@@ -118,21 +95,7 @@ impl RuntimeFeatures {
             eval_bridge: true,
             eval_scope: true,
             web: true,
-            const_introspection: true,
-            class_introspection: true,
-            class_relation_introspection: true,
-            class_methods_introspection: true,
-        }
-    }
-
-    /// Enables optional runtime families referenced by code generated for another feature.
-    ///
-    /// The unbounded descriptor invoker emits generic wrappers for every dynamically callable
-    /// builtin, including `preg_match()` and `preg_match_all()`. Those wrappers reference the
-    /// regex helpers even when the source program contains no direct `preg_*` call.
-    pub(crate) fn include_transitive_codegen_dependencies(&mut self) {
-        if self.descriptor_invoker {
-            self.regex = true;
+            pdo_udf: true,
         }
     }
 }
@@ -151,38 +114,34 @@ pub fn runtime_features_for_program_and_classes(
     runtime_features_for_program_and_classes_opt(program, Some(classes))
 }
 
-/// Returns native libraries required by the selected optional runtime features.
-pub fn required_libraries_for_runtime_features(features: RuntimeFeatures) -> Vec<String> {
-    let mut libs = Vec::new();
+/// Returns typed final-link requirements for the selected optional runtime features.
+pub fn link_requirements_for_runtime_features(features: RuntimeFeatures) -> Vec<LinkRequirement> {
+    let mut requirements = Vec::new();
     if features.regex {
-        push_required_library(&mut libs, "pcre2-posix");
-        push_required_library(&mut libs, "pcre2-8");
+        requirements.push(LinkRequirement::NativePackage("pcre2"));
     }
     if features.phar_archive {
-        libs.push("elephc_phar".to_string());
-        libs.push("z".to_string());
-        libs.push("bz2".to_string());
+        requirements.push(LinkRequirement::Bridge("elephc_phar"));
+        requirements.push(LinkRequirement::SystemLibrary("z".to_string()));
+        requirements.push(LinkRequirement::SystemLibrary("bz2".to_string()));
     }
-    if features.descriptor_invoker {
-        // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that
-        // reference `elephc_crypto_hash`; force the crate to link on all targets.
-        libs.push("elephc_crypto".to_string());
+    if features.descriptor_invoker && !features.eval_bridge {
+        // The dynamic builtin dispatcher emits md5/sha1/hash wrappers that reference
+        // `elephc_crypto_hash`; force the crate to link when Magician is absent. The
+        // Magician staticlib already carries its crypto dependency, and adding the
+        // standalone archive beside it produces duplicate C exports on macOS.
+        requirements.push(LinkRequirement::Bridge("elephc_crypto"));
     }
     if features.eval_bridge {
-        // Eval code can call preg_* from dynamically parsed source, so PCRE2 is
-        // required even when no static preg call appears in the AOT AST.
-        push_required_library(&mut libs, "pcre2-posix");
-        push_required_library(&mut libs, "pcre2-8");
-        push_required_library(&mut libs, "elephc_magician");
+        // The interpreter remains an ordinary table-driven Elephc bridge. Its BCMath
+        // registry calls the standalone C ABI so AOT and eval share one process scale
+        // instead of embedding a second staticlib copy. Keep bcmath after magician so
+        // eval-only links resolve the archive's newly introduced references.
+        // Regex is a separate optional capability registered only when enabled.
+        requirements.push(LinkRequirement::Bridge("elephc_magician"));
+        requirements.push(LinkRequirement::Bridge("elephc_bcmath"));
     }
-    libs
-}
-
-/// Appends a required link library once while preserving feature order.
-fn push_required_library(libs: &mut Vec<String>, library: &str) {
-    if !libs.iter().any(|existing| existing == library) {
-        libs.push(library.to_string());
-    }
+    requirements
 }
 
 /// Builds the optional runtime feature set, using class metadata when codegen has it.
@@ -194,7 +153,6 @@ fn runtime_features_for_program_and_classes_opt(
     features.regex = program_requires_regex(program, classes);
     features.phar_archive = class_emission_can_reference_phar_archive(program, classes);
     features.descriptor_invoker = program_requires_descriptor_invoker(program);
-    features.include_transitive_codegen_dependencies();
     features
 }
 
@@ -295,6 +253,9 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
+        | StmtKind::Assign { value: expr, .. }
+        | StmtKind::TypedAssign { value: expr, .. }
+        | StmtKind::StaticVar { init: expr, .. }
         | StmtKind::ListUnpack { value: expr, .. }
         | StmtKind::Return(Some(expr))
         | StmtKind::ArrayPush { value: expr, .. }
@@ -303,20 +264,10 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
         | StmtKind::Include { path: expr, .. } => expr_has_regex_call(expr),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::StaticVar { init: value, .. } => {
-            expr_has_regex_call(value) || expr_is_regex_callback_string(value)
-        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_has_regex_call(index) || expr_has_regex_call(value)
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_has_regex_call(property)
-                || index.as_ref().is_some_and(expr_has_regex_call)
-                || expr_has_regex_call(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_regex_call(target) || expr_has_regex_call(value)
@@ -389,11 +340,8 @@ fn stmt_has_regex_call(stmt: &Stmt) -> bool {
         }
         StmtKind::Return(None)
         | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -450,7 +398,6 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_has_regex_call(value) || expr_has_regex_call(default),
-        ExprKind::ListUnpack { value, .. } => expr_has_regex_call(value),
         ExprKind::Assignment {
             target,
             value,
@@ -461,7 +408,6 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
             body_has_regex_call(prelude)
                 || expr_has_regex_call(target)
                 || expr_has_regex_call(value)
-                || expr_is_regex_callback_string(value)
                 || result_target.as_deref().is_some_and(expr_has_regex_call)
         }
         ExprKind::ArrayLiteral(items) => items.iter().any(expr_has_regex_call),
@@ -543,10 +489,6 @@ fn expr_has_regex_call(expr: &Expr) -> bool {
         | ExprKind::ScopedConstantAccess { receiver, .. } => {
             static_receiver_has_regex_call(receiver)
         }
-        // `$obj::CONST` — recurse into the evaluated object expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_regex_call(object),
-        // `self::${$expr}` — recurse into the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_regex_call(property),
         ExprKind::BufferNew { len, .. } => expr_has_regex_call(len),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_has_regex_call)
@@ -587,18 +529,6 @@ fn expr_is_regex_callback_string(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::StringLiteral(name) => is_regex_builtin_name(name),
         ExprKind::NamedArg { value, .. } => expr_is_regex_callback_string(value),
-        ExprKind::Ternary {
-            then_expr,
-            else_expr,
-            ..
-        } => {
-            expr_is_regex_callback_string(then_expr)
-                || expr_is_regex_callback_string(else_expr)
-        }
-        ExprKind::ShortTernary { value, default }
-        | ExprKind::NullCoalesce { value, default } => {
-            expr_is_regex_callback_string(value) || expr_is_regex_callback_string(default)
-        }
         _ => false,
     }
 }
@@ -661,11 +591,6 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         | StmtKind::PropertyArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_needs_descriptor_invoker(index) || expr_needs_descriptor_invoker(value)
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_needs_descriptor_invoker(property)
-                || index.as_ref().is_some_and(expr_needs_descriptor_invoker)
-                || expr_needs_descriptor_invoker(value)
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_needs_descriptor_invoker(target) || expr_needs_descriptor_invoker(value)
@@ -752,11 +677,8 @@ fn stmt_needs_descriptor_invoker(stmt: &Stmt) -> bool {
         }
         StmtKind::Return(None)
         | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
@@ -809,7 +731,6 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
             value,
             callable: default,
         } => expr_needs_descriptor_invoker(value) || expr_needs_descriptor_invoker(default),
-        ExprKind::ListUnpack { value, .. } => expr_needs_descriptor_invoker(value),
         ExprKind::Assignment {
             target,
             value,
@@ -893,14 +814,6 @@ fn expr_needs_descriptor_invoker(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. }
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. } => false,
-        // `$obj::CONST` — recurse into the evaluated object expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            expr_needs_descriptor_invoker(object)
-        }
-        // `self::${$expr}` — recurse into the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            expr_needs_descriptor_invoker(property)
-        }
         ExprKind::BufferNew { len, .. } => expr_needs_descriptor_invoker(len),
         ExprKind::Yield { key, value } => {
             key.as_deref().is_some_and(expr_needs_descriptor_invoker)
@@ -1084,31 +997,47 @@ mod tests {
         );
     }
 
-    /// Verifies regex runtime features request PCRE2 libraries for final linking.
+    /// Verifies regex features emit one managed PCRE2 requirement without raw library names.
     #[test]
-    fn test_regex_runtime_features_require_pcre2_libraries() {
+    fn test_regex_runtime_features_require_managed_pcre2() {
         assert_eq!(
-            required_libraries_for_runtime_features(RuntimeFeatures {
+            link_requirements_for_runtime_features(RuntimeFeatures {
                 regex: true,
                 ..RuntimeFeatures::none()
             }),
-            vec!["pcre2-posix".to_string(), "pcre2-8".to_string()]
+            vec![LinkRequirement::NativePackage("pcre2")]
         );
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures::none()).is_empty());
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures::none()).is_empty());
     }
 
-    /// Verifies eval runtime features request PCRE2 plus the magician bridge staticlib for final linking.
+    /// Verifies eval requests Magician followed by its standalone BCMath ABI provider.
     #[test]
-    fn test_eval_runtime_features_require_elephc_magician_library() {
+    fn test_eval_runtime_features_require_magician_and_bcmath_bridges() {
         assert_eq!(
-            required_libraries_for_runtime_features(RuntimeFeatures {
+            link_requirements_for_runtime_features(RuntimeFeatures {
                 eval_bridge: true,
                 ..RuntimeFeatures::none()
             }),
             vec![
-                "pcre2-posix".to_string(),
-                "pcre2-8".to_string(),
-                "elephc_magician".to_string()
+                LinkRequirement::Bridge("elephc_magician"),
+                LinkRequirement::Bridge("elephc_bcmath")
+            ]
+        );
+    }
+
+    /// Verifies eval plus regex requests PCRE2 and both eval bridge archives.
+    #[test]
+    fn test_eval_with_regex_requires_managed_pcre2_and_magician_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                regex: true,
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![
+                LinkRequirement::NativePackage("pcre2"),
+                LinkRequirement::Bridge("elephc_magician"),
+                LinkRequirement::Bridge("elephc_bcmath")
             ]
         );
     }
@@ -1116,7 +1045,7 @@ mod tests {
     /// Verifies eval scope-only support no longer pulls the dynamic eval bridge libraries.
     #[test]
     fn test_eval_scope_runtime_features_omit_bridge_libraries() {
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures {
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             eval_scope: true,
             ..RuntimeFeatures::none()
         })
@@ -1137,22 +1066,6 @@ mod tests {
             features_for("<?php echo call_user_func_array(\"preg_split\", [\"/,/\", \"a,b\"]);"),
             RuntimeFeatures {
                 regex: true,
-                ..RuntimeFeatures::none()
-            }
-        );
-    }
-
-    /// Verifies a finite conditional regex function-name assignment enables regex helpers for a
-    /// later direct dynamic call.
-    #[test]
-    fn test_runtime_features_include_regex_for_conditional_dynamic_callable() {
-        assert_eq!(
-            features_for(
-                "<?php $match = $all ? 'preg_match_all' : 'preg_match'; $match('/a/', 'a');",
-            ),
-            RuntimeFeatures {
-                regex: true,
-                descriptor_invoker: true,
                 ..RuntimeFeatures::none()
             }
         );
@@ -1227,10 +1140,10 @@ mod tests {
     /// Verifies a dynamic `call_user_func()` callback requests the dispatcher.
     #[test]
     fn test_runtime_features_include_descriptor_invoker_for_dynamic_call_user_func() {
-        let features =
-            features_for("<?php $cb = \"strlen\"; echo call_user_func($cb, \"hi\");");
-        assert!(features.descriptor_invoker);
-        assert!(features.regex);
+        assert!(
+            features_for("<?php $cb = \"strlen\"; echo call_user_func($cb, \"hi\");")
+                .descriptor_invoker
+        );
     }
 
     /// Verifies a direct dynamic string call requests the dispatcher.
@@ -1280,10 +1193,10 @@ mod tests {
         );
     }
 
-    /// Verifies the dynamic dispatcher feature requests the crypto staticlib for linking.
+    /// Verifies the dynamic dispatcher feature requests the typed crypto bridge.
     #[test]
-    fn test_descriptor_invoker_runtime_features_require_elephc_crypto_library() {
-        assert!(required_libraries_for_runtime_features(RuntimeFeatures {
+    fn test_descriptor_invoker_runtime_features_require_elephc_crypto_bridge() {
+        assert!(link_requirements_for_runtime_features(RuntimeFeatures {
             regex: false,
             mb_strlen: false,
             phar_archive: false,
@@ -1291,17 +1204,28 @@ mod tests {
             eval_bridge: false,
             eval_scope: false,
             web: false,
-            const_introspection: false,
-            class_introspection: false,
-            class_relation_introspection: false,
-            class_methods_introspection: false,
+            pdo_udf: false,
         })
         .iter()
-        .any(|lib| lib == "elephc_crypto"));
-        assert!(
-            !required_libraries_for_runtime_features(RuntimeFeatures::none())
-                .iter()
-                .any(|lib| lib == "elephc_crypto")
+        .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
+        assert!(!link_requirements_for_runtime_features(RuntimeFeatures::none())
+            .iter()
+            .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));
+    }
+
+    /// Verifies Magician supplies its embedded crypto dependency without a duplicate archive.
+    #[test]
+    fn test_eval_descriptor_invoker_omits_standalone_crypto_bridge() {
+        assert_eq!(
+            link_requirements_for_runtime_features(RuntimeFeatures {
+                descriptor_invoker: true,
+                eval_bridge: true,
+                ..RuntimeFeatures::none()
+            }),
+            vec![
+                LinkRequirement::Bridge("elephc_magician"),
+                LinkRequirement::Bridge("elephc_bcmath")
+            ]
         );
     }
 }

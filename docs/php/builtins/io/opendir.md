@@ -2,19 +2,20 @@
 title: "opendir()"
 description: "Open directory handle."
 sidebar:
-  order: 204
+  order: 216
 ---
 
 ## opendir()
 
 ```php
-function opendir(string $directory): mixed
+function opendir(string $directory, mixed $context = null): mixed
 ```
 
 Open directory handle.
 
 **Parameters**:
 - `$directory` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
@@ -24,12 +25,6 @@ Open directory handle.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/opendir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

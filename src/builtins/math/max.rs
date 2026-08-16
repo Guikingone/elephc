@@ -6,49 +6,29 @@
 //!
 //! Key details:
 //! - A `check` hook is required because the return type depends on argument types:
-//!   any Float argument widens the result to Float; otherwise the result is Int.
-//! - `min_args: 1` admits PHP's single-argument form `max(array $value_array)`; the
-//!   check hook requires that lone argument to be an array (gradually acceptable).
+//!   the single-array form returns the array's element type, while the variadic
+//!   form widens to Float as soon as any argument is Float.
+//! - `min_args: 1` matches PHP: `max()` with no argument is an ArgumentCountError,
+//!   one argument must be an array, and two or more arguments compare the values.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "max",
-    area: Math,
-    params: [value: Mixed],
-    variadic: "values",
-    min_args: 1,
-    arity_error: "max() requires at least 1 argument",
-    returns: Mixed,
+    contract: "max",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Max,
     ),
-    summary: "Find highest value.",
-    php_manual: "https://www.php.net/manual/en/function.max.php",
 }
 
-/// Returns Float when any argument is Float, otherwise returns Int.
+/// Returns the array element type for the single-array form; otherwise returns Float
+/// when any argument is Float and Int in every other case.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    // PHP overloads min/max as `min/max(array $value_array)` (a single array argument)
-    // or `min/max(mixed $value, mixed ...$values)` (two or more scalar arguments).
     if cx.args.len() == 1 {
-        // Single-argument form: the lone argument must be an array, accepted under the
-        // gradual boundary (concrete array, `Mixed`, or a union containing an array); a
-        // concrete scalar is a type error matching PHP's `min(1)` / `max(1)` TypeError.
-        let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-        if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
-            return Err(CompileError::new(
-                cx.span,
-                &format!("{}() single argument must be array", cx.name),
-            ));
-        }
-        return Ok(crate::types::checker::builtins::numeric::min_max_single_array_result(&ty));
+        return super::min_max_array_element_type(cx, "max");
     }
-    // Two-or-more-argument scalar form: any argument types are accepted; a float
-    // argument promotes the result to float.
     let mut has_float = false;
     for arg in cx.args {
         let t = cx.checker.infer_type(arg, cx.env)?;

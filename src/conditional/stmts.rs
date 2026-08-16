@@ -22,6 +22,7 @@ use super::exprs::rewrite_expr;
 pub(super) fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<Stmt> {
     let mut result = Vec::new();
     for stmt in stmts {
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         match stmt.kind {
             StmtKind::IfDef {
                 symbol,
@@ -114,11 +115,6 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             value: rewrite_expr(value, defines),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
-            target: rewrite_expr(target, defines),
-            source: rewrite_expr(source, defines),
-            append,
-        },
         StmtKind::If {
             condition,
             then_body,
@@ -235,8 +231,6 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
         },
         StmtKind::Break(levels) => StmtKind::Break(levels),
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
-        StmtKind::Goto(label) => StmtKind::Goto(label),
-        StmtKind::Label(label) => StmtKind::Label(label),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(rewrite_expr(expr, defines)),
         StmtKind::FunctionDecl {
             by_ref_return,
@@ -426,19 +420,6 @@ fn rewrite_stmt_kind(kind: StmtKind, defines: &HashSet<String>) -> StmtKind {
             receiver,
             property,
             index: rewrite_expr(index, defines),
-            value: rewrite_expr(value, defines),
-        },
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property: Box::new(rewrite_expr(*property, defines)),
-            index: index.map(|i| rewrite_expr(i, defines)),
-            append,
             value: rewrite_expr(value, defines),
         },
         StmtKind::PropertyArrayPush {

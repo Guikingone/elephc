@@ -172,18 +172,20 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
-    // -- derive property count from the object payload size --
-    emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
-    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
-    emitter.instruction("lsr x9, x9, #4");                                      // divide by 16 to get the number of property slots
-    emitter.instruction("str x9, [sp, #16]");                                   // save the property count for the cleanup loop
-
-    // -- resolve the per-class property tag descriptor --
+    // -- resolve the per-class layout and property tag descriptor --
     emitter.instruction("ldr x10, [x0]");                                       // load the runtime class_id from the object payload
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the number of emitted class descriptors
     emitter.instruction("cmp x10, x11");                                        // is class_id within the descriptor table?
-    emitter.instruction("b.hs __rt_object_free_deep_struct");                   // invalid class ids fall back to a shallow free
+    emitter.instruction("b.hs __rt_object_free_deep_no_dyn_props");             // invalid class ids fall back to a shallow free without table indexing
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x9, [x11, x10, lsl #3]");                          // load the class-declared payload size instead of reused block capacity
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load whether this class reserves a dynamic-property tail
+    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field from the declared layout
+    emitter.instruction("sub x9, x9, x11, lsl #3");                             // exclude the optional eight-byte dynamic-property tail
+    emitter.instruction("lsr x9, x9, #4");                                      // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("str x9, [sp, #16]");                                   // save the authoritative property count for the cleanup loop
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_gc_desc_ptrs");
     emitter.instruction("lsl x12, x10, #3");                                    // scale class_id by 8 bytes per descriptor pointer
     emitter.instruction("ldr x11, [x11, x12]");                                 // load the tag descriptor pointer for this class
@@ -216,10 +218,6 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_object_free_deep_release_runtime");          // mixed payloads may or may not be heap-backed, but decref_any handles both safely
     emitter.instruction("cmp x15, #10");                                        // is this a compile-time callable descriptor property?
     emitter.instruction("b.eq __rt_object_free_deep_release_callable");         // callable descriptors require capture-aware release
-    emitter.instruction("cmp x15, #8");                                         // is this an owned reference cell holding a refcounted payload?
-    emitter.instruction("b.eq __rt_object_free_deep_owned_ref_refcounted");     // decref the payload, then free the ref cell
-    emitter.instruction("cmp x15, #11");                                        // is this an owned reference cell holding a scalar payload?
-    emitter.instruction("b.eq __rt_object_free_deep_owned_ref_scalar");         // free the ref cell only (no payload decref)
     emitter.instruction("b __rt_object_free_deep_next");                        // scalars and nulls need no cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
@@ -240,53 +238,20 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("str x12, [sp, #24]");                                  // save the updated property index
     emitter.instruction("b __rt_object_free_deep_loop");                        // continue scanning property slots
 
-    // -- owned reference cell holding a refcounted payload (tag 8): decref payload, then free cell --
-    // x14 = cell pointer (property slot low word). The 16-byte cell holds the referenced value at
-    // +0. Release the payload BEFORE freeing the cell; reload the cell from the slot afterwards
-    // because __rt_decref_any clobbers x14. x12 (loop index) is preserved through [sp, #24].
-    emitter.label("__rt_object_free_deep_owned_ref_refcounted");
-    emitter.instruction("cbz x14, __rt_object_free_deep_next");                 // defensive: null cell owns nothing to release
-    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the decref call
-    emitter.instruction("ldr x0, [x14]");                                       // load the refcounted payload stored at cell + 0
-    emitter.instruction("bl __rt_decref_any");                                  // release the payload the reference cell holds
-    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the decref call
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer to recompute the cell slot
-    emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
-    emitter.instruction("mul x10, x12, x10");                                   // compute the property slot byte offset
-    emitter.instruction("add x10, x10, #8");                                    // skip the leading class_id field
-    emitter.instruction("ldr x0, [x9, x10]");                                   // reload the cell pointer from the property slot
-    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the heap free
-    emitter.instruction("bl __rt_heap_free");                                   // return the 16-byte reference cell to the heap
-    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the heap free
-    emitter.instruction("b __rt_object_free_deep_next");                        // continue scanning the remaining property slots
-
-    // -- owned reference cell holding a scalar payload (tag 10): free the cell only --
-    // The payload is a non-refcounted scalar, so there is nothing to decref; just return the
-    // 16-byte cell to the heap. x14 already holds the cell pointer.
-    emitter.label("__rt_object_free_deep_owned_ref_scalar");
-    emitter.instruction("cbz x14, __rt_object_free_deep_next");                 // defensive: null cell owns nothing to free
-    emitter.instruction("mov x0, x14");                                         // pass the reference cell pointer to the heap free helper
-    emitter.instruction("str x12, [sp, #24]");                                  // preserve the property index across the heap free
-    emitter.instruction("bl __rt_heap_free");                                   // return the 16-byte reference cell to the heap
-    emitter.instruction("ldr x12, [sp, #24]");                                  // restore the property index after the heap free
-    emitter.instruction("b __rt_object_free_deep_next");                        // continue scanning the remaining property slots
-
     // -- free the object storage itself --
     emitter.label("__rt_object_free_deep_struct");
 
     // -- if the object carries a #[\AllowDynamicProperties] hashtable, free it --
-    // The presence of the dyn_props slot is encoded in the payload size: the
-    // base layout is `8 + num_props * 16` (always a multiple of 16 plus 8 for
-    // the class_id field), so an extra 8-byte tail signals an ADP slot at
-    // offset `size - 16` from the object payload start.
+    // Reused whole heap blocks can exceed the class layout, so the class tables
+    // are the only authoritative source for the tail's presence and offset.
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer for the dyn_props check
-    emitter.instruction("ldr w9, [x0, #-16]");                                  // load the object payload size from the heap header
-    emitter.instruction("sub x9, x9, #8");                                      // subtract the leading class_id field
-    emitter.instruction("and x10, x9, #15");                                    // isolate the low 4 bits of the property region size
-    emitter.instruction("cmp x10, #8");                                         // 8 leftover bytes signal a dyn_props pointer slot
-    emitter.instruction("b.ne __rt_object_free_deep_no_dyn_props");             // no dyn_props tail → skip hashtable cleanup
-    emitter.instruction("sub x9, x9, #8");                                      // back out the dyn_props slot from the property region size
-    emitter.instruction("add x9, x9, #8");                                      // re-add the leading class_id offset to land on the dyn_props slot
+    emitter.instruction("ldr x10, [x0]");                                       // reload the runtime class_id for the layout tables
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_dynamic_prop_flags");
+    emitter.instruction("ldr x11, [x11, x10, lsl #3]");                         // load the class-declared dynamic-property-tail flag
+    emitter.instruction("cbz x11, __rt_object_free_deep_no_dyn_props");         // classes without the tail own no dynamic-property hashtable
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_class_object_payload_sizes");
+    emitter.instruction("ldr x9, [x11, x10, lsl #3]");                          // load the exact class-declared object payload size
+    emitter.instruction("sub x9, x9, #8");                                      // the dynamic-property pointer occupies the final eight bytes
     emitter.instruction("ldr x11, [x0, x9]");                                   // load the dyn_props hashtable pointer from the slot
     emitter.instruction("cbz x11, __rt_object_free_deep_no_dyn_props");         // null hashtables (lazy init never happened) need no cleanup
     emitter.instruction("mov x0, x11");                                         // pass the hashtable pointer to the uniform decref helper
@@ -442,13 +407,18 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // free custom fixed-array storage without generic descriptor walking
     emitter.label("__rt_object_free_deep_not_spl_fixed");
 
-    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the uniform heap header
-    emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field from the payload size to isolate property storage
-    emitter.instruction("shr r10, 4");                                          // divide by 16 because every property slot occupies two qwords
-    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the total property count for the deep-free loop
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the runtime class id from the object payload
     abi::emit_cmp_reg_to_symbol(emitter, "r10", "_class_gc_desc_count");        // is the runtime class id within the emitted descriptor table?
-    emitter.instruction("jae __rt_object_free_deep_struct");                    // invalid class ids fall back to a shallow object free on x86_64
+    emitter.instruction("jae __rt_object_free_deep_no_dyn_props");              // invalid class ids fall back to a shallow free without table indexing
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");    // materialize the class-declared payload-size table
+    emitter.instruction("mov rcx, QWORD PTR [r11 + r10 * 8]");                  // load the declared layout size instead of reused block capacity
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // materialize the dynamic-property-tail flag table
+    emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");                   // load whether this class reserves a dynamic-property tail
+    emitter.instruction("sub rcx, 8");                                          // subtract the leading class_id field from the declared layout
+    emitter.instruction("shl r8, 3");                                           // convert the boolean tail flag into its eight-byte size
+    emitter.instruction("sub rcx, r8");                                         // exclude the optional tail from the fixed property region
+    emitter.instruction("shr rcx, 4");                                          // divide the fixed property region by 16 bytes per slot
+    emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                       // save the authoritative property count for the deep-free loop
     abi::emit_symbol_address(emitter, "r11", "_class_gc_desc_ptrs");            // materialize the base address of the class property-tag descriptor table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load the property-tag descriptor pointer for this object class
     emitter.instruction("mov QWORD PTR [rbp - 16], r11");                       // save the descriptor pointer for the object-property cleanup loop
@@ -477,10 +447,6 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_object_free_deep_release_runtime");            // mixed cells release through the uniform x86_64 decref_any helper
     emitter.instruction("cmp r8, 10");                                          // does the property hold a callable descriptor pointer?
     emitter.instruction("je __rt_object_free_deep_release_callable");           // callable descriptors require capture-aware release on x86_64
-    emitter.instruction("cmp r8, 8");                                           // owned reference cell holding a refcounted payload?
-    emitter.instruction("je __rt_object_free_deep_owned_ref_refcounted");       // decref the payload, then free the ref cell
-    emitter.instruction("cmp r8, 11");                                          // owned reference cell holding a scalar payload?
-    emitter.instruction("je __rt_object_free_deep_owned_ref_scalar");           // free the ref cell only (no payload decref)
     emitter.instruction("jmp __rt_object_free_deep_next");                      // scalar, float, and null property slots need no heap cleanup
 
     emitter.label("__rt_object_free_deep_release_runtime");
@@ -494,45 +460,18 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                         // advance the property index to the next slot in the object layout
     emitter.instruction("jmp __rt_object_free_deep_loop");                      // continue scanning property slots until the whole object payload is released
 
-    // -- owned reference cell holding a refcounted payload (tag 8): decref payload, then free cell --
-    // rax = cell pointer (property slot low word). The 16-byte cell holds the referenced value at
-    // +0. Release the payload BEFORE freeing the cell; reload the cell from the slot afterwards
-    // because __rt_decref_any clobbers rax. The loop index lives in memory ([rbp - 32]) and so is
-    // unaffected by the helper calls. Both helpers take their pointer argument in rax on x86_64.
-    emitter.label("__rt_object_free_deep_owned_ref_refcounted");
-    emitter.instruction("test rax, rax");                                       // defensive: null cell owns nothing to release
-    emitter.instruction("jz __rt_object_free_deep_next");                       // skip empty owned reference slots
-    emitter.instruction("mov rax, QWORD PTR [rax]");                            // load the refcounted payload stored at cell + 0
-    emitter.instruction("call __rt_decref_any");                                // release the payload the reference cell holds
-    emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer to recompute the cell slot
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // reload the current property index
-    emitter.instruction("shl rcx, 4");                                          // convert the property index into a 16-byte slot offset
-    emitter.instruction("add rcx, 8");                                          // skip the leading class_id field
-    emitter.instruction("mov rax, QWORD PTR [r11 + rcx]");                      // reload the cell pointer from the property slot
-    emitter.instruction("call __rt_heap_free");                                 // return the 16-byte reference cell to the heap
-    emitter.instruction("jmp __rt_object_free_deep_next");                      // continue scanning the remaining property slots
-
-    // -- owned reference cell holding a scalar payload (tag 10): free the cell only --
-    // The payload is a non-refcounted scalar, so there is nothing to decref; just return the
-    // 16-byte cell to the heap. rax already holds the cell pointer.
-    emitter.label("__rt_object_free_deep_owned_ref_scalar");
-    emitter.instruction("test rax, rax");                                       // defensive: null cell owns nothing to free
-    emitter.instruction("jz __rt_object_free_deep_next");                       // skip empty owned reference slots
-    emitter.instruction("call __rt_heap_free");                                 // free the 16-byte reference cell (pointer already in rax)
-    emitter.instruction("jmp __rt_object_free_deep_next");                      // continue scanning the remaining property slots
-
     emitter.label("__rt_object_free_deep_struct");
 
     // -- if the object carries a #[\AllowDynamicProperties] hashtable, free it --
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer for the dyn_props check
-    emitter.instruction("mov r10d, DWORD PTR [rax - 16]");                      // load the object payload size from the heap header
-    emitter.instruction("sub r10, 8");                                          // subtract the leading class_id field
-    emitter.instruction("mov r11, r10");                                        // copy the property region size before isolating the low nibble
-    emitter.instruction("and r11, 15");                                         // isolate the low 4 bits of the property region size
-    emitter.instruction("cmp r11, 8");                                          // 8 leftover bytes signal a dyn_props pointer slot
-    emitter.instruction("jne __rt_object_free_deep_no_dyn_props");              // no dyn_props tail → skip hashtable cleanup
-    emitter.instruction("sub r10, 8");                                          // back out the dyn_props slot from the property region size
-    emitter.instruction("add r10, 8");                                          // re-add the leading class_id offset to land on the dyn_props slot
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // reload the runtime class id for the authoritative layout tables
+    abi::emit_symbol_address(emitter, "r11", "_class_object_dynamic_prop_flags"); // materialize the dynamic-property-tail flag table
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load whether this class owns a dynamic-property tail
+    emitter.instruction("test r11, r11");                                       // does this exact class layout reserve the tail slot?
+    emitter.instruction("jz __rt_object_free_deep_no_dyn_props");               // classes without the tail own no dynamic-property hashtable
+    abi::emit_symbol_address(emitter, "r11", "_class_object_payload_sizes");    // materialize the exact class payload-size table
+    emitter.instruction("mov r10, QWORD PTR [r11 + r10 * 8]");                  // load the exact class-declared payload size
+    emitter.instruction("sub r10, 8");                                          // the dynamic-property pointer occupies the final eight bytes
     emitter.instruction("mov r11, QWORD PTR [rax + r10]");                      // load the dyn_props hashtable pointer from the slot
     emitter.instruction("test r11, r11");                                       // null hashtables (lazy init never happened) need no cleanup
     emitter.instruction("jz __rt_object_free_deep_no_dyn_props");               // skip cleanup for null dyn_props slot

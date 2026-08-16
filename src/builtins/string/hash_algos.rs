@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "hash_algos",
-    area: String,
-    params: [],
-    returns: Mixed,
+    contract: "hash_algos",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashAlgos,
     ),
-    summary: "Returns an array of supported hashing algorithm names.",
-    php_manual: "https://www.php.net/manual/en/function.hash-algos.php",
 }
 
 /// Returns `PhpType::Array(Box::new(PhpType::Str))` for a `hash_algos` call.

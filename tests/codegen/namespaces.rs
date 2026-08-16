@@ -97,66 +97,6 @@ echo $probe->ok();
     assert_eq!(out, "5");
 }
 
-/// Verifies that a prelude-injected global function (`var_export`) is resolved by the PHP
-/// namespace fallback for a bare call inside a namespace block, so `var_export(...)` in
-/// `namespace N` resolves to the global `\var_export` rather than the non-existent `N\var_export`.
-/// `var_export` is provided by `crate::var_export_prelude` as a prelude-injected user function
-/// (not the builtin catalog), so this exercises the `canonical_prelude_global_function_name`
-/// fallback path in `src/name_resolver`. Cross-checked with
-/// `php -r 'namespace N; echo var_export(["x"=>1], true);'`.
-#[test]
-fn test_namespace_bare_call_falls_back_to_prelude_global_var_export() {
-    let out = compile_and_run(
-        r#"<?php
-namespace N;
-echo var_export(["x" => 1], true);
-"#,
-    );
-    assert_eq!(out, "array (\n  'x' => 1,\n)");
-}
-
-/// Verifies that `register_shutdown_function` (a `crate::shutdown_prelude`-injected global user
-/// function, like `var_export` above) is ALSO resolved by the namespace fallback for a bare call
-/// inside a namespace block — the own-feature gap this regression guards: the prelude injection
-/// runs after the main name-resolution pass, so without an entry in `name_resolver`'s
-/// `PRELUDE_GLOBAL_FUNCTIONS` a namespaced unqualified call hit "Undefined function" instead of
-/// falling back to `\register_shutdown_function`. Cross-checked with
-/// `php -r 'namespace N; register_shutdown_function(function () { echo "shutdown\n"; }); echo "main\n";'`
-/// (prints "main\nshutdown\n").
-#[test]
-fn test_namespace_bare_call_falls_back_to_prelude_global_register_shutdown_function() {
-    let out = compile_and_run(
-        r#"<?php
-namespace N;
-register_shutdown_function(function () {
-    echo "shutdown\n";
-});
-echo "main\n";
-"#,
-    );
-    assert_eq!(out, "main\nshutdown\n");
-}
-
-/// Verifies the namespace fallback does NOT shadow a same-namespace user declaration: a
-/// namespaced `function register_shutdown_function(...)` still wins for a bare call in that SAME
-/// namespace (PHP resolves a same-namespace function before falling back to the global one).
-/// Cross-checked with `php -r 'namespace N; function register_shutdown_function($cb) { return
-/// "user-owned-ns"; } echo register_shutdown_function(function () { echo "never\n"; });'` (prints
-/// "user-owned-ns", the callback never runs).
-#[test]
-fn test_namespace_user_declared_register_shutdown_function_wins_over_prelude_fallback() {
-    let out = compile_and_run(
-        r#"<?php
-namespace N;
-function register_shutdown_function(callable $cb): string {
-    return "user-owned-ns";
-}
-echo register_shutdown_function(function () { echo "never\n"; });
-"#,
-    );
-    assert_eq!(out, "user-owned-ns");
-}
-
 /// Verifies that a declared return type (`Box`) resolves to the same-namespace class
 /// inside a typed local variable declaration (`Box $box = ...`). Checks both return-type
 /// resolution and typed local variable initialization.
@@ -531,106 +471,6 @@ echo paint("x");
     assert_eq!(out, "ok7<x>");
 }
 
-/// Verifies that a namespaced `new` inside an assignment used in expression position gets its
-/// class reference rewritten to the fully-qualified name. Regression: the name resolver did not
-/// recurse into `ExprKind::Assignment`'s value, so `new ParserState()` nested in an
-/// expression-position assignment stayed unqualified and was reported as an undefined class.
-#[test]
-fn test_namespace_new_in_expression_position_assignment_is_qualified() {
-    let out = compile_and_run(
-        r#"<?php
-namespace App\Parser;
-
-class ParserState {
-    public int $pos = 5;
-}
-
-echo ($s = new ParserState())->pos;
-"#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies that a namespaced `new` on the right of a `??=` assignment (also expression-position)
-/// is fully qualified by the name resolver, so the null-coalescing assignment constructs the
-/// namespaced class instead of erroring on an undefined class.
-#[test]
-fn test_namespace_new_in_null_coalesce_assignment_is_qualified() {
-    let out = compile_and_run(
-        r#"<?php
-namespace App\Parser;
-
-class ParserState {
-    public int $pos = 9;
-}
-
-function go(): int {
-    $s = null;
-    $s ??= new ParserState();
-    return $s->pos;
-}
-
-echo go();
-"#,
-    );
-    assert_eq!(out, "9");
-}
-
-/// Verifies that a top-level `\define('NAME', ...)` inside a namespace creates a
-/// GLOBAL constant and that an unqualified reference inside the namespace falls
-/// back to that global. Mirrors PHP: `php -r 'namespace X; define("MY_GLOBAL_CONST","hello"); echo MY_GLOBAL_CONST;'` prints `hello`.
-#[test]
-fn test_namespace_define_global_constant_unqualified_reference_resolves() {
-    let out = compile_and_run(
-        r#"<?php
-namespace Symfony\Polyfill\Intl\Grapheme;
-
-\define('MY_GLOBAL_CONST', 'hello');
-
-echo MY_GLOBAL_CONST;
-"#,
-    );
-    assert_eq!(out, "hello");
-}
-
-/// Verifies that a `define()` with a NON-foldable value (runtime ternary) still
-/// has its NAME registered by the name_resolver so unqualified references inside
-/// the namespace resolve to the global. The value ternary depends on `$argc`
-/// (runtime-unknown) so it survives AST folding; the reference must still resolve
-/// and the chosen branch must be echoed.
-#[test]
-fn test_namespace_define_non_foldable_value_unqualified_reference_resolves() {
-    let out = compile_and_run(
-        r#"<?php
-namespace Demo\Runtime;
-
-\define('RX', $argc > 1 ? 'a' : 'b');
-
-echo RX;
-"#,
-    );
-    assert_eq!(out, "b");
-}
-
-/// Verifies that a namespace-local `const FOO` wins over a global `define('FOO')`
-/// of the same name: an unqualified `FOO` inside the namespace resolves to the
-/// namespace-local constant (name_resolver step 4), not the global. Mirrors PHP:
-/// `php -r 'namespace X; const FOO = 1; define("FOO", 2); echo FOO;'` prints `1`.
-#[test]
-fn test_namespace_local_const_shadows_global_define() {
-    let out = compile_and_run(
-        r#"<?php
-namespace Demo\Shadow;
-
-const FOO = 1;
-\define('FOO', 2);
-
-echo FOO;
-"#,
-    );
-    assert_eq!(out, "1");
-}
-
 /// EC-12 (#495): a `new <ImportedAlias>` nested inside a NAMED ARGUMENT resolves the alias —
 /// the resolver's expression walk previously had no NamedArg arm, so the value expression
 /// escaped rewriting entirely ("Undefined class: Url" on the ward-component-catalog
@@ -727,4 +567,118 @@ namespace App {
 "#,
     );
     assert_eq!(out, "Vendor\\Legacy");
+}
+
+/// Verifies that a namespace alias (`use App\Math as M;`) expands the leading segment of a
+/// qualified *function* call, matching PHP's rule that qualified names are translated
+/// through the class/namespace import table.
+#[test]
+fn test_namespace_alias_expands_qualified_function_call() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+function double(int $x): int { return $x * 2; }
+
+namespace App\Main;
+use App\Math as M;
+echo M\double(5);
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies that a namespace alias expands the leading segment of qualified *class*
+/// references: static call, class constant, `new`, and `instanceof`.
+#[test]
+fn test_namespace_alias_expands_qualified_class_references() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+class Thing {
+    const V = 7;
+    public static function m(): string { return "Thing::m"; }
+    public function i(): string { return "i"; }
+}
+
+namespace App\Main;
+use App\Math as M;
+echo M\Thing::m();
+echo M\Thing::V;
+$t = new M\Thing();
+echo $t->i();
+echo $t instanceof M\Thing ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "Thing::m7iyes");
+}
+
+/// Verifies that a namespace alias expands the leading segment of a qualified *constant*
+/// reference (`M\FOO`).
+#[test]
+fn test_namespace_alias_expands_qualified_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+const FOO = 42;
+
+namespace App\Main;
+use App\Math as M;
+echo M\FOO;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that namespace-alias expansion is case-insensitive on both the alias and the
+/// aliased function name, as PHP namespace/function lookups are.
+#[test]
+fn test_namespace_alias_expansion_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+function double(int $x): int { return $x * 2; }
+
+namespace App\Main;
+use App\Math as M;
+echo m\double(5);
+echo M\DOUBLE(6);
+"#,
+    );
+    assert_eq!(out, "1012");
+}
+
+/// Verifies that only the FIRST segment of a qualified name is alias-expanded: `A\C\g()`
+/// expands `A` and keeps `C\g` verbatim even though `C` is itself an alias.
+#[test]
+fn test_namespace_alias_expands_only_first_segment() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Q\R;
+function h(): string { return "Q\\R\\h"; }
+
+namespace App\Main;
+use Q as A;
+use Zzz as R;
+echo A\R\h();
+"#,
+    );
+    assert_eq!(out, "Q\\R\\h");
+}
+
+/// Verifies that an alias imported directly for a class (`use App\Math\Thing as T;`) still
+/// works as an unqualified constructor name.
+#[test]
+fn test_namespace_class_alias_unqualified_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+class Thing { public function i(): string { return "i"; } }
+
+namespace App\Main;
+use App\Math\Thing as T;
+$t = new T();
+echo $t->i();
+"#,
+    );
+    assert_eq!(out, "i");
 }

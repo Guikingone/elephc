@@ -2,7 +2,7 @@
 title: "class_uses()"
 description: "Returns the traits used by the given class."
 sidebar:
-  order: 74
+  order: 80
 ---
 
 ## class_uses()
@@ -25,12 +25,6 @@ Returns the traits used by the given class.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/class_uses.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_uses.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

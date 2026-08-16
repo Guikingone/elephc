@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the temporary-name helper.
 
 eval_builtin! {
-    name: "tempnam",
+    contract: "tempnam",
     area: Filesystem,
-    params: [directory, prefix],
     direct: Filesystem,
     values: Filesystem,
 }

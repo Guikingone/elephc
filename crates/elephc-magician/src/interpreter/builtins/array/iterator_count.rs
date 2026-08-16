@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "iterator_count",
+    contract: "iterator_count",
     area: Array,
-    params: [iterator],
     direct: Array,
     values: Array,
 }
@@ -47,6 +46,7 @@ pub(in crate::interpreter) fn eval_builtin_iterator_count(
         return Err(EvalStatus::RuntimeFatal);
     };
     let iterator = eval_expr(iterator, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("iterator_count", &[iterator], context, values)?;
     eval_iterator_count_result(iterator, values)
 }
 

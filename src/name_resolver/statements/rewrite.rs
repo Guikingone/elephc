@@ -140,11 +140,6 @@ pub(super) fn resolve_regular_stmt(
             target: target.clone(),
             source: source.clone(),
         },
-        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
-            target: ctx.expr(target),
-            source: ctx.expr(source),
-            append: *append,
-        },
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -211,19 +206,6 @@ pub(super) fn resolve_regular_stmt(
             receiver: ctx.static_receiver(receiver),
             property: property.clone(),
             index: ctx.expr(index),
-            value: ctx.expr(value),
-        },
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => StmtKind::DynamicStaticPropertyWrite {
-            receiver: ctx.static_receiver(receiver),
-            property: Box::new(ctx.expr(property)),
-            index: index.as_ref().map(|i| ctx.expr(i)),
-            append: *append,
             value: ctx.expr(value),
         },
         StmtKind::PropertyArrayPush {

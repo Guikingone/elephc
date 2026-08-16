@@ -10,50 +10,34 @@
 
 /// Type checking module.
 pub mod checker;
-/// Shared checked-downcast representation rule (checker acceptance + lowering emission).
-pub(crate) mod checked_downcast;
 /// Trait flattening and resolution.
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
+/// Array storage-representation conversions shared by checking and lowering.
+mod array_storage;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
-/// PHP error-level and debug-backtrace integer constants (E_ERROR, E_ALL, DEBUG_BACKTRACE_*).
-pub(crate) mod error_constants;
-/// PHP runtime and version integer constants (PHP_MAJOR_VERSION, PHP_INT_SIZE, etc.).
-pub(crate) mod php_runtime_constants;
 /// Call argument planning: named, positional, and spread semantics.
 pub(crate) mod call_args;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// `ext/date` integer constants (e.g. `SUNFUNCS_RET_*`).
 pub(crate) mod date_constants;
-/// POSIX locale category integer constants (LC_ALL, LC_NUMERIC, etc.).
-pub(crate) mod locale_constants;
-/// String-function integer constants (STR_PAD_*, ENT_* html-entity flags).
-pub(crate) mod string_constants;
-/// Sort comparison-mode integer constants (SORT_STRING, SORT_NATURAL).
-pub(crate) mod sort_constants;
-/// mbstring case-mode integer constants (MB_CASE_FOLD_SIMPLE).
-pub(crate) mod mbstring_constants;
-/// `ext/filter` validation-filter integer constants (FILTER_VALIDATE_BOOL[EAN]).
-pub(crate) mod filter_constants;
-/// `ext/pcntl` signal integer constants (SIGINT, SIGTERM, SIG_DFL, SIG_IGN, etc.).
-pub(crate) mod pcntl_constants;
-/// PHP file-upload error integer constants (UPLOAD_ERR_*).
-pub(crate) mod upload_constants;
-/// `parse_url()`/`http_build_query()` integer constants (PHP_URL_*, PHP_QUERY_*).
-pub(crate) mod url_constants;
-/// `ext/tokenizer` token-kind integer constants (T_START_HEREDOC, T_END_HEREDOC).
-pub(crate) mod tokenizer_constants;
-/// `ext/dom` node-kind integer constants (XML_DOCUMENT_TYPE_NODE).
-pub(crate) mod xml_constants;
 /// `ENT_*` HTML-escaping flag constants shared by checker and codegen.
 pub(crate) mod ent_constants;
+/// PHP `E_*` error-level integer constants (`error_reporting` bitmask levels).
+pub(crate) mod error_constants;
 /// C FFI type mapping utilities.
 mod ffi;
 /// JSON literal constant type inference.
 pub(crate) mod json_constants;
+/// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
+pub(crate) mod math_constants;
+/// OpenSSL option constants shared by checker and codegen.
+pub(crate) mod openssl_constants;
+/// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
+pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
@@ -69,6 +53,7 @@ pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 pub(crate) mod stream_constants;
+pub(crate) mod string_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 
@@ -76,6 +61,9 @@ pub(crate) use array_keys::{
     array_key_type_from_value_type, is_php_integer_array_key, merge_array_key_types,
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
+};
+pub(crate) use array_storage::{
+    array_storage_conversion, join_array_storage_conversion, key_preserving_sort_promotes,
 };
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};

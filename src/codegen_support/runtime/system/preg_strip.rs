@@ -12,16 +12,13 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_preg_strip` runtime helper for stripping PHP regex delimiters.
 ///
-/// Transforms PHP PCRE patterns by removing the leading/trailing delimiter and extracting
-/// PCRE2 POSIX-wrapper flags. The opening delimiter is the first byte; any byte that is not
-/// alphanumeric, ASCII whitespace, or a backslash is accepted (e.g. `/`, `#`, `~`, `!`, `%`).
-/// The closing delimiter is the same byte, located by a reverse scan past trailing flag
-/// letters, so `"#pattern#i"` becomes `("pattern", REG_ICASE)`.
+/// Transforms PHP PCRE patterns by removing leading/trailing '/' delimiters and extracting
+/// PCRE2 POSIX-wrapper flags. For example, `"/pattern/i"` becomes
+/// `("pattern", REG_ICASE)`.
 ///
 /// Dispatches to `emit_preg_strip_linux_x86_64` on x86_64; ARM64 uses inline scalar
-/// loads/stores in the main emitter. Undelimited or invalidly-delimited patterns (digit,
-/// letter, whitespace, or backslash opener) are returned unchanged with flags=0. Bracket-pair
-/// delimiters (`(){}[]<>`) are not yet supported and fall through as unchanged.
+/// loads/stores in the main emitter. Undelimited patterns (no leading '/') are returned
+/// unchanged with flags=0.
 ///
 /// Input:  x1=pattern ptr, x2=pattern len
 /// Output: x1=stripped pattern ptr, x2=stripped len, x3=PCRE2 POSIX cflags
@@ -45,41 +42,18 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
     emitter.instruction("mov x3, #0");                                          // flags = 0
     emitter.instruction("str x3, [sp, #16]");                                   // save flags
 
-    // -- read the opening delimiter and reject undelimited/invalid openers --
-    emitter.instruction("cbz x2, __rt_preg_strip_done");                        // empty patterns have no delimiter to strip
-    emitter.instruction("ldrb w13, [x1]");                                      // load the opening delimiter byte for later closing comparison
-    emitter.instruction("cmp w13, #48");                                        // compare the delimiter with '0'
-    emitter.instruction("b.lo __rt_preg_strip_not_digit");                      // bytes below '0' cannot be a decimal digit
-    emitter.instruction("cmp w13, #57");                                        // compare the delimiter with '9'
-    emitter.instruction("b.ls __rt_preg_strip_done");                           // a digit opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_digit");
-    emitter.instruction("cmp w13, #65");                                        // compare the delimiter with 'A'
-    emitter.instruction("b.lo __rt_preg_strip_not_upper");                      // bytes below 'A' are not uppercase letters
-    emitter.instruction("cmp w13, #90");                                        // compare the delimiter with 'Z'
-    emitter.instruction("b.ls __rt_preg_strip_done");                           // an uppercase-letter opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_upper");
-    emitter.instruction("cmp w13, #97");                                        // compare the delimiter with 'a'
-    emitter.instruction("b.lo __rt_preg_strip_not_lower");                      // bytes below 'a' are not lowercase letters
-    emitter.instruction("cmp w13, #122");                                       // compare the delimiter with 'z'
-    emitter.instruction("b.ls __rt_preg_strip_done");                           // a lowercase-letter opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_lower");
-    emitter.instruction("cmp w13, #32");                                        // compare the delimiter with an ASCII space
-    emitter.instruction("b.eq __rt_preg_strip_done");                           // a space delimiter is invalid, leave the pattern unchanged
-    emitter.instruction("cmp w13, #92");                                        // compare the delimiter with a backslash
-    emitter.instruction("b.eq __rt_preg_strip_done");                           // a backslash delimiter is invalid, leave the pattern unchanged
-    emitter.instruction("cmp w13, #9");                                         // compare the delimiter with the tab control byte
-    emitter.instruction("b.lo __rt_preg_strip_scan_start");                     // control bytes below tab are accepted delimiters
-    emitter.instruction("cmp w13, #13");                                        // compare the delimiter with carriage return
-    emitter.instruction("b.ls __rt_preg_strip_done");                           // tab..CR whitespace delimiters are invalid in PHP
-    emitter.label("__rt_preg_strip_scan_start");
+    // -- check if pattern starts with '/' --
+    emitter.instruction("ldrb w9, [x1]");                                       // load first byte
+    emitter.instruction("cmp w9, #47");                                         // compare with '/'
+    emitter.instruction("b.ne __rt_preg_strip_done");                           // not delimited, return as-is
 
-    // -- find the matching closing delimiter by scanning from the end --
+    // -- find closing delimiter by scanning from the end --
     emitter.instruction("sub x10, x2, #1");                                     // start from last char
     emitter.label("__rt_preg_strip_scan");
     emitter.instruction("cmp x10, #1");                                         // must have at least 1 char between delimiters
     emitter.instruction("b.lt __rt_preg_strip_done");                           // no closing delimiter found
     emitter.instruction("ldrb w9, [x1, x10]");                                  // load byte at position
-    emitter.instruction("cmp w9, w13");                                         // check for the closing delimiter matching the opener
+    emitter.instruction("cmp w9, #47");                                         // check for closing '/'
     emitter.instruction("b.eq __rt_preg_strip_found");                          // found it
 
     // -- check supported PCRE2 POSIX-wrapper flags --
@@ -132,9 +106,8 @@ pub(crate) fn emit_preg_strip(emitter: &mut Emitter) {
 ///
 /// Uses System V AMD64 ABI: pattern pointer in `rax`, length in `rdx`; returns stripped
 /// pattern pointer in `rax`, stripped length in `rdx`, and PCRE2 POSIX cflags in `rcx`.
-/// Clobbers `r8`, `r9` as temporaries during the reverse scan and holds the opening delimiter
-/// byte in `r10`. Returns patterns unchanged when the opener is alphanumeric, whitespace, or a
-/// backslash (undelimited or invalidly-delimited raw regex payloads).
+/// Clobbers `r8`, `r9` as temporaries during the reverse scan. Returns patterns unchanged
+/// when they do not begin with '/' (undelimited raw regex payloads).
 fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: preg_strip_delimiters ---");
@@ -143,40 +116,18 @@ fn emit_preg_strip_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor ecx, ecx");                                        // clear the regex flag accumulator so undelimited patterns default to no modifiers
     emitter.instruction("test rdx, rdx");                                       // skip delimiter stripping when the pattern string is empty
     emitter.instruction("jz __rt_preg_strip_done_linux_x86_64");                // empty patterns already behave like raw undelimited regex payloads
-    emitter.instruction("movzx r10d, BYTE PTR [rax]");                          // load the opening delimiter byte for validation and later closing comparison
-    emitter.instruction("cmp r10d, 48");                                        // compare the delimiter with '0'
-    emitter.instruction("jl __rt_preg_strip_not_digit_linux_x86_64");           // bytes below '0' cannot be a decimal digit
-    emitter.instruction("cmp r10d, 57");                                        // compare the delimiter with '9'
-    emitter.instruction("jle __rt_preg_strip_done_linux_x86_64");               // a digit opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_digit_linux_x86_64");
-    emitter.instruction("cmp r10d, 65");                                        // compare the delimiter with 'A'
-    emitter.instruction("jl __rt_preg_strip_not_upper_linux_x86_64");           // bytes below 'A' are not uppercase letters
-    emitter.instruction("cmp r10d, 90");                                        // compare the delimiter with 'Z'
-    emitter.instruction("jle __rt_preg_strip_done_linux_x86_64");               // an uppercase-letter opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_upper_linux_x86_64");
-    emitter.instruction("cmp r10d, 97");                                        // compare the delimiter with 'a'
-    emitter.instruction("jl __rt_preg_strip_not_lower_linux_x86_64");           // bytes below 'a' are not lowercase letters
-    emitter.instruction("cmp r10d, 122");                                       // compare the delimiter with 'z'
-    emitter.instruction("jle __rt_preg_strip_done_linux_x86_64");               // a lowercase-letter opener means an undelimited pattern
-    emitter.label("__rt_preg_strip_not_lower_linux_x86_64");
-    emitter.instruction("cmp r10d, 32");                                        // compare the delimiter with an ASCII space
-    emitter.instruction("je __rt_preg_strip_done_linux_x86_64");                // a space delimiter is invalid, leave the pattern unchanged
-    emitter.instruction("cmp r10d, 92");                                        // compare the delimiter with a backslash
-    emitter.instruction("je __rt_preg_strip_done_linux_x86_64");                // a backslash delimiter is invalid, leave the pattern unchanged
-    emitter.instruction("cmp r10d, 9");                                         // compare the delimiter with the tab control byte
-    emitter.instruction("jl __rt_preg_strip_scan_start_linux_x86_64");          // control bytes below tab are accepted delimiters
-    emitter.instruction("cmp r10d, 13");                                        // compare the delimiter with carriage return
-    emitter.instruction("jle __rt_preg_strip_done_linux_x86_64");               // tab..CR whitespace delimiters are invalid in PHP
-    emitter.label("__rt_preg_strip_scan_start_linux_x86_64");
+    emitter.instruction("movzx r8d, BYTE PTR [rax]");                           // load the first pattern byte so delimiter detection can inspect the opening character
+    emitter.instruction("cmp r8d, 47");                                         // test whether the pattern starts with the canonical '/' regex delimiter
+    emitter.instruction("jne __rt_preg_strip_done_linux_x86_64");               // return the original pattern unchanged when it is not slash-delimited
     emitter.instruction("mov r9, rdx");                                         // seed the reverse scan cursor from the full source pattern length
     emitter.instruction("sub r9, 1");                                           // start scanning from the final byte looking for flags or the closing delimiter
 
     emitter.label("__rt_preg_strip_scan_linux_x86_64");
     emitter.instruction("cmp r9, 1");                                           // stop when there is no room left for a distinct closing delimiter
     emitter.instruction("jl __rt_preg_strip_done_linux_x86_64");                // malformed slash patterns fall back to the original undelimited payload
-    emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the current reverse-scan byte from the delimited pattern literal
-    emitter.instruction("cmp r8d, r10d");                                       // did the reverse scan find the closing delimiter matching the opener?
-    emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing delimiter is located
+    emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the current reverse-scan byte from the slash-delimited pattern literal
+    emitter.instruction("cmp r8d, 47");                                         // did the reverse scan find the closing '/' delimiter?
+    emitter.instruction("je __rt_preg_strip_found_linux_x86_64");               // stop once the closing slash delimiter is located
     emitter.instruction("cmp r8d, 105");                                        // detect the trailing 'i' case-insensitive modifier while walking backward
     emitter.instruction("jne __rt_preg_strip_flag_m_linux_x86_64");             // try the next supported regex modifier
     emitter.instruction("or rcx, 1");                                           // record REG_ICASE for PCRE2 POSIX compilation

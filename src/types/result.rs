@@ -80,10 +80,6 @@ pub struct CheckResult {
     pub extern_globals: HashMap<String, PhpType>,
     pub required_libraries: Vec<String>,
     pub warnings: Vec<CompileWarning>,
-    /// Canonical keys of user functions/methods that call `func_num_args()`,
-    /// `func_get_args()`, or `func_get_arg()` at their own scope. See
-    /// `crate::types::checker::func_args_scan`.
-    pub func_args_functions: HashSet<String>,
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: HashMap<Span, ThrowAccessInfo>,
@@ -91,6 +87,9 @@ pub struct CheckResult {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point array-local storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: LoopStorageTypes,
+    /// `(function-like scope, local name)` pairs for `string` locals that are a `++`/`--`
+    /// target, so EIR lowering can give them boxed `Mixed` storage from their first store.
+    pub string_incdec_locals: HashSet<(String, String)>,
 }
 
 /// Runs type checking using the host platform (auto-detected from the build environment).

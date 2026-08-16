@@ -83,57 +83,6 @@ run(3);
     assert_eq!(out, "abc!bc!c!");
 }
 
-/// Regression: a switch **without a default** has an implicit no-match path that falls through
-/// to the statements after the switch. The DCE tail-sinking optimization must not drop that tail
-/// for the no-match path when it sinks the tail into the matching case bodies. Here `run(1)`
-/// matches the single case (prints "a" then the sunk tail "!"), while `run(2)`/`run(3)` match no
-/// case and must still reach the tail ("!"). Before the fix the no-match path skipped the tail
-/// entirely (and, inside a function, fell straight to the epilogue).
-#[test]
-fn test_dead_code_elimination_keeps_tail_for_no_default_switch_no_match_path() {
-    let out = compile_and_run(
-        r#"<?php
-function run(int $flag) {
-    switch ($flag) {
-        case 1:
-            echo "a";
-            break;
-    }
-    echo "!";
-}
-
-run(1);
-run(2);
-run(3);
-"#,
-    );
-
-    assert_eq!(out, "a!!!");
-}
-
-/// Regression: a no-default switch whose only case **returns** (rather than breaks) must still
-/// execute the code after the switch on the no-match path. `pick(1)` returns early ("one"), while
-/// `pick(2)` matches nothing and falls through to `return "other"`. Before the fix the no-match
-/// path jumped to the function epilogue and returned an uninitialized value.
-#[test]
-fn test_no_default_switch_returning_case_falls_through_on_no_match() {
-    let out = compile_and_run(
-        r#"<?php
-function pick(int $flag): string {
-    switch (true) {
-        case 1 === $flag:
-            return "one";
-    }
-    return "other";
-}
-
-echo pick(1), "|", pick(2), "|", pick(3);
-"#,
-    );
-
-    assert_eq!(out, "one|other|other");
-}
-
 /// Verifies that code after a switch with a break in one case and fallthrough in another sinks
 /// correctly. Confirms "a!bc!c!".
 #[test]

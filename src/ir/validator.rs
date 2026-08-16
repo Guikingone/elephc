@@ -272,12 +272,18 @@ fn validate_instruction_result(
 }
 
 /// Validates that non-refinable opcodes carry their canonical effect set.
+/// `load_local` additionally admits exactly `PURE`, which is attached only after
+/// the immutable-local pass proves that the named scalar slot cannot change.
 fn validate_instruction_effects(
     inst_id: InstId,
     inst: &Instruction,
 ) -> Result<(), ValidationError> {
     let expected = inst.op.default_effects();
-    if !inst.op.allows_effect_refinement() && inst.effects != expected {
+    let immutable_local_refinement = inst.op == Op::LoadLocal && inst.effects.is_pure();
+    if !inst.op.allows_effect_refinement()
+        && !immutable_local_refinement
+        && inst.effects != expected
+    {
         return Err(ValidationError::EffectMismatch {
             inst: inst_id,
             expected,
@@ -299,8 +305,7 @@ fn validate_instruction_immediate(
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
-        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | LoadStaticPropRefCell
-        | BindPropRefCell | ThrowCheckedReturnTypeError | ThrowCheckedTypeError | EvalLiteralCall
+        | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -310,13 +315,15 @@ fn validate_instruction_immediate(
         | ReflectionStaticPropertyInitialized => {
             require_immediate(inst_id, inst, "data id", |imm| matches!(imm, Imm::Data(_)))
         }
+        EvalLiteralCall => require_immediate(inst_id, inst, "profiled data id", |imm| {
+            matches!(imm, Imm::Data(_) | Imm::ProfiledData { .. })
+        }),
         LoadLocal | StoreLocal | UnsetLocal | LoadRefCell | StoreRefCell | ReleaseLocalRefCell
         | ReleaseLocalSlot | BindRefCellPtr
-        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalInitialized
-        | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
+        | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | InvokerRefArg => require_immediate(inst_id, inst, "local slot", |imm| {
             matches!(imm, Imm::LocalSlot(_))
         }),
-        PromoteLocalRefCell | AliasLocalRefCell | AdoptRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
+        PromoteLocalRefCell | AliasLocalRefCell => require_immediate(inst_id, inst, "local slot pair", |imm| {
             matches!(imm, Imm::LocalSlotPair { .. })
         }),
         EvalScopeGet | EvalScopeSet => require_immediate(inst_id, inst, "global name", |imm| {
@@ -328,14 +335,12 @@ fn validate_instruction_immediate(
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
-        StrBitwise | MixedBitwise => require_immediate(inst_id, inst, "string bitwise op", |imm| {
-            matches!(imm, Imm::StrBitOp(_))
+        StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
+            matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
-        ObjectCast => check_count(inst_id, inst, 1, "1"),
-        ArrayCast => check_count(inst_id, inst, 1, "1"),
         TypePredicate => require_immediate(inst_id, inst, "type predicate", |imm| {
             matches!(imm, Imm::TypePredicate(_))
         }),
@@ -412,7 +417,7 @@ fn validate_opcode_rules(
         | EvalClassExists | EvalConstantExists | EvalConstantFetch | ConcatReset | GcCollect | Nop => {
             check_count(inst_id, inst, 0, "0")
         }
-        EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet | ObjectClassName => {
+        EvalLiteralCall | EvalFunctionCallArray | EvalScopeGet => {
             check_count(inst_id, inst, 1, "1")
         }
         EvalScopeSet => check_count(inst_id, inst, 2, "2"),
@@ -422,12 +427,15 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
-        ICheckedAdd | ICheckedSub | ICheckedMul => {
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
+        | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
-        MixedNumericBinop | MixedBitwise => check_count(inst_id, inst, 2, "2"),
-        MixedBitwiseNot => check_count(inst_id, inst, 1, "1"),
+        MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
+        // the arity is pinned here; the backend dispatches on the operand's EIR type.
+        StrIncDec => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),
@@ -446,27 +454,23 @@ fn validate_opcode_rules(
         StrToI | StrToF | StrToNumber | StrLen | StrPersist => {
             check_unary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrConcat | StrBitwise | StrEq | StrLooseEq => {
+        StrConcat | StrEq | StrCmp | StrLooseEq => {
             check_binary(function, inst_id, inst, IrType::Str, "Str")
         }
-        StrCmp => check_php_compare_binary(function, inst_id, inst),
         StrCharAt => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
-        StrOffsetSet => {
-            check_count(inst_id, inst, 3, "3")?;
-            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")?;
-            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;
-            check_operand_type(function, inst_id, inst, 2, IrType::Str, "Str")
-        }
         BufferNew => check_unary(function, inst_id, inst, IrType::I64, "I64"),
-        LoadLocal | LoadRefCell | LoadGlobal | LoadStaticLocal | LoadStaticProperty
-        | LoadStaticPropRefCell | LoadReflectionStaticProperty
-        | ReflectionStaticPropertyInitialized | ExternGlobalLoad | StaticLocalInitialized => {
-            check_count(inst_id, inst, 0, "0")
-        }
+        LoadLocal
+        | LoadRefCell
+        | LoadGlobal
+        | LoadStaticLocal
+        | LoadStaticProperty
+        | LoadReflectionStaticProperty
+        | ReflectionStaticPropertyInitialized
+        | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
         ThrowError => check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | PromoteLocalRefCell | AliasLocalRefCell | ReleaseLocalRefCell
@@ -475,25 +479,14 @@ fn validate_opcode_rules(
         }
         StoreLocal | StoreGlobal | StoreStaticLocal | InitStaticLocal | StoreStaticProperty
         | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
-        | AdoptRefCell | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue
-        | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | ThrowException
-        | GeneratorReturn | PtrCheckNonnull => {
+        | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue | PrintValue | WriteStdout
+        | WriteStrStdout | VarDump | PrintR | ThrowException | GeneratorReturn
+        | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
-        // The mismatched value, plus an OPTIONAL message suffix the fail path appends after the
-        // runtime type name. The RETURN position supplies none and keeps its baked `" returned"`,
-        // which is what keeps its emitted assembly byte-for-byte what it was; the property store
-        // supplies one naming the property and its declared type.
-        ThrowCheckedReturnTypeError => {
-            if inst.operands.len() == 1 {
-                check_count(inst_id, inst, 1, "1")
-            } else {
-                check_count(inst_id, inst, 2, "1 or 2")
-            }
+        ReleaseUnlessAliases => {
+            check_count(inst_id, inst, 2, "2")
         }
-        // TWO operands, unlike the return variant's optional suffix: this position always has a
-        // suffix to append, because neither of its two wordings ends at the runtime type name.
-        ThrowCheckedTypeError => check_count(inst_id, inst, 2, "2"),
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")
@@ -520,6 +513,23 @@ fn validate_opcode_rules(
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // The fetch-for-write element read is emitted from exactly one site (a by-reference
+        // `foreach` source, issue #580) and writes the copy-on-write split back into the
+        // receiver's element slot, so its operand shape is pinned tighter than the shared read
+        // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
+        // one.
+        ArrayGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+        }
+        // The hash counterpart of the fetch-for-write read, emitted from the same single site.
+        // Its key stays in whatever form `hash_get` accepts (string or integer) rather than being
+        // int-coerced, because the hash lookup normalizes the key itself.
+        HashGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+        }
         LoadArrayElemRefCell => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
@@ -537,38 +547,41 @@ fn validate_opcode_rules(
             )
         }
         HashLen | HashGet | HashGetSilent | HashIsset | HashSet | HashAppend | HashEnsureUnique
-        | HashCloneShallow | HashRefElement => {
+        | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
-        HashBindRefElement => {
-            check_count(inst_id, inst, 3, "3")?;
-            check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
-        }
-        HashRefAppendElement => {
+        // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
+        // on an indexed array (via `__rt_array_set_refcounted`) or on a hash (via `__rt_hash_set`).
+        // This rule is not optional — the match ends in `_ => Ok(())`, so an unlisted op would be
+        // validated by *accepting anything*, including a malformed operand list.
+        SlotDetach => {
             check_count(inst_id, inst, 2, "2")?;
-            check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
+            let container = inst.operands[0];
+            let actual = function
+                .value(container)
+                .ok_or(ValidationError::UnknownValue(container))?
+                .ir_type;
+            match actual {
+                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => Ok(()),
+                _ => Err(ValidationError::OperandTypeMismatch {
+                    inst: inst_id,
+                    operand: container,
+                    expected: "Heap(Array) or Heap(Hash)",
+                    actual,
+                }),
+            }
         }
-        LocalRefEnsure => check_count(inst_id, inst, 0, "0"),
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Buffer, "Heap(Buffer)")
         }
-        LoadDynamicPropRefCell => check_count(inst_id, inst, 2, "2"),
-        LoadDynamicStaticProperty => {
-            check_count(inst_id, inst, 1, "1")?;
-            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
-        }
-        StoreDynamicStaticProperty => {
-            check_count(inst_id, inst, 2, "2")?;
-            check_operand_type(function, inst_id, inst, 0, IrType::Str, "Str")
-        }
         DynamicObjectNewWithoutConstructorMixed
         | PropGet
+        | PropGetForWrite
         | PropInitialized
         | PropSet
         | LoadPropRefCell
-        | BindPropRefCell
         | DynamicPropGet
         | DynamicPropSet
         | NullsafePropGet
@@ -579,6 +592,14 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        CallablePtr
+        | NormalizeCallable
+        | PdoAdapterAddr
+        | DynamicClassHasConstructor
+        | DynamicPdoStatementClassStatus
+        | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
+        DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
+        DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
     }
@@ -782,56 +803,6 @@ fn check_unary_any(
 ) -> Result<(), ValidationError> {
     check_count(inst_id, inst, 1, "1")?;
     let operand = inst.operands[0];
-    let actual = function
-        .value(operand)
-        .ok_or(ValidationError::UnknownValue(operand))?
-        .ir_type;
-    if expected.contains(&actual) {
-        Ok(())
-    } else {
-        Err(ValidationError::OperandTypeMismatch {
-            inst: inst_id,
-            operand,
-            expected: expected_label,
-            actual,
-        })
-    }
-}
-
-/// Validates both operands of an `StrCmp` (PHP ordered comparison) instruction.
-///
-/// Unlike strict string operations, `StrCmp` lowers a PHP 8 ordered comparison whose operands may
-/// be a string, a number (`I64`/`F64`), a tagged scalar, `null` (`Void`), or a boxed `Mixed`/`Union`
-/// value — the backend boxes each operand as `Mixed` and dispatches through `__rt_php_compare`.
-fn check_php_compare_binary(
-    function: &Function,
-    inst_id: InstId,
-    inst: &Instruction,
-) -> Result<(), ValidationError> {
-    const ALLOWED: &[IrType] = &[
-        IrType::Str,
-        IrType::I64,
-        IrType::F64,
-        IrType::TaggedScalar,
-        IrType::Void,
-        IrType::Heap(IrHeapKind::Mixed),
-        IrType::Heap(IrHeapKind::Union),
-    ];
-    check_count(inst_id, inst, 2, "2")?;
-    check_operand_in_set(function, inst_id, inst, 0, ALLOWED, "Str/number/Mixed")?;
-    check_operand_in_set(function, inst_id, inst, 1, ALLOWED, "Str/number/Mixed")
-}
-
-/// Validates that a single operand's storage type belongs to an accepted set.
-fn check_operand_in_set(
-    function: &Function,
-    inst_id: InstId,
-    inst: &Instruction,
-    index: usize,
-    expected: &[IrType],
-    expected_label: &'static str,
-) -> Result<(), ValidationError> {
-    let operand = inst.operands[index];
     let actual = function
         .value(operand)
         .ok_or(ValidationError::UnknownValue(operand))?
@@ -1399,9 +1370,8 @@ fn php_type_compatible(ir_type: IrType, php_type: &PhpType) -> bool {
 
 /// Returns true when ownership is coherent with storage and PHP type metadata.
 fn ownership_compatible(ir_type: IrType, php_type: &PhpType, ownership: Ownership) -> bool {
-    let php_type = php_type.codegen_repr();
     let tracks_lifetime =
-        ir_type.is_refcounted_storage() || Ownership::php_type_needs_lifetime_tracking(&php_type);
+        ir_type.is_refcounted_storage() || Ownership::php_type_needs_lifetime_tracking(php_type);
     if tracks_lifetime {
         !matches!(ownership, Ownership::NonHeap)
     } else {

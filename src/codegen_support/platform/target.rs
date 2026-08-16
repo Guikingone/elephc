@@ -54,7 +54,7 @@ impl Platform {
 
     /// Returns the PHP-compatible OS name string for this platform.
     ///
-    /// macOS reports `"Darwin"` and Linux reports `"Linux"`, matching PHP's `PHP_OS` constant.
+    /// macOS reports `"Darinux"` and Linux reports `"Linux"`, matching PHP's `PHP_OS` constant.
     pub fn php_os_name(&self) -> &'static str {
         match self {
             Platform::MacOS => "Darwin",
@@ -62,17 +62,6 @@ impl Platform {
             Platform::Windows => "WINNT",
         }
     }
-
-    /// Returns the PHP-compatible OS family string for this platform, matching PHP's
-    /// `PHP_OS_FAMILY` constant ("Darwin", "Linux", "Windows").
-    pub fn php_os_family(&self) -> &'static str {
-        match self {
-            Platform::MacOS => "Darwin",
-            Platform::Linux => "Linux",
-            Platform::Windows => "Windows",
-        }
-    }
-
 
     /// Returns the `O_WRONLY | O_CREAT | O_TRUNC` flag combination for `open()`.
     ///
@@ -83,6 +72,20 @@ impl Platform {
         match self {
             Platform::MacOS => 0x601,
             Platform::Linux => 0x241,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// `O_CLOEXEC` open flag bit — the value differs between macOS and Linux.
+    ///
+    /// php-src's plain-files wrapper sets it for an `fopen()` mode carrying an `e`
+    /// (`ext/standard/plain_wrapper.c`), which is the only way PHP code can ask for a descriptor
+    /// that does NOT survive `exec`. Nothing inside the process can observe the bit — it changes
+    /// only what a child sees — so the flag is pinned by asserting on the emitted assembly.
+    pub fn o_cloexec(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0100_0000,
+            Platform::Linux => 0x0008_0000,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -150,6 +153,17 @@ impl Platform {
         }
     }
 
+    /// `SO_REUSEADDR` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0004, Linux uses 2. php-src sets this on every socket
+    /// it binds, so a server that restarts can rebind a port still in TIME_WAIT.
+    pub fn so_reuseaddr(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 2,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `SO_BROADCAST` setsockopt option name. Differs between BSD (macOS) and
     /// Linux: macOS uses 0x0020, Linux uses 6. Enables sending to broadcast
     /// addresses on a UDP socket.
@@ -175,16 +189,6 @@ impl Platform {
         match self {
             Platform::MacOS => 27,
             Platform::Linux => 26,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        }
-    }
-
-    /// `ECONNREFUSED` error number — 61 on macOS, 111 on Linux. `fsockopen()`
-    /// reports it generically when a connection cannot be established.
-    pub fn econnrefused(&self) -> i64 {
-        match self {
-            Platform::MacOS => 61,
-            Platform::Linux => 111,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -221,6 +225,18 @@ impl Platform {
         match self {
             Platform::MacOS => 0x201,
             Platform::Linux => 0x41,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL` flag combination for `open()`.
+    ///
+    /// Creates a new file for writing and fails when one already exists, which is what PHP's
+    /// `x` fopen mode asks for.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xA01,
+            Platform::Linux => 0xC1,
             Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
         }
     }
@@ -523,16 +539,6 @@ impl Platform {
         }
     }
 
-    /// Returns the size of PCRE2 POSIX-wrapper `struct regex_t` in bytes.
-    pub fn regex_t_size(&self) -> usize {
-        48
-    }
-
-    /// Returns the byte offset of `re_nsub` within PCRE2 POSIX-wrapper `struct regex_t`.
-    pub fn regex_re_nsub_offset(&self) -> usize {
-        24
-    }
-
     /// Returns the value of `LC_CTYPE` for `setlocale()`.
     pub fn lc_ctype(&self) -> u32 {
         match self {
@@ -542,22 +548,6 @@ impl Platform {
         }
     }
 
-    /// Returns the size of PCRE2 POSIX-wrapper `struct regmatch_t` in bytes.
-    pub fn regmatch_t_size(&self) -> usize {
-        8
-    }
-
-    /// Returns the byte offset of `rm_eo` within PCRE2 POSIX-wrapper `struct regmatch_t`.
-    pub fn regmatch_rm_eo_offset(&self) -> usize {
-        4
-    }
-
-    /// Returns the ARM64 load instruction for a `regoff_t` field (regex match offset).
-    ///
-    /// PCRE2's POSIX wrapper uses signed 32-bit offsets on all supported targets.
-    pub fn regoff_load_instr(&self, dest: &str, base: &str, offset: usize) -> String {
-        format!("ldrsw {}, [{}, #{}]", dest, base, offset)
-    }
 }
 
 impl Arch {

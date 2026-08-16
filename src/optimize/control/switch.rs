@@ -22,6 +22,8 @@ pub(crate) fn prune_switch_stmt(
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
     default: Option<Vec<Stmt>>,
     span: crate::span::Span,
+    source_mode: crate::source::SourceMode,
+    strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
@@ -46,22 +48,8 @@ pub(crate) fn prune_switch_stmt(
                 default,
             },
             span,
-            attributes: Vec::new(),
-        }];
-    }
-
-    // A `label:` at the top level of a case body is a `goto` target. Flattening the switch into its
-    // executed path would drop statements after a terminal effect (including such a label), so keep
-    // the switch structurally intact whenever any case carries a label. Nested labels are preserved
-    // by the label-aware `prune_block` already applied to each body above.
-    if switch_contains_top_level_label(&cases, &default) {
-        return vec![Stmt {
-            kind: StmtKind::Switch {
-                subject,
-                cases,
-                default,
-            },
-            span,
+            source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     }
@@ -92,6 +80,8 @@ pub(crate) fn prune_switch_stmt(
                 default,
             },
             span,
+            source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     };
@@ -109,6 +99,8 @@ pub(crate) fn prune_switch_stmt(
                         default,
                     },
                     span,
+                    source_mode,
+                    strict_types,
                     attributes: Vec::new(),
                 }];
             }
@@ -274,28 +266,11 @@ pub(crate) fn compare_scalar_strict(left: &ScalarValue, right: &ScalarValue) -> 
 
 /// Loose PHP-style switch comparison between two scalar values.
 ///
-/// String compares by value; float compares by numeric value; int is extracted via
-/// `scalar_dispatch_int`. Cross-type comparisons between string/float and other types
-/// yield `None` (indeterminate).
+/// A `switch` case is decided by PHP's `==`, so this is exactly `loose_eq_values`: `case
+/// true` matches any truthy subject (`switch (2)` selects it), `case null` matches `0` and
+/// `""`, and PHP 8's string/number rules make `case 0` *not* match the subject `"foo"`.
+/// Returns `None` only when the pair has no compile-time answer, which keeps the switch on
+/// the runtime path.
 pub(crate) fn compare_scalar_switch(left: &ScalarValue, right: &ScalarValue) -> Option<bool> {
-    match (left, right) {
-        (ScalarValue::String(left), ScalarValue::String(right)) => Some(left == right),
-        (ScalarValue::Float(left), ScalarValue::Float(right)) => Some(left == right),
-        (ScalarValue::String(_), _) | (_, ScalarValue::String(_)) => None,
-        (ScalarValue::Float(_), _) | (_, ScalarValue::Float(_)) => None,
-        _ => Some(scalar_dispatch_int(left)? == scalar_dispatch_int(right)?),
-    }
-}
-
-/// Converts a scalar value to an integer for switch dispatch purposes.
-///
-/// Returns `Some(i64)` for Null (as 0), Bool (0/1), and Int values.
-/// Returns `None` for Float and String, which cannot be safely coerced in this context.
-pub(crate) fn scalar_dispatch_int(value: &ScalarValue) -> Option<i64> {
-    match value {
-        ScalarValue::Null => Some(0),
-        ScalarValue::Bool(value) => Some(i64::from(*value)),
-        ScalarValue::Int(value) => Some(*value),
-        ScalarValue::Float(_) | ScalarValue::String(_) => None,
-    }
+    loose_eq_values(left, right)
 }

@@ -2,7 +2,7 @@
 title: "stream_socket_get_name()"
 description: "Retrieve the name of the local or remote sockets."
 sidebar:
-  order: 238
+  order: 257
 ---
 
 ## stream_socket_get_name()
@@ -25,12 +25,6 @@ Retrieve the name of the local or remote sockets.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_get_name.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_get_name.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

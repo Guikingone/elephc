@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "copy",
-    area: Io,
-    params: [from: Str, to: Str],
-    returns: Bool,
+    contract: "copy",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Copy,
     ),
-    summary: "Copies a file.",
-    php_manual: "function.copy",
 }

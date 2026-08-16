@@ -22,108 +22,6 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
-    test_error_serialize_no_args,
-    "<?php serialize();",
-    "serialize() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_serialize_too_many_args,
-    "<?php $a = 1; $b = 2; serialize($a, $b);",
-    "serialize() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_unserialize_no_args,
-    "<?php unserialize();",
-    "unserialize() takes 1 or 2 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_unserialize_too_many_args,
-    "<?php $a = \"x\"; unserialize($a, [], 3);",
-    "unserialize() takes 1 or 2 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_set_time_limit_no_args,
-    "<?php set_time_limit();",
-    "set_time_limit() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_connection_aborted_too_many_args,
-    "<?php connection_aborted(1);",
-    "connection_aborted() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_error_reporting_too_many_args,
-    "<?php error_reporting(1, 2);",
-    "error_reporting() takes at most 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_gc_enabled_too_many_args,
-    "<?php gc_enabled(1);",
-    "gc_enabled() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_gc_enable_too_many_args,
-    "<?php gc_enable(1);",
-    "gc_enable() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_gc_disable_too_many_args,
-    "<?php gc_disable(1);",
-    "gc_disable() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_gc_collect_cycles_too_many_args,
-    "<?php gc_collect_cycles(1);",
-    "gc_collect_cycles() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_gc_mem_caches_too_many_args,
-    "<?php gc_mem_caches(1);",
-    "gc_mem_caches() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_memory_get_usage_too_many_args,
-    "<?php memory_get_usage(true, false);",
-    "memory_get_usage() takes at most 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_error_get_last_too_many_args,
-    "<?php error_get_last(1);",
-    "error_get_last() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_libxml_use_internal_errors_too_many_args,
-    "<?php libxml_use_internal_errors(true, false);",
-    "libxml_use_internal_errors() takes at most 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_libxml_clear_errors_too_many_args,
-    "<?php libxml_clear_errors(1);",
-    "libxml_clear_errors() takes no arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_libxml_get_errors_too_many_args,
-    "<?php libxml_get_errors(1);",
-    "libxml_get_errors() takes no arguments"
-);
-
-expect_builtin_arity_error!(
     test_error_eval_wrong_args,
     "<?php eval();",
     "eval() takes exactly 1 argument"
@@ -158,56 +56,6 @@ fn test_error_undefined_constant() {
     expect_error("<?php echo UNDEFINED_CONST;", "Undefined constant");
 }
 
-/// Verifies that an unqualified reference to a genuinely-undefined constant
-/// inside a namespace still errors with the namespaced FQN. Guards that the
-/// name_resolver's new `define()` symbol collection does not over-accept: only
-/// constants actually created by a `define('LITERAL', ...)` call are registered.
-#[test]
-fn test_error_namespace_undefined_constant_no_define() {
-    expect_error(
-        "<?php namespace Demo\\Missing; echo MISSING_CONST;",
-        "Undefined constant: Demo\\Missing\\MISSING_CONST",
-    );
-}
-
-/// A curated platform-conditional predefined constant (the Windows-only
-/// `PHP_WINDOWS_VERSION_*` family, genuinely defined on Windows PHP but not this target) is
-/// tolerated as `Mixed` instead of a hard "Undefined constant". PHP defers undefined-constant
-/// resolution to runtime, so the reference compiles (and lowers to `__rt_constant`, which throws
-/// a catchable `\Error` on a miss). This is the VarDumper `CliDumper::isWindowsTrueColor()` shape.
-#[test]
-fn test_platform_conditional_windows_constant_tolerated() {
-    expect_ok(
-        r#"<?php
-function tc(): string {
-    if ('\\' === DIRECTORY_SEPARATOR) {
-        return sprintf('%s.%s.%s', PHP_WINDOWS_VERSION_MAJOR, PHP_WINDOWS_VERSION_MINOR, PHP_WINDOWS_VERSION_BUILD);
-    }
-    return '0';
-}
-echo tc();"#,
-    );
-}
-
-/// A platform-conditional constant is tolerated even referenced unqualified inside a namespace
-/// (the namespaced attempt form still resolves to the bare global name), matching PHP's namespace
-/// fallback to the global constant.
-#[test]
-fn test_platform_conditional_windows_constant_namespaced() {
-    expect_ok("<?php namespace Demo\\App; echo PHP_WINDOWS_VERSION_BUILD;");
-}
-
-/// A typo in a curated platform constant name is NOT on the allowlist and stays a loud
-/// compile-time "Undefined constant" — the tolerance is EXACT-name only, no fuzzy matching, so
-/// the typo-detection signal is preserved.
-#[test]
-fn test_platform_conditional_constant_typo_stays_loud() {
-    expect_error(
-        "<?php echo PHP_WINDOWS_VERSON_MAJOR;",
-        "Undefined constant",
-    );
-}
-
 /// Verifies that `define()` with a single argument (missing value) yields a wrong-args diagnostic.
 #[test]
 fn test_error_define_wrong_args() {
@@ -229,14 +77,12 @@ fn test_error_defined_wrong_args() {
     expect_error("<?php defined();", "defined() takes exactly 1 argument");
 }
 
-/// Verifies that `constant()` requires exactly one argument. A non-literal name
-/// is intentionally accepted (it lowers to the runtime constant registry), so the
-/// remaining compile-time error surface is the argument count.
+/// Verifies that `defined()` requires a string literal in AOT mode.
 #[test]
-fn test_error_constant_wrong_args() {
+fn test_error_defined_non_literal_name() {
     expect_error(
-        "<?php constant(\"A\", \"B\");",
-        "constant() takes exactly 1 argument",
+        "<?php $name = \"PHP_OS\"; defined($name);",
+        "defined() first argument must be a string literal in AOT mode",
     );
 }
 
@@ -281,25 +127,50 @@ fn test_error_putenv_wrong_args() {
     expect_error("<?php putenv();", "putenv() takes exactly 1 argument");
 }
 
-/// Verifies that `phpversion()` with more than one argument yields an arity diagnostic.
-///
-/// The zero-argument (version string) and one-argument (`?string $extension`,
-/// always false in elephc) forms are both valid, so only two or more arguments
-/// stay loud.
+/// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
 #[test]
 fn test_error_phpversion_wrong_args() {
+    // `phpversion()` takes an optional `?string $extension`, so a non-string argument is
+    // now a TYPE diagnostic rather than an arity one. Documented divergence, shared with
+    // `extension_loaded()`: reference PHP coerces `phpversion(1)` to the string `"1"` and
+    // returns `false` for the unknown extension, while elephc rejects it because the
+    // lowering has no runtime int-to-string conversion on that path.
     expect_error(
-        "<?php phpversion(1, 2);",
-        "phpversion() takes at most 1 argument",
+        "<?php phpversion(1);",
+        "phpversion() extension argument must be string",
     );
 }
 
-/// Verifies that `extension_loaded()` with no arguments yields a wrong-args diagnostic.
+/// Verifies `get_loaded_extensions()` rejects more than its optional flag argument.
 #[test]
-fn test_error_extension_loaded_wrong_args() {
+fn test_error_get_loaded_extensions_wrong_args() {
     expect_error(
-        "<?php extension_loaded();",
-        "extension_loaded() takes exactly 1 argument",
+        "<?php get_loaded_extensions(false, true);",
+        "get_loaded_extensions() takes at most 1 argument",
+    );
+}
+
+/// Verifies `hrtime()` rejects more than its optional numeric-format flag.
+#[test]
+fn test_error_hrtime_wrong_args() {
+    expect_error(
+        "<?php hrtime(false, true);",
+        "hrtime() takes at most 1 argument",
+    );
+}
+
+/// Verifies `header()` requires between one and three arguments.
+#[test]
+fn test_error_header_wrong_args() {
+    expect_error("<?php header();", "header() takes 1 to 3 arguments");
+}
+
+/// Verifies `http_response_code()` rejects more than one optional status code.
+#[test]
+fn test_error_http_response_code_wrong_args() {
+    expect_error(
+        "<?php http_response_code(200, 201);",
+        "http_response_code() takes 0 or 1 arguments",
     );
 }
 
@@ -567,7 +438,7 @@ fn test_error_json_last_error_msg_with_args() {
 fn test_error_preg_match_no_args() {
     expect_error(
         "<?php preg_match();",
-        "preg_match() takes 2 to 5 arguments",
+        "preg_match() takes 2 or 3 arguments",
     );
 }
 
@@ -576,7 +447,7 @@ fn test_error_preg_match_no_args() {
 fn test_error_preg_match_one_arg() {
     expect_error(
         r#"<?php preg_match("/test/");"#,
-        "preg_match() takes 2 to 5 arguments",
+        "preg_match() takes 2 or 3 arguments",
     );
 }
 
@@ -589,12 +460,12 @@ fn test_error_preg_match_matches_must_be_variable() {
     );
 }
 
-/// Verifies that `preg_match()` rejects more than the five supported arguments.
+/// Verifies that `preg_match()` rejects arguments beyond the supported `$matches` parameter.
 #[test]
-fn test_error_preg_match_too_many_args() {
+fn test_error_preg_match_four_args() {
     expect_error(
-        r#"<?php preg_match("/test/", "test", $matches, 0, 0, 0);"#,
-        "preg_match() takes 2 to 5 arguments",
+        r#"<?php preg_match("/test/", "test", $matches, 0);"#,
+        "preg_match() takes 2 or 3 arguments",
     );
 }
 
@@ -603,7 +474,7 @@ fn test_error_preg_match_too_many_args() {
 fn test_error_preg_match_all_no_args() {
     expect_error(
         "<?php preg_match_all();",
-        "preg_match_all() takes 2 to 5 arguments",
+        "preg_match_all() takes exactly 2 arguments",
     );
 }
 
@@ -612,72 +483,16 @@ fn test_error_preg_match_all_no_args() {
 fn test_error_preg_replace_wrong_args() {
     expect_error(
         r#"<?php preg_replace("/a/", "b");"#,
-        "preg_replace() takes 3 to 5 arguments",
+        "preg_replace() takes exactly 3 arguments",
     );
 }
 
-/// Verifies a by-reference out-parameter is defined AFTER the call, not before: reading `$matches`
-/// before the `preg_match()` call still reports "Undefined variable" (the call writes `$matches`
-/// during execution, so a prior read is a genuine undefined-variable use in PHP).
-#[test]
-fn test_error_preg_match_read_before_call_still_undefined() {
-    expect_error(
-        r#"<?php
-echo $matches;
-preg_match('/a/', 'cat', $matches);
-"#,
-        "Undefined variable: $matches",
-    );
-}
-
-/// Verifies a by-VALUE builtin argument does NOT define the caller's variable: `strlen($x)` reads
-/// `$x` but does not write it, so a later read of an otherwise-undefined `$x` still reports
-/// "Undefined variable". Guards against over-marking from the by-reference definite-assignment fix.
-#[test]
-fn test_error_by_value_builtin_arg_does_not_define() {
-    expect_error(
-        r#"<?php
-strlen($x);
-echo $x;
-"#,
-        "Undefined variable: $x",
-    );
-}
-
-/// Verifies that `preg_replace()` rejects more than the five supported arguments.
-#[test]
-fn test_error_preg_replace_too_many_args() {
-    expect_error(
-        r#"<?php preg_replace("/a/", "b", "c", -1, $count, 0);"#,
-        "preg_replace() takes 3 to 5 arguments",
-    );
-}
-
-/// Verifies that `preg_replace()` rejects a non-variable `$count` output argument.
-#[test]
-fn test_error_preg_replace_count_must_be_variable() {
-    expect_error(
-        r#"<?php preg_replace("/a/", "b", "c", -1, 5);"#,
-        "preg_replace() parameter $count must be passed a variable",
-    );
-}
-
-/// Verifies that `preg_replace_callback()` with only two arguments yields a wrong-args
-/// diagnostic (PHP allows 3–6).
+/// Verifies that `preg_replace_callback()` with only two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_preg_replace_callback_wrong_args() {
     expect_error(
         r#"<?php preg_replace_callback("/a/", function($matches) { return $matches[0]; });"#,
-        "preg_replace_callback() takes 3 to 6 arguments",
-    );
-}
-
-/// Verifies that `preg_replace_callback()` rejects seven arguments (PHP allows 3–6).
-#[test]
-fn test_error_preg_replace_callback_too_many_args() {
-    expect_error(
-        r#"<?php preg_replace_callback("/a/", function($m) { return $m[0]; }, "s", 1, 2, 3, 4);"#,
-        "preg_replace_callback() takes 3 to 6 arguments",
+        "preg_replace_callback() takes exactly 3 arguments",
     );
 }
 
@@ -690,24 +505,6 @@ fn test_error_preg_split_no_args() {
     );
 }
 
-expect_builtin_arity_error!(
-    test_error_ini_set_one_arg,
-    "<?php ini_set(\"x\");",
-    "ini_set() takes exactly 2 arguments"
-);
-
-expect_builtin_arity_error!(
-    test_error_ini_get_no_args,
-    "<?php ini_get();",
-    "ini_get() takes exactly 1 argument"
-);
-
-expect_builtin_arity_error!(
-    test_error_get_cfg_var_two_args,
-    "<?php get_cfg_var(\"a\", \"b\");",
-    "get_cfg_var() takes exactly 1 argument"
-);
-
 // -- Hex literal errors --
 
 /// Verifies that concatenating an undefined constant with a string path inside `require` produces a
@@ -719,133 +516,6 @@ fn test_include_path_with_undefined_const_errors() {
         err.message.contains("UNDEFINED"),
         "message should reference the undefined constant: {}",
         err.message
-    );
-}
-
-// -- Pre-checker curated-extension `function_exists` fold: correctness gates --
-//
-// `crate::optimize::function_existence::FunctionExistenceSet::for_pre_check` false-folds
-// `function_exists`/`extension_loaded` ONLY for a small curated allowlist of PHP extensions
-// elephc never provides (see `NEVER_AVAILABLE_FUNCTION_PREFIXES` in
-// `src/optimize/function_existence.rs`). These tests pin the two correctness gates: a call that is
-// NOT behind a provably-false guard still errors loudly (an unguarded/always-reached call to an
-// extension function elephc cannot resolve), and a plausible-but-uncurated name is left alone by
-// the pre-checker fold, so its guard is resolved normally instead of assumed absent.
-//
-// NOTE: a SEPARATE, narrower, EXACT-name curated allowlist (`crate::types::checker::builtins::
-// late_bound`, `apcu_exists`, `opcache_invalidate`, `igbinary_serialize`, ...) makes an UNGUARDED
-// call to one of ITS names compile successfully instead — PHP is late-bound, so the compiler
-// accepts the call site and lowers it to a catchable `\Error` throw with PHP's exact message
-// (see `tests/codegen/late_bound_functions.rs` for that behavior's coverage). That allowlist is
-// deliberately much narrower than `NEVER_AVAILABLE_FUNCTION_PREFIXES`'s broad prefix match (no
-// prefix wildcards: `apcu_ftch`/a same-family sibling not on the exact list stays loud), so the
-// tests below intentionally use names that are prefix-matched for the `function_exists` fold but
-// NOT on the late-bound exact allowlist, to keep pinning the "still a compile error" gate.
-
-/// Verifies an UNGUARDED call to a curated never-available extension function still errors loudly:
-/// the pre-checker fold only prunes DEAD branches behind a provably-false guard, never the call
-/// itself when it is always reached.
-#[test]
-fn test_error_fastcgi_finish_request_unguarded_call_still_loud() {
-    expect_error(
-        "<?php fastcgi_finish_request();",
-        "Undefined function: fastcgi_finish_request",
-    );
-}
-
-/// Verifies an UNGUARDED call to an `igbinary_*`-family name that is NOT on the late-bound exact
-/// allowlist (`igbinary_serialize`/`igbinary_unserialize` are; this one deliberately is not)
-/// still errors loudly, mirroring `test_error_fastcgi_finish_request_unguarded_call_still_loud`.
-/// Pins that `NEVER_AVAILABLE_FUNCTION_PREFIXES`'s broad `igbinary_` prefix match (used only for
-/// the `function_exists`/`extension_loaded` fold) never leaks into late-bound-call eligibility.
-#[test]
-fn test_error_igbinary_get_flags_unguarded_call_still_loud() {
-    expect_error(
-        "<?php igbinary_get_flags();",
-        "Undefined function: igbinary_get_flags",
-    );
-}
-
-/// Verifies an UNGUARDED call to the curated LATE-BOUND `igbinary_serialize` no longer errors at
-/// compile time (JURY ADDENDUM: it lowers to a catchable `\Error` throw instead — see
-/// `tests/codegen/late_bound_functions.rs` for the runtime-throw coverage). This is the direct
-/// regression pin for the pre-L1 expectation this exact call used to error loudly.
-#[test]
-fn test_igbinary_serialize_unguarded_call_no_longer_compile_errors() {
-    expect_ok("<?php igbinary_serialize([1]); echo 'ok';");
-}
-
-/// Verifies a TYPO of a curated late-bound name (`apcu_exists` → `apcu_exsts`) still errors
-/// loudly at compile time — the late-bound carve-out is EXACT-name-only, never a prefix or
-/// fuzzy match (jury addendum #1).
-#[test]
-fn test_error_late_bound_name_typo_still_loud() {
-    expect_error(
-        "<?php apcu_exsts('key');",
-        "Undefined function: apcu_exsts",
-    );
-}
-
-/// Verifies a genuinely-undefined USER function with a curated-looking name segment
-/// (`apcu_exists_wrapper`) still errors loudly — the late-bound carve-out matches complete
-/// names only, never a substring/prefix of a curated name.
-#[test]
-fn test_error_late_bound_name_substring_still_loud() {
-    expect_error(
-        "<?php apcu_exists_wrapper('key');",
-        "Undefined function: apcu_exists_wrapper",
-    );
-}
-
-/// Verifies a curated late-bound name used in a top-level `const` initializer still errors
-/// loudly: PHP itself rejects ANY function call in a constant expression
-/// ("Constant expression contains invalid operations"), and this context is genuinely
-/// compile-time-evaluated in elephc (`Checker::compile_time_const_depth`), so the late-bound
-/// carve-out must not apply there.
-#[test]
-fn test_error_late_bound_name_in_const_decl_still_loud() {
-    expect_error(
-        "<?php const X = apcu_exists('key'); echo X;",
-        "Undefined function: apcu_exists",
-    );
-}
-
-/// Verifies a curated late-bound name used in a class constant initializer still errors loudly,
-/// mirroring `test_error_late_bound_name_in_const_decl_still_loud` for class/interface constants.
-#[test]
-fn test_error_late_bound_name_in_class_const_decl_still_loud() {
-    expect_error(
-        "<?php class C { const X = apcu_exists('key'); } echo C::X;",
-        "Undefined function: apcu_exists",
-    );
-}
-
-// -- output buffering / get_class_methods (K2): kept-loud forms --
-
-// NOTE: `ob_start()` callback and chunk_size forms are fully supported post-merge
-// (see `tests/codegen/io/output_buffering.rs` for the behavioral coverage), so the
-// former rejected-form tests were retired.
-
-// A non-literal string and a `Mixed` receiver are no longer refused: both resolve through the
-// `_class_methods_table` registry at runtime (behavioral coverage lives in
-// `tests/codegen/oop/reflection.rs`). What stays loud is a value that can NEVER name a class —
-// PHP raises a TypeError there, and this one is statically provable, so it is reported at
-// compile time instead of deferred to the runtime miss path.
-expect_builtin_arity_error!(
-    test_error_get_class_methods_argument_that_can_never_name_a_class,
-    "<?php function f(int $n) { return get_class_methods($n); } f(7);",
-    "get_class_methods() requires an object or a class-name string; a value of this type can never name a class"
-);
-
-/// Verifies the pre-checker fold does not over-reach beyond its curated allowlist: a plausible but
-/// unknown/absent function name is left unfolded (neither true- nor false-folded) pre-checker, so
-/// a call to it inside a NON-provably-false guard is still checked and still errors — the guard's
-/// dynamic-looking condition is not assumed false just because the callee is unresolved.
-#[test]
-fn test_error_uncurated_unknown_function_guard_stays_unfolded_and_errors() {
-    expect_error(
-        "<?php if (function_exists('totally_made_up_fn_xyz') || true) { totally_made_up_fn_xyz(); }",
-        "Undefined function: totally_made_up_fn_xyz",
     );
 }
 
@@ -867,5 +537,47 @@ fn test_error_unserialize_non_string_data() {
     expect_error(
         "<?php unserialize([1, 2]);",
         "unserialize() data argument must be string-compatible",
+    );
+}
+
+/// Verifies `constant()` rejects an unknown constant at compile time.
+///
+/// Reference PHP raises `Error: Undefined constant "NOPE"` at runtime; an AOT binary has no
+/// constant table to look the name up in, so the diagnostic moves to compile time.
+#[test]
+fn test_error_constant_undefined_name() {
+    expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
+}
+
+/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
+#[test]
+fn test_error_constant_dynamic_name() {
+    expect_error(
+        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+}
+
+/// Verifies `constant()` rejects a class-constant name.
+#[test]
+fn test_error_constant_class_constant_name() {
+    expect_error(
+        "<?php class K { const A = 1; } echo constant(\"K::A\");",
+        "constant() class constants are not supported",
+    );
+}
+
+/// Verifies `constant()` rejects a missing argument.
+#[test]
+fn test_error_constant_wrong_args() {
+    expect_error("<?php echo constant();", "constant() takes exactly 1 argument");
+}
+
+/// Verifies `constant()` rejects excess positional arguments.
+#[test]
+fn test_error_constant_too_many_args() {
+    expect_error(
+        "<?php echo constant(\"PHP_EOL\", \"x\");",
+        "constant() takes exactly 1 argument",
     );
 }

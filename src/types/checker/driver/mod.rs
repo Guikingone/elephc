@@ -13,16 +13,11 @@ use std::collections::{HashMap, HashSet};
 use crate::codegen::platform::Platform;
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Program, Stmt, StmtKind};
-use crate::types::{
-    callable_wrapper_sig,
-    traits::{flatten_classes, FlattenedClass},
-    FunctionSig, PhpType, TypeEnv,
-};
+use crate::parser::ast::{Program, StmtKind};
+use crate::types::{traits::flatten_classes, TypeEnv};
 
 use super::builtin_types::{
-    finalize_magic_call_arg_signatures, inject_builtin_date_period, inject_builtin_datetime,
-    inject_builtin_normalizer, inject_builtin_reflection,
+    inject_builtin_date_period, inject_builtin_datetime, inject_builtin_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -40,19 +35,26 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
-    drop_unresolvable_attribute_arg_refs, resolve_const_default_references,
-    validate_deferred_class_constants, validate_deferred_declaration_defaults,
-};
-use super::func_args_scan::{
-    mark_func_args_functions, validate_func_args_global_scope, validate_func_args_method_bodies,
+    drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
+    validate_deferred_declaration_defaults,
 };
 use super::yield_validation::validate_yield_contexts;
 use super::Checker;
 
+mod declaration_metadata;
 mod externs;
 mod functions;
 mod init;
 mod top_level;
+
+use declaration_metadata::{
+    collect_declared_trait_constants, collect_declared_trait_methods,
+    collect_declared_trait_names, flatten_enum_methods,
+    substitute_relative_class_types_in_constants,
+    substitute_relative_class_types_in_flattened,
+    substitute_relative_class_types_in_flattened_enums,
+    substitute_relative_class_types_in_methods,
+};
 
 /// Orchestrates the full type-checker pipeline after parsing and name resolution.
 ///
@@ -78,18 +80,11 @@ pub(super) fn check_types_impl(
     let mut errors = Vec::new();
 
     errors.extend(validate_yield_contexts(program));
-    errors.extend(super::goto_validation::validate_goto_labels(program));
-    errors.extend(validate_func_args_global_scope(program));
 
     checker.collect_function_decls(program, &mut errors);
 
     let (mut flattened_classes, mut flattened_enums, flatten_errors) = flatten_classes(program);
     errors.extend(flatten_errors);
-    // Record which flattened methods declare a `static` return BEFORE the substitution below
-    // collapses `static` to the declaring class. PHP's `: static` is late-bound to the receiver,
-    // but the collapse makes it indistinguishable from a genuine `: DeclaringClass` return. The
-    // recorded side-table lets method-call inference late-bind such returns to the receiver class.
-    checker.static_return_methods = collect_static_return_methods(&flattened_classes);
     // Resolve the relative class types `self`/`static`/`parent` in every member type annotation
     // now that inheritance and trait flattening have settled the concrete enclosing class. This
     // single pass feeds the schema signatures, the body-check pass, and codegen (which all read
@@ -195,16 +190,6 @@ pub(super) fn check_types_impl(
     {
         errors.extend(error.flatten());
     }
-    // The DOM surface is no longer injected as checker-only shells: it is declared as ordinary
-    // PHP by `crate::dom_prelude`, so it is collected here like any user class AND reaches
-    // lowering. The shells type-checked but had no EIR body, which made `new DOMDocument()`
-    // un-compilable for every DOM-using program regardless of how clean its types were.
-    // Register the ext-intl `Normalizer` class constants elephc's emulated intl environment
-    // defines. Injects a builtin constants-only `Normalizer` when none is registered, or
-    // supplements a vendor-provided `Normalizer` (the intl polyfill stub) with the ext-intl
-    // constants it omits (notably `NFKC_CF`). Runs after all injectors so it patches whichever
-    // `Normalizer` ended up registered.
-    inject_builtin_normalizer(&mut class_map);
     checker.declared_classes = class_map.keys().cloned().collect();
     checker.declared_interfaces = interface_map.keys().cloned().collect();
     checker.declared_traits = declared_traits.clone();
@@ -220,28 +205,14 @@ pub(super) fn check_types_impl(
         }
     }
 
-    // Snapshot each class's method declarations BEFORE `resolve_const_default_references`
-    // rewrites class-constant-reference parameter defaults (`self::LABEL`, `parent::BASE`,
-    // `Class::LABEL`) into their resolved literal in place below. `ClassInfo::method_decls`
-    // is built from the POST-rewrite `class_map` (needed for default-value materialization
-    // elsewhere), which would otherwise make it impossible for
-    // `ReflectionParameter::getDefaultValueConstantName()` to recover the source-visible
-    // constant reference — this snapshot backs `ClassInfo::method_decls_unfolded` instead.
-    let pre_const_fold_method_decls: HashMap<String, Vec<ClassMethod>> = class_map
-        .iter()
-        .map(|(name, class)| (name.clone(), class.methods.clone()))
-        .collect();
-
-    // Fold class/interface-constant references used as defaults — property defaults
-    // (`public int $y = A::X;`) and method/constructor parameter defaults
-    // (`__construct(int $n = Contract::MAX)`) — into the referenced constant's literal value.
-    // Runs on both complete declaration maps so it is independent of declaration order, and
-    // rewrites in place so both type inference and codegen default emission see a literal.
-    resolve_const_default_references(&mut class_map, &interface_map);
-
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
-    let interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    // Sorted: `interface_map` is a HashMap, whose iteration order is randomized per
+    // process. Interface ids are handed out in this order and are baked into the
+    // generated assembly, so an unsorted walk makes two compilations of the SAME
+    // source produce different output — which defeats any content-addressed cache.
+    let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    interface_names.sort();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -257,7 +228,11 @@ pub(super) fn check_types_impl(
 
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    // Sorted for the same reason as `interface_names` above: class ids are assigned in
+    // this walk order and end up as immediates and `.quad` values in the emitted
+    // assembly, so a HashMap-ordered walk is a reproducibility hole.
+    let mut class_names: Vec<String> = class_map.keys().cloned().collect();
+    class_names.sort();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
@@ -266,41 +241,7 @@ pub(super) fn check_types_impl(
             &mut next_class_id,
             &mut building,
         ) {
-            // A flattened declaration is only a forward declaration until its
-            // complete schema builds. Keeping a failed class in
-            // `declared_classes` makes later `new`/static/member references
-            // treat the unavailable wrapper as known, producing misleading
-            // secondary "Undefined class" errors instead of the existing
-            // absent-optional-dependency fallback.
-            checker.declared_classes.remove(&class_name);
-            // When the build fails only because the class extends or implements an absent
-            // optional dependency — a supertype that exists nowhere in the closed world, e.g. a
-            // class from an uninstalled component such as symfony/expression-language — the
-            // failure is expected: PHP never autoloads the class on any reached path (its parent
-            // does not exist, so any real use would fatal at load time and is guarded away).
-            // Removing the class above already routes every use site through the absent-optional
-            // fallback (degrade to Mixed), so emit a warning instead of failing the whole compile.
-            // A genuine failure (a real, present supertype with some other schema error) keeps
-            // erroring loudly.
-            if let Some(absent) = absent_optional_supertype(&class_name, &class_map, &checker) {
-                checker.warnings.push(crate::errors::CompileWarning::new(
-                    crate::span::Span::dummy(),
-                    &format!(
-                        "class {} extends or implements absent optional dependency '{}'; treated as an uninstalled optional dependency",
-                        class_name, absent
-                    ),
-                ));
-            } else {
-                errors.extend(error.flatten());
-            }
-        }
-    }
-    // Back-fill `method_decls_unfolded` with the pre-const-fold snapshot captured above, now
-    // that every user class has a built `ClassInfo`. Compiler-injected/builtin classes have no
-    // entry in `pre_const_fold_method_decls` and keep the empty default set at construction.
-    for (class_name, methods) in pre_const_fold_method_decls {
-        if let Some(info) = checker.classes.get_mut(&class_name) {
-            info.method_decls_unfolded = methods;
+            errors.extend(error.flatten());
         }
     }
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
@@ -374,70 +315,14 @@ pub(super) fn check_types_impl(
 
     checker.prescan_extern_decls(program, &mut errors);
 
-    // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
-    // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
-    // into method-checkable units here — their signatures already live in `checker.classes`.
-    // A declaration whose schema failed (missing optional parent/interface,
-    // invalid inheritance contract, etc.) has no trustworthy method
-    // signature or enclosing class state. Exclude its bodies from inference:
-    // checking them only adds cascades from code that cannot be reached as a
-    // valid class in this closed world.
-    let mut methods_to_check: Vec<_> = flattened_classes
-        .iter()
-        .filter(|class| checker.classes.contains_key(&class.name))
-        .cloned()
-        .collect();
-    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
-    let class_method_bodies: HashMap<String, Vec<(String, bool, Vec<Stmt>)>> = methods_to_check
-        .iter()
-        .map(|class| {
-            (
-                class.name.clone(),
-                class
-                    .methods
-                    .iter()
-                    .map(|method| (method.name.clone(), method.is_static, method.body.clone()))
-                    .collect(),
-            )
-        })
-        .collect();
-
-    // Method schemas are already complete, so relax safe arity-hungry methods before even
-    // the provisional top-level pass. Otherwise a legacy surplus-argument constructor call
-    // records an initial arity error that is intentionally not suppressible as ordinary type
-    // inference noise, even though the authoritative pass later sees the relaxed signature.
-    let mut no_functions = HashMap::new();
-    checker.func_args_functions = mark_func_args_functions(
-        &mut no_functions,
-        &HashMap::new(),
-        &mut checker.classes,
-        &class_method_bodies,
-    );
-
     let (_, initial_top_level_errors) = checker.check_top_level_program(program);
 
     checker.resolve_unchecked_functions(&mut errors);
-
-    // Detect functions/methods that call func_num_args()/func_get_args()/func_get_arg()
-    // and relax their signature to accept unlimited trailing positional arguments (reusing
-    // the variadic call-argument machinery), BEFORE method bodies and the authoritative
-    // top-level call-site pass validate calls against these signatures.
-    let fn_decl_bodies: HashMap<String, Vec<Stmt>> = checker
-        .fn_decls
-        .iter()
-        .map(|(name, decl)| (name.clone(), decl.body.clone()))
-        .collect();
-    checker.func_args_functions = mark_func_args_functions(
-        &mut checker.functions,
-        &fn_decl_bodies,
-        &mut checker.classes,
-        &class_method_bodies,
-    );
-    errors.extend(validate_func_args_method_bodies(
-        &class_method_bodies,
-        &checker.func_args_functions,
-    ));
-
+    // Enum method bodies are not part of `flattened_classes` (enums are registered separately via
+    // the enum schema pass), so they would otherwise skip body checking entirely. Flatten them
+    // into method-checkable units here — their signatures already live in `checker.classes`.
+    let mut methods_to_check = flattened_classes.clone();
+    methods_to_check.extend(flatten_enum_methods(program, &flattened_enums));
     checker.type_check_methods_until_stable(&methods_to_check, &mut errors)?;
     patch_builtin_spl_storage_signatures(&mut checker);
     apply_implicit_stringable_interfaces(&mut checker.classes);
@@ -460,322 +345,5 @@ pub(super) fn check_types_impl(
         return Err(CompileError::from_many(errors));
     }
 
-    // All expression inference (and thus per-site `__call`/`__callStatic`
-    // argument-array specialization) has now run. Any magic-dispatch signature
-    // whose `params[1]` is still `Array(Never)` was never pinned by a singular
-    // concrete receiver; widen it to `Array(Mixed)` so a Mixed-receiver dispatch
-    // reads the forwarded arguments as boxed 8-byte cells (matching how
-    // `emit_magic_call_args_array` builds them) instead of a 16-byte stride.
-    finalize_magic_call_arg_signatures(&mut checker);
-
     Ok((checker, final_global_env))
-}
-
-/// Returns the name of a direct supertype of `class_name` that is absent from the entire closed
-/// world — a parent class or implemented interface present in neither the flatten set nor any
-/// known class-like table.
-///
-/// Such a supertype models an uninstalled optional dependency: the class can never be autoloaded
-/// (its parent/interface does not exist), so a flattening failure caused by it is expected rather
-/// than a genuine schema error. Parent resolution runs before member and interface checks during a
-/// class build, so whenever a class carries an absent supertype that supertype is what fails first,
-/// making this a reliable classifier for the absent-optional case. Returns `None` when every
-/// supertype is present, so a real build failure keeps erroring.
-fn absent_optional_supertype(
-    class_name: &str,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &Checker,
-) -> Option<String> {
-    let class = class_map.get(class_name)?;
-    if let Some(parent) = &class.extends {
-        if !class_map.contains_key(parent) && !checker.class_like_exists(parent) {
-            return Some(parent.clone());
-        }
-    }
-    class
-        .implements
-        .iter()
-        .find(|interface| {
-            !class_map.contains_key(*interface) && !checker.class_like_exists(interface)
-        })
-        .cloned()
-}
-
-/// Collects source-declared trait names recursively, including namespace blocks.
-fn collect_declared_trait_names(program: &Program) -> HashSet<String> {
-    let mut names = HashSet::new();
-    collect_declared_trait_names_into(program, &mut names);
-    names
-}
-
-/// Pushes recursive source-declared trait names into `names`.
-fn collect_declared_trait_names_into(program: &Program, names: &mut HashSet<String>) {
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::TraitDecl { name, .. } => {
-                names.insert(name.clone());
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                collect_declared_trait_names_into(body, names);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collects source-declared trait method signatures recursively, including namespace blocks.
-fn collect_declared_trait_methods(
-    program: &Program,
-) -> HashMap<String, HashMap<String, FunctionSig>> {
-    let mut methods = HashMap::new();
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::TraitDecl {
-                name,
-                methods: trait_methods,
-                ..
-            } => {
-                methods.insert(
-                    name.clone(),
-                    trait_methods
-                        .iter()
-                        .map(|method| {
-                            (
-                                php_symbol_key(&method.name),
-                                trait_method_reflection_sig(method),
-                            )
-                        })
-                        .collect(),
-                );
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                methods.extend(collect_declared_trait_methods(body));
-            }
-            _ => {}
-        }
-    }
-    methods
-}
-
-/// Collects source-declared trait constant names recursively, including namespace blocks.
-fn collect_declared_trait_constants(program: &Program) -> HashMap<String, HashSet<String>> {
-    let mut constants = HashMap::new();
-    for stmt in program {
-        match &stmt.kind {
-            StmtKind::TraitDecl {
-                name,
-                constants: trait_constants,
-                ..
-            } => {
-                constants.insert(
-                    name.clone(),
-                    trait_constants
-                        .iter()
-                        .map(|constant| constant.name.clone())
-                        .collect(),
-                );
-            }
-            StmtKind::NamespaceBlock { body, .. } => {
-                constants.extend(collect_declared_trait_constants(body));
-            }
-            _ => {}
-        }
-    }
-    constants
-}
-
-/// Builds the reflection-visible signature for a direct trait method.
-///
-/// Trait direct reflection only needs parameter names, defaults, by-reference
-/// flags, variadic shape, and declared-type presence; class-relative type names
-/// are resolved when the trait is flattened into a concrete class.
-fn trait_method_reflection_sig(method: &ClassMethod) -> FunctionSig {
-    let params = method
-        .params
-        .iter()
-        .map(|(name, type_ann, _, _)| {
-            (
-                name.clone(),
-                if type_ann.is_some() {
-                    PhpType::Mixed
-                } else {
-                    PhpType::Int
-                },
-            )
-        })
-        .collect();
-    let defaults = method
-        .params
-        .iter()
-        .map(|(_, _, default, _)| default.clone())
-        .collect();
-    let mut ref_params: Vec<bool> = method
-        .params
-        .iter()
-        .map(|(_, _, _, by_ref)| *by_ref)
-        .collect();
-    if method.variadic.is_some() {
-        ref_params.push(method.variadic_by_ref);
-    }
-    callable_wrapper_sig(&FunctionSig {
-        params,
-        param_type_exprs: method
-            .params
-            .iter()
-            .map(|(_, type_ann, _, _)| type_ann.clone())
-            .chain(method.variadic.iter().map(|_| method.variadic_type.clone()))
-            .collect(),
-        param_attributes: method.param_attributes.clone(),
-        defaults,
-        return_type: PhpType::Mixed,
-        declared_return: method.return_type.is_some(),
-        by_ref_return: method.by_ref_return,
-        ref_params,
-        declared_params: method
-            .params
-            .iter()
-            .map(|(_, type_ann, _, _)| type_ann.is_some())
-            .chain(
-                method
-                    .variadic
-                    .iter()
-                    .map(|_| method.variadic_type.is_some()),
-            )
-            .collect(),
-        variadic: method.variadic.clone(),
-        deprecation: None,
-    })
-}
-
-/// Builds method-checkable `FlattenedClass` units for every `enum` in the program so their method
-/// bodies go through the same validation as class methods. Enum signatures are already registered
-/// in `checker.classes` by the enum schema pass; these units only carry the names and method
-/// bodies the method-check pass needs. The relative types `self`/`static` resolve to the enum
-/// itself (enums have no parent).
-fn flatten_enum_methods(
-    program: &[Stmt],
-    flattened_enums: &HashMap<String, FlattenedClass>,
-) -> Vec<FlattenedClass> {
-    let mut units = Vec::new();
-    for stmt in program {
-        if let StmtKind::EnumDecl {
-            name,
-            implements,
-            methods,
-            constants,
-            ..
-        } = &stmt.kind
-        {
-            if let Some(flattened) = flattened_enums.get(name) {
-                units.push(flattened.clone());
-                continue;
-            }
-            let mut flattened = FlattenedClass {
-                name: name.clone(),
-                span: stmt.span,
-                extends: None,
-                implements: implements
-                    .iter()
-                    .map(|name| name.as_str().to_string())
-                    .collect(),
-                is_abstract: false,
-                is_final: true,
-                is_readonly_class: false,
-                properties: Vec::new(),
-                methods: methods.clone(),
-                attributes: stmt.attributes.clone(),
-                constants: constants.clone(),
-                used_traits: Vec::new(),
-                trait_aliases: Vec::new(),
-            };
-            substitute_relative_class_types_in_methods(&mut flattened.methods, name, None);
-            units.push(flattened);
-        }
-    }
-    units
-}
-
-/// Scans each flattened class's methods for a `static` return type and records
-/// `(declaring_class, method_key)` for every method whose declared return type contains
-/// PHP's late-bound `static`, BEFORE `substitute_relative_class_types_in_flattened`
-/// collapses `static` to the declaring class. Method-call inference resolves the
-/// declaring class of the called method and consults this set to late-bind the return
-/// type to the receiver.
-fn collect_static_return_methods(classes: &[FlattenedClass]) -> HashSet<(String, String)> {
-    let mut set = HashSet::new();
-    for class in classes {
-        for method in &class.methods {
-            if method
-                .return_type
-                .as_ref()
-                .is_some_and(|ty| ty.contains_late_static())
-            {
-                set.insert((class.name.clone(), php_symbol_key(&method.name)));
-            }
-        }
-    }
-    set
-}
-
-/// Resolves the relative class types `self`/`static`/`parent` to concrete class names across
-/// every flattened class's method parameter, method return, and property type annotations.
-///
-/// `self`/`static` resolve to the flattened class itself and `parent` to its `extends` target.
-/// Because trait methods are already merged into the using class at this point, a trait method's
-/// `self` correctly resolves to the using class rather than the trait. Annotations with no
-/// relative type are left untouched.
-fn substitute_relative_class_types_in_flattened(classes: &mut [FlattenedClass]) {
-    for class in classes.iter_mut() {
-        let self_class = class.name.clone();
-        let parent = class.extends.clone();
-        let parent_ref = parent.as_deref();
-        substitute_relative_class_types_in_methods(&mut class.methods, &self_class, parent_ref);
-        for property in class.properties.iter_mut() {
-            if let Some(ty) = property.type_expr.as_mut() {
-                *ty = ty.substitute_relative_class_types(&self_class, parent_ref);
-            }
-        }
-        substitute_relative_class_types_in_constants(
-            &mut class.constants,
-            &self_class,
-            parent_ref,
-        );
-    }
-}
-
-/// Resolves relative class types inside flattened enum methods.
-fn substitute_relative_class_types_in_flattened_enums(enums: &mut HashMap<String, FlattenedClass>) {
-    for enum_unit in enums.values_mut() {
-        let self_class = enum_unit.name.clone();
-        substitute_relative_class_types_in_methods(&mut enum_unit.methods, &self_class, None);
-        substitute_relative_class_types_in_constants(&mut enum_unit.constants, &self_class, None);
-    }
-}
-
-/// Rewrites `self`/`static`/`parent` type annotations on class constants after
-/// composition and inheritance have established the concrete owner.
-fn substitute_relative_class_types_in_constants(
-    constants: &mut [crate::parser::ast::ClassConst],
-    self_class: &str,
-    parent: Option<&str>,
-) {
-    for constant in constants {
-        if let Some(type_expr) = constant.type_expr.as_mut() {
-            *type_expr = type_expr.substitute_relative_class_types(self_class, parent);
-        }
-    }
-}
-
-/// Rewrites `self`/`static`/`parent` type annotations on a slice of methods by delegating to
-/// `ClassMethod::substitute_relative_class_types`.
-///
-/// Used for user classes after trait/inheritance flattening, interfaces, and enums.
-fn substitute_relative_class_types_in_methods(
-    methods: &mut [ClassMethod],
-    self_class: &str,
-    parent: Option<&str>,
-) {
-    for method in methods.iter_mut() {
-        method.substitute_relative_class_types(self_class, parent);
-    }
 }

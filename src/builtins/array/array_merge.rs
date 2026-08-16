@@ -20,17 +20,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_merge",
-    area: Array,
-    params: [],
-    variadic: "arrays",
-    returns: Mixed,
+    contract: "array_merge",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayMerge,
     ),
-    summary: "Merges the elements of two arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-merge.php",
 }
 
 /// Validates the first argument is an array and returns the merged result type.
@@ -40,25 +34,18 @@ builtin! {
 /// indexed array (element type `Void`), the result adopts the right operand's element
 /// type if it is a scalar-merge-compatible type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    // PHP 8: `array_merge(array ...$arrays): array` — variadic, accepting zero or more
-    // array arguments. Each argument is accepted under the gradual boundary (concrete
-    // array, `Mixed`, or a union containing an array); a concretely non-array argument
-    // is rejected. `array_merge()` with no arguments returns an empty array.
-    let mut result: Option<PhpType> = None;
-    for (idx, arg) in cx.args.iter().enumerate() {
-        let ty = cx.checker.infer_type(arg, cx.env)?;
-        if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
-            return Err(CompileError::new(
-                cx.span,
-                &format!("array_merge() argument #{} must be array", idx + 1),
-            ));
-        }
-        result = Some(match result {
-            None => ty,
-            Some(acc) => array_merge_return_type(acc, ty),
-        });
+    let ty1 = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty1 = ty1.array_or_false_member().cloned().unwrap_or(ty1);
+    let ty2 = cx.checker.infer_type(&cx.args[1], cx.env)?;
+    if !matches!(ty1, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+        return Err(CompileError::new(
+            cx.span,
+            "array_merge() first argument must be array",
+        ));
     }
-    Ok(result.unwrap_or_else(|| PhpType::Array(Box::new(PhpType::Void))))
+    Ok(array_merge_return_type(ty1, ty2))
 }
 
 

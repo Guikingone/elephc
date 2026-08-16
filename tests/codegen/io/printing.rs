@@ -124,9 +124,22 @@ var_dump($map["a"]);
 var_dump($map["o"]);
 "#,
     );
+    // The array slot dumps its elements: the boxed Mixed unbox lands on the real
+    // array, and the universal indexed walker reads its runtime value_type stamp
+    // (int) rather than assuming boxed cells. The object slot renders its full
+    // body AND its `#1` PHP object handle; this whole expectation is byte-for-byte
+    // `php -d xdebug.mode=off` output. See `tests/var_dump_object_tests.rs` for the
+    // handle-numbering parity suite.
     assert_eq!(
         out,
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\nobject(Box)\n"
+        concat!(
+            "int(42)\n",
+            "string(5) \"hello\"\n",
+            "bool(true)\n",
+            "NULL\n",
+            "array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n",
+            "object(Box)#1 (0) {\n}\n",
+        )
     );
 }
 
@@ -251,90 +264,6 @@ fn test_print_r_mixed_scalar_element() {
         r#"<?php $a = [1, "two", 3.5, true, null]; print_r($a[1]); echo "|"; print_r($a[3]);"#,
     );
     assert_eq!(out, "two|1");
-}
-
-/// H5: php-verified — `print_r($v)` (no `$return`, or `$return = false`)
-/// writes to stdout AND returns the concrete `true` (never void/nothing).
-#[test]
-fn test_print_r_no_return_arg_still_returns_true() {
-    let out = compile_and_run(r#"<?php $r = print_r("x"); var_dump($r);"#);
-    assert_eq!(out, "xbool(true)\n");
-}
-
-/// H5: `print_r($v, true)` captures the exact same scalar rendering as the
-/// stdout form into a returned string instead of writing it — php-verified
-/// scalar formats: int/float/string raw, bool `true`→`"1"`, bool
-/// `false`/`null`→`""`.
-#[test]
-fn test_print_r_return_true_scalars() {
-    let out = compile_and_run(
-        r#"<?php
-echo print_r(42, true), "|";
-echo print_r("hello", true), "|";
-echo print_r(true, true), "|";
-echo print_r(false, true), "|";
-echo print_r(null, true), "|";
-echo print_r(1.5, true);
-"#,
-    );
-    assert_eq!(out, "42|hello|1|||1.5");
-}
-
-/// H5: `print_r($array, true)` renders the exact same recursive
-/// `Array\n(\n    [k] => v\n)\n` body as the stdout form, captured into a string.
-#[test]
-fn test_print_r_return_true_nested_array() {
-    let out = compile_and_run(
-        r#"<?php
-$s = print_r(["a" => 1, "b" => ["c" => 2, "d" => 3]], true);
-echo $s;
-"#,
-    );
-    assert_eq!(
-        out,
-        "Array\n(\n    [a] => 1\n    [b] => Array\n        (\n            [c] => 2\n            [d] => 3\n        )\n\n)\n"
-    );
-}
-
-/// H5: `print_r($v, true)`'s returned string is independently usable (not an
-/// alias into reused scratch state) — two consecutive calls must not corrupt
-/// each other's captured output.
-#[test]
-fn test_print_r_return_true_two_calls_independent() {
-    let out = compile_and_run(
-        r#"<?php
-$a = print_r([1, 2], true);
-$b = print_r(["x", "y", "z"], true);
-echo $a;
-echo $b;
-"#,
-    );
-    assert_eq!(
-        out,
-        "Array\n(\n    [0] => 1\n    [1] => 2\n)\nArray\n(\n    [0] => x\n    [1] => y\n    [2] => z\n)\n"
-    );
-}
-
-/// H5: `print_r($v, true)` on a plain (non-nested) value still returns `string`,
-/// usable directly with string functions.
-#[test]
-fn test_print_r_return_true_usable_as_string() {
-    let out = compile_and_run(r#"<?php echo strlen(print_r("hello", true));"#);
-    assert_eq!(out, "5");
-}
-
-/// H5: `print_r($object, true)` stays loud (object dumps need class metadata
-/// the capture-buffer walker lacks, matching the pre-existing stdout-form limitation).
-#[test]
-#[should_panic(expected = "print_r($v, true) for PHP type Object")]
-fn test_print_r_return_true_object_stays_loud() {
-    compile_and_run(
-        r#"<?php
-class Foo {}
-$f = new Foo();
-print_r($f, true);
-"#,
-    );
 }
 
 /// Verifies `print_r($value, true)` returns the rendered int as a string instead
@@ -564,53 +493,6 @@ fn test_var_export_arrays() {
     );
 }
 
-/// Regression: `var_export` of an ASSOCIATIVE array reaching the prelude as a boxed Mixed cell
-/// (here through a typed `array` parameter, so the value is a runtime tag-5 associative payload
-/// rather than a const-folded literal). The prelude renders it with `if (is_array($value)) { foreach
-/// ($value as $k => $v) … }`; the `is_array` guard used to narrow `$value` to `array<mixed>` (tag 4),
-/// forcing the Mixed->array load coercion that fataled with "array builtin argument must be of type
-/// array" on the associative payload. The guarded local now keeps its Mixed representation so the
-/// `foreach` dispatches on the runtime tag. Covers a nested associative value too.
-#[test]
-fn test_var_export_assoc_array_through_typed_param() {
-    let out = compile_and_run(
-        r#"<?php
-function dump(array $m) { var_export($m); }
-dump(["a" => 1, "b" => ["c" => 2, "d" => 3]]);
-"#,
-    );
-    assert_eq!(
-        out,
-        "array (\n  'a' => 1,\n  'b' => \n  array (\n    'c' => 2,\n    'd' => 3,\n  ),\n)"
-    );
-}
-
-/// Regression: an `is_array()` guard over a Mixed value that is an ASSOCIATIVE array must let the
-/// guarded body run `count`/`foreach`/index without the tag-4 load coercion fataling on the tag-5
-/// payload. Exercises the associative and indexed cases through the same untyped parameter, plus a
-/// direct associative index read after the guard, byte-for-byte against PHP.
-#[test]
-fn test_is_array_guard_ops_on_associative_mixed() {
-    let out = compile_and_run(
-        r#"<?php
-function probe(mixed $x): string {
-    if (is_array($x)) {
-        $parts = [];
-        foreach ($x as $k => $v) { $parts[] = $k . "=" . $v; }
-        return "n" . count($x) . ":" . implode(",", $parts);
-    }
-    return "scalar";
-}
-function idx(mixed $x): string { return is_array($x) ? (string) $x["b"] : "?"; }
-echo probe(["a" => 1, "b" => 2, "c" => 3]), "|",
-     probe([10, 20]), "|",
-     probe("hi"), "|",
-     idx(["a" => 1, "b" => 42]);
-"#,
-    );
-    assert_eq!(out, "n3:a=1,b=2,c=3|n2:0=10,1=20|scalar|42");
-}
-
 /// `var_export($value, true)` returns the rendered string instead of printing it, and
 /// `function_exists('var_export')` sees the injected function. The unused-on-echo return is null.
 #[test]
@@ -639,81 +521,268 @@ echo var_export(123, true);
     assert_eq!(out, "custom");
 }
 
-/// `var_export` usage inside a PSR-4 autoloaded file is detected after the pipeline move
-/// (injection now runs after `autoload::run`), the prelude is injected, and the bare
-/// namespaced `var_export(...)` call inside `App\Dumper` resolves to the injected global
-/// via the name_resolver prelude-global fallback. This is the regression that previously
-/// produced "Undefined function: var_export" for autoloaded Symfony files.
-///
-/// This is a pipeline-level (type-check) assertion rather than a full `compile_and_run_files`
-/// end-to-end run: the legacy direct-AST `codegen::generate` path used by the multi-file
-/// helper does not lower `is_array` (a builtin the prelude body calls) and so fails at link
-/// time independently of this fix. Asserting `types::check_with_target` succeeds proves the
-/// prelude was injected and the call resolved at the pipeline stage the move targets, without
-/// coupling to the unrelated legacy-codegen `is_array` gap.
+// --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---
+
+// --- Issue #647: print_r() of a value carrying the null-container sentinel ---
+
+/// Regression for issue #647: the exact repro. `$a[7]` misses, so the Array-typed local
+/// `$arr` carries the in-band null-container sentinel. `print_r($arr)` must print NOTHING
+/// and keep running — PHP's `print_r(null)` is empty output, unlike `var_dump(null)`.
 #[test]
-fn test_var_export_in_autoloaded_file_is_injected() {
-    use crate::support::target;
-    use std::collections::HashSet;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static LOCAL_ID: AtomicU64 = AtomicU64::new(0);
-    let id = LOCAL_ID.fetch_add(1, Ordering::SeqCst);
-    let dir = std::env::temp_dir().join(format!(
-        "elephc_var_export_autoload_{}_{}",
-        std::process::id(),
-        id,
-    ));
-    fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(
-        dir.join("composer.json"),
-        r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
-    )
-    .unwrap();
-    fs::write(
-        dir.join("src/Dumper.php"),
-        "<?php\nnamespace App;\nclass Dumper {\n    public static function dump(mixed $v): string { return var_export($v, true); }\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        dir.join("main.php"),
-        "<?php\necho App\\Dumper::dump([1, 2]);\n",
-    )
-    .unwrap();
-
-    let php_path = dir.join("main.php");
-    let base_dir = php_path.parent().unwrap();
-    let source = fs::read_to_string(&php_path).unwrap();
-    let tokens = elephc::lexer::tokenize(&source).expect("tokenize failed");
-    let ast = elephc::parser::parse(&tokens).expect("parse failed");
-    let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
-    let define_set: HashSet<String> = HashSet::new();
-    let ast = elephc::conditional::apply(ast, &define_set);
-    let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
-    let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
-    let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _warnings) =
-        elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
-    let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
-    // The fix under test: inject AFTER autoload::run + hoist so the autoloaded-file
-    // usage is detected and the declaration is present before the type checker.
-    let resolved = elephc::var_export_prelude::inject_if_used(resolved);
-    let resolved = elephc::optimize::fold_constants(resolved);
-    let check_result = elephc::types::check_with_target(&resolved, target());
-    let _ = fs::remove_dir_all(&dir);
-    match check_result {
-        Ok(_) => {}
-        Err(e) => panic!(
-            "type check failed for autoloaded var_export usage: {}",
-            e.message
-        ),
-    }
+fn test_print_r_missed_indexed_read_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
 }
 
-// The "only when used" guard (no injection when the program has no `var_export` usage)
-// is verified at the function level in `src/var_export_prelude.rs::tests::no_injection_when_unused`,
-// since a runtime `function_exists($non_literal_name)` probe is not supported by the EIR
-// backend and a `"var_export"` string literal would itself trigger detection.
+/// Regression for issue #647: the same miss taken from a hash source whose value type is
+/// an indexed array reaches the identical `__rt_print_r_indexed` branch.
+#[test]
+fn test_print_r_missed_hash_read_of_array_value_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x', 'y']];
+$arr = $a['zz'];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
 
-// --- File I/O: CSV, timestamps, directory listing, temp files, seek/rewind/eof ---
+/// Regression for issue #647: a hash source whose value type is itself a hash routes to
+/// `__rt_print_r_hash`, the other walker reached through the same unguarded lowering.
+#[test]
+fn test_print_r_missed_hash_read_of_hash_value_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x' => 1]];
+$arr = $a['zz'];
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #647's post-`main` integration: object rendering was added after
+/// the original fix, and a missed object read carried the same sentinel into its walker.
+#[test]
+fn test_print_r_missed_object_read_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PrintRNullSentinelObject {
+    public int $n = 1;
+}
+$a = [new PrintRNullSentinelObject()];
+$value = $a[7];
+print_r($value);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Verifies return mode leaves its capture buffer empty when an object-typed missed read
+/// resolves to PHP null, rather than passing the sentinel to the object walker.
+#[test]
+fn test_print_r_missed_object_read_return_mode_yields_empty_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PrintRNullSentinelReturnObject {
+    public int $n = 1;
+}
+$a = [new PrintRNullSentinelReturnObject()];
+$value = $a[7];
+$s = print_r($value, true);
+echo "[", $s, "] len=", strlen($s), "\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[] len=0\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #647: a miss forwarded through `?? null` keeps the sentinel payload
+/// while suppressing the warning; the render must still be silent rather than crash.
+#[test]
+fn test_print_r_missed_read_through_coalesce_null_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7] ?? null;
+print_r($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #647: the return mode renders into the capture buffer instead of
+/// stdout, so the guard has to leave that buffer empty — PHP's `print_r(null, true)` is `""`.
+#[test]
+fn test_print_r_missed_read_return_mode_yields_empty_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+$s = print_r($arr, true);
+echo "[", $s, "] len=", strlen($s), "\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[] len=0\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #647: the runtime-flag mode picks echo or return at run time from
+/// the same rendering; a false flag must render nothing and still return PHP's `true`.
+#[test]
+fn test_print_r_missed_read_runtime_flag_mode_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+$flag = $argc > 99;
+$r = print_r($arr, $flag);
+echo "[", $r, "]\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[1]\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #647: a genuine null local and present indexed/associative arrays keep
+/// their existing renderings, so the added guard does not silence live containers.
+#[test]
+fn test_print_r_null_local_and_present_arrays_are_unchanged() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = null;
+print_r($n);
+$a = [['x', 'y']];
+print_r($a[0]);
+$h = ['k' => 'v'];
+print_r($h);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Array\n(\n    [0] => x\n    [1] => y\n)\nArray\n(\n    [k] => v\n)\ndone\n"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #647: the null-container sentinel must be recognized before the
+/// `Array` header write and the walker call, on every supported target. The lowering had no
+/// null branch at all, so the assertion is on ordering: the sentinel comparison has to
+/// precede the walker call inside the guarded body. Run under `ELEPHC_TEST_TARGET` to cover
+/// the non-host architectures.
+#[test]
+fn test_print_r_array_emits_null_container_guard_before_walker_call() {
+    let dir = make_cli_test_dir("elephc_print_r_null_container_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+print_r($arr);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // The zero check branches to the skip label first, so the label's first mention opens
+    // the guarded body and its definition closes it; the header write and walk sit between.
+    let body_start = user_asm
+        .find("print_r_skip_null_array")
+        .expect("missing print_r null-container skip branch");
+    let body_end = user_asm
+        .match_indices("print_r_skip_null_array")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing print_r null-container skip label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, walker_call) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_indexed"),
+        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_indexed"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let call_pos = body
+        .find(walker_call)
+        .unwrap_or_else(|| panic!("missing walker call `{walker_call}` in:\n{body}"));
+    assert!(
+        cmp_pos < call_pos,
+        "sentinel comparison must precede the print_r walker call, got:\n{body}"
+    );
+}
+
+/// Verifies the object path added by the merged `main` also branches around its runtime
+/// walker for both null-container representations on every supported architecture.
+#[test]
+fn test_print_r_object_emits_null_container_guard_before_walker_call() {
+    let dir = make_cli_test_dir("elephc_print_r_null_object_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+class PrintRGuardObject {}
+$a = [new PrintRGuardObject()];
+$value = $a[7];
+print_r($value);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let body_start = user_asm
+        .find("print_r_skip_null_object")
+        .expect("missing print_r null-object skip branch");
+    let body_end = user_asm
+        .match_indices("print_r_skip_null_object")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing print_r null-object skip label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, walker_call) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_object"),
+        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_object"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let call_pos = body
+        .find(walker_call)
+        .unwrap_or_else(|| panic!("missing object walker call `{walker_call}` in:\n{body}"));
+    assert!(
+        cmp_pos < call_pos,
+        "sentinel comparison must precede the print_r object walker call, got:\n{body}"
+    );
+}

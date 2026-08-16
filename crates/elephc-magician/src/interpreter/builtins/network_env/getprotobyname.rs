@@ -10,9 +10,8 @@
 use super::*;
 
 eval_builtin! {
-    name: "getprotobyname",
+    contract: "getprotobyname",
     area: NetworkEnv,
-    params: [protocol],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

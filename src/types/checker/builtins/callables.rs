@@ -128,6 +128,43 @@ pub(crate) fn array_element_type(arr_ty: &PhpType) -> PhpType {
     }
 }
 
+/// Returns the array key type carried by an array/associative-array type.
+///
+/// Indexed arrays are integer-keyed; an associative array reports its declared key type.
+/// A `Mixed` receiver yields `Mixed` keys so callback validation keeps the declaration as
+/// the only available contract. Other non-array types retain the `Int` fallback, matching
+/// [`array_element_type`]; callers that require arrays diagnose the container separately.
+pub(crate) fn array_key_type(arr_ty: &PhpType) -> PhpType {
+    match arr_ty {
+        PhpType::Array(_) => PhpType::Int,
+        PhpType::AssocArray { key, .. } => (**key).clone(),
+        PhpType::Mixed => PhpType::Mixed,
+        _ => PhpType::Int,
+    }
+}
+
+/// Returns the argument positions whose callback operand is type-checked *contextually* by
+/// the builtin's own `check` hook, with parameter types derived from the array element/key.
+///
+/// Every eager pre-inference pass must skip these positions. Inferring the closure there
+/// first would check its body once with the unhinted `Int`/`Mixed` parameter fallback and
+/// reject valid code — e.g. `array_filter($strings, fn($v) => strlen($v) > 5)` would fail
+/// with "strlen() argument must be string" before the hook ever supplied the `Str` hint.
+///
+/// The table mirrors the `check_array_callback_builtin_call` / `check_callback_builtin_call`
+/// call sites in `src/builtins/array/` plus `preg_replace_callback`, whose contextual
+/// signature lives in `callables::preg_replace_callback`.
+pub(crate) fn contextual_callback_arg_positions(builtin_name: &str) -> &'static [usize] {
+    match crate::names::php_symbol_key(builtin_name.trim_start_matches('\\')).as_str() {
+        "array_map" => &[0],
+        "array_all" | "array_any" | "array_filter" | "array_find" | "array_reduce"
+        | "array_walk" | "array_walk_recursive" | "preg_replace_callback" | "uasort"
+        | "uksort" | "usort" => &[1],
+        "array_udiff" | "array_uintersect" => &[2],
+        _ => &[],
+    }
+}
+
 /// Prefix for synthetic callback arguments; PHP identifiers cannot begin with a digit.
 const CALLBACK_ARG_PLACEHOLDER_PREFIX: &str = "0__elephc_callback_arg";
 
@@ -186,6 +223,28 @@ pub(crate) fn check_array_callback_builtin_call(
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_array_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_arg_types,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks an array-callback builtin's callback after the caller's `strict_types` setting
+/// has been suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_array_callback_builtin_call_in_engine_frame(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_arg_types: &[PhpType],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
     let callback_args = callback_arg_types
         .iter()
@@ -228,13 +287,12 @@ pub(crate) fn check_array_callback_builtin_call(
             return_type,
             body,
             captures,
-            capture_refs,
             *by_ref_return,
             callback.span,
             env,
             &param_hints,
         )?;
-        return checker.check_known_user_callback_call(
+        return checker.check_known_callable_call(
             &sig,
             &callback_args,
             span,
@@ -275,13 +333,6 @@ fn check_object_or_array_callable_call(
             )
                 .map(Some);
         }
-    }
-
-    // A dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>`, before the
-    // generic runtime-callable-array generalization would widen it to `Mixed`.
-    if let Some(cases_ty) = unresolved_cases_callable_return(checker, callback, callback_args, env)?
-    {
-        return Ok(Some(cases_ty));
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
@@ -373,12 +424,6 @@ fn infer_object_or_array_callable_runtime_return(
             return infer_callable_target_runtime_return(checker, &target, callback, env)
                 .map(Some);
         }
-    }
-
-    // A dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>` here too,
-    // keeping the callable-return inference coherent with the direct call path.
-    if let Some(cases_ty) = unresolved_cases_callable_return(checker, callback, &[], env)? {
-        return Ok(Some(cases_ty));
     }
 
     let callback_ty = checker.infer_type(callback, env)?;
@@ -614,48 +659,6 @@ fn callable_array_parts(callback: &Expr) -> Option<(&Expr, &str)> {
     Some((&elems[0], method.as_str()))
 }
 
-/// Recognizes a dynamic `$stringVar::cases()` array-callable whose receiver class cannot be
-/// resolved at compile time, returning `array<mixed>` so array consumers such as
-/// `array_column()` accept it.
-///
-/// A backed enum's `cases()` is universally an array, but a static call whose receiver is a
-/// runtime class-name string (`$self->typeName::cases()`) cannot be resolved to the concrete
-/// enum, so ordinary inference yields the gradual `Mixed`. Since any class may define
-/// `cases()`, `array<mixed>` is the honest element type and is sufficient for array acceptance.
-///
-/// The gate is strictly `cases`-only (case-insensitive, via `php_symbol_key`) with an
-/// unresolved, non-object receiver. Every other unresolved dynamic static call keeps its
-/// existing inference, so genuine mistakes (`$str::nonexistent()`) are not masked here and the
-/// resolved-class `cases()` path is left untouched. Returns `None` when the call is not a
-/// `cases()` array-callable on an unresolved receiver.
-fn unresolved_cases_callable_return(
-    checker: &mut Checker,
-    callback: &Expr,
-    callback_args: &[Expr],
-    env: &TypeEnv,
-) -> Result<Option<PhpType>, CompileError> {
-    let Some((receiver, method)) = callable_array_parts(callback) else {
-        return Ok(None);
-    };
-    if php_symbol_key(method) != "cases" {
-        return Ok(None);
-    }
-    // A statically resolvable class-name receiver goes through the normal resolved path.
-    if static_callable_receiver(checker, receiver, callback.span)?.is_some() {
-        return Ok(None);
-    }
-    // An object receiver names an instance-method array callable, not a static `cases()` call.
-    let receiver_ty = checker.infer_type(receiver, env)?;
-    if checker.invokable_class_for_type(&receiver_ty).is_some() {
-        return Ok(None);
-    }
-    // `cases()` takes no arguments; infer any provided ones for their side effects/diagnostics.
-    for arg in callback_args {
-        checker.infer_type(arg, env)?;
-    }
-    Ok(Some(PhpType::Array(Box::new(PhpType::Mixed))))
-}
-
 /// Provides the Static callable receiver helper used by the callables module.
 fn static_callable_receiver(
     checker: &Checker,
@@ -812,6 +815,28 @@ pub(crate) fn check_callback_builtin_call(
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_args,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks a callback builtin's callback after the caller's `strict_types` setting has been
+/// suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_callback_builtin_call_in_engine_frame(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
     if checker.expr_call_complex_callee_needs_runtime_capture(callback)
         && !callback_builtin_allows_complex_descriptor_env(label, callback)
     {
@@ -842,51 +867,8 @@ pub(crate) fn check_callback_builtin_call(
     }
 
     if let ExprKind::StringLiteral(cb_name) = &callback.kind {
-        // A literal-name callback applied PER-ELEMENT of a runtime collection (array_map/
-        // array_filter/array_reduce/array_walk/usort family/preg_replace_callback/
-        // iterator_apply — the SAME label set `callback_builtin_allows_complex_descriptor_env`
-        // above tracks) is always lowered through
-        // `crate::ir_lower::expr::lower_static_callable_value_call`, which receives
-        // already-materialized per-element operands with no room to append the hidden
-        // trailing arity-count operand an arity-hungry function needs. Refuse here instead
-        // of letting that path silently pass a parameter-count-mismatched operand list.
-        //
-        // `call_user_func()`/`call_user_func_array()` are deliberately NOT in this gate: with
-        // a fully static argument list (e.g. `call_user_func_array('f', [1, 2, 3])`) they
-        // lower through the DIFFERENT, supported `lower_static_callable_call` path (full
-        // `&[Expr]` argument list, same machinery as a direct call) — see
-        // `test_func_num_args_through_call_user_func_array_literal_name`. A genuinely
-        // dynamic-array `call_user_func_array()` call still falls back to the pre-materialized
-        // path, caught by that path's own defense-in-depth panic.
-        const PER_ELEMENT_CALLBACK_LABELS: &[&str] = &[
-            "array_map() callback",
-            "array_filter() callback",
-            "array_reduce() callback",
-            "array_walk() callback",
-            "array_walk_recursive() callback",
-            "preg_replace_callback() callback",
-            "usort() callback",
-            "uksort() callback",
-            "uasort() callback",
-            "iterator_apply() callback",
-        ];
-        if PER_ELEMENT_CALLBACK_LABELS.contains(&label)
-            && checker.func_args_functions.contains(cb_name.as_str())
-        {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "'{}' cannot be used as a callback for {} — it calls \
-                     func_num_args()/func_get_args()/func_get_arg(), which this compiler \
-                     only supports through direct calls, not through this per-element \
-                     dynamic-callable path",
-                    cb_name, label
-                ),
-            ));
-        }
         if let Some(sig) = checker.functions.get(cb_name.as_str()).cloned() {
-            return checker
-                .check_known_user_callback_call(&sig, callback_args, span, env, label);
+            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
         }
         if let Some(decl) = checker.fn_decls.get(cb_name.as_str()).cloned() {
             let effective_arg_count = callback_args.len();
@@ -901,13 +883,13 @@ pub(crate) fn check_callback_builtin_call(
                         ),
                     ));
                 }
-            } else if effective_arg_count < required {
+            } else if effective_arg_count < required || effective_arg_count > decl.params.len() {
                 return Err(CompileError::new(
                     span,
                     &format!(
-                        "Function '{}' expects at least {} arguments, got {}",
+                        "Function '{}' expects {} arguments, got {}",
                         cb_name,
-                        required,
+                        Checker::format_fixed_or_range_arity(required, decl.params.len()),
                         effective_arg_count
                     ),
                 ));
@@ -917,35 +899,11 @@ pub(crate) fn check_callback_builtin_call(
             let _ = checker.check_function_call(cb_name, callback_args, span, env);
             return Ok(PhpType::Int);
         }
-        // Before reporting "Undefined function", recognize a string-literal
-        // callback that names a PHP builtin (e.g. `array_map('trim', ...)`). A
-        // bare `trim(...)` call in a namespace already resolves to the global
-        // builtin via the catalog lookup; a string callable naming the same
-        // builtin must resolve the same way instead of being rejected as
-        // undefined. `canonical_builtin_function_name` implements PHP's
-        // case-insensitive builtin lookup against the same catalog a normal
-        // builtin call uses, so the namespace-fallback semantics are
-        // preserved: the literal `'trim'` is canonicalized to the global
-        // `trim` builtin regardless of the enclosing namespace.
-        if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
-            // Validate the callback's arguments against the builtin's real
-            // signature (arity, argument types, return type), mirroring how a
-            // direct `trim(...)` call is checked. This surfaces arity errors
-            // for genuine misuse while accepting valid builtin callables.
-            if let Some(ret_ty) = checker.check_builtin(&builtin_name, callback_args, span, env)? {
-                return Ok(ret_ty);
-            }
-            // The builtin dispatcher returned no inferred return type; treat
-            // the callback as valid and fall back to the conventional
-            // placeholder used for user-function callbacks above.
-            return Ok(PhpType::Int);
-        }
         return checker.check_function_call(cb_name, callback_args, span, env);
     }
 
     if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
-        return checker
-            .check_known_user_callback_call(&sig, callback_args, span, env, label);
+        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
     }
 
     if let Some(ret_ty) =
@@ -1376,13 +1334,27 @@ pub(crate) fn check_call_user_func(
 
 /// Type-checks `function_exists`: infers the argument and, for a string-literal function
 /// name, forces resolution of a matching not-yet-instantiated declaration or variant group.
+///
+/// The argument must be a string: a literal name const-folds at codegen, while any other
+/// `string` expression lowers to a baked case-insensitive membership test over the same set of
+/// declared functions. A non-string argument is rejected here — with a proper source-located
+/// diagnostic rather than a backend-internal message — because the lowering has no runtime
+/// string conversion.
 pub(crate) fn check_function_exists(
     checker: &mut Checker,
     args: &[Expr],
     span: crate::span::Span,
     env: &TypeEnv,
 ) -> Result<PhpType, CompileError> {
-    checker.infer_type(&args[0], env)?;
+    let function_ty = checker.infer_type(&args[0], env)?;
+    if !matches!(args[0].kind, ExprKind::StringLiteral(_))
+        && function_ty.codegen_repr() != PhpType::Str
+    {
+        return Err(CompileError::new(
+            span,
+            "function_exists() first argument must be a string in AOT mode",
+        ));
+    }
     if let ExprKind::StringLiteral(cb_name) = &args[0].kind {
         let cb_name = cb_name.trim_start_matches('\\');
         let cb_name = checker
@@ -1418,9 +1390,35 @@ pub(crate) fn array_filter_callback_arg_types(
 ) -> Vec<PhpType> {
     let elem_ty = array_element_type(arr_ty);
     match mode_arg.and_then(static_array_filter_mode_value) {
-        Some(1) => vec![elem_ty, PhpType::Int],
-        Some(2) => vec![PhpType::Int],
+        Some(1) => vec![elem_ty, array_key_type(arr_ty)],
+        Some(2) => vec![array_key_type(arr_ty)],
         _ => vec![elem_ty],
+    }
+}
+
+/// Returns the contextual callback parameter types for `array_walk()`/`array_walk_recursive()`.
+///
+/// PHP always invokes the callback as `callback($value, $key)`, but declaring only the value
+/// parameter is legal and common. The key slot is therefore added only when the callback is a
+/// closure literal that declares at least two parameters, so a one-parameter callback keeps
+/// passing arity validation while `function ($v, $k)` gets its key typed from the array.
+pub(crate) fn array_walk_callback_arg_types(arr_ty: &PhpType, callback: &Expr) -> Vec<PhpType> {
+    let elem_ty = array_element_type(arr_ty);
+    if callback_declares_at_least_two_params(callback) {
+        vec![elem_ty, array_key_type(arr_ty)]
+    } else {
+        vec![elem_ty]
+    }
+}
+
+/// Reports whether a callback expression is a closure literal declaring two or more parameters.
+///
+/// Only literal closures/arrow functions are inspected; every other callable shape keeps the
+/// single-parameter contract the checker can prove without resolving the callable.
+fn callback_declares_at_least_two_params(callback: &Expr) -> bool {
+    match &callback.kind {
+        ExprKind::Closure { params, .. } => params.len() >= 2,
+        _ => false,
     }
 }
 

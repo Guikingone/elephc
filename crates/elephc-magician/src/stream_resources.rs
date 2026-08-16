@@ -8,8 +8,41 @@
 //! - `crate::interpreter::builtins::filesystem` stream builtin helpers.
 //!
 //! Key details:
-//! - Resource ids are zero-based runtime payloads; PHP display ids are payload + 1.
+//! - Resource ids here are runtime PAYLOADS, drawn from a namespace disjoint from
+//!   every payload the compiled host program can produce (see
+//!   `EVAL_RESOURCE_PAYLOAD_BASE`). The PHP display id is a SEPARATE number minted
+//!   by the runtime resource-id registry; it is not `payload + 1` and cannot be
+//!   converted back into a payload.
 //! - Resource handles are process-local to eval and are not visible across the C ABI.
+
+/// First native payload handed out for an eval-owned resource.
+///
+/// WHY A BASE AT ALL. A tag-9 payload is the KEY of the runtime resource-id
+/// registry (`elephc::codegen_support::runtime::resource_ids`), and that registry
+/// is shared with the compiled host program — as it must be, because PHP keeps ONE
+/// resource-id counter per request and `eval()` draws from it like any other code.
+/// Measured against PHP 8.5.6: `$h = fopen(...); eval('$a = fopen(...); $b =
+/// fopen(...);'); $i = fopen(...);` reports 5 / 6, 7 / 8. So the ID space is shared
+/// on purpose; what must NOT be shared is the PAYLOAD space, because eval's keys
+/// are a dense counter of its own while host payloads are file descriptors and
+/// allocator handles. Without a base the two collide in two distinct ways:
+///
+/// - Eval's first three keys were 0, 1 and 2, which the registry answers directly
+///   as `payload + 1` because those are the standard stream descriptors. Eval
+///   resources therefore reported 1, 2, 3 and then jumped to the counter's 5 —
+///   `get_resource_id()` inside `eval()` returned 1,2,3,5,6,7 where PHP returns
+///   5,6,7,8,9,10 — while consuming nothing from the shared counter, so a later
+///   host `fopen()` reported an id three too low.
+/// - Beyond the third, eval key `n` and host descriptor `n` are the same registry
+///   key, so an eval stream and an unrelated host stream aliased one id.
+///
+/// WHY THIS VALUE. It must exceed the standard-stream shortcut (payload 2), every
+/// file descriptor, and every user-space address a `DIR*` or a hash-context handle
+/// can take. `1 << 62` clears all three on both supported targets: canonical
+/// user-space addresses stop at 2^47 on x86_64 (2^56 with 5-level paging) and at
+/// 2^52 on AArch64, and it stays positive in `i64`, so payloads keep round-tripping
+/// through `raw_value_word()` and `i64::try_from`.
+pub(crate) const EVAL_RESOURCE_PAYLOAD_BASE: i64 = 1 << 62;
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -26,6 +59,7 @@ use crate::stream_wrappers;
 use crate::value::RuntimeCellHandle;
 
 mod file_process_opening;
+pub(crate) use file_process_opening::{eval_open_failure_reason, EVAL_OPEN_DEFAULT_REASON};
 mod operations;
 mod resource_registration;
 mod sockets;
@@ -44,6 +78,21 @@ pub(crate) struct EvalStreamResources {
     directories: HashMap<i64, EvalDirectoryStream>,
     filter_resources: HashSet<i64>,
     hash_contexts: HashMap<i64, EvalHashContext>,
+    /// Why the most recent local open failed, in the platform's own words.
+    ///
+    /// `open_path` answers `None` for every kind of failure, which is all its callers need to
+    /// decide what to RETURN. It is not enough to decide what to SAY: PHP's warning quotes the
+    /// reason, and "No such file or directory" is wrong for a file that exists and cannot be
+    /// read. The opener records it here rather than changing its signature, so the callers that
+    /// only care about the result stay untouched.
+    last_open_error: Option<String>,
+    /// The directory resource `readdir()`/`rewinddir()`/`closedir()` use when handed no handle.
+    ///
+    /// php keeps ONE such slot, fed by `opendir()` — and so by `dir()`, which is built on it —
+    /// and never by `fopen()`. It holds the id and not the resource, so a closed directory needs
+    /// no bookkeeping here: the id simply stops being live, and the family raises php's
+    /// `TypeError: No resource supplied` on its own.
+    last_directory: Option<i64>,
     process_children: HashMap<i64, Child>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,

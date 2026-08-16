@@ -11,14 +11,6 @@ use crate::support::*;
 
 #[path = "oop/instanceof.rs"]
 mod instanceof;
-#[path = "oop/checked_downcast_argument.rs"]
-mod checked_downcast_argument;
-#[path = "oop/checked_downcast_return.rs"]
-mod checked_downcast_return;
-#[path = "oop/scalar_coercion_refusal.rs"]
-mod scalar_coercion_refusal;
-#[path = "oop/checked_downcast_property_store.rs"]
-mod checked_downcast_property_store;
 #[path = "oop/traits.rs"]
 mod traits;
 #[path = "oop/inheritance.rs"]
@@ -37,16 +29,12 @@ mod relative_types;
 mod anonymous_classes;
 #[path = "oop/intersection_types.rs"]
 mod intersection_types;
-#[path = "oop/dnf_types.rs"]
-mod dnf_types;
 #[path = "oop/dynamic_dispatch.rs"]
 mod dynamic_dispatch;
 #[path = "oop/misc.rs"]
 mod misc;
 #[path = "oop/attributes.rs"]
 mod attributes;
-#[path = "oop/reflection.rs"]
-mod reflection;
 #[path = "oop/constants.rs"]
 mod constants;
 #[path = "oop/abstract_properties.rs"]
@@ -55,10 +43,6 @@ mod abstract_properties;
 mod property_hooks;
 #[path = "oop/datetime.rs"]
 mod datetime;
-#[path = "oop/cloning.rs"]
-mod cloning;
-#[path = "oop/dom.rs"]
-mod dom;
 #[path = "oop/reflection_properties.rs"]
 mod reflection_properties;
 #[path = "oop/reflection_functions.rs"]

@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_rand",
+    contract: "array_rand",
     area: Array,
-    params: [array],
     direct: ArrayRand,
     values: ArrayRand,
 }
@@ -47,6 +46,7 @@ pub(in crate::interpreter) fn eval_builtin_array_rand(
         return Err(EvalStatus::RuntimeFatal);
     };
     let array = eval_expr(array, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_rand", &[array], context, values)?;
     eval_array_rand_result(array, values)
 }
 

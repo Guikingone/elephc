@@ -36,26 +36,6 @@ impl DataId {
     }
 }
 
-/// Scalar value of a program constant materialized into the closed-world
-/// constant registry consumed by `constant()`/`defined()` runtime lookups.
-///
-/// Only PHP scalar shapes are representable here; class constants, enum-case
-/// singletons, and array/composite constants are intentionally absent in
-/// Stage 0 (a registry miss is correct PHP behavior: `false`/throw).
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConstScalar {
-    /// Integer constant (boxed as Mixed tag 0).
-    Int(i64),
-    /// Floating-point constant (boxed as Mixed tag 2 via its bit pattern).
-    Float(f64),
-    /// Boolean constant (boxed as Mixed tag 3).
-    Bool(bool),
-    /// String constant (boxed as Mixed tag 1; bytes interned in the data section).
-    Str(String),
-    /// `null` constant (boxed as Mixed tag 8).
-    Null,
-}
-
 /// Method metadata retained for standalone trait reflection.
 #[derive(Debug, Clone)]
 pub struct TraitMethodInfo {
@@ -109,20 +89,6 @@ pub struct Module {
     pub packed_layouts: PackedLayoutTable,
     pub extern_globals: HashMap<String, PhpType>,
     pub required_runtime_features: RuntimeFeatures,
-    /// Closed-world constant registry (canonical FQN, no leading `\`, sorted by
-    /// name bytes) materialized for runtime `defined()`/`constant()` lookups when
-    /// `required_runtime_features.const_introspection` is set.
-    pub const_registry: Vec<(String, ConstScalar)>,
-    /// Case-folded class/enum name -> declaring source file, snapshotted from the entry file's
-    /// own top-level declarations before include/autoload merging (see
-    /// `crate::pipeline::scan_reflection_source_files`). Backs `ReflectionClass::getFileName()`
-    /// (`crate::codegen::lower_inst::objects::reflection`); a class not covered by this
-    /// snapshot (declared in an included/autoloaded file, or an ambiguous duplicate name) is
-    /// simply absent, and `getFileName()` reports PHP's `false` for it.
-    pub class_source_files: HashMap<String, String>,
-    /// Same as `class_source_files`, for free-function declarations. Backs
-    /// `ReflectionFunction::getFileName()`.
-    pub function_source_files: HashMap<String, String>,
     /// True when this module is being lowered for a `--web` compile. Threaded
     /// down from the CLI flag (`CliConfig.web`, mirroring what
     /// `codegen_ir::block_emit::emit_module` receives) so lowering can gate
@@ -175,9 +141,6 @@ impl Module {
             packed_layouts: PackedLayoutTable::default(),
             extern_globals: HashMap::new(),
             required_runtime_features: RuntimeFeatures::none(),
-            const_registry: Vec::new(),
-            class_source_files: HashMap::new(),
-            function_source_files: HashMap::new(),
             web: false,
         }
     }

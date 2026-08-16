@@ -7,12 +7,9 @@
 //! - `crate::var_export_prelude::inject_if_used`.
 //!
 //! Key details:
-//! - Runs after name resolution (the injection point in `pipeline::compile` is after
-//!   `autoload::run` and the conditional-function hoist), so function `Name`s are the
-//!   canonicalized forms produced by the name resolver; `name_is_var_export` matches on
-//!   the unqualified last segment, which is `var_export` whether the call was written
-//!   bare, as `\var_export`, or as a namespaced `N\var_export` that the prelude-global
-//!   fallback rewrote to the global `var_export`. PHP function names are case-insensitive.
+//! - Runs before name resolution, so function `Name`s are raw source text; matched
+//!   case-insensitively on the unqualified last segment (PHP function names are
+//!   case-insensitive and may be written `\var_export`).
 //! - A `"var_export"` string literal also counts as a reference so the
 //!   `function_exists('var_export')` and `'var_export'` callable forms still inject
 //!   the function. Over-injection (e.g. an unrelated string) only adds a small, later
@@ -176,7 +173,6 @@ fn expr_refs_ve(expr: &Expr) -> bool {
             expr_refs_ve(value) || expr_refs_ve(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_ve(value) || expr_refs_ve(callable),
-        ExprKind::ListUnpack { value, .. } => expr_refs_ve(value),
         ExprKind::Assignment {
             target,
             value,
@@ -235,9 +231,6 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         ExprKind::StaticPropertyAccess { .. } => false,
         ExprKind::BufferNew { len, .. } => expr_refs_ve(len),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => false,
-        // `$obj::CONST` — recurse into the evaluated object expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_ve(object),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_ve(property),
         ExprKind::ObjectClassName { object } => expr_refs_ve(object),
         ExprKind::NewScopedObject { args, .. } => args.iter().any(expr_refs_ve),
         ExprKind::Yield { key, value } => {
@@ -254,12 +247,9 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no call position and no child expr/stmt.
         StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -399,11 +389,6 @@ fn stmt_refs_ve(stmt: &Stmt) -> bool {
         | StmtKind::StaticPropertyArrayPush { value, .. } => expr_refs_ve(value),
         StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             expr_refs_ve(index) || expr_refs_ve(value)
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_refs_ve(property)
-                || index.as_ref().is_some_and(expr_refs_ve)
-                || expr_refs_ve(value)
         }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_ve(object) || expr_refs_ve(value)

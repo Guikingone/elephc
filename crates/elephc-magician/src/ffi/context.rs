@@ -49,6 +49,19 @@ pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
     crate::strict_php_mode::set_strict_php_mode(enabled != 0);
 }
 
+/// Selects the PHP language profile eval reports, so that a binary compiled
+/// `--php-version 8.2` answers `8.2.0` from inside `eval()` exactly as it does
+/// natively.
+///
+/// Generated code emits this call before every runtime eval dispatch. Ids outside
+/// the profiles elephc supports leave the active one untouched, which keeps every
+/// consumer that links this archive without elephc's codegen — the test harnesses
+/// in this crate included — on the default profile.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
+    crate::eval_php_profile::set_eval_php_version_id(version_id);
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// # Safety

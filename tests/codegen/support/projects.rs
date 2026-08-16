@@ -10,17 +10,14 @@
 use super::*;
 
 /// Combines checker-required libraries with libraries required by feature-gated runtime helpers.
-fn required_libraries_for_runtime_features(
+fn link_requirements_for_runtime_features(
     check_result: &elephc::types::CheckResult,
     runtime_features: elephc::codegen::RuntimeFeatures,
-) -> Vec<String> {
-    let mut required_libraries = check_result.required_libraries.clone();
-    for lib in elephc::codegen::required_libraries_for_runtime_features(runtime_features) {
-        if !required_libraries.contains(&lib) {
-            required_libraries.push(lib);
-        }
-    }
-    required_libraries
+) -> TestLinkRequirements {
+    TestLinkRequirements::new(
+        check_result.required_libraries.clone(),
+        elephc::codegen::link_requirements_for_runtime_features(runtime_features),
+    )
 }
 
 /// Generates user and runtime assembly for project fixtures through the canonical EIR backend.
@@ -33,14 +30,7 @@ fn generate_project_asm(
     heap_debug: bool,
     requires_elephc_tls: bool,
 ) -> (String, String, elephc::codegen::RuntimeFeatures) {
-    let empty_source_files = HashMap::new();
-    let ir_module = lower_and_validate_ir_for_codegen_fixture(
-        program,
-        check_result,
-        source_path,
-        &empty_source_files,
-        &empty_source_files,
-    );
+    let ir_module = lower_and_validate_ir_for_codegen_fixture(program, check_result, source_path);
     let exported_functions = HashMap::new();
     let regalloc_linear = !matches!(std::env::var("ELEPHC_REGALLOC").as_deref(), Ok("stack"));
     let user_asm = elephc::codegen::generate_user_asm_from_ir_with_options(
@@ -99,6 +89,14 @@ pub(crate) fn elephc_cli_command(dir: &Path) -> Command {
     cmd
 }
 
+/// Constructs a CLI command backed by a hermetic managed-PCRE2 project fixture.
+pub(crate) fn elephc_cli_command_with_managed_pcre2(dir: &Path) -> Command {
+    let cache = prepare_managed_pcre2_cli_project(dir);
+    let mut cmd = elephc_cli_command(dir);
+    cmd.env("ELEPHC_NATIVE_CACHE", cache);
+    cmd
+}
+
 // Compiles a PHP source string with conditional defines and runs the resulting binary.
 // Uses the full compiler pipeline (no CLI subprocess) with the default 8_388_608-byte heap.
 // Returns stdout. Cleans up the temporary directory after execution.
@@ -133,12 +131,33 @@ pub(crate) fn compile_and_run_with_defines(source: &str, defines: &[&str]) -> St
 // Used for CLI integration tests that exercise the binary interface end-to-end.
 /// Provides the Compile cli file and run helper used by the projects module.
 pub(crate) fn compile_cli_file_and_run(source: &str, defines: &[&str]) -> String {
+    compile_cli_file_and_run_with_native(source, defines, false)
+}
+
+/// Compiles and runs a CLI fixture with a verified managed-PCRE2 test artifact.
+pub(crate) fn compile_cli_file_and_run_with_managed_pcre2(
+    source: &str,
+    defines: &[&str],
+) -> String {
+    compile_cli_file_and_run_with_native(source, defines, true)
+}
+
+/// Compiles and runs one CLI fixture with optional managed-PCRE2 project setup.
+fn compile_cli_file_and_run_with_native(
+    source: &str,
+    defines: &[&str],
+    managed_pcre2: bool,
+) -> String {
     let dir = make_cli_test_dir("elephc_cli_test");
 
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let mut compile_cmd = elephc_cli_command(&dir);
+    let mut compile_cmd = if managed_pcre2 {
+        elephc_cli_command_with_managed_pcre2(&dir)
+    } else {
+        elephc_cli_command(&dir)
+    };
     for define in defines {
         compile_cmd.arg("--define").arg(define);
     }
@@ -208,8 +227,11 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _autoload_warnings) =
+    let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -265,6 +287,9 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -286,7 +311,7 @@ pub(crate) fn compile_and_run_files_expect_failure(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
 
     let elephc_err = assemble_and_run_expect_failure(
         &user_asm,
@@ -337,8 +362,11 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
-    let (resolved, _autoload_warnings) =
+    let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -360,7 +388,7 @@ pub(crate) fn compile_and_run_files_with_defines(
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let elephc_out = assemble_and_run(
@@ -420,6 +448,7 @@ pub(crate) fn compile_files_fails_with_defines(
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::autoload::collect_aliases(resolved);
         let resolved = elephc::name_resolver::resolve(resolved)?;
+        let resolved = elephc::func_args::desugar(resolved)?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
         Ok(())
@@ -447,6 +476,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -468,7 +500,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
         requires_elephc_tls,
     );
     let required_libraries =
-        required_libraries_for_runtime_features(&check_result, runtime_features);
+        link_requirements_for_runtime_features(&check_result, runtime_features);
     // user assembly is already platform-correct (emitters handle platform at emit time)
 
     let asm_path = dir.join("test.s");
@@ -553,44 +585,6 @@ pub(crate) fn compile_and_run_in_dir(source: &str) -> (String, std::path::PathBu
     let elephc_out = assemble_and_run(
         &user_asm,
         &runtime_obj_for_asm(&runtime_asm),
-        &dir,
-        &required_libraries,
-        &default_link_paths(),
-        &[],
-    );
-    (elephc_out, dir)
-}
-
-/// EIR-backed sibling of `compile_and_run_in_dir()`.
-///
-/// `compile_and_run_in_dir()` above calls `elephc::codegen::generate()` directly —
-/// the `#[allow(dead_code)]`-marked FROZEN legacy direct AST→ASM backend entry
-/// point — instead of the shared `compile_source_to_asm_with_defines_repr()`
-/// pipeline that `compile_and_run()` uses (which dispatches on
-/// `selected_test_codegen_backend()`, defaulting to the active EIR backend).
-/// New H5 filesystem features (real `mkdir()`/`scandir()`/`glob()` optional-arg
-/// semantics) are EIR-only per the backend-freeze policy, so a test asserting
-/// their behavior must exercise EIR, not the frozen legacy path. This helper
-/// preserves `compile_and_run_in_dir()`'s directory-preserving contract (the
-/// caller inspects/cleans up `dir`) while routing through the EIR-aware
-/// pipeline. NOT a replacement for `compile_and_run_in_dir()` — the ~139
-/// pre-existing call sites across `tests/codegen/io/` are left untouched to
-/// avoid an unrelated, wide-blast-radius backend swap; use this helper only
-/// for new tests that need both a working directory and guaranteed EIR codegen.
-pub(crate) fn compile_and_run_in_dir_ir(source: &str) -> (String, std::path::PathBuf) {
-    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let tid = std::thread::current().id();
-    let pid = std::process::id();
-    let dir = std::env::temp_dir().join(format!("elephc_test_ir_{}_{:?}_{}", pid, tid, id));
-    fs::create_dir_all(&dir).unwrap();
-
-    let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
-    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
-
-    let elephc_out = assemble_and_run(
-        &user_asm,
-        &runtime_obj,
         &dir,
         &required_libraries,
         &default_link_paths(),

@@ -38,8 +38,6 @@ pub(in crate::interpreter) enum EvalBuiltinDefaultValue {
     Float(f64),
     /// PHP string default represented as UTF-8 text.
     String(&'static str),
-    /// PHP string default represented as raw bytes.
-    Bytes(&'static [u8]),
     /// PHP empty indexed array default.
     EmptyArray,
 }

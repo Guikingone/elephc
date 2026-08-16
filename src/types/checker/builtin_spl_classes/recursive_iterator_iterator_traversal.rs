@@ -49,11 +49,6 @@ fn recursive_iterator_iterator_slot_expr() -> Expr {
     property_access(this_expr(), "slot")
 }
 
-/// Builds the AST expression for recursive iterator iterator max depth (`-1` = unlimited).
-fn recursive_iterator_iterator_max_depth_expr() -> Expr {
-    property_access(this_expr(), "maxDepth")
-}
-
 /// Builds the AST expression for recursive iterator iterator current valid.
 fn recursive_iterator_iterator_current_valid_expr() -> Expr {
     property_access(this_expr(), "currentValid")
@@ -110,73 +105,7 @@ pub(super) fn recursive_iterator_iterator_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "depth", int_expr(0)),
         property_assign_stmt(this_expr(), "slot", int_expr(0)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(false)),
-        // PHP starts every RecursiveIteratorIterator unlimited; `setMaxDepth()` narrows it.
-        property_assign_stmt(this_expr(), "maxDepth", int_expr(-1)),
     ]
-}
-
-/// Builds the synthetic method body for `RecursiveIteratorIterator::setMaxDepth()`.
-///
-/// PHP validates the argument before storing it: `setMaxDepth(-2)` throws
-/// `ValueError: RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater
-/// than or equal to -1` (verified against php 8.5.6). `-1` (the default) means unlimited.
-pub(super) fn recursive_iterator_iterator_set_max_depth_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            binary_expr(var_expr("maxDepth"), BinOp::Lt, int_expr(-1)),
-            vec![throw_stmt(new_object_expr(
-                "ValueError",
-                vec![string_expr(
-                    "RecursiveIteratorIterator::setMaxDepth(): Argument #1 ($maxDepth) must be greater than or equal to -1",
-                )],
-            ))],
-            None,
-        ),
-        property_assign_stmt(this_expr(), "maxDepth", var_expr("maxDepth")),
-    ]
-}
-
-/// Builds the synthetic method body for `RecursiveIteratorIterator::getMaxDepth()`.
-///
-/// PHP returns `int|false`: `false` when any depth is allowed, otherwise the configured maximum
-/// (verified against php 8.5.6 — a fresh iterator reports `bool(false)`, and `setMaxDepth(0)` then
-/// reports `int(0)`). The internal `-1` sentinel is mapped back to `false` here.
-pub(super) fn recursive_iterator_iterator_get_max_depth_body() -> Vec<Stmt> {
-    vec![
-        if_stmt(
-            binary_expr(
-                recursive_iterator_iterator_max_depth_expr(),
-                BinOp::Lt,
-                int_expr(0),
-            ),
-            return_body(bool_expr(false)),
-            None,
-        ),
-        return_stmt(recursive_iterator_iterator_max_depth_expr()),
-    ]
-}
-
-/// Builds the synthetic method body for the internal descend gate.
-///
-/// True when the traversal may still descend from the CURRENT frame into its children: either no
-/// maximum is configured (`maxDepth < 0`), or the current depth is strictly below it. PHP yields
-/// the node sitting at `maxDepth` (it is simply treated as having no children) but never opens it,
-/// so entries exist at depths `0..=maxDepth` — verified against php 8.5.6 on a 3-level tree:
-/// `setMaxDepth(0)` yields only depth-0 entries, `setMaxDepth(1)` yields depths 0 and 1.
-pub(super) fn recursive_iterator_iterator_may_descend_body() -> Vec<Stmt> {
-    return_body(binary_expr(
-        binary_expr(
-            recursive_iterator_iterator_max_depth_expr(),
-            BinOp::Lt,
-            int_expr(0),
-        ),
-        BinOp::Or,
-        binary_expr(
-            recursive_iterator_iterator_depth_expr(),
-            BinOp::Lt,
-            recursive_iterator_iterator_max_depth_expr(),
-        ),
-    ))
 }
 
 /// Builds the synthetic method body for recursive iterator iterator rewind.
@@ -411,109 +340,70 @@ fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
 
 /// Builds the synthetic method body for recursive iterator iterator advance self first.
 fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
-    let mut body = vec![if_stmt(
-        binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(0)),
-        vec![
-            property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1)),
-            property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
-            return_void_stmt(),
-        ],
-        None,
-    )];
-    body.extend(vec![
+    vec![
+        if_stmt(
+            binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(0)),
+            vec![
+                property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1)),
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                return_void_stmt(),
+            ],
+            None,
+        ),
         assign_stmt(
             "hasChildren",
             method_call(var_expr("iterator"), "hasChildren", Vec::new()),
         ),
         if_stmt(
             var_expr("hasChildren"),
-            // SELF_FIRST already yielded this node on entry (state 0 above), so a blocked descend
-            // simply falls through to the next sibling — no extra depth-limit case is needed here.
-            vec![if_stmt(
-                recursive_iterator_iterator_may_descend_expr(),
-                vec![
-                    assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
-                    if_stmt(
-                        not_expr(function_call("is_null", vec![var_expr("child")])),
-                        recursive_iterator_iterator_descend_current_child_body(int_expr(2)),
-                        None,
-                    ),
-                ],
-                None,
-            )],
+            vec![
+                assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
+                if_stmt(
+                    not_expr(function_call("is_null", vec![var_expr("child")])),
+                    recursive_iterator_iterator_descend_current_child_body(int_expr(2)),
+                    None,
+                ),
+            ],
             None,
         ),
         property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
         expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
         return_void_stmt(),
-    ]);
-    body
-}
-
-/// Builds `$this->__elephcMayDescend()` — the `maxDepth` descend gate.
-///
-/// It gates the DESCENT only, never `hasChildren()` itself: PHP keeps treating a depth-limited
-/// node as "has children" for the LEAVES_ONLY emit decision, so collapsing the two would wrongly
-/// emit it. Verified against php 8.5.6 on `[1, [2, [3, 4]], 5]` with `setMaxDepth(0)`:
-/// LEAVES_ONLY yields `1 5` (the nested array is skipped, not emitted as a leaf), while SELF_FIRST
-/// and CHILD_FIRST both yield the nested array itself.
-fn recursive_iterator_iterator_may_descend_expr() -> Expr {
-    method_call(this_expr(), "__elephcMayDescend", Vec::new())
+    ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator advance children first or leaves.
 fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<Stmt> {
-    let mut body = vec![if_stmt(
-        binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(1)),
-        vec![
-            property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
-            property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
-            return_void_stmt(),
-        ],
-        None,
-    )];
-    body.extend(vec![
+    vec![
+        if_stmt(
+            binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(1)),
+            vec![
+                property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                return_void_stmt(),
+            ],
+            None,
+        ),
         assign_stmt(
             "hasChildren",
             method_call(var_expr("iterator"), "hasChildren", Vec::new()),
         ),
         if_stmt(
             var_expr("hasChildren"),
-            vec![if_stmt(
-                recursive_iterator_iterator_may_descend_expr(),
-                vec![
-                    assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
-                    if_stmt(
-                        not_expr(function_call("is_null", vec![var_expr("child")])),
-                        recursive_iterator_iterator_non_self_child_body(),
-                        None,
-                    ),
-                ],
-                // Depth limit reached with children present. LEAVES_ONLY must NOT emit this node
-                // (it is not a leaf — it still has children), so skip straight to the next
-                // sibling; the identical skip lives in `..._non_self_child_body` for the
-                // descended case. CHILD_FIRST falls through and emits the node, matching PHP.
-                Some(vec![if_stmt(
-                    binary_expr(
-                        recursive_iterator_iterator_mode_expr(),
-                        BinOp::StrictEq,
-                        int_expr(0),
-                    ),
-                    vec![
-                        property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
-                        expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
-                        return_void_stmt(),
-                    ],
+            vec![
+                assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
+                if_stmt(
+                    not_expr(function_call("is_null", vec![var_expr("child")])),
+                    recursive_iterator_iterator_non_self_child_body(),
                     None,
-                )]),
-            )],
+                ),
+            ],
             None,
         ),
         property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
         property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
         return_void_stmt(),
-    ]);
-    body
+    ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator non self child.

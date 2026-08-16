@@ -10,15 +10,6 @@
 //! Key details:
 //! - Calling convention (matches the C ABI of `elephc_web_write`): byte pointer
 //!   in `x0`/`rdi`, length in `x1`/`rsi`. No return value.
-//! - `ob_start()` interception is checked FIRST, unconditionally (every target,
-//!   web or not): while `_ob_level` is nonzero, every write routes to
-//!   `crate::codegen_support::runtime::io::ob_buffer`'s `__rt_ob_append` instead of the
-//!   syscall/`--web` capture path — this is the SAME choke point every echo/
-//!   print/scalar-to-string write already travels through (see
-//!   `crate::codegen::abi::values::emit_write_stdout`), so a plain `ob_start()`
-//!   captures it without touching any of those call sites. `_headers_sent` is
-//!   stamped `1` right before the real (non-buffered) output path, so an active
-//!   `ob_start()` buffer correctly delays `headers_sent()` (php -n verified).
 //! - The `--web` capture branch (flag load + `elephc_web_write` call) is emitted
 //!   ONLY when `web == true`. Non-web binaries never reference `_elephc_web_capture`
 //!   or `elephc_web_write`, so they link without the (web-only) bridge symbol.
@@ -83,11 +74,6 @@ pub fn emit_stdout_write(emitter: &mut Emitter, web: bool) {
     emitter.instruction("b __rt_stdout_write_done");                            // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_ob_inactive");
 
-    // -- real output: stamp headers_sent() true before the syscall/`--web` capture path --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_headers_sent");
-    emitter.instruction("mov x10, #1");                                         // headers_sent() observes real output has now left the buffer stack
-    emitter.instruction("str x10, [x9]");
-
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --
         let capture_symbol = emitter.target.extern_symbol("elephc_web_capture");
@@ -151,10 +137,6 @@ fn emit_stdout_write_x86_64(emitter: &mut Emitter, web: bool) {
     emitter.instruction("call __rt_ob_append");                                 // append the bytes (ptr=rdi, len=rsi) to the top output buffer
     emitter.instruction("jmp __rt_stdout_write_done");                          // capture handled the bytes — skip the syscall path
     emitter.label("__rt_stdout_write_ob_inactive");
-
-    // -- real output: stamp headers_sent() true before the syscall/`--web` capture path --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_headers_sent");
-    emitter.instruction("mov QWORD PTR [r11], 1");                              // headers_sent() observes real output has now left the buffer stack
 
     if web {
         // -- web build: route through elephc_web_write when capture is enabled --

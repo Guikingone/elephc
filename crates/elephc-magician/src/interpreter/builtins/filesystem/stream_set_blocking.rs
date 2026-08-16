@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream blocking-mode helper.
 
 eval_builtin! {
-    name: "stream_set_blocking",
+    contract: "stream_set_blocking",
     area: Filesystem,
-    params: [stream, enable],
     direct: Filesystem,
     values: Filesystem,
 }

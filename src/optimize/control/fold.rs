@@ -22,6 +22,8 @@ use super::*;
 /// Returns a new `Stmt` with all nested expressions folded via `fold_expr`.
 pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
@@ -36,11 +38,6 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             value: fold_expr(value),
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
-            target: fold_expr(target),
-            source: fold_expr(source),
-            append,
-        },
         StmtKind::If {
             condition,
             then_body,
@@ -167,8 +164,6 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         },
         StmtKind::Break(levels) => StmtKind::Break(levels),
         StmtKind::Continue(levels) => StmtKind::Continue(levels),
-        StmtKind::Goto(label) => StmtKind::Goto(label),
-        StmtKind::Label(label) => StmtKind::Label(label),
         StmtKind::ExprStmt(expr) => StmtKind::ExprStmt(fold_expr(expr)),
         StmtKind::NamespaceDecl { name } => StmtKind::NamespaceDecl { name },
         StmtKind::NamespaceBlock { name, body } => StmtKind::NamespaceBlock {
@@ -316,19 +311,6 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             index: fold_expr(index),
             value: fold_expr(value),
         },
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property: Box::new(fold_expr(*property)),
-            index: index.map(fold_expr),
-            append,
-            value: fold_expr(value),
-        },
         StmtKind::PropertyArrayPush {
             object,
             property,
@@ -371,7 +353,13 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
             StmtKind::FunctionVariantMark { name, variant }
         }
     };
-    Stmt { kind, span, attributes }
+    Stmt {
+        kind,
+        span,
+        source_mode,
+        strict_types,
+        attributes,
+    }
 }
 
 /// Folds all statements in a block by mapping `fold_stmt` over each element.

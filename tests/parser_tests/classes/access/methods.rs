@@ -128,45 +128,6 @@ fn test_parse_scoped_constant_named_like_keyword() {
     }
 }
 
-/// Parses `$o::K` and verifies it produces a `DynamicClassConstantAccess` node whose
-/// object is the `$o` variable and whose name is the constant `K` (not a method call).
-#[test]
-fn test_parse_dynamic_class_constant_access() {
-    let stmts = parse_source("<?php echo $o::K;");
-    match &stmts[0].kind {
-        StmtKind::Echo(expr) => match &expr.kind {
-            ExprKind::DynamicClassConstantAccess { object, name } => {
-                assert_eq!(object.kind, ExprKind::Variable("o".into()));
-                assert_eq!(name, "K");
-            }
-            other => panic!("Expected dynamic class constant access, got {:?}", other),
-        },
-        _ => panic!("Expected Echo"),
-    }
-}
-
-/// A method call through a variable receiver (`$o::m()`) still desugars to
-/// `call_user_func`, not a `DynamicClassConstantAccess`.
-#[test]
-fn test_parse_dynamic_static_method_call_still_call_user_func() {
-    let stmts = parse_source("<?php $o::m();");
-    match &stmts[0].kind {
-        StmtKind::ExprStmt(expr) => match &expr.kind {
-            ExprKind::FunctionCall { name, .. } => {
-                assert_eq!(name, &Name::unqualified("call_user_func"));
-            }
-            other => panic!("Expected call_user_func desugaring, got {:?}", other),
-        },
-        _ => panic!("Expected ExprStmt"),
-    }
-}
-
-/// A dynamic static *property* access (`$o::$prop`) is still rejected at parse time
-/// as an unsupported (deferred sibling) feature.
-#[test]
-fn test_parse_dynamic_static_property_access_rejected() {
-    assert!(parse_fails("<?php echo $o::$prop;"));
-}
 /// Parses keyword-spelled scoped names at three casings and verifies the AST keeps the source
 /// form instead of canonicalizing every `Token::Match` to one hard-coded spelling.
 #[test]

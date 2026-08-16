@@ -2,7 +2,7 @@
 title: "class_implements()"
 description: "Returns the interfaces which are implemented by the given class or its parents."
 sidebar:
-  order: 72
+  order: 78
 ---
 
 ## class_implements()
@@ -25,12 +25,6 @@ Returns the interfaces which are implemented by the given class or its parents.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/class_implements.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_implements.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

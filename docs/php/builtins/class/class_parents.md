@@ -2,7 +2,7 @@
 title: "class_parents()"
 description: "Returns the parent classes of the given class."
 sidebar:
-  order: 73
+  order: 79
 ---
 
 ## class_parents()
@@ -25,12 +25,6 @@ Returns the parent classes of the given class.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/class_parents.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/class_parents.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

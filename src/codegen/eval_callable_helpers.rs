@@ -22,8 +22,8 @@ use std::collections::HashSet;
 use crate::codegen::callable_dispatch::{
     self, RuntimeCallableCase, RuntimeCallableSelector, RuntimeStaticMethodCallableCase,
 };
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::runtime_callable_invoker::RuntimeCallableInvoker;
 use crate::ir::{Function, LocalKind, Module};
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
@@ -222,7 +222,6 @@ fn eval_dynamic_callable_descriptor(data: &mut DataSection) -> String {
         &[],
         CallableDescriptorInvocation::new(CallableDescriptorShape::CallbackAdapter),
         Some(EVAL_DYNAMIC_CALLABLE_INVOKER_LABEL),
-        false,
     )
 }
 
@@ -400,8 +399,6 @@ fn eval_user_function_callable_cases(
             &[],
             CallableDescriptorInvocation::named(CallableDescriptorShape::Function, &name),
             Some(&invoker_label),
-        
-            false,
         );
         cases.push(RuntimeCallableCase {
             label: function_symbol(&name),
@@ -611,9 +608,7 @@ fn eval_static_method_callable_cases(
                             method_name.as_str(),
                         ),
                         Some(&invoker_label),
-                    
-            false,
-        );
+                    );
                 RuntimeStaticMethodCallableCase {
                     class_name,
                     method_name,
@@ -695,9 +690,7 @@ fn receiver_bound_instance_method_case(
             method_name,
         ),
         Some(&invoker_label),
-    
-            false,
-        );
+    );
     RuntimeCallableCase {
         label: entry_label,
         descriptor_label,

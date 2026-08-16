@@ -2,7 +2,7 @@
 title: "long2ip()"
 description: "Converts an IPv4 address from long integer to dotted string notation."
 sidebar:
-  order: 390
+  order: 434
 ---
 
 ## long2ip()
@@ -24,12 +24,6 @@ Converts an IPv4 address from long integer to dotted string notation.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/network_env/long2ip.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/network_env/long2ip.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

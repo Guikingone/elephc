@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the string-search predicate hook.
 
 eval_builtin! {
-    name: "str_ends_with",
+    contract: "str_ends_with",
     area: String,
-    params: [haystack, needle],
     direct: StringSearch,
     values: StringSearch,
 }

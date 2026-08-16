@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies `method_exists()` requires both a class/object and method name.
+#[test]
+fn test_error_method_exists_wrong_args() {
+    expect_error(
+        "<?php method_exists(new stdClass());",
+        "method_exists() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies `property_exists()` requires both a class/object and property name.
+#[test]
+fn test_error_property_exists_wrong_args() {
+    expect_error(
+        "<?php property_exists(new stdClass());",
+        "property_exists() takes exactly 2 arguments",
+    );
+}
+
 /// Verifies the error diagnostic for instanceof self outside class scope.
 #[test]
 fn test_error_instanceof_self_outside_class_scope() {
@@ -19,28 +37,11 @@ fn test_error_instanceof_self_outside_class_scope() {
     );
 }
 
-/// Regression: `instanceof self` used as an `if`-guard condition outside any class must still
-/// error. The relative-name narrowing resolver returns the target unchanged when there is no
-/// enclosing class (`current_class` is `None`), so the pre-existing instanceof-outside-class
-/// diagnostic keeps firing rather than a new panic/error path being introduced.
+/// Verifies the error diagnostic for undefined class.
 #[test]
-fn test_error_instanceof_self_guard_outside_class_scope() {
-    expect_error(
-        "<?php function f(mixed $x): int { if ($x instanceof self) { return 1; } return 0; } echo f(5);",
-        "Cannot use self in instanceof outside of a class context",
-    );
-}
-
-/// Verifies that `new` on a class absent from the closed world is tolerated as an absent
-/// optional dependency: it warns and type-checks (degrading to `Mixed`) rather than hard-erroring.
-/// This is the accepted softening of class-name typo detection needed to compile frameworks with
-/// uninstalled optional dependencies. See `crate::types::checker::absent_class`.
-#[test]
-fn test_new_undefined_class_tolerated_as_absent_warning() {
-    expect_warning(
-        "<?php $x = new Missing();",
-        "reference to unknown class 'Missing' treated as an absent optional dependency",
-    );
+fn test_error_undefined_class() {
+    // new on an undefined class name reports an undefined class error.
+    expect_error("<?php $x = new Missing();", "Undefined class: Missing");
 }
 
 /// Verifies the error diagnostic for undefined property.
@@ -50,17 +51,6 @@ fn test_error_undefined_property() {
     expect_error(
         "<?php class Box {} $b = new Box(); echo $b->missing;",
         "Undefined property: Box::missing",
-    );
-}
-
-/// Verifies that `$x::CONST` on a receiver whose class is not statically a single object
-/// type (here a `mixed` value) reports a clear "class must be statically known" error rather
-/// than crashing or silently degrading.
-#[test]
-fn test_error_dynamic_class_constant_on_mixed() {
-    expect_error(
-        "<?php class C { const K = 42; } function f(mixed $o): int { return $o::K; } echo f(new C());",
-        "Cannot resolve class constant `K` on a value of type `mixed`",
     );
 }
 
@@ -74,19 +64,10 @@ fn test_error_undefined_method() {
     );
 }
 
-/// PHP-faithful lenient dispatch: an interface call keeps its declared ancestor return type, and a
-/// follow-up call on that ancestor type is dispatched on the runtime class rather than rejected at
-/// compile time. `withHeader()` is declared `: Message`, so its result stays `Message` (NOT refined
-/// to `Request`/`Req` — that ancestor-return intent is preserved). The chained `->requestOnly()` on
-/// a `Message`-typed receiver is then accepted because a concrete implementor (`Req`, which IS-A
-/// `Message`) declares `requestOnly`: PHP performs no compile-time method-existence check here and
-/// dispatches on the runtime class. At runtime `Req::withHeader()` returns a `Plain`, which lacks
-/// `requestOnly`, so this faults cleanly with a PHP-style `Error` — `php` verified: "Call to
-/// undefined method Plain::requestOnly()". It therefore COMPILES (this test) and faults at runtime,
-/// exactly like PHP, instead of the previous over-strict compile-time rejection.
+/// Verifies an interface call keeps its declared ancestor return type.
 #[test]
-fn test_interface_method_on_ancestor_receiver_dispatches_at_runtime() {
-    expect_ok(
+fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
+    expect_error(
         r#"<?php
 interface Message { public function withHeader(): Message; }
 interface Request extends Message { public function requestOnly(): string; }
@@ -99,30 +80,7 @@ function read(Request $request): string {
     return $request->withHeader()->requestOnly();
 }
 "#,
-    );
-}
-
-/// KEEP-LOUD boundary of the PHP-faithful lenient-dispatch relaxation: a method call on an
-/// interface-typed receiver stays loud when NO class in the closed world (interface or concrete)
-/// declares the method — it is genuinely undefined, no runtime class could ever satisfy it, so the
-/// relaxation must not swallow the diagnostic. `save()` exists nowhere despite `Persister`
-/// having a concrete implementor.
-#[test]
-fn test_error_interface_receiver_genuinely_undefined_method_stays_loud() {
-    expect_error(
-        "<?php interface Persister { public function id(): int; } class DbPersister implements Persister { public function id(): int { return 1; } } function f(Persister $p): int { return $p->save(); }",
-        "Undefined method: Persister::save",
-    );
-}
-
-/// KEEP-LOUD boundary: a method call on a base-class-typed receiver stays loud when neither the
-/// class nor any subclass declares the method — no concrete runtime class the dynamic dispatch
-/// could land on has it, so the relaxation keeps the loud diagnostic instead of accepting.
-#[test]
-fn test_error_base_class_receiver_no_subclass_method_stays_loud() {
-    expect_error(
-        "<?php class Base {} class Sub extends Base { public function present(): int { return 1; } } function f(Base $b): int { return $b->absent(); }",
-        "Undefined method: Base::absent",
+        "Undefined method: Message::requestOnly",
     );
 }
 
@@ -139,9 +97,10 @@ fn test_error_object_class_name_requires_object() {
 /// method is absent from one of the member classes: every object member must
 /// provide the method for the runtime class-id dispatch to be sound.
 #[test]
-fn test_object_union_method_present_on_only_one_member_type_checks() {
-    expect_ok(
+fn test_error_object_union_method_missing_from_member() {
+    expect_error(
         "<?php class A { function only_a() {} } class B {} function make(bool $b): A|B { return $b ? new A() : new B(); } make(true)->only_a();",
+        "Undefined method: B::only_a",
     );
 }
 
@@ -152,37 +111,6 @@ fn test_error_object_subscript_requires_array_access() {
     expect_error(
         "<?php class Box {} $b = new Box(); echo $b[\"k\"];",
         "Cannot index non-array",
-    );
-}
-
-/// Campaign H1 PART B KEEP-LOUD: an object NOT implementing `ArrayAccess` still errors on
-/// indexed read — the scalar-receiver read relaxation (Bool/Int/Float/Void) does not touch
-/// this path.
-#[test]
-fn test_error_object_without_array_access_index_read_still_loud() {
-    expect_error(
-        "<?php class Box {} $b = new Box(); $y = $b[0];",
-        "Cannot index non-array",
-    );
-}
-
-/// Campaign H1 PART C KEEP-LOUD: a nested indexed write through an `array|false`/`?array`
-/// element (`$arr[$k][\"j\"] = v`, not the single-level `$this->v[\"k\"] = v` property case)
-/// stays loud. Investigation found the nested-write lowering (`lower_nested_array_assign`'s
-/// general fallback) reads the leaf via `__rt_mixed_array_get` and mutates whatever cell that
-/// read returns in place; for a MISS/scalar leaf (the false/null-vivify case) that read
-/// allocates a fresh disconnected cell, so the write would silently no-op — proven true even
-/// for the PRE-EXISTING `Mixed` arm (independent of this campaign). Accepting the nested Union
-/// case would let a checker-legal program silently drop the write, so it stays loud.
-#[test]
-fn test_error_nested_array_or_false_write_stays_loud() {
-    expect_error(
-        r#"<?php
-function pick(): array|false { return false; }
-$items = [pick(), pick()];
-$items[0]["k"] = 1;
-"#,
-        "Nested array assignment requires a Mixed or ArrayAccess target",
     );
 }
 
@@ -207,16 +135,17 @@ fn test_error_parenthesis_free_new_rejects_immediate_postfix_access() {
     );
 }
 
-/// Verifies property and array-element dynamic class-name references after `new` are accepted.
+/// Verifies unsupported dynamic class-name references after `new` fail instead of miscompiling.
 #[test]
 fn test_error_dynamic_new_rejects_unsupported_class_name_references() {
-    // Property and array-element class references after `new` are now supported
-    // (`new $box->className` / `new $classes[0]` compile and instantiate at runtime),
-    // so these forms must type-check instead of erroring.
-    expect_ok(
+    expect_error(
         "<?php class Box { public $className = \"stdClass\"; } $box = new Box(); $object = new $box->className;",
+        "Dynamic class-name expressions after 'new' are not supported",
     );
-    expect_ok("<?php $classes = [\"stdClass\"]; $object = new $classes[0];");
+    expect_error(
+        "<?php $classes = [\"stdClass\"]; $object = new $classes[0];",
+        "Dynamic class-name expressions after 'new' are not supported",
+    );
 }
 
 /// Verifies the error diagnostic for nullsafe property rejects scalar receiver.
@@ -275,18 +204,6 @@ fn test_error_typed_property_rejects_invalid_default() {
     // typed property with a mismatched default value is rejected at declaration time.
     expect_error(
         "<?php class Box { public int $value = \"bad\"; }",
-        "Property Box::$value default expects Int, got Str",
-    );
-}
-
-/// Verifies the error diagnostic for a typed property whose class-constant default resolves to an
-/// incompatible type. The class-constant reference is folded to its literal value, so the
-/// mismatch is reported the same as for a literal default.
-#[test]
-fn test_error_typed_property_rejects_incompatible_class_constant_default() {
-    // `int $value = A::S` where `const S = "bad"` resolves to a string literal, which is rejected.
-    expect_error(
-        "<?php class Box { const S = \"bad\"; public int $value = Box::S; }",
         "Property Box::$value default expects Int, got Str",
     );
 }
@@ -404,27 +321,14 @@ fn test_error_typed_property_rejects_void_type() {
     );
 }
 
-/// Verifies that the bare `callable` pseudo-type is rejected as a property type with PHP's
-/// exact fatal wording (`php -n` verified: "Property Box::$callback cannot have type
-/// callable"). `\Closure`-typed properties remain valid and are covered separately below.
+/// Verifies the error diagnostic for typed property rejects callable type.
 #[test]
-fn test_typed_property_rejects_bare_callable_type() {
+fn test_error_typed_property_rejects_callable_type() {
+    // callable is not a valid property type.
     expect_error(
         "<?php class Box { public callable $callback; }",
-        "Property Box::$callback cannot have type callable",
+        "Property Box::$callback cannot use type callable",
     );
-}
-
-/// Verifies that `\Closure`-typed properties, including nullable and union forms, type-check
-/// cleanly — mirroring real-world Symfony property declarations such as
-/// `Question::$autocompleterCallback` (`?\Closure`) and
-/// `Argument::$suggestedValues`/`Option::$suggestedValues` (`array|\Closure`).
-#[test]
-fn test_closure_typed_properties_type_check_cleanly() {
-    assert!(check_source(
-        "<?php class Box { public ?\\Closure $cb = null; public array|\\Closure $x; }"
-    )
-    .is_ok());
 }
 
 /// Verifies nullable and union spellings do not make PHP's forbidden `callable` property
@@ -433,11 +337,11 @@ fn test_closure_typed_properties_type_check_cleanly() {
 fn test_error_typed_property_rejects_nested_callable_types() {
     expect_error(
         "<?php class Box { public ?callable $callback; }",
-        "Property Box::$callback cannot have type callable",
+        "Property Box::$callback cannot use type callable",
     );
     expect_error(
         "<?php class Box { public callable|null $callback; }",
-        "Property Box::$callback cannot have type callable",
+        "Property Box::$callback cannot use type callable",
     );
 }
 
@@ -552,16 +456,6 @@ fn test_error_self_instance_method_from_static_method() {
     );
 }
 
-/// Verifies an unrelated class scope cannot turn a named non-static call into an implicit
-/// `$this` dispatch.
-#[test]
-fn test_error_unrelated_named_instance_method_static_call() {
-    expect_error(
-        "<?php class Target { public function value() { return 1; } } class Caller { public function run() { return Target::value(); } } echo (new Caller())->run();",
-        "Cannot call instance method statically: Target::value",
-    );
-}
-
 /// Verifies the error diagnostic for circular inheritance.
 #[test]
 fn test_error_circular_inheritance() {
@@ -569,37 +463,6 @@ fn test_error_circular_inheritance() {
     expect_error(
         "<?php class A extends B {} class B extends A {}",
         "Circular inheritance detected",
-    );
-}
-
-/// Regression: a class whose schema build genuinely fails must NOT pollute the shared
-/// `building` cycle-detection set and mis-flag other classes as circular.
-///
-/// `S extends F` fails at schema time (`F` is final), which used to leave `S` stuck in `building`
-/// on the `?` early-return. Later builds of `A`/`B` (both `extends S`) or the top-level revisit of
-/// `S` then re-entered `S` while it was still in `building` and reported a spurious "Circular
-/// inheritance detected involving class S". The fix removes `S` from `building` on every exit path,
-/// so the ONLY error is the genuine "cannot extend final class" — no false circular. Class-build
-/// order is `HashMap`-driven, but the assertion holds for every order: with the leak, at least one
-/// spurious circular appears; without it, none can (no genuine cycle exists in this tree).
-#[test]
-fn test_class_build_failure_does_not_leak_building_set() {
-    let err = check_source_full(
-        "<?php final class F {} class S extends F {} class A extends S {} class B extends S {}",
-    )
-    .expect_err("expected the final-parent violation to fail the build");
-    let messages: Vec<String> = err.flatten().into_iter().map(|e| e.message).collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot extend final class F")),
-        "expected the genuine final-parent error, got: {:?}",
-        messages,
-    );
-    assert!(
-        !messages.iter().any(|m| m.contains("Circular inheritance")),
-        "class-build failure leaked into `building` and produced a false circular error: {:?}",
-        messages,
     );
 }
 
@@ -639,7 +502,7 @@ fn test_error_missing_static_interface_method() {
     // a concrete class must implement static methods required by interfaces.
     expect_error(
         "<?php interface Maker { public static function make(): string; } class Box implements Maker {}",
-        "Class Box must implement interface method Maker::make",
+        "Class Box must implement interface static method Maker::make",
     );
 }
 
@@ -649,7 +512,7 @@ fn test_error_instance_method_cannot_satisfy_static_interface_contract() {
     // PHP keeps static and instance interface contracts distinct.
     expect_error(
         "<?php interface Maker { public static function make(): string; } class Box implements Maker { public function make(): string { return \"x\"; } }",
-        "Cannot make static method Maker::make() non static in class Box",
+        "Cannot use instance method to satisfy static interface contract: Box::make",
     );
 }
 
@@ -659,7 +522,7 @@ fn test_error_static_method_cannot_satisfy_instance_interface_contract() {
     // PHP keeps static and instance interface contracts distinct in both directions.
     expect_error(
         "<?php interface Named { public function name(): string; } class User implements Named { public static function name(): string { return \"x\"; } }",
-        "Cannot make non static method Named::name() static in class User",
+        "Cannot use static method to satisfy interface contract: User::name",
     );
 }
 
@@ -669,7 +532,7 @@ fn test_error_interface_parent_static_method_kind_conflict() {
     // A child interface cannot redeclare a static parent method as non-static.
     expect_error(
         "<?php interface ParentMaker { public static function make(): string; } interface ChildMaker extends ParentMaker { public function make(): string; }",
-        "Cannot make static method ParentMaker::make() non static in class ChildMaker",
+        "Cannot combine static and non-static interface method: ChildMaker::make",
     );
 }
 
@@ -734,18 +597,6 @@ fn test_error_instantiate_abstract_class() {
     // abstract classes cannot be instantiated directly.
     expect_error(
         "<?php abstract class Base { abstract public function run(); } $x = new Base();",
-        "Cannot instantiate abstract class: Base",
-    );
-}
-
-/// Verifies that `new self()` inside an abstract class STILL reports "Cannot instantiate abstract
-/// class". This is the negative control documenting that the `new static()` late-static-binding
-/// fix is narrow to `static`: unlike `static`, `self` early-binds to the declaring (abstract)
-/// class, which can never be instantiated, so it must remain a fatal error like PHP.
-#[test]
-fn test_error_new_self_in_abstract_class_still_errors() {
-    expect_error(
-        "<?php abstract class Base { public function f(): self { return new self(); } } class Child extends Base {} echo (new Child())->f() === null ? \"n\" : \"y\";",
         "Cannot instantiate abstract class: Base",
     );
 }
@@ -860,38 +711,6 @@ fn test_error_interface_inheritance_cycle() {
     );
 }
 
-/// Regression (interface analog of `test_class_build_failure_does_not_leak_building_set`): an
-/// interface whose schema build genuinely fails must NOT pollute the shared `building` set and
-/// mis-flag other interfaces as circular.
-///
-/// `S extends C` fails at schema time (`C` is a class, and interfaces may only extend interfaces),
-/// which used to leave `S` stuck in `building` on the `?` early-return. Later builds of `A`/`B`
-/// (both `extends S`) or the top-level revisit of `S` then re-entered `S` and reported a spurious
-/// "Circular interface inheritance detected involving S". The fix removes `S` on every exit path,
-/// so the ONLY error is the genuine "cannot extend class" — no false circular, in any build order.
-#[test]
-fn test_interface_build_failure_does_not_leak_building_set() {
-    let err = check_source_full(
-        "<?php class C {} interface S extends C {} interface A extends S {} interface B extends S {}",
-    )
-    .expect_err("expected the interface-extends-class violation to fail the build");
-    let messages: Vec<String> = err.flatten().into_iter().map(|e| e.message).collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot extend class C")),
-        "expected the genuine interface-extends-class error, got: {:?}",
-        messages,
-    );
-    assert!(
-        !messages
-            .iter()
-            .any(|m| m.contains("Circular interface inheritance")),
-        "interface-build failure leaked into `building` and produced a false circular error: {:?}",
-        messages,
-    );
-}
-
 /// Verifies the error diagnostic for class cannot extend interface.
 #[test]
 fn test_error_class_cannot_extend_interface() {
@@ -964,20 +783,6 @@ fn test_error_property_redeclaration_adds_type_to_untyped_parent() {
     );
 }
 
-/// Verifies that a child may redeclare a property whose name collides only with a
-/// PRIVATE ancestor property, freely choosing a different visibility and type. PHP
-/// does not inherit private properties, so this is a fresh own property rather than an
-/// override, and the override visibility/type-invariance checks must not fire. The
-/// codegen counterpart lives in `tests/codegen/oop/inheritance.rs`.
-#[test]
-fn test_private_parent_property_shadowing_is_allowed() {
-    // A private ancestor property is not inherited, so the child's same-named property
-    // is independent and may pick any visibility/type without an override error.
-    expect_ok(
-        "<?php class Base { private int $secret = 1; } class Child extends Base { public string $secret = \"y\"; }",
-    );
-}
-
 /// Verifies the error diagnostic for property redeclaration changes by ref qualifier.
 #[test]
 fn test_error_property_redeclaration_changes_by_ref_qualifier() {
@@ -1045,29 +850,6 @@ fn test_error_write_to_get_only_hooked_property() {
     expect_error(
         "<?php class C { public int $x { get => 42; } } $c = new C(); $c->x = 5;",
         "Cannot write to read-only hooked property C::x",
-    );
-}
-
-/// Verifies that a VIRTUAL get-only hooked property (its hook body never names `$this->p`) is
-/// still rejected on write, now that BACKED hooked properties are accepted. `php -n` 8.5.6 throws
-/// `Error: Property C::$p is read-only` here, and `ReflectionProperty::isVirtual()` reports `true`.
-#[test]
-fn test_error_write_to_virtual_hooked_property_reading_another_property() {
-    expect_error(
-        "<?php class C { public string $q = \"seed\"; public string $p { get { return strtoupper($this->q); } } } $c = new C(); $c->p = \"nope\";",
-        "Cannot write to read-only hooked property C::p",
-    );
-}
-
-/// Verifies that a `$this->p` buried inside a CLOSURE in the hook body does NOT make the property
-/// backed: `php -n` 8.5.6 reports `isVirtual() === true` for `get => (fn () => $this->p)()` and
-/// throws `Error: Property D::$p is read-only` on write. This is the negative control for the
-/// backing-store scanner's deliberate refusal to descend into `ExprKind::Closure`.
-#[test]
-fn test_error_write_to_hooked_property_backed_only_inside_closure() {
-    expect_error(
-        "<?php class D { public string $p { get { return (fn () => $this->p)(); } } } $d = new D(); $d->p = \"nope\";",
-        "Cannot write to read-only hooked property D::p",
     );
 }
 
@@ -1323,44 +1105,6 @@ fn test_error_asymmetric_visibility_external_array_index_write() {
     expect_error(
         "<?php class C { public private(set) array $items = []; } $c = new C(); $c->items['k'] = 1;",
         "Cannot access private property: C::items",
-    );
-}
-
-/// Verifies that `$this->prop[] = v` type-checks cleanly when the property is an associative
-/// array — both an untyped property with an assoc default (`['k' => 'v']`, static type
-/// `AssocArray`) and a declared `array` property with an assoc default (`['a' => 1]`). A PHP
-/// `array` hint imposes no element constraint, so the push is a gradual merge and must not emit
-/// the false-positive `Array push requires an array property` diagnostic. (Runtime lowering of the
-/// assoc push is a tracked EIR follow-up; the codegen counterparts are `#[ignore]`d in
-/// `tests/codegen/objects/property_access/mutations.rs`.)
-#[test]
-fn test_assoc_array_property_push_type_checks() {
-    expect_ok(
-        "<?php class C { private $items = ['k' => 'v']; private array $rows = ['a' => 1]; public function add($x): void { $this->items[] = $x; $this->rows[] = $x; } }",
-    );
-}
-
-/// Verifies that `$this->maybe[] = v` type-checks cleanly when the property is `?array`
-/// (a `array|null` union) initialized to `null`. PHP auto-vivifies a null array property to an
-/// array on first push, so the push targets the array arm of the union and must not emit the
-/// false-positive `Array push requires an array property` diagnostic. (Runtime lowering of the
-/// union/nullable push is a tracked EIR follow-up; the codegen counterpart is `#[ignore]`d in
-/// `tests/codegen/objects/property_access/mutations.rs`.)
-#[test]
-fn test_nullable_array_property_push_type_checks() {
-    expect_ok(
-        "<?php class C { private ?array $maybe = null; public function addMaybe($x): void { $this->maybe[] = $x; } }",
-    );
-}
-
-/// Negative control: `$this->x[] = v` on a union property with NO array-like member
-/// (`int|string`) must still be rejected. This documents that the AssocArray/union push
-/// acceptance is narrow to array-like targets and does not open pushes to arbitrary unions.
-#[test]
-fn test_error_non_array_union_property_push() {
-    expect_error(
-        "<?php class C { private int|string $x = 0; public function push(): void { $this->x[] = 1; } }",
-        "Array push requires an array property",
     );
 }
 

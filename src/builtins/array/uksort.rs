@@ -8,43 +8,39 @@
 //! - The golden signature is `first_param_ref(fixed(["array", "callback"]))`: exactly 2
 //!   arguments, the `array` param is by-reference. The `ref` marker drives in-place
 //!   mutation (ir_lower reads `ref_params` from the registry sig).
-//! - `check` validates the comparator with two integer dummy arguments — `uksort` compares
-//!   array keys (always integer in the supported subset), not values. Returns `Void`.
+//! - `check` derives the comparator parameter type from the array's KEY type — `uksort`
+//!   compares array keys, not values — so an unannotated comparator over a string-keyed
+//!   array types its parameters as `Str`. Returns `Void`.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
-use crate::span::Span;
 use crate::types::PhpType;
 
 builtin! {
-    name: "uksort",
-    area: Array,
-    params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    contract: "uksort",
     check: check,
+    lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Uksort,
     ),
-    summary: "Sorts an array by keys using a user-defined comparison function.",
-    php_manual: "https://www.php.net/manual/en/function.uksort.php",
 }
 
 /// Validates the array and comparator callback arguments for a `uksort` call.
 ///
-/// `uksort` compares array keys, which are always integers in the supported subset.
-/// The comparator is validated with two integer literal dummy arguments. Arity
-/// (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
+/// `uksort` compares array KEYS, so both comparator parameters are typed from the array's
+/// key type: `Int` for an indexed array, the declared key type for an associative one. An
+/// unannotated closure parameter inherits that type; explicit declarations stay
+/// authoritative. Arity (exactly 2) is pre-validated by the registry.
+/// Returns `Ok(PhpType::Void)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    cx.checker.infer_type(&cx.args[0], cx.env)?;
-    cx.checker.infer_type(&cx.args[1], cx.env)?;
-    let cmp_arg = Expr::new(ExprKind::IntLiteral(0), Span::dummy());
-    let dummy_args = vec![cmp_arg.clone(), cmp_arg];
+    let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let key_ty = crate::types::checker::builtins::array_key_type(&arr_ty);
     let label = format!("{}() callback", cx.name);
-    crate::types::checker::builtins::check_callback_builtin_call(
+    let callback_arg_types = [key_ty.clone(), key_ty];
+    crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker,
         &cx.args[1],
-        &dummy_args,
+        &callback_arg_types,
         cx.span,
         cx.env,
         &label,

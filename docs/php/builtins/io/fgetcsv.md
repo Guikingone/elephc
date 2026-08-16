@@ -2,13 +2,13 @@
 title: "fgetcsv()"
 description: "Gets line from file pointer and parse for CSV fields."
 sidebar:
-  order: 165
+  order: 174
 ---
 
 ## fgetcsv()
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ','): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed
 ```
 
 Gets line from file pointer and parse for CSV fields.
@@ -17,8 +17,10 @@ Gets line from file pointer and parse for CSV fields.
 - `$stream` (`resource`)
 - `$length` (`int`), default `null`, optional
 - `$separator` (`string`), default `','`, optional
+- `$enclosure` (`string`), default `'"'`, optional
+- `$escape` (`string`), default `'\\'`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -26,12 +28,6 @@ Gets line from file pointer and parse for CSV fields.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgetcsv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

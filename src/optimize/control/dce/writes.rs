@@ -10,35 +10,103 @@
 
 use super::*;
 use super::guards::{clear_guards_for_name, extend_guards};
-use super::state::GuardState;
+use super::state::{GuardState, RelSide};
 
 /// Invalidates guard state for any variable written by a statement.
 /// Collects all written variable names from the statement and removes
 /// corresponding entries from the guard state.
 pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
-    let mut written = Vec::new();
-    collect_written_names(stmt, &mut written);
-    if written.is_empty() {
-        return;
-    }
+    apply_guard_invalidation(guards, stmt_invalidation(stmt));
+}
 
-    invalidate_guards_for_written_names(guards, &written);
+/// Advances guard state past one completed statement.
+///
+/// The statement's complete call-aware write set is invalidated first. An exact
+/// `int` typed local declaration then seeds the integer domain for subsequent
+/// statements, because reaching them proves the checked assignment completed.
+/// A by-ref `foreach` also leaves its iterable root reference-volatile because
+/// the value binding survives the loop and may mutate that root later.
+pub(super) fn advance_guards_after_stmt(stmt: &Stmt, guards: &mut GuardState) {
+    invalidate_guards_for_stmt(stmt, guards);
+    match &stmt.kind {
+        StmtKind::TypedAssign {
+            name,
+            type_expr: TypeExpr::Int,
+            ..
+        } => guards.record_integer_domain(name),
+        StmtKind::Foreach {
+            array,
+            value_by_ref: true,
+            ..
+        } => mark_foreach_root_reference_volatile(guards, array),
+        _ => {}
+    }
+}
+
+/// Builds conservative body-entry guards for `foreach` from the shared write set.
+///
+/// By-reference values additionally make the iterable root volatile inside the
+/// body, preventing a guard established before a write through the alias from
+/// being reused afterward.
+pub(super) fn invalidated_guards_for_foreach_body(
+    guards: &GuardState,
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    value_by_ref: bool,
+    body: &[Stmt],
+) -> GuardState {
+    let mut next = guards.clone();
+    apply_guard_invalidation(
+        &mut next,
+        foreach_invalidation(array, key_var, value_var, value_by_ref, body),
+    );
+    if value_by_ref {
+        mark_foreach_root_reference_volatile(&mut next, array);
+    }
+    next
+}
+
+/// Clears and permanently disables facts for a by-ref `foreach` iterable root.
+fn mark_foreach_root_reference_volatile(guards: &mut GuardState, array: &Expr) {
+    if let Some(root) = lvalue_root(array) {
+        clear_guards_for_name(guards, root);
+        guards.mark_reference_volatile(root);
+    }
 }
 
 /// Computes guard state after a block of statements, accounting for variables
 /// written within the block. Returns a new guard state with guards for
 /// written variables removed; returns a clone of the input if no variables
 /// are written.
-fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
-    let mut written = Vec::new();
-    collect_written_names_in_block(stmts, &mut written);
-    if written.is_empty() {
-        return guards.clone();
-    }
-
+pub(super) fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
     let mut next = guards.clone();
-    invalidate_guards_for_written_names(&mut next, &written);
+    apply_guard_invalidation(&mut next, block_invalidation(stmts));
     next
+}
+
+/// Computes guard state after explicit writes performed while evaluating an expression.
+pub(super) fn invalidated_guards_for_expr(guards: &GuardState, expr: &Expr) -> GuardState {
+    let mut next = guards.clone();
+    apply_guard_invalidation(&mut next, expr_invalidation(expr));
+    next
+}
+
+/// Applies a shared targeted invalidation to every GuardState fact domain.
+fn apply_guard_invalidation(guards: &mut GuardState, invalidation: Invalidation) {
+    match invalidation {
+        Invalidation::Names(names) => {
+            let names: Vec<String> = names.into_iter().collect();
+            invalidate_guards_for_written_names(guards, &names);
+        }
+        Invalidation::All => {
+            let reference_volatile_vars = std::mem::take(&mut guards.reference_volatile_vars);
+            *guards = GuardState {
+                reference_volatile_vars,
+                ..GuardState::default()
+            };
+        }
+    }
 }
 
 /// Computes guard state after a block, assuming execution may throw at any point.
@@ -374,6 +442,23 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
         .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
     guards
+        .integer_domain_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .range_guards
+        .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards.relational_guards.retain(|known| {
+        let mentions_left = match &known.left {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        let mentions_right = match &known.right {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        !mentions_left && !mentions_right
+    });
+    guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
 }
@@ -395,17 +480,15 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
                 push_written_name(written, source_name);
             }
         }
-        StmtKind::RefAssignToTarget { source, .. } => {
-            // The target is a property/array lvalue (writes no local). A plain-variable
-            // source is aliased to that storage, so it can change invisibly afterwards.
-            if let ExprKind::Variable(source_name) = &source.kind {
-                push_written_name(written, source_name);
-            }
-        }
         StmtKind::ArrayAssign { array, .. } | StmtKind::ArrayPush { array, .. } => {
             push_written_name(written, array)
         }
         StmtKind::ListUnpack { vars, .. } => {
+            for name in vars {
+                push_written_name(written, name);
+            }
+        }
+        StmtKind::Global { vars } => {
             for name in vars {
                 push_written_name(written, name);
             }
@@ -456,11 +539,17 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
             collect_written_names_in_block(body, written);
         }
         StmtKind::Foreach {
+            array,
             key_var,
             value_var,
+            value_by_ref,
             body,
-            ..
         } => {
+            if *value_by_ref {
+                if let Some(root) = lvalue_root(array) {
+                    push_written_name(written, root);
+                }
+            }
             if let Some(name) = key_var {
                 push_written_name(written, name);
             }

@@ -335,32 +335,3 @@ probe();
     );
     assert_eq!(out, "null:null");
 }
-
-/// Tests foreach over a plain object implementing no iterator protocol: PHP iterates
-/// its accessible public properties as name => value in declaration order. Verifies
-/// key order, value types (int/string/array/mixed-null, mirroring VarDumper's Stub),
-/// and concrete scalar/string values, snapshotting the object without mutating it.
-#[test]
-fn test_foreach_plain_object_public_properties() {
-    let out = compile_and_run(
-        r#"<?php
-class P {
-    public int $a = 1;
-    public string $b = "hi";
-    public array $c = [];
-    public mixed $d = null;
-}
-$p = new P();
-$out = "";
-foreach ($p as $k => $v) {
-    $out .= $k . "=" . gettype($v) . ";";
-}
-echo $out;
-foreach ($p as $k => $v) {
-    if ($k === "a") { echo "A" . $v; }
-    if ($k === "b") { echo "B" . $v; }
-}
-"#,
-    );
-    assert_eq!(out, "a=integer;b=string;c=array;d=NULL;A1Bhi");
-}

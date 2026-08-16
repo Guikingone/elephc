@@ -42,6 +42,7 @@ pub(super) fn emit_throw_state_error_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_heap_alloc");                                // rax = freshly allocated payload pointer
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the kind in the uniform heap header
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_error_class_id", 0);   // r10 = runtime class id of FiberError
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store FiberError class id at the object header
     emitter.instruction("mov QWORD PTR [rax + 8], r12");                        // message property low half = bytes pointer
@@ -80,6 +81,7 @@ pub(super) fn emit_construct_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r14, rax");                                        // r14 = Fiber object pointer kept until return
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the object heap kind word
     emitter.instruction("mov QWORD PTR [r14 - 8], r10");                        // stamp the allocation as an object instance
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new Fiber object to its PHP object handle (rax still holds it)
     emitter.instruction("mov QWORD PTR [r14], r13");                            // store the runtime class_id at the object header
 
     // -- zero-initialise every Fiber field before populating meaningful ones --

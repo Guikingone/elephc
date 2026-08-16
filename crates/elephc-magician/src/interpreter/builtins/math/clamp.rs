@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "clamp",
+    contract: "clamp",
     area: Math,
-    params: [value, min, max],
     direct: Clamp,
     values: Clamp,
 }

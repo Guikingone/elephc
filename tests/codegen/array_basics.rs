@@ -834,187 +834,6 @@ fn test_array_pop_empty() {
     assert_eq!(out, "");
 }
 
-/// Verifies `array_pop()` on a Mixed receiver mutates the caller's INDEXED array in place and
-/// returns the removed element (gradual-typing dynamic path). Regression for the runtime-tag
-/// dispatched `lower_array_pop_dynamic` (tag 4 = indexed).
-#[test]
-fn test_array_pop_mixed_indexed() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_pop($a); return $x . \"|\" . implode(\",\", $a); } echo f([1, 2, 3]);",
-    );
-    assert_eq!(out, "3|1,2");
-}
-
-/// Verifies `array_pop()` on a Mixed receiver whose runtime value is an ASSOCIATIVE hash removes
-/// the insertion-order tail entry in place and returns its value (tag 5 = hash path).
-#[test]
-fn test_array_pop_mixed_assoc() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_pop($a); return $x . \"|\" . json_encode($a); } echo f(['a' => 1, 'b' => 2, 'c' => 3]);",
-    );
-    assert_eq!(out, "3|{\"a\":1,\"b\":2}");
-}
-
-/// Verifies copy-on-write: popping a Mixed receiver that aliases a sibling variable (`$b = $a;`)
-/// must not corrupt the alias — the sibling keeps the original array.
-#[test]
-fn test_array_pop_mixed_cow_alias() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $b = $a; $x = array_pop($a); return $x . \"|\" . json_encode($a) . \"|\" . json_encode($b); } echo f([1, 2, 3]);",
-    );
-    assert_eq!(out, "3|[1,2]|[1,2,3]");
-}
-
-/// Verifies a Mixed receiver holding a heterogeneous (boxed-Mixed element) array pops the last
-/// element with the correct runtime type and leaves the rest intact.
-#[test]
-fn test_array_pop_mixed_heterogeneous() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_pop($a); return json_encode($x) . \"|\" . json_encode($a); } echo f([1, 'two', 3.0]);",
-    );
-    assert_eq!(out, "3|[1,\"two\"]");
-}
-
-/// Verifies `array_pop()` on an empty Mixed array returns null and leaves the array empty.
-#[test]
-fn test_array_pop_mixed_empty() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_pop($a); return var_export($x, true) . \"|\" . count($a); } echo f([]);",
-    );
-    assert_eq!(out, "NULL|0");
-}
-
-/// Verifies by-value semantics: `array_pop()` on a Mixed parameter must not mutate the caller's
-/// original array variable (the parameter is a copy).
-#[test]
-fn test_array_pop_mixed_by_value_caller_unchanged() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ array_pop($a); } $arr = [1, 2, 3]; f($arr); echo count($arr);",
-    );
-    assert_eq!(out, "3");
-}
-
-/// Verifies a non-array runtime value behind a checker-accepted Mixed receiver throws PHP's exact
-/// catchable `\TypeError` from `array_pop()`.
-#[test]
-fn test_array_pop_mixed_non_array_throws_type_error() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ try { array_pop($a); } catch (\\TypeError $e) { echo $e->getMessage(); } } f(42);",
-    );
-    assert_eq!(
-        out,
-        "array_pop(): Argument #1 ($array) must be of type array, int given"
-    );
-}
-
-/// Verifies `array_shift()` on a Mixed receiver removes the FIRST element of the caller's INDEXED
-/// array in place and reindexes the remaining integer keys from zero (runtime-tag dynamic path,
-/// tag 4 = indexed).
-#[test]
-fn test_array_shift_mixed_indexed() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . implode(\",\", $a); } echo f([1, 2, 3]);",
-    );
-    assert_eq!(out, "1|2,3");
-}
-
-/// Verifies `array_shift()` on a Mixed receiver whose runtime value is an ASSOCIATIVE hash removes
-/// the insertion-order head entry and renumbers surviving integer keys `0,1,…` while preserving
-/// string keys (tag 5 = hash rebuild path).
-#[test]
-fn test_array_shift_mixed_assoc_renumbers() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . json_encode($a); } echo f(['x' => 1, 5 => 2, 'y' => 3, 10 => 4]);",
-    );
-    assert_eq!(out, "1|{\"0\":2,\"y\":3,\"1\":4}");
-}
-
-/// Verifies copy-on-write: shifting a Mixed receiver that aliases a sibling variable (`$b = $a;`)
-/// must not corrupt the alias — the sibling keeps the original array.
-#[test]
-fn test_array_shift_mixed_cow_alias() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $b = $a; $x = array_shift($a); return $x . \"|\" . json_encode($a) . \"|\" . json_encode($b); } echo f([10, 20, 30]);",
-    );
-    assert_eq!(out, "10|[20,30]|[10,20,30]");
-}
-
-/// Verifies a Mixed receiver holding a string-valued indexed array shifts the first string and
-/// slides the 16-byte string slots one position toward the front.
-#[test]
-fn test_array_shift_mixed_string_indexed() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_shift($a); return $x . \"|\" . implode(\",\", $a); } echo f(['aa', 'bb', 'cc']);",
-    );
-    assert_eq!(out, "aa|bb,cc");
-}
-
-/// Verifies `array_shift()` on an empty Mixed array returns null and leaves the array empty.
-#[test]
-fn test_array_shift_mixed_empty() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ $x = array_shift($a); return var_export($x, true) . \"|\" . count($a); } echo f([]);",
-    );
-    assert_eq!(out, "NULL|0");
-}
-
-/// Verifies a non-array runtime value behind a checker-accepted Mixed receiver throws PHP's exact
-/// catchable `\TypeError` from `array_shift()`.
-#[test]
-fn test_array_shift_mixed_non_array_throws_type_error() {
-    let out = compile_and_run(
-        "<?php function f(mixed $a){ try { array_shift($a); } catch (\\TypeError $e) { echo $e->getMessage(); } } f(42);",
-    );
-    assert_eq!(
-        out,
-        "array_shift(): Argument #1 ($array) must be of type array, int given"
-    );
-}
-
-/// Verifies `array_combine()` pairs two checker-accepted Mixed operands positionally into an
-/// associative array (gradual `__rt_array_combine_mixed` path).
-#[test]
-fn test_array_combine_mixed_operands() {
-    let out = compile_and_run(
-        "<?php function f(mixed $k, mixed $v){ return json_encode(array_combine($k, $v)); } echo f(['a', 'b'], [1, 2]);",
-    );
-    assert_eq!(out, "{\"a\":1,\"b\":2}");
-}
-
-/// Verifies `array_combine()` coerces keys exactly like PHP: integers stay integer keys, numeric
-/// strings normalize to integers, and non-integer scalars are `(string)`-cast (float `1.9`→`"1.9"`,
-/// `null`→`""`).
-#[test]
-fn test_array_combine_mixed_key_coercion() {
-    let out = compile_and_run(
-        "<?php function f(mixed $k, mixed $v){ return json_encode(array_combine($k, $v)); } echo f([1.9, 5.0, true, null], ['a', 'b', 'c', 'd']);",
-    );
-    assert_eq!(out, "{\"1.9\":\"a\",\"5\":\"b\",\"1\":\"c\",\"\":\"d\"}");
-}
-
-/// Verifies `array_combine()` accepts a concrete `Array` operand (a raw container pointer boxed via
-/// `__rt_mixed_from_array_kind`) alongside a Mixed operand, and preserves heterogeneous values.
-#[test]
-fn test_array_combine_mixed_array_operand() {
-    let out = compile_and_run(
-        "<?php function f(array $a){ return json_encode(array_combine(array_keys($a), array_values($a))); } echo f(['x' => 1, 'y' => 'two', 'z' => 3.5]);",
-    );
-    assert_eq!(out, "{\"x\":1,\"y\":\"two\",\"z\":3.5}");
-}
-
-/// Verifies `array_combine()` throws PHP's exact catchable `\ValueError` when the operands have
-/// different element counts.
-#[test]
-fn test_array_combine_mixed_count_mismatch_throws() {
-    let out = compile_and_run(
-        "<?php function f(mixed $k, mixed $v){ try { $r = array_combine($k, $v); echo json_encode($r); } catch (\\ValueError $e) { echo $e->getMessage(); } } f([1, 2], [1]);",
-    );
-    assert_eq!(
-        out,
-        "array_combine(): Argument #1 ($keys) and argument #2 ($values) must have the same number of elements"
-    );
-}
-
 /// Verifies in array found.
 #[test]
 fn test_in_array_found() {
@@ -1058,36 +877,6 @@ var_dump(in_array(99, $a) === false);
 "#,
     );
     assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
-}
-
-/// Verifies strict `in_array` matches a same-type integer needle (`===` over an int array).
-#[test]
-fn test_in_array_strict_int_match() {
-    let out = compile_and_run("<?php var_dump(in_array(2, [1, 2, 3], true));");
-    assert_eq!(out, "bool(true)\n");
-}
-
-/// Verifies strict `in_array` rejects a string needle against an int array because `===`
-/// requires identical types, so `"2"` is never identical to `2`.
-#[test]
-fn test_in_array_strict_string_needle_int_array_false() {
-    let out = compile_and_run(r#"<?php var_dump(in_array("2", [1, 2, 3], true));"#);
-    assert_eq!(out, "bool(false)\n");
-}
-
-/// Verifies strict `in_array` over a same-type string array still matches by exact value.
-#[test]
-fn test_in_array_strict_string_match() {
-    let out = compile_and_run(r#"<?php var_dump(in_array("b", ["a", "b", "c"], true));"#);
-    assert_eq!(out, "bool(true)\n");
-}
-
-/// Verifies the strict flag is honored through named arguments (`strict: true`).
-#[test]
-fn test_in_array_strict_named_argument() {
-    let out =
-        compile_and_run("<?php var_dump(in_array(needle: 2, haystack: [1, 2, 3], strict: true));");
-    assert_eq!(out, "bool(true)\n");
 }
 
 /// Verifies sort.
@@ -1439,77 +1228,6 @@ fn test_isset_null_variable_is_false() {
     assert_eq!(out, "1");
 }
 
-/// An assignment inside an `isset()` array-index operand defines the assigned variable for code
-/// that runs after the `isset()` call, mirroring PHP's always-evaluated index-expression
-/// semantics (php-verified: `isset($a[$h = f()])` defines `$h` even when the outer index does
-/// not exist in `$a`). Matches the RedisTrait `!isset($connections[$h = $redis->_target($id)])`
-/// shape.
-#[test]
-fn test_isset_array_index_assignment_defines_variable_after_call() {
-    let out = compile_and_run(
-        r#"<?php
-function target($id) { return "h_" . $id; }
-$connections = [];
-if (!isset($connections[$h = target(5)])) {
-    $connections[$h] = "conn";
-}
-echo $h, "\n";
-echo $connections[$h], "\n";
-"#,
-    );
-    assert_eq!(out, "h_5\nconn\n");
-}
-
-/// The same always-evaluated-index rule applies to `unset()`'s operand: an assignment inside the
-/// index expression defines the variable for code after the `unset()` call.
-#[test]
-fn test_unset_array_index_assignment_defines_variable_after_call() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [10, 20, 30];
-unset($a[$k = 1]);
-echo $k, "\n";
-echo count($a), "\n";
-"#,
-    );
-    assert_eq!(out, "1\n2\n");
-}
-
-/// A by-reference out-parameter call nested inside an `isset()` index expression still defines
-/// its output variable after the call, exactly like the same call outside `isset()` (JURY
-/// ADDENDUM #3's "nested by-reference in isset" regression probe).
-#[test]
-fn test_isset_array_index_nested_by_ref_output_defines_variable() {
-    let out = compile_and_run(
-        r#"<?php
-$arr = [1, 2, 3];
-if (isset($arr[preg_match('/\d/', 'x', $matches) ? 0 : 1])) {
-    echo "matched\n";
-}
-echo count($matches), "\n";
-"#,
-    );
-    assert_eq!(out, "matched\n0\n");
-}
-
-/// Regression: `isset()` on an undeclared property still routes through `__isset` instead of
-/// being rejected as a bare property access — the property-magic skip the isset/unset lazy-
-/// construct path exists for must survive walking always-evaluated index sub-expressions.
-#[test]
-fn test_isset_undeclared_property_still_routes_through_magic_isset() {
-    let out = compile_and_run(
-        r#"<?php
-class Bar {
-    private array $data = [];
-    public function __isset($name) { return isset($this->data[$name]); }
-}
-$b = new Bar();
-echo isset($b->undeclaredProp) ? "y" : "n", "\n";
-"#,
-    );
-    assert_eq!(out, "n\n");
-}
-
 /// Verifies array values.
 #[test]
 fn test_array_values() {
@@ -1639,195 +1357,6 @@ echo (in_array("hello", $a) ? "y" : "n"),
 "#,
     );
     assert_eq!(out, "yyn");
-}
-
-/// Regression: `in_array()` with a `Mixed` needle must work over a concrete indexed `array<Str>`
-/// (the inverse of the string-needle / Mixed-array case). An untyped function parameter is a boxed
-/// `Mixed` value; searching it against a literal string array surfaced in symfony/yaml. Each string
-/// element is boxed into a temporary Mixed cell and compared with the boxed needle: loose mode uses
-/// the PHP 8 three-way comparison helper (so a numeric needle can match a numeric string element,
-/// e.g. `in_array(1, ["1"])` is true), while strict mode uses runtime tag identity (so `1 !== "1"`).
-#[test]
-fn test_in_array_mixed_needle_over_string_array() {
-    let out = compile_and_run(
-        r#"<?php
-function check($needle) {
-    $arr = ["a", "b", "c"];
-    return in_array($needle, $arr) ? "y" : "n";
-}
-function loose_num($needle) {
-    return in_array($needle, ["1", "x"]) ? "y" : "n";
-}
-function strict($needle) {
-    return in_array($needle, ["1", "b"], true) ? "y" : "n";
-}
-echo check("b"), check("x"), check(2), "|",
-     loose_num(1), loose_num(9), "|",
-     strict("b"), strict(1);
-"#,
-    );
-    // check: string hit, string miss, non-numeric int miss (2 cast to "2" != "a"/"b"/"c").
-    // loose_num: int 1 loose-matches string "1"; int 9 misses.
-    // strict: string "b" identity-matches; int 1 never identity-matches string "1".
-    assert_eq!(out, "ynn|yn|yn");
-}
-
-// --- Long-form `array(...)` literal ---
-
-/// Verifies that the long-form `array(...)` produces an indexed array equivalent to `[...]`.
-#[test]
-fn test_long_array_indexed() {
-    let out = compile_and_run("<?php $a = array(10, 20, 30); echo count($a) . \":\" . $a[0] . \":\" . $a[2];");
-    assert_eq!(out, "3:10:30");
-}
-
-/// Verifies that an empty long-form `array()` is an empty array.
-#[test]
-fn test_long_array_empty() {
-    let out = compile_and_run("<?php $a = array(); echo count($a);");
-    assert_eq!(out, "0");
-}
-
-/// Verifies that long-form `array("k" => v)` produces an associative array with the given keys.
-#[test]
-fn test_long_array_assoc() {
-    let out = compile_and_run(
-        "<?php $m = array(\"a\" => 1, \"b\" => 2); echo $m[\"a\"] + $m[\"b\"];",
-    );
-    assert_eq!(out, "3");
-}
-
-/// Verifies that a runtime-valued key works in a long-form `array($k => v)` literal.
-#[test]
-fn test_long_array_dynamic_key() {
-    let out = compile_and_run("<?php $k = \"dyn\"; $kv = array($k => 42); echo $kv[\"dyn\"];");
-    assert_eq!(out, "42");
-}
-
-/// Verifies that long-form arrays nest like the short form.
-#[test]
-fn test_long_array_nested() {
-    let out = compile_and_run(
-        "<?php $n = array(\"x\" => array(1, 2), \"y\" => 3); echo count($n[\"x\"]) . \":\" . $n[\"y\"];",
-    );
-    assert_eq!(out, "2:3");
-}
-
-/// Verifies mixed positional and keyed entries in a long-form array (positional elements keep
-/// their auto-incremented integer keys around the explicit string key, as in PHP).
-#[test]
-fn test_long_array_mixed_positional_and_keyed() {
-    let out = compile_and_run(
-        "<?php $m = array(10, \"k\" => 20, 30); echo $m[0] . \":\" . $m[\"k\"] . \":\" . $m[1];",
-    );
-    assert_eq!(out, "10:20:30");
-}
-
-/// Verifies that spread (`...`) works inside a long-form array literal.
-#[test]
-fn test_long_array_spread() {
-    let out = compile_and_run("<?php $s = array(...array(1, 2), 3); echo count($s);");
-    assert_eq!(out, "3");
-}
-
-/// Verifies that the long-form keyword is case-insensitive (`ARRAY(...)`), matching PHP.
-#[test]
-fn test_long_array_case_insensitive() {
-    let out = compile_and_run("<?php $a = ARRAY(1, 2); echo count($a);");
-    assert_eq!(out, "2");
-}
-
-/// Verifies that the short `[...]` and long `array(...)` forms interoperate: a long-form array
-/// passed to a builtin (`array_merge`) combines with a short-form array as expected.
-#[test]
-fn test_long_array_interops_with_short_form() {
-    let out = compile_and_run(
-        "<?php $a = array(1, 2); $b = [3, 4]; $c = array_merge($a, $b); echo count($c) . \":\" . $c[0] . \":\" . $c[3];",
-    );
-    assert_eq!(out, "4:1:4");
-}
-
-/// Verifies `end()` returns the last element of a non-empty array, for both a literal argument
-/// and a variable. elephc models only the last-element read (it has no internal array pointer),
-/// boxing the element through the `__rt_end_boxed` runtime helper.
-#[test]
-fn test_end_returns_last_element() {
-    let out = compile_and_run("<?php echo end([1, 2, 3]);");
-    assert_eq!(out, "3");
-    let out = compile_and_run("<?php $a = [10, 20, 30]; echo end($a);");
-    assert_eq!(out, "30");
-}
-
-/// Verifies the canonical builtin catalog exposes `end()` to `function_exists()` and lets
-/// case-insensitive unqualified calls inside a namespace fall back to the global builtin.
-#[test]
-fn test_end_catalog_supports_case_insensitive_namespace_fallback() {
-    let out = compile_and_run(
-        r#"<?php
-namespace App\Catalog;
-$values = [10, 20, 30];
-echo \function_exists("EnD") ? "Y:" : "N:";
-echo EnD($values);
-"#,
-    );
-    assert_eq!(out, "Y:30");
-}
-
-/// Verifies `end()` on an empty array returns `false`, matching PHP's empty-array behavior.
-/// `var_dump` renders the boxed `false` result so the bool type is observable.
-#[test]
-fn test_end_on_empty_array_returns_false() {
-    let out = compile_and_run("<?php $a = []; var_dump(end($a));");
-    assert_eq!(out, "bool(false)\n");
-}
-
-/// Verifies `end()` accepts a `Mixed`/union-containing-array argument under the gradual-typing
-/// boundary: an array read from a heterogeneous associative array (boxed as `Mixed`) is unboxed
-/// and its last element returned.
-#[test]
-fn test_end_on_mixed_array_argument() {
-    let out = compile_and_run(
-        "<?php
-        $h = [];
-        $h[\"a\"] = [10, 20, 30];
-        $h[\"b\"] = \"s\";
-        $arr = $h[\"a\"];
-        echo end($arr);
-        ",
-    );
-    assert_eq!(out, "30");
-}
-
-/// Verifies count() accepts a genuinely `Mixed`-typed argument (a `mixed` function
-/// parameter) under the gradual-typing boundary and returns the element count at
-/// runtime. Regression for the checker wrongly rejecting `count($mixed)`.
-#[test]
-fn test_count_mixed_argument() {
-    let out = compile_and_run(
-        r#"<?php
-function n(mixed $x): int { return count($x); }
-echo n([1, 2, 3, 4]);
-"#,
-    );
-    assert_eq!(out, "4");
-}
-
-/// Verifies appending a statically PHP-null (`Void`) value into an `array<never>` indexed
-/// array: the null is stored as an 8-byte sentinel slot, the length grows, and the element
-/// reads back as null. Regression for the symfony/yaml `array_push for PHP type Void` gap.
-#[test]
-fn test_array_push_null_into_empty_array() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [];
-$x = null;
-$a[] = $x;
-echo count($a);
-echo "|";
-echo is_null($a[0]) ? "null" : "set";
-"#,
-    );
-    assert_eq!(out, "1|null");
 }
 
 /// Regression: the loop-widening prescan must not treat a variable defined only inside
@@ -2049,4 +1578,53 @@ fn test_in_array_strict_distinguishes_bool_int_membership() {
         "<?php echo in_array(true, [2]) ? '1' : '0'; echo in_array(true, [2], true) ? '1' : '0'; echo in_array(false, [0]) ? '1' : '0'; echo in_array(false, [0], true) ? '1' : '0'; echo in_array(2, [true]) ? '1' : '0'; echo in_array(2, [true], true) ? '1' : '0';",
     );
     assert_eq!(out, "101010");
+}
+
+/// Verifies `unset()` on a never-declared variable is accepted and is a silent no-op, the way
+/// PHP treats it — `unset()` exists to name storage that may not be there.
+#[test]
+fn test_unset_never_declared_variable_is_a_noop() {
+    let out = compile_and_run(
+        r#"<?php
+unset($neverDeclared);
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies every null probe answers for a never-declared variable the way PHP does, instead of
+/// rejecting the program: `isset()` is `false`, `empty()` is `true`, `??` yields the default and
+/// `??=` installs it. Output matches `php 8.4`.
+#[test]
+fn test_null_probes_on_never_declared_variable_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverA));
+var_dump(empty($neverB));
+var_dump($neverC ?? "dflt");
+$neverD ??= 5;
+var_dump($neverD);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)
+bool(true)
+string(4) \"dflt\"
+int(5)
+"
+    );
+}
+
+/// Verifies `isset()` reaches through a never-declared variable's index without faulting, the
+/// way PHP does — the whole chain simply answers `false`.
+#[test]
+fn test_isset_index_of_never_declared_variable_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverIndexed["k"]));
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
 }

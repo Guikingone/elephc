@@ -265,18 +265,10 @@ pub struct ClassInfo {
     pub allow_dynamic_properties: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
-    ///
-    /// Lookup only: this map has no stable iteration order, so anything that must
-    /// ENUMERATE constants walks [`Self::constant_order`] instead.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
-    /// Constant names in PHP's enumeration order: this class's own constants in
-    /// declaration order, then each ancestor's, nearest first (php -n verified against
-    /// `ReflectionClass::getConstants()` and `getReflectionConstants()` on a 2-level
-    /// hierarchy). Mirrors `InterfaceInfo::method_order`, which exists for the same
-    /// reason. Reflection used to iterate the `constants` HashMap directly, which made
-    /// the reported order depend on hash layout — a silently wrong answer for user code
-    /// and a recurring phantom test failure.
-    pub constant_order: Vec<String>,
+    /// Deprecation reason for class constants carrying `#[\Deprecated]`, keyed
+    /// by the case-sensitive constant name. An empty string means no reason.
+    pub constant_deprecations: HashMap<String, String>,
     /// PHP 8.3 declared types for constants declared directly on this class-like symbol.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Class constant visibilities keyed by case-sensitive constant name.
@@ -341,14 +333,6 @@ pub struct ClassInfo {
     /// caller). The object allocates a cell per such property at construction and releases
     /// it on destruction.
     pub owned_reference_properties: HashSet<String>,
-    /// Reference properties that are EVER the TARGET of a `=&` reference-bind assignment
-    /// (`$obj->prop = &rhs`) anywhere in the program. Such a property's slot may be overwritten to
-    /// alias another object's ref-cell (`BindPropRefCell` shares the cell), so the destructor must
-    /// NOT free its cell: doing so would double-free the cell the aliased owner also frees. A
-    /// whole-program superset used to demote owned rebind-target cells back to tag-0 (leak, never
-    /// double-free) in `_class_gc_desc_N`. Populated in the checker's reference-bind handling and
-    /// propagated across the inheritance hierarchy like `owned_reference_properties`.
-    pub rebound_reference_properties: HashSet<String>,
     pub promoted_properties: HashSet<String>,
     /// Per-layout-slot by-reference flags for instance properties.
     ///
@@ -364,24 +348,7 @@ pub struct ClassInfo {
     pub static_property_visibilities: HashMap<String, Visibility>,
     pub declared_static_properties: HashSet<String>,
     pub final_static_properties: HashSet<String>,
-    /// Names of properties (instance and static combined) THIS class itself declares, in
-    /// source AST order — mirrors `method_decls` below but as bare names. Used by the
-    /// reflection member enumeration to reconstruct PHP's real
-    /// `ReflectionClass::getProperties()` declaration order (own class's own order first,
-    /// then each ancestor's own order appended), which the accumulated, parent-first
-    /// `properties`/`static_properties` vectors cannot reproduce on their own.
-    pub own_property_decl_order: Vec<String>,
     pub method_decls: Vec<ClassMethod>,
-    /// Same declarations as `method_decls`, captured BEFORE
-    /// `resolve_const_default_references` rewrites class-constant-reference parameter
-    /// defaults (`self::LABEL`, `parent::BASE`, `Class::LABEL`) into their resolved scalar
-    /// literal in place. `method_decls` itself already carries that rewrite by the time this
-    /// `ClassInfo` is built (needed for actual default-value materialization elsewhere), which
-    /// would otherwise make it impossible for `ReflectionParameter::getDefaultValueConstantName()`
-    /// to recover the source-visible constant reference. Populated only for user classes (empty
-    /// for compiler-injected/builtin classes and enums); callers should fall back to
-    /// `method_decls` when a class has no entry here.
-    pub method_decls_unfolded: Vec<ClassMethod>,
     pub methods: HashMap<String, FunctionSig>,
     pub static_methods: HashMap<String, FunctionSig>,
     /// Exact return syntax for instance methods containing PHP's late-bound `static` type.

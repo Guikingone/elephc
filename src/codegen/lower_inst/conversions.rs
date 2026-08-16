@@ -12,7 +12,7 @@
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
 use crate::ir::{Immediate, Instruction, IrType, ValueId};
-use crate::names::method_symbol;
+use crate::names::{label_fragment, method_symbol};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
@@ -54,20 +54,6 @@ pub(super) fn lower_str_to_float(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
-/// Lowers the PHP `(object)` cast by dispatching to the runtime stdClass builder.
-///
-/// The single operand is always a boxed `Mixed` cell (the EIR lowering boxes any
-/// non-object source). `__rt_object_from_mixed` inspects the runtime tag and
-/// returns a freshly allocated owned `stdClass`, so this lowering only needs to
-/// place the Mixed pointer in the first integer-argument register, call the
-/// helper, and store the returned object pointer into the instruction result.
-pub(super) fn lower_object_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let value = expect_operand(inst, 0)?;
-    load_value_to_first_int_arg(ctx, value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_object_from_mixed");
-    store_if_result(ctx, inst)
-}
-
 /// Lowers explicit scalar casts based on the target storage immediate and result PHP type.
 pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     match expect_cast_target(inst)? {
@@ -80,23 +66,6 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             target
         ))),
     }
-}
-
-/// Lowers the PHP `(array)` cast by dispatching to the runtime array builder.
-///
-/// The single operand is always a boxed `Mixed` cell (the EIR lowering boxes any
-/// non-array source and passes indexed arrays through directly). `__rt_array_from_mixed`
-/// inspects the runtime tag and returns a freshly owned boxed-Mixed array: null becomes an
-/// empty array, an indexed-array payload is rebuilt into boxed-Mixed slots, and scalars
-/// wrap in a single-element `[value]` array. Associative-array and object payloads fatal
-/// because their string keys cannot fit the int-indexed result type. This lowering only
-/// needs to place the Mixed pointer in the first integer-argument register, call the
-/// helper, and store the returned array pointer into the instruction result.
-pub(super) fn lower_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let value = expect_operand(inst, 0)?;
-    load_value_to_first_int_arg(ctx, value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_from_mixed");
-    store_if_result(ctx, inst)
 }
 
 /// Lowers an explicit cast to PHP int for concrete scalar operands.
@@ -267,7 +236,7 @@ fn emit_mixed_string_context(
         .map(|candidate| {
             ctx.next_label(&format!(
                 "mixed_string_{}",
-                super::label_fragment(&candidate.class_name)
+                label_fragment(&candidate.class_name)
             ))
         })
         .collect::<Vec<_>>();
@@ -497,16 +466,15 @@ pub(super) fn emit_array_like_string_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Converts the loaded native resource payload into PHP's one-based display id.
+/// Converts the loaded native resource payload into PHP's resource id.
+///
+/// This used to be `payload + 1`, which only ever worked for descriptor-backed
+/// resources; a `HashContext` handle is a malloc'd address, so `(int)` on one
+/// produced a raw pointer. `__rt_resource_id_of` answers from the resource-id
+/// registry instead, which is small, creation-ordered and stable across runs for
+/// every resource kind.
 fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("add x0, x0, #1");                          // convert native resource payload to PHP's one-based display id
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rax, 1");                              // convert native resource payload to PHP's one-based display id
-        }
-    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
 }
 
 /// Returns the cast target immediate attached to a `Cast` instruction.

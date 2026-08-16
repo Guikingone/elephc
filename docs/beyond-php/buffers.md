@@ -11,7 +11,10 @@ sidebar:
 
 ## Why not PHP arrays?
 
-PHP arrays are hash tables. Every access goes through hashing, linear probing, entry comparison. `buffer<T>` compiles to a single `ldr` instruction: `base + 16 + index * stride`.
+PHP arrays are hash tables. Every access goes through hashing, probing, and entry
+comparison. `buffer<T>` instead uses a bounds-checked direct address calculation:
+`base + 16 + index * stride`, followed by a native load or store. Repeated immutable
+integer index arithmetic can be shared or moved out of loops by the EIR optimizer.
 
 ## Creating buffers
 
@@ -69,6 +72,19 @@ Restrictions:
 ## Bounds checking
 
 Always enabled. Out-of-bounds aborts: `Fatal error: buffer index out of bounds`
+
+## Length validation
+
+`buffer_new<T>()` validates the requested length before allocating. A negative length, or a length
+whose `length * stride` payload size does not fit in a machine word, aborts with:
+
+```
+Fatal error: buffer_new() length is negative or exceeds the maximum buffer size
+```
+
+This keeps the length recorded in the buffer header consistent with the memory the buffer actually
+owns, so the bounds check above can never approve an index outside the allocation. A length that is
+representable but larger than the configured heap still reports `Fatal error: heap memory exhausted`.
 
 ## Memory layout
 

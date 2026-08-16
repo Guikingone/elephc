@@ -124,13 +124,22 @@ fn exclude_eval_literal_read_slots(
         if inst.op != Op::EvalLiteralCall {
             continue;
         }
-        let Some(Immediate::Data(data_id)) = inst.immediate else {
-            continue;
+        let (data_id, strict_php) = match inst.immediate {
+            Some(Immediate::Data(data_id)) => (data_id, false),
+            Some(Immediate::ProfiledData {
+                data: data_id,
+                strict_php,
+            }) => (data_id, strict_php),
+            _ => continue,
         };
         let Some(fragment) = data.strings.get(data_id.as_raw() as usize) else {
             continue;
         };
-        let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(fragment, |_, _| false);
+        let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(
+            fragment,
+            strict_php,
+            |_, _| false,
+        );
         for name in plan.reads() {
             if let Some(slot) = slots_by_name.get(name) {
                 eligible.remove(slot);
@@ -195,7 +204,9 @@ fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | IDiv | ISDiv | ISMod | IPow | INeg | IBitAnd | IBitOr | IBitXor
+        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+            | ICheckedSubToInt | ICheckedMulToInt | ICheckedPow | IDiv | ISDiv | ISMod
+            | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
@@ -207,7 +218,7 @@ fn op_is_value_only_consumer(op: Op) -> bool {
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString
             // String value operations.
-            | StrConcat | StrBitwise | StrLen | StrPersist | StrCharAt | StrOffsetSet | StrInterpolate
+            | StrConcat | StrLen | StrPersist | StrCharAt | StrInterpolate
             // Output operations consume their operand by value.
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.

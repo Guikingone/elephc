@@ -62,11 +62,11 @@ fn rewrite_expr(
         ExprKind::BitNot(inner) => {
             ExprKind::BitNot(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
-        ExprKind::Clone(inner) => {
-            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
-        }
         ExprKind::Throw(inner) => {
             ExprKind::Throw(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
+        ExprKind::Clone(inner) => {
+            ExprKind::Clone(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(rewrite_expr(
             inner,
@@ -83,10 +83,6 @@ fn rewrite_expr(
         ExprKind::Pipe { value, callable } => ExprKind::Pipe {
             value: Box::new(rewrite_expr(value, class_name, parent_name)?),
             callable: Box::new(rewrite_expr(callable, class_name, parent_name)?),
-        },
-        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
-            vars: vars.clone(),
-            value: Box::new(rewrite_expr(value, class_name, parent_name)?),
         },
         ExprKind::Assignment {
             target,
@@ -320,21 +316,6 @@ fn rewrite_expr(
             receiver: receiver.clone(),
             args: rewrite_expr_list(args, class_name, parent_name)?,
         },
-        // `$obj::CONST` — rewrite lexical receivers inside the object; the constant name
-        // is left as-is (it names a constant on the runtime class).
-        ExprKind::DynamicClassConstantAccess { object, name } => {
-            ExprKind::DynamicClassConstantAccess {
-                object: Box::new(rewrite_expr(object, class_name, parent_name)?),
-                name: name.clone(),
-            }
-        }
-        // `self::${$expr}` — rewrite the lexical receiver and the dynamic name expression.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            ExprKind::DynamicStaticPropertyAccess {
-                receiver: rewrite_constant_receiver(receiver, class_name, parent_name, expr.span)?,
-                property: Box::new(rewrite_expr(property, class_name, parent_name)?),
-            }
-        }
         ExprKind::Yield { key, value } => ExprKind::Yield {
             key: key
                 .as_ref()

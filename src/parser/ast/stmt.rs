@@ -23,6 +23,12 @@ use super::{
 pub struct Stmt {
     pub kind: StmtKind,
     pub span: Span,
+    /// Physical source profile retained after includes and autoloaded statements are merged.
+    pub source_mode: crate::source::SourceMode,
+    /// Whether the physical file this statement was parsed from opened with
+    /// `declare(strict_types=1)`. Retained alongside `source_mode` because the directive is
+    /// per-file and the type checker only ever sees the merged program.
+    pub strict_types: bool,
     /// PHP attributes attached to this statement. Only populated for
     /// declaration kinds (`ClassDecl`, `FunctionDecl`, etc.); the parser
     /// rejects attributes on non-declaration statements.
@@ -32,7 +38,13 @@ pub struct Stmt {
 impl Stmt {
     /// Creates a `Stmt` with the given kind and source span, with an empty attribute list.
     pub fn new(kind: StmtKind, span: Span) -> Self {
-        Stmt { kind, span, attributes: Vec::new() }
+        Stmt {
+            kind,
+            span,
+            source_mode: crate::source::current_parse_mode(),
+            strict_types: crate::source::current_strict_types(),
+            attributes: Vec::new(),
+        }
     }
 
     /// Creates a `Stmt` with the given kind, source span, and PHP attribute list.
@@ -41,7 +53,25 @@ impl Stmt {
         span: Span,
         attributes: Vec<AttributeGroup>,
     ) -> Self {
-        Stmt { kind, span, attributes }
+        Stmt {
+            kind,
+            span,
+            source_mode: crate::source::current_parse_mode(),
+            strict_types: crate::source::current_strict_types(),
+            attributes,
+        }
+    }
+
+    /// Returns the physical-file profile this statement was parsed under.
+    ///
+    /// Statement-rewriting passes install it with `crate::source::scoped_parse_mode` before
+    /// rebuilding a statement, so the replacement inherits the original file's language mode
+    /// *and* its `strict_types` state instead of the compiler-internal defaults.
+    pub fn profile(&self) -> crate::source::SourceProfile {
+        crate::source::SourceProfile {
+            mode: self.source_mode,
+            strict_types: self.strict_types,
+        }
     }
 }
 
@@ -84,27 +114,6 @@ pub enum StmtKind {
         /// (`$obj->prop`), an `ArrayAccess` (`$arr[$k]`), or a call to a
         /// by-reference-returning callee (`f()`, `$o->m()`, `($c)()`).
         source: Expr,
-    },
-    /// Reference assignment whose left-hand side is a property access
-    /// (`$obj->prop = &$src`) or an array element (`$arr[$k] = &$src`), aliasing
-    /// the target lvalue's storage to `source`. The plain-variable form lives in
-    /// `RefAssign`; this variant carries the full lvalue as an expression.
-    RefAssignToTarget {
-        /// The target lvalue: a `PropertyAccess` (`$obj->prop`) or an
-        /// `ArrayAccess` (`$arr[$k]`) that becomes an alias to `source`.
-        ///
-        /// When `append` is `true`, `target` is the CONTAINER expression itself
-        /// with no sentinel index: `Variable($a)` for `$a[] = &…`,
-        /// `ArrayAccess { array, index }` for `$a[$k][] = &…`, or a
-        /// `PropertyAccess` / `StaticPropertyAccess` container (which the checker
-        /// then rejects as an unsupported append target).
-        target: Expr,
-        /// The reference source lvalue: a plain `Variable`, a `PropertyAccess`,
-        /// an `ArrayAccess`, or a by-reference-returning call.
-        source: Expr,
-        /// Whether the assignment appends a NEW element to `target` (`$a[] = &…`)
-        /// rather than aliasing an existing lvalue (`$a[$k] = &…`).
-        append: bool,
     },
     If {
         condition: Expr,
@@ -182,8 +191,6 @@ pub enum StmtKind {
     },
     Break(usize),
     Continue(usize),
-    Goto(String),
-    Label(String),
     ExprStmt(Expr),
     NamespaceDecl {
         name: Option<Name>,
@@ -300,20 +307,6 @@ pub enum StmtKind {
         receiver: StaticReceiver,
         property: String,
         index: Expr,
-        value: Expr,
-    },
-    /// A write through a dynamic-named static property (`self::${$expr} = v`,
-    /// `self::${$expr}[$k] = v`, `self::${$expr}[] = v`) whose receiver class is statically
-    /// known. `property` is the runtime name expression; `index`/`append` select the write
-    /// shape: `index: None, append: false` is a direct write, `index: Some(k)` is an
-    /// array-element write, and `append: true` is an array push. Mirrors the
-    /// `StaticProperty*` triplet but with a computed property name resolved by the codegen
-    /// compare-chain.
-    DynamicStaticPropertyWrite {
-        receiver: StaticReceiver,
-        property: Box<Expr>,
-        index: Option<Expr>,
-        append: bool,
         value: Expr,
     },
     PropertyArrayPush {

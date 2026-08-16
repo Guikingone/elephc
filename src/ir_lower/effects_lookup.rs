@@ -13,7 +13,6 @@
 use crate::ir::{Effects, Op};
 
 /// Returns conservative effects for a compiler-resident language construct call.
-#[allow(dead_code)]
 pub(crate) fn language_construct_effects(_name: &str) -> Effects {
     Op::LanguageConstructCall.default_effects()
 }
@@ -27,8 +26,3 @@ pub(crate) fn user_call_effects(_name: &str) -> Effects {
 pub(crate) fn runtime_effects() -> Effects {
     Op::RuntimeCall.default_effects()
 }
-
-pub(crate) fn builtin_effects(_name: &str) -> Effects {
-    Op::BuiltinCall.default_effects()
-}
-

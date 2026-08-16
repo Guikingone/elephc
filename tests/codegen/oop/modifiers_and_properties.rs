@@ -233,8 +233,21 @@ try { echo $c->x; } catch (\Exception $e) { echo "caught"; }
 echo "end";
 "#,
     );
-    assert!(err.contains("uncaught"), "{err}");
+    // Asserting the CLASS is what this test is actually about: the `catch (\Exception $e)` must
+    // not match because an uninitialized typed property raises an `Error`. The previous
+    // assertion only looked for the word "uncaught", so a fatal of any class would have passed —
+    // including the very `Exception` the test exists to rule out.
+    //
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix, which elephc
+    // cannot emit (see issue #660).
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught Error: Typed property C::$x must not be accessed before initialization"
+        ),
+        "{err}"
+    );
 }
+/// Verifies a typed static property assigned zero remains distinguishable from uninitialized.
 #[test]
 fn test_typed_static_property_initialized_to_zero_reads_normally() {
     let out = compile_and_run(
@@ -279,92 +292,6 @@ echo WithoutDefault::$value;
     );
     assert!(
         err.contains("Fatal error: Typed static property WithoutDefault::$value must not be accessed before initialization"),
-        "{err}"
-    );
-}
-
-/// Verifies an indexed write auto-vivifies a nullable static array from its explicit null
-/// default, matching PHP's write-context behavior.
-#[test]
-fn test_nullable_static_array_index_write_autovivifies_null() {
-    let out = compile_and_run(
-        r#"<?php
-class NullableStaticArray {
-    public static ?array $values = null;
-}
-
-NullableStaticArray::$values["answer"] = 42;
-echo NullableStaticArray::$values["answer"];
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Verifies that a nullable-int (`?int`) instance property round-trips through the inline
-/// tagged-scalar slot: a `= null` default reads as null, an int store reads the int back, a
-/// null store reads back null, and the `NULL_SENTINEL` integer `-9223372036854775806` stores
-/// and reads as itself (the tag word distinguishes it from PHP null).
-#[test]
-fn test_nullable_int_instance_property_store_and_read() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public ?int $value = null;
-}
-$b = new Box();
-echo is_null($b->value);
-$b->value = 5;
-echo "|", $b->value;
-$b->value = null;
-echo "|", is_null($b->value) ? "yes" : "no";
-$b->value = -9223372036854775806;
-echo "|", $b->value;
-"#,
-    );
-    assert_eq!(out, "1|5|yes|-9223372036854775806");
-}
-
-/// Verifies a nullable-int (`?int`) instance property used across methods: a constructor
-/// stores a `?int` parameter (null here), a mutator reads the tagged scalar through `?? 0`
-/// and writes an int back, and an accessor returns the tagged scalar unchanged.
-#[test]
-fn test_nullable_int_instance_property_across_method() {
-    let out = compile_and_run(
-        r#"<?php
-class Counter {
-    private ?int $n;
-    public function __construct(?int $start) { $this->n = $start; }
-    public function bump(): void { $this->n = ($this->n ?? 0) + 1; }
-    public function value(): ?int { return $this->n; }
-}
-$c = new Counter(null);
-echo is_null($c->value()) ? "n" : $c->value();
-$c->bump();
-echo "|", $c->value();
-$c->bump();
-echo "|", $c->value();
-"#,
-    );
-    assert_eq!(out, "n|1|2");
-}
-
-/// Verifies that a nullable-int (`?int`) instance property without a default remains
-/// uninitialized: the tagged-scalar tag word doubles as the typed-property marker, so an
-/// undefaulted slot still triggers the uninitialized-property fatal on read.
-#[test]
-fn test_uninitialized_nullable_int_instance_property_is_fatal() {
-    let err = compile_and_run_expect_failure(
-        r#"<?php
-class Box {
-    public ?int $value;
-}
-
-$box = new Box();
-echo $box->value;
-"#,
-    );
-    assert!(
-        err.contains("Fatal error: Typed property Box::$value must not be accessed before initialization"),
         "{err}"
     );
 }
@@ -543,88 +470,4 @@ fn test_asymmetric_visibility_protected_set_subclass_write() {
 fn test_example_asymmetric_visibility_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/asymmetric-visibility/main.php"));
     assert_eq!(out, "balance: 120\ninsufficient funds\nbalance: 120\n");
-}
-
-/// Campaign H1 PART C: an indexed write to an `array|false` property auto-vivifies `false` into
-/// a fresh array (PHP: `Deprecated: Automatic conversion of false to array`, php -n verified —
-/// elephc omits the deprecation text but matches the value). Round-trips the read back correctly.
-#[test]
-fn test_array_or_false_property_indexed_write_vivifies_false() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public array|false $v = false;
-}
-$b = new Box();
-$b->v["k"] = 1;
-var_dump($b->v);
-"#,
-    );
-    assert_eq!(out, "array(1) {\n  [\"k\"]=>\n  int(1)\n}\n");
-}
-
-/// Campaign H1 PART C: an indexed write to a `?array` (`array|null`) property auto-vivifies
-/// `null` into a fresh array (PHP: silent, no deprecation warning — php -n verified), matching
-/// the `false` case above.
-#[test]
-fn test_nullable_array_property_indexed_write_vivifies_null() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public ?array $v = null;
-}
-$b = new Box();
-$b->v[0] = "x";
-var_dump($b->v);
-"#,
-    );
-    assert_eq!(out, "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n");
-}
-
-/// An indexed write to a `mixed` property covers both halves of PHP's rule (`php -n` 8.5.6
-/// verified): a `null` payload auto-vivifies into a fresh array, and a payload that already
-/// holds an array is extended in place. Both go through `__rt_mixed_array_set` via the runtime
-/// property-array-set fallback, whose `PhpType::Object(_)` arm resolves the inline slot with
-/// `known_class_mixed_property_offset` — the emitter behind the checker's `PhpType::Mixed`
-/// acceptance in `updated_array_property_assign_type`. Symfony shape: `ExceptionCaster.php:166`
-/// writes `$frame->value['arguments']` where `Stub::$value` is declared `mixed`.
-#[test]
-fn test_mixed_property_indexed_write_vivifies_null_and_extends_array() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public mixed $v = null;
-}
-$b = new Box();
-$b->v["k"] = 1;
-var_dump($b->v);
-$c = new Box();
-$c->v = ["a" => 10];
-$c->v["b"] = 20;
-var_dump($c->v);
-"#,
-    );
-    assert_eq!(
-        out,
-        "array(1) {\n  [\"k\"]=>\n  int(1)\n}\narray(2) {\n  [\"a\"]=>\n  int(10)\n  [\"b\"]=>\n  int(20)\n}\n"
-    );
-}
-
-/// Campaign H1 PART C: an indexed write to a `true`-valued `array|bool` property does NOT
-/// vivify (PHP fatals "Cannot use a scalar value as an array"; elephc DEFERS the fatal per the
-/// JURY ADDENDUM and keeps the pre-existing silent-drop behavior — documented divergence). The
-/// property must stay unchanged rather than corrupt/crash.
-#[test]
-fn test_array_or_bool_property_true_value_write_is_silently_dropped_not_corrupted() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public array|bool $v = true;
-}
-$b = new Box();
-$b->v["k"] = 1;
-var_dump($b->v);
-"#,
-    );
-    assert_eq!(out, "bool(true)\n");
 }

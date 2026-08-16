@@ -2,7 +2,7 @@
 title: "ptr_read32()"
 description: "Reads one unsigned 32-bit word through a raw pointer and returns it as an integer."
 sidebar:
-  order: 312
+  order: 353
 ---
 
 ## ptr_read32()
@@ -25,12 +25,6 @@ Reads one unsigned 32-bit word through a raw pointer and returns it as an intege
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

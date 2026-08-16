@@ -43,44 +43,6 @@ pub(in crate::parser::stmt) fn parse_list_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
-/// Parses a bracket destructuring pattern outside the standalone statement form — the
-/// foreach value position (`foreach ($arr as [pattern])`, `foreach ($arr as $k => [pattern])`)
-/// and the expression-position desugar (`if ([, , , $x] = RHS)`) — and lowers it into a
-/// single statement that binds each pattern target from `source`.
-///
-/// Unlike `parse_list_unpack`, this consumes only the bracket-enclosed pattern (no `=` or
-/// trailing right-hand side) and takes `source` from the caller — the synthetic foreach
-/// element variable or the hidden expression-position temporary. Reuses
-/// `parse_bracket_list_pattern` and `lower_list_unpack` so every caller stays in lockstep
-/// with standalone list/bracket destructuring.
-pub(crate) fn parse_and_lower_bracket_destructure(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    span: Span,
-    source: Expr,
-) -> Result<Stmt, CompileError> {
-    let pattern = parse_bracket_list_pattern(tokens, pos, span)?;
-    Ok(lower_list_unpack(pattern, source, span))
-}
-
-/// Parses a `list(...)` construct destructuring pattern outside the standalone statement
-/// form — currently the expression-position desugar (`if (list(, $b) = RHS)`) — and lowers
-/// it into a single statement that binds each pattern target from `source`.
-///
-/// Consumes the `list` keyword through the matching `)` (no `=` or right-hand side); the
-/// caller supplies `source`, the hidden temporary holding the evaluated right-hand side.
-/// Reuses `parse_list_construct_pattern` and `lower_list_unpack` so the construct form stays
-/// in lockstep with standalone `list() = ...;` destructuring.
-pub(crate) fn parse_and_lower_list_construct_destructure(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    span: Span,
-    source: Expr,
-) -> Result<Stmt, CompileError> {
-    let pattern = parse_list_construct_pattern(tokens, pos, span)?;
-    Ok(lower_list_unpack(pattern, source, span))
-}
-
 /// Parses a `list() = $x;` destructuring assignment statement using the `list()` construct syntax.
 /// Consumes the `list` keyword, parses the parenthesized pattern, expects `=`, parses the
 /// right-hand side expression, and consumes the trailing semicolon. Returns the lowered statement.
@@ -102,6 +64,48 @@ pub(in crate::parser::stmt) fn parse_list_construct_unpack(
     expect_semicolon(tokens, pos)?;
 
     Ok(lower_list_unpack(pattern, value, span))
+}
+
+/// Parses a destructuring pattern used as a `foreach` value target and lowers it into the
+/// statement that unpacks `source` into the pattern's targets.
+///
+/// Accepts both spellings PHP allows there — `[$a, $b]` and `list($a, $b)` — and consumes
+/// exactly the pattern, leaving `*pos` on the token that follows it (`)` for a `foreach`
+/// value target). `source` is the expression the loop assigns each element to, normally a
+/// hidden temporary the caller also names as the loop's value variable.
+///
+/// The returned statement is the very same lowering `[$a, $b] = $source;` produces, so
+/// nested, keyed, skipped, and property/array-element targets all behave identically inside
+/// and outside `foreach`.
+pub(crate) fn parse_destructuring_pattern_unpack(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    source: Expr,
+) -> Result<Stmt, CompileError> {
+    let pattern = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => parse_bracket_list_pattern(tokens, pos, span)?,
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("list") => {
+            parse_list_construct_pattern(tokens, pos, span)?
+        }
+        _ => return Err(CompileError::new(span, "Expected destructuring pattern")),
+    };
+    Ok(lower_list_unpack(pattern, source, span))
+}
+
+/// Returns true when the token at `pos` opens a destructuring pattern (`[` or `list(`).
+pub(crate) fn starts_destructuring_pattern(
+    tokens: &[SpannedToken],
+    pos: usize,
+) -> bool {
+    match tokens.get(pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => true,
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("list") => matches!(
+            tokens.get(pos + 1).map(|(token, _)| token),
+            Some(Token::LParen)
+        ),
+        _ => false,
+    }
 }
 
 /// Represents a list destructuring pattern with ordered entries.

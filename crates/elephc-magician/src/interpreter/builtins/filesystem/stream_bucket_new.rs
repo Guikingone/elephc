@@ -8,9 +8,8 @@
 //! - Creates stdClass bucket objects with `data` and `datalen` properties.
 
 eval_builtin! {
-    name: "stream_bucket_new",
+    contract: "stream_bucket_new",
     area: Filesystem,
-    params: [stream, buffer],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -69,9 +68,5 @@ pub(in crate::interpreter) fn eval_stream_extension_resource_id(
     resource: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(resource)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(resource, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(resource, values)
 }

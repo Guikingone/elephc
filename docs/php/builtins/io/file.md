@@ -2,21 +2,23 @@
 title: "file()"
 description: "Reads an entire file into an array."
 sidebar:
-  order: 167
+  order: 176
 ---
 
 ## file()
 
 ```php
-function file(string $filename): array
+function file(string $filename, int $flags = 0, mixed $context = null): mixed
 ```
 
 Reads an entire file into an array.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$flags` (`int`), default `0`, optional
+- `$context` (`mixed`), default `null`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -24,12 +26,6 @@ Reads an entire file into an array.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/file.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

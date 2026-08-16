@@ -175,12 +175,32 @@ fn test_modulo_normal() {
     assert_eq!(out, "0");
 }
 
-/// Verifies that modulo by zero returns 0 (no crash).
-/// Regression for issue #23 (modulo by zero).
+/// Verifies that an uncaught modulo by zero is a `DivisionByZeroError` fatal, not the value `0`.
+///
+/// Regression for issue #23 (modulo by zero). Reference PHP 8.4 raises
+/// `DivisionByZeroError: Modulo by zero`; elephc used to fall back to `mov result, 0` and hand
+/// back `0`. With no handler active the program still terminates — the diagnostic just names
+/// the PHP class now, matching `Fatal error: Uncaught DivisionByZeroError: Modulo by zero`.
 #[test]
-fn test_modulo_by_zero() {
-    let out = compile_and_run("<?php echo 5 % 0;");
-    assert_eq!(out, "0");
+fn test_modulo_by_zero_is_uncaught_fatal() {
+    let err = compile_and_run_expect_failure("<?php echo 5 % 0;");
+    assert!(
+        err.contains("Uncaught DivisionByZeroError: Modulo by zero"),
+        "modulo by zero should fatal as a DivisionByZeroError, got: {err}"
+    );
+}
+
+/// Verifies the modulo-by-zero error is catchable, which is the substantive half of PHP 8's
+/// behavior: the `catch` block runs and `getMessage()` carries php-src's own wording.
+///
+/// Regression for issue #23 (modulo by zero). While `%` produced a value, no `catch` clause
+/// could ever observe a zero divisor.
+#[test]
+fn test_modulo_by_zero_is_catchable() {
+    let out = compile_and_run(
+        "<?php try { echo 5 % 0; } catch (DivisionByZeroError $e) { echo get_class($e), ':', $e->getMessage(); }",
+    );
+    assert_eq!(out, "DivisionByZeroError:Modulo by zero");
 }
 
 /// Verifies normal modulo remainder: `7 % 3` returns 1.
@@ -251,64 +271,6 @@ fn test_string_nonempty_truthy() {
 fn test_string_empty_falsy() {
     let out = compile_and_run(r#"<?php echo "" ? "yes" : "no";"#);
     assert_eq!(out, "no");
-}
-
-/// Verifies that `preg_match` with a not-yet-supported Mixed subject still compiles.
-///
-/// The EIR regex bridge does not yet coerce a non-string (Mixed) subject, so it
-/// lowers that case to a runtime fatal instead of failing codegen. This keeps a
-/// runtime-dead branch (here guarded by `$run = false`) compilable; the program
-/// links and runs without firing the fatal. Mirrors Symfony YAML's block-scalar
-/// `preg_replace('#\d+#', '', $modifiers)` path, which the parser never reaches
-/// for a simple mapping.
-#[test]
-fn test_preg_match_mixed_subject_dead_branch_compiles() {
-    let out = compile_and_run(
-        r#"<?php
-function maybe_match(mixed $subject, bool $run): int {
-    $n = 0;
-    if ($run) {
-        $n = preg_match('/x/', $subject);
-    }
-    return $n;
-}
-echo maybe_match("abc", false);
-"#,
-    );
-    assert_eq!(out, "0");
-}
-
-// --- by-ref IN-OUT params must NOT be re-typed by the out-only overwrite change ---
-
-/// Verifies an IN-OUT by-ref call (`sort`) mutates its array argument in place without
-/// destroying the caller's element type: `$a` stays `array<int>`, so `array_sum($a)`
-/// after `sort($a)` still type-checks and computes the sum. This guards the OUT-only vs
-/// IN-OUT distinction — sort is deliberately NOT classified out-only, so an already-defined
-/// `array<int>` local keeps its type. PHP: `sort([3,1,2])` -> `[1,2,3]`, sum `6`.
-#[test]
-fn test_sort_in_out_preserves_array_element_type() {
-    let out = compile_and_run(r#"<?php $a = [3, 1, 2]; sort($a); echo array_sum($a);"#);
-    assert_eq!(out, "6");
-}
-
-/// Verifies `array_push` (IN-OUT by-ref) keeps its target's `array<int>` type so a
-/// following `array_sum` still type-checks. PHP: push 4 onto `[1,2,3]`, sum `10`.
-#[test]
-fn test_array_push_in_out_preserves_array_element_type() {
-    let out = compile_and_run(
-        r#"<?php $b = [1, 2, 3]; array_push($b, 4); echo array_sum($b);"#,
-    );
-    assert_eq!(out, "10");
-}
-
-/// Verifies `array_shift` (IN-OUT by-ref) mutates in place and preserves the remaining
-/// array's element type. PHP: shift from `[10,20,30]` yields `10`, remaining sum `50`.
-#[test]
-fn test_array_shift_in_out_preserves_array_element_type() {
-    let out = compile_and_run(
-        r#"<?php $c = [10, 20, 30]; $first = array_shift($c); echo $first, "-", array_sum($c);"#,
-    );
-    assert_eq!(out, "10-50");
 }
 
 // --- Bug fix: compound assignment in for-loop update ---

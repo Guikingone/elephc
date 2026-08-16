@@ -96,8 +96,8 @@ echo "done\n";
 }
 
 /// Verifies that an explicitly closed stream does not crash and is skipped by
-/// scope cleanup: `fclose()` stamps the -1 release sentinel into the Mixed box,
-/// so the kind-1 destructor does not close the descriptor a second time.
+/// scope cleanup: `fclose()` transitions the registry entry to Closed, so the
+/// final Mixed release cannot close the backend descriptor a second time.
 #[test]
 fn test_stream_explicit_close_then_scope_exit() {
     let out = compile_and_run(
@@ -106,46 +106,72 @@ $f = fopen("php://temp", "w+");
 fwrite($f, "test");
 fclose($f);
 echo "ok\n";
-// $f leaves scope with a sentinel-marked box — scope cleanup skips it.
+// $f leaves scope with a Closed registry handle — scope cleanup skips it.
 "#,
     );
     assert_eq!(out, "ok\n");
 }
 
-/// Verifies that a finalized HashContext can be finalized again without a
-/// crash: `elephc_crypto_final` finalizes a clone and leaves the original live,
-/// so there is no use-after-free or double-free against scope cleanup. elephc
-/// diverges from PHP here (PHP throws); both finals see the same digest.
+/// Verifies that finalizing an already-finalized HashContext raises PHP's
+/// `TypeError` instead of silently digesting again, and that the rejection is
+/// memory-safe: the guard reads the finalized flag BEFORE touching the context,
+/// the original handle is still owned by scope cleanup, and the caught throw
+/// leaves the program running so that cleanup actually happens.
+///
+/// This used to pin the opposite behaviour — both finals returning the same
+/// digest — as a documented divergence. PHP throws, so the divergence is gone
+/// and the expectation moved with it.
 #[test]
-fn test_hash_context_double_final_memory_safe() {
+fn test_hash_context_double_final_rejected_and_memory_safe() {
     let out = compile_and_run(
         r#"<?php
 $ctx = hash_init("sha256");
 hash_update($ctx, "hello");
 $a = hash_final($ctx);
-$b = hash_final($ctx); // memory-safe: original stays live, same digest
-echo ($a === $b) ? "same\n" : "diff\n";
+try {
+    hash_final($ctx);
+    echo "no-throw\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+echo strlen($a), "\n";
 "#,
     );
-    assert_eq!(out, "same\n");
+    assert_eq!(
+        out,
+        "hash_final(): Argument #1 ($context) must be a valid, non-finalized HashContext\n64\n"
+    );
 }
 
-/// Verifies that updating a HashContext after `hash_final()` is memory-safe:
-/// the original handle is never freed by finalize, so it keeps accumulating.
-/// PHP would reject this; elephc instead hashes the still-live context.
+/// Verifies that updating a HashContext after `hash_final()` raises PHP's
+/// `TypeError` rather than quietly accumulating more data into the still-live
+/// context — the silently-wrong-digest shape this guard exists to kill.
+///
+/// The `hash("sha256", "ab")` comparison this test used to make is kept as the
+/// positive control, computed the legitimate way, so the suite still proves the
+/// digest path itself was not broken by the guard.
 #[test]
-fn test_hash_context_update_after_final_memory_safe() {
+fn test_hash_context_update_after_final_rejected_and_memory_safe() {
     let out = compile_and_run(
         r#"<?php
 $ctx = hash_init("sha256");
 hash_update($ctx, "a");
-hash_final($ctx);      // finalizes a clone; original keeps "a"
-hash_update($ctx, "b");
-$got = hash_final($ctx);
-echo ($got === hash("sha256", "ab")) ? "ok\n" : "bad\n";
+hash_final($ctx);
+try {
+    hash_update($ctx, "b");
+    echo "no-throw\n";
+} catch (TypeError $e) {
+    echo $e->getMessage(), "\n";
+}
+$fresh = hash_init("sha256");
+hash_update($fresh, "ab");
+echo (hash_final($fresh) === hash("sha256", "ab")) ? "ok\n" : "bad\n";
 "#,
     );
-    assert_eq!(out, "ok\n");
+    assert_eq!(
+        out,
+        "hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext\nok\n"
+    );
 }
 
 /// Verifies that a `popen()` pipe never `pclose`d is auto-released at scope exit
@@ -165,7 +191,7 @@ echo "|done\n";
 }
 
 /// Verifies that an explicitly `pclose`d pipe is skipped by scope cleanup (the
-/// release sentinel marks the box) so the child is not reaped / fd closed twice.
+/// Closed registry state remains observable) so the child is not reaped or closed twice.
 #[test]
 fn test_popen_explicit_pclose_then_scope_exit() {
     let out = compile_and_run(
@@ -175,7 +201,7 @@ echo fread($p, 16);
 echo "|";
 echo pclose($p);
 echo "\n";
-// $p leaves scope sentinel-marked — scope cleanup does not pclose again.
+// $p leaves scope with a Closed registry handle — cleanup does not pclose again.
 "#,
     );
     assert_eq!(out, "xyz|0\n");
@@ -199,7 +225,7 @@ echo "done\n";
 }
 
 /// Verifies that an explicitly `closedir`d stream is skipped by scope cleanup
-/// (release sentinel) so `closedir` does not run twice.
+/// (Closed registry state) so `closedir` does not run twice.
 #[test]
 fn test_opendir_explicit_closedir_then_scope_exit() {
     let out = compile_and_run(
@@ -208,27 +234,27 @@ mkdir("d");
 $h = opendir("d");
 closedir($h);
 echo "ok\n";
-// $h leaves scope sentinel-marked — scope cleanup does not closedir again.
+// $h leaves scope with a Closed registry handle — cleanup does not closedir again.
 "#,
     );
     assert_eq!(out, "ok\n");
 }
 
 /// Verifies that closing a stream and opening another (which may reuse the same
-/// fd number) before scope exit is safe: the closed stream's box is sentinel-
-/// marked, so its scope cleanup cannot close the reused descriptor.
+/// fd number) before scope exit is safe: the closed stream's registry
+/// generation cannot resolve to or close the reused descriptor.
 #[test]
 fn test_stream_fd_reuse_after_close_is_safe() {
     let out = compile_and_run(
         r#"<?php
 $a = fopen("php://temp", "w+");
-fclose($a);            // $a's box is sentinel-marked
+fclose($a);            // $a's registry entry becomes Closed
 $b = fopen("php://temp", "w+"); // may reuse $a's old fd number
 fwrite($b, "reused");
 rewind($b);
 echo fread($b, 16);
 echo "\n";
-// Both leave scope: $a is skipped (sentinel), $b is closed exactly once.
+// Both leave scope: stale $a is skipped, while $b is closed exactly once.
 "#,
     );
     assert_eq!(out, "reused\n");

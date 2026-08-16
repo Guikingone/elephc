@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "exec",
-    area: System,
-    params: [command: Str],
-    returns: Str,
+    contract: "exec",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Exec,
     ),
-    summary: "Executes an external program and returns the last line of output.",
 }

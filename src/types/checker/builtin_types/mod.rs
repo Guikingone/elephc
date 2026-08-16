@@ -15,7 +15,6 @@ mod declarations;
 mod exception;
 mod fiber;
 mod magic_methods;
-mod normalizer;
 mod reflection;
 mod timezone_ids;
 
@@ -30,15 +29,18 @@ mod timezone_ids;
 /// Checks for name collisions with user-declared types before inserting; returns
 /// `CompileError` if any builtin name is already present. Insertion order sets
 /// the inheritance chain: Error/Exception extend Throwable; TypeError/ValueError/
-/// ArithmeticError/UnhandledMatchError extend Error; RuntimeException/
-/// ReflectionException extend Exception; JsonException extends RuntimeException;
-/// FiberError extends Error. Fiber is final with no parent.
+/// ArithmeticError/AssertionError/UnhandledMatchError extend Error;
+/// ArgumentCountError extends TypeError; DivisionByZeroError extends
+/// ArithmeticError; RuntimeException/ReflectionException extend Exception;
+/// JsonException extends RuntimeException; FiberError extends Error. Fiber is
+/// final with no parent.
 pub(crate) use declarations::{InterfaceDeclInfo, inject_builtin_throwables};
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, ArithmeticError, UnhandledMatchError, Exception, RuntimeException,
-/// ReflectionException, JsonException, and FiberError.
+/// ArgumentCountError, ValueError, ArithmeticError, DivisionByZeroError, AssertionError,
+/// UnhandledMatchError, Exception, RuntimeException, ReflectionException, JsonException,
+/// and FiberError.
 pub(crate) use exception::patch_builtin_exception_signatures;
 
 /// Patches Fiber method signatures in the checker after initial class registration.
@@ -54,24 +56,11 @@ pub(crate) use fiber::patch_builtin_fiber_signatures;
 /// For `__set`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Mixed`.
 /// For `__call`: parameter 0 is `PhpType::Str`, parameter 1 is `PhpType::Array` of `PhpType::Never`.
 /// Does nothing for classes that do not declare these methods.
-pub(crate) use magic_methods::{
-    finalize_magic_call_arg_signatures, patch_magic_method_signatures,
-    validate_magic_method_contracts,
-};
+pub(crate) use magic_methods::{patch_magic_method_signatures, validate_magic_method_contracts};
 pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_signatures};
-
-/// Injects the five built-in DOM shell types (`DOMNode`, `DOMDocument`, `DOMElement`,
-/// `DOMText`, `DOMNodeList`) used by vendor code such as symfony/console's
-/// `XmlDescriptor.php`. Type-check-only shell; no DOM runtime exists yet.
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
 pub(crate) use datetime::inject_builtin_datetime;
 
 /// Injects the builtin `DatePeriod` Iterator class (the `(start, interval, end)` form).
 pub(crate) use date_period::inject_builtin_date_period;
-
-/// Registers the ext-intl `Normalizer` class constants: injects a builtin constants-only
-/// `Normalizer` class when none exists, or supplements a vendor-stub `Normalizer` with the
-/// ext-intl constants it omits (notably `NFKC_CF`/`FORM_KC_CF`). Both the checker and the
-/// codegen constant fold then resolve `Normalizer::FORM_C`, `Normalizer::NFKC_CF`, etc.
-pub(crate) use normalizer::inject_builtin_normalizer;

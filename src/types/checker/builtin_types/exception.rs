@@ -18,37 +18,13 @@ use crate::types::PhpType;
 use super::super::Checker;
 
 /// Returns a synthetic `ClassProperty` AST node for the `message` property of builtin Exception classes.
-///
-/// `protected`, matching PHP's real `Exception`/`Error` declaration (`protected $message = '';`).
-/// External reads therefore fail the way `php -n` does ("Cannot access protected property
-/// Exception::$message"), and — the reason this matters in practice — a subclass may legally
-/// redeclare it as `protected $message = 'default';`, a widespread shape in Symfony's exception
-/// hierarchy that a `public` parent declaration rejected with a spurious "Cannot reduce visibility
-/// when overriding property".
-///
-/// UNTYPED, also matching PHP, so the property-invariance rule sees what PHP sees: a subclass may
-/// write `protected $message = 'default';` (type omitted, as PHP requires against an untyped
-/// parent) instead of being told "Type of X::$message must be string". The empty-string default
-/// still gives the slot a `string` STORAGE type through `infer_expr_type_syntactic`, which is what
-/// keeps the runtime layout unchanged.
-///
-/// That inferred `string` storage is a DELIBERATE, documented divergence from PHP, which can hold
-/// any value here — `AutowiringFailedException` stores a `Stringable` anonymous class in it for a
-/// lazy message. elephc's compact Throwable payload keeps the message as a raw `(pointer, length)`
-/// pair at object offsets 8/16, and `getMessage()`/`__toString()` are codegen intrinsics
-/// (`lower_throwable_get_message`, `src/codegen/lower_inst.rs`) that read those two words directly
-/// rather than executing the synthetic body below. Widening the slot to `Mixed` would store a
-/// single boxed pointer at offset 8 and leave a stale length at 16, so `getMessage()` would
-/// silently return garbage; and PHP re-invokes `__toString()` on EVERY `getMessage()` call, so
-/// coercing at the store instead would change observable behaviour. Honouring PHP here needs a
-/// tagged message field across the whole Throwable surface (allocation, intrinsic getters, the
-/// uncaught-exception printer, reflection), which is a feature rather than a declaration change.
+/// The property is public, typed `string`, with an empty string default value.
 pub(super) fn builtin_exception_message_property() -> ClassProperty {
     ClassProperty {
         name: "message".to_string(),
-        visibility: Visibility::Protected,
+        visibility: Visibility::Public,
         set_visibility: None,
-        type_expr: None,
+        type_expr: Some(TypeExpr::Str),
         hooks: PropertyHooks::none(),
         readonly: false,
         is_final: false,
@@ -195,36 +171,6 @@ pub(super) fn builtin_exception_previous_property() -> ClassProperty {
     }
 }
 
-/// Returns a synthetic `ClassProperty` for PHP's private `$trace` backtrace on builtin Exception classes.
-///
-/// Typed `array` and `private`, matching PHP's real `Exception`/`Error` class shape (the backtrace
-/// is a private property on the base class). This is a type-contract-only declaration so reflection
-/// over the property resolves — e.g. `new ReflectionProperty(Exception::class, 'trace')`, which
-/// Symfony's `ErrorHandler`/`var-exporter` use to inject a backtrace. The compact runtime Throwable
-/// payload does not store a backtrace array, so `private` visibility (no external direct read) keeps
-/// the declaration honest: `getTrace()` still returns the empty-array intrinsic. Default is `[]`.
-pub(super) fn builtin_exception_trace_property() -> ClassProperty {
-    ClassProperty {
-        name: "trace".to_string(),
-        visibility: Visibility::Private,
-        set_visibility: None,
-        type_expr: Some(array_type()),
-        hooks: PropertyHooks::none(),
-        readonly: false,
-        is_final: false,
-        is_static: false,
-        is_abstract: false,
-        by_ref: false,
-        is_promoted: false,
-        default: Some(Expr::new(
-            ExprKind::ArrayLiteral(Vec::new()),
-            crate::span::Span::dummy(),
-        )),
-        span: crate::span::Span::dummy(),
-        attributes: Vec::new(),
-    }
-}
-
 /// Returns a synthetic `ClassMethod` for `Exception::getCode()`.
 /// Body returns `$this->code` cast to `int`.
 pub(super) fn builtin_exception_get_code_method() -> ClassMethod {
@@ -307,9 +253,7 @@ pub(super) fn builtin_exception_get_trace_as_string_method() -> ClassMethod {
 }
 
 /// Returns a synthetic `ClassMethod` for `Exception::getPrevious()`.
-/// Return type is `?Throwable`; body returns `null` in the dummy AST. The EIR backend
-/// special-cases this method (`lower_throwable_null_previous`) and always returns null,
-/// because the compact runtime Throwable payload does not store a chained previous.
+/// Return type is `?Throwable`; body returns `null` in the dummy AST.
 pub(super) fn builtin_exception_get_previous_method() -> ClassMethod {
     concrete_throwable_method(
         "getPrevious",
@@ -408,8 +352,9 @@ fn nullable_throwable_type() -> TypeExpr {
 
 /// Patches the checker metadata for the Throwable interface and all builtin exception classes.
 /// Updates return types for getter methods and the `__construct` parameter types for Error, TypeError,
-/// ValueError, ArithmeticError, UnhandledMatchError, Exception, RuntimeException,
-/// ReflectionException, JsonException, and FiberError.
+/// ArgumentCountError, ValueError, ArithmeticError, DivisionByZeroError, AssertionError,
+/// UnhandledMatchError, Exception, RuntimeException, ReflectionException, JsonException,
+/// and FiberError.
 pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
     let nullable_throwable = checker.normalize_union_type(vec![
         PhpType::Object("Throwable".to_string()),
@@ -456,8 +401,11 @@ pub(crate) fn patch_builtin_exception_signatures(checker: &mut Checker) {
     for class_name in [
         "Error",
         "TypeError",
+        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "AssertionError",
         "UnhandledMatchError",
         "Exception",
         "RuntimeException",

@@ -14,8 +14,8 @@
 //!   fold correctly with zero runtime `define()` calls.
 //! - These constants are global (available in CLI and `--web` alike), matching
 //!   PHP where the `E_*` levels are always defined.
-//! - `E_ALL` is `30719` on PHP 8.4 (`E_STRICT`, value `2048`, was removed from
-//!   the `E_ALL` mask when it was deprecated; php -n verified `var_dump(E_ALL)`).
+//! - `E_ALL` is `32767` on PHP 8.x (`E_STRICT`, value `2048`, is deprecated but
+//!   its bit remains set in `E_ALL`).
 
 /// Tuple of `(name, value)` pairs for every PHP `E_*` error-level constant.
 ///
@@ -37,7 +37,7 @@ pub(crate) const ERROR_LEVEL_CONSTANTS: &[(&str, i64)] = &[
     ("E_RECOVERABLE_ERROR", 4096),
     ("E_DEPRECATED", 8192),
     ("E_USER_DEPRECATED", 16384),
-    ("E_ALL", 30719),
+    ("E_ALL", 32767),
 ];
 
 #[cfg(test)]
@@ -63,7 +63,7 @@ mod tests {
             ("E_RECOVERABLE_ERROR", 4096),
             ("E_DEPRECATED", 8192),
             ("E_USER_DEPRECATED", 16384),
-            ("E_ALL", 30719),
+            ("E_ALL", 32767),
         ];
         for (name, value) in expected {
             let entry = ERROR_LEVEL_CONSTANTS

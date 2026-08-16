@@ -9,13 +9,8 @@
 
 
 builtin! {
-    name: "stream_context_set_params",
-    area: Io,
-    params: [context: Mixed, params: Mixed],
-    returns: Bool,
+    contract: "stream_context_set_params",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamContextSetParams,
     ),
-    summary: "Sets parameters on the specified context.",
-    php_manual: "function.stream-context-set-params",
 }

@@ -434,14 +434,13 @@ fn test_error_magic_unset_must_not_take_two_arguments() {
     );
 }
 
-/// Verifies that `catch (MissingException $e)` with a class absent from the closed world is
-/// tolerated as an absent optional dependency: it warns and type-checks (the clause simply never
-/// matches at runtime) rather than hard-erroring. See `crate::types::checker::absent_class`.
+/// Verifies that `catch (MissingException $e)` with an undefined class
+/// reports "Undefined class: MissingException".
 #[test]
-fn test_catch_absent_class_tolerated_as_absent_warning() {
-    expect_warning(
+fn test_error_catch_requires_defined_class() {
+    expect_error(
         "<?php try { echo 1; } catch (MissingException $e) { echo 2; }",
-        "reference to unknown class 'MissingException' treated as an absent optional dependency",
+        "Undefined class: MissingException",
     );
 }
 
@@ -453,18 +452,6 @@ fn test_error_catch_requires_throwable_type() {
     expect_error(
         "<?php class PlainObject {} try { throw new Exception(); } catch (PlainObject $e) { echo 2; }",
         "Catch type must extend or implement Throwable: PlainObject",
-    );
-}
-
-/// Verifies that the builtin exception constructor still rejects more than three
-/// arguments after the optional third `?Throwable $previous` parameter was added.
-/// PHP's `Exception::__construct(string $message = "", int $code = 0,
-/// ?Throwable $previous = null)` takes at most three arguments.
-#[test]
-fn test_error_builtin_exception_rejects_four_arguments() {
-    expect_error(
-        "<?php $e = new RuntimeException(\"a\", 0, null, \"extra\");",
-        "expects 0 to 3 arguments, got 4",
     );
 }
 
@@ -565,68 +552,4 @@ fn test_error_enum_method_undefined_variable() {
         "<?php enum E { case A; public function f(): int { return $missing; } }",
         "Undefined variable: $missing",
     );
-}
-
-/// Verifies that `clone` on a definite non-object scalar is rejected at compile time,
-/// matching PHP's "clone requires an object value" runtime error (deferred here to the checker
-/// for statically-known non-object operands).
-#[test]
-fn test_error_clone_non_object() {
-    expect_error("<?php $b = clone 42;", "clone requires an object value");
-}
-
-/// Verifies that a static `__clone` method is rejected: PHP invokes `__clone` on the
-/// freshly copied instance, so it must be non-static.
-#[test]
-fn test_error_clone_must_be_non_static() {
-    expect_error(
-        "<?php class P { public static function __clone() {} }",
-        "Magic method must be non-static: P::__clone",
-    );
-}
-
-/// Verifies that `__clone` with parameters is rejected: PHP calls `__clone` with no
-/// arguments on the cloned instance.
-#[test]
-fn test_error_clone_must_take_zero_arguments() {
-    expect_error(
-        "<?php class P { public function __clone($x) {} }",
-        "Magic method must take 0 arguments: P::__clone",
-    );
-}
-
-/// Verifies `Exception::$message` is PROTECTED, matching PHP's real declaration
-/// (`protected $message = '';`): an external read must be rejected, not silently served.
-/// `php -n -r '$e = new Exception("boom"); echo $e->message;'` raises
-/// "Cannot access protected property Exception::$message"; elephc reports the same access
-/// violation at compile time because the receiver class is statically known.
-#[test]
-fn test_error_builtin_exception_message_is_protected() {
-    expect_error(
-        "<?php $e = new Exception(\"boom\"); echo $e->message;",
-        "Cannot access protected property",
-    );
-}
-
-/// Verifies a subclass may redeclare `protected $message = 'default';` — the shape PHP itself
-/// permits against its untyped parent declaration, and a widespread one in exception hierarchies.
-/// A `public`, `string`-typed parent declaration rejected it twice over ("Cannot reduce visibility
-/// when overriding property", then "Type of E::$message must be string"). `php -n` accepts this
-/// source; the checker must too.
-#[test]
-fn test_builtin_exception_message_subclass_may_redeclare_untyped_protected() {
-    expect_ok("<?php class E extends RuntimeException { protected $message = 'fallback'; }");
-}
-
-/// Verifies the untyped parent declaration still forbids a subclass from GIVING `$message` a type.
-/// `php -n` fatals with "Type of E::$message must be omitted to match the parent definition in
-/// class Exception"; the checker must reject it too rather than accepting a second, incompatible
-/// contract. (Widening the visibility to `public` is legal in PHP and stays accepted.)
-#[test]
-fn test_error_builtin_exception_message_subclass_cannot_add_a_type() {
-    expect_error(
-        "<?php class E extends RuntimeException { protected string $message = 'x'; }",
-        "must not be defined",
-    );
-    expect_ok("<?php class E extends RuntimeException { public $message = 'x'; }");
 }

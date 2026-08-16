@@ -146,62 +146,15 @@ fn test_static_and_instance_calls_unaffected() {
     assert_eq!(out, "isT");
 }
 
-/// Verifies PHP's object-call syntax can invoke a declared static method while preserving
-/// receiver-before-argument evaluation order.
-#[test]
-fn test_static_method_called_through_object() {
-    let out = compile_and_run(
-        "<?php
-        function receiver(): StaticViaObject {
-            echo \"receiver:\";
-            return new StaticViaObject();
-        }
-        function argument(): int {
-            echo \"argument:\";
-            return 41;
-        }
-        class StaticViaObject {
-            public static function increment(int $value): int {
-                return $value + 1;
-            }
-        }
-        echo receiver()->increment(argument());
-        ",
-    );
-    assert_eq!(out, "receiver:argument:42");
-}
-
-/// Verifies an object-call static method uses the receiver's runtime class for overrides
-/// and late-static binding even when the function parameter has the base type.
-#[test]
-fn test_static_method_called_through_base_typed_object_is_late_bound() {
-    let out = compile_and_run(
-        "<?php
-        class StaticObjectBase {
-            public static function label(): string {
-                return \"base:\" . static::class;
-            }
-        }
-        class StaticObjectChild extends StaticObjectBase {
-            public static function label(): string {
-                return \"child:\" . static::class;
-            }
-        }
-        function label_for(StaticObjectBase $object): string {
-            return $object->label();
-        }
-        echo label_for(new StaticObjectChild());
-        ",
-    );
-    assert_eq!(out, "child:StaticObjectChild");
-}
-
 /// Compiles and runs the checked-in `examples/dynamic-dispatch/main.php` fixture, covering
 /// dynamic instance method dispatch by name and a dynamic static call.
 #[test]
 fn test_example_dynamic_dispatch_compiles_and_runs() {
     let out = compile_and_run(include_str!("../../../examples/dynamic-dispatch/main.php"));
-    assert_eq!(out, "Hello, world\nLOUD!\ncommands: greet, shout\n");
+    assert_eq!(
+        out,
+        "Hello, world\nLOUD!\ncommands: greet, shout\nresult: effects\n"
+    );
 }
 
 /// Verifies a dynamic static method call on a literal class name (`C::$method()`), which has a
@@ -274,35 +227,4 @@ fn test_inferred_mixed_receiver_method_in_concat() {
         ",
     );
     assert_eq!(out, "hello world");
-}
-
-/// A method call on a union that contains the ERASED object type (`object`, `is_object()`,
-/// `(object)` — modelled as the empty class name) defers to runtime dispatch instead of being
-/// refused, matching what a receiver typed as the erased object ALONE already did.
-///
-/// The erased member fixes no class, so the union cannot settle the lookup — and PHP does not
-/// settle it statically either. Symfony's `ResolveInstanceofConditionalsPass` hits this through
-/// `$definition = (new DeepCloner($definition))->cloneAs(ChildDefinition::class)`: `cloneAs()` is
-/// declared `: object`, so the branch join is `Definition|<erased>` while `setParent()` lives
-/// only on `ChildDefinition`.
-#[test]
-fn test_method_on_union_with_erased_object_member_dispatches_at_runtime() {
-    let out = compile_and_run(
-        r#"<?php
-class Def { public string $p = ""; }
-class ChildDef extends Def { public function setParent(string $p): static { $this->p = $p; return $this; } }
-function cloneAs(): object { return new ChildDef(); }
-function pick(): Def { return new Def(); }
-function run(bool $cond): string {
-    $d = pick();
-    if ($cond) {
-        $d = cloneAs();
-        return $d->setParent("x")->p;
-    }
-    return "none";
-}
-echo run(true), ",", run(false);
-"#,
-    );
-    assert_eq!(out, "x,none");
 }

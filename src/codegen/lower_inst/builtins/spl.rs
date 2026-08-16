@@ -16,7 +16,7 @@ use crate::codegen::{
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{BlockId, Immediate, Instruction, Op, ValueDef, ValueId};
-use crate::names::function_symbol;
+use crate::names::{function_symbol, label_fragment};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -212,24 +212,34 @@ pub(crate) fn lower_spl_classes(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `spl_object_id(object)` by returning the loaded object pointer as an integer.
+/// Lowers `spl_object_id(object)` to the object's PHP handle.
+///
+/// This reads the SAME pool `var_dump` prints as `object(C)#N`, so the two can never
+/// contradict each other: both go through `__rt_object_handle_of`. PHP's handles are
+/// small dense integers starting at 1 and reused LIFO once an object dies, which is
+/// what the pool in `codegen_support::runtime::objects::handles` reproduces.
 pub(crate) fn lower_spl_object_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_object_id", 1)?;
     load_object_operand(ctx, inst, "spl_object_id")?;
+    abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
     store_if_result(ctx, inst)
 }
 
-/// Lowers `spl_object_hash(object)` by formatting the loaded object pointer as a string.
+/// Lowers `spl_object_hash(object)` to PHP's 32-character rendering of the handle.
+///
+/// PHP returns the handle as 16 zero-padded hex digits followed by 16 zeros, so
+/// `spl_object_id($o) === 1` gives `"00000000000000010000000000000000"`. The helper
+/// derives it from the same handle rather than from the address.
 pub(crate) fn lower_spl_object_hash(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_object_hash", 1)?;
     load_object_operand(ctx, inst, "spl_object_hash")?;
-    abi::emit_call_label(ctx.emitter, "__rt_itoa");
+    abi::emit_call_label(ctx.emitter, "__rt_spl_object_hash");
     store_if_result(ctx, inst)
 }
 
@@ -297,7 +307,11 @@ pub(crate) fn lower_iterator_apply(
     let callback = iterator_apply_callback(ctx, callback_value, inst)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
 
-    emit_apply_callback_state(ctx, &callback)?;
+    emit_apply_callback_state(
+        ctx,
+        &callback,
+        super::super::instruction_strict_php_profile(inst),
+    )?;
 
     ctx.load_value_to_result(source)?;
     match source_ty {
@@ -318,6 +332,7 @@ pub(crate) fn lower_iterator_apply(
 fn emit_apply_callback_state(
     ctx: &mut FunctionContext<'_>,
     callback: &IteratorApplyCallback,
+    strict_php: bool,
 ) -> Result<()> {
     match callback {
         IteratorApplyCallback::DynamicString { callable, .. } => {
@@ -338,6 +353,7 @@ fn emit_apply_callback_state(
                 *callable,
                 abi::int_result_reg(ctx.emitter),
                 "iterator_apply",
+                strict_php,
             )?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             Ok(())
@@ -1434,11 +1450,11 @@ fn emit_integer_key_from_result(ctx: &mut FunctionContext<'_>) {
 fn emit_float_key_from_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float iterator keys to integer array keys
+            abi::emit_php_float_to_int(ctx.emitter, "x1");
             ctx.emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks an integer key
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float iterator keys to integer array keys
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks an integer key
         }
     }
@@ -1483,7 +1499,7 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits for casting
-            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "x1");
             ctx.emitter.instruction("mov x2, #-1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
 
@@ -1523,7 +1539,7 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits for casting
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, -1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
 
@@ -1537,12 +1553,8 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Branches when the object receiver saved at the top of the stack implements `interface_name`.
-///
-/// Shared with `super::lower_count_iterable`, which probes `Countable` on an `iterable` that
-/// turned out to hold an object. Callers must have pushed the receiver pointer so it is
-/// readable at `[sp]`, and the probe leaves that slot untouched.
-pub(super) fn emit_branch_if_saved_receiver_implements(
+/// Branches when the saved Traversable receiver implements `interface_name`.
+fn emit_branch_if_saved_receiver_implements(
     ctx: &mut FunctionContext<'_>,
     interface_name: &str,
     target_label: &str,
@@ -1760,13 +1772,6 @@ fn emit_branch_if_saved_apply_callback_name_matches(
     }
 }
 
-/// Converts PHP function names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a case-insensitive compare against the saved `iterator_apply()` callback name.
 fn emit_apply_callback_name_compare(

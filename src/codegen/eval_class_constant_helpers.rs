@@ -12,12 +12,12 @@
 
 use std::collections::HashSet;
 
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{enum_case_symbol, php_symbol_key};
+use crate::names::{join_php_symbol, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
@@ -934,7 +934,7 @@ fn emit_aarch64_value_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, mode.suffix()));
-        emit_aarch64_constant_value(emitter, data, &slot.value);
+        emit_aarch64_constant_value(module, emitter, data, &slot.value);
         emitter.instruction(&format!("b {}", done_label));                      // return after boxing the constant value
     }
 }
@@ -950,13 +950,14 @@ fn emit_x86_64_value_slot_bodies(
 ) {
     for slot in slots {
         emitter.label(&slot_body_label(module, slot, mode.suffix()));
-        emit_x86_64_constant_value(emitter, data, &slot.value);
+        emit_x86_64_constant_value(module, emitter, data, &slot.value);
         emitter.instruction(&format!("jmp {}", done_label));                    // return after boxing the constant value
     }
 }
 
 /// Emits one ARM64 boxed Mixed value for a supported class constant.
 fn emit_aarch64_constant_value(
+    module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     value: &EvalClassConstantValue,
@@ -990,8 +991,12 @@ fn emit_aarch64_constant_value(
             enum_name,
             case_name,
         } => {
-            let case_label = enum_case_symbol(enum_name, case_name);
-            abi::emit_load_symbol_to_reg(emitter, "x0", &case_label, 0);
+            // The eval bridge reads a case exactly like user code does, so the read
+            // materializes it on first evaluation. This site has no label generator,
+            // so it calls the idempotent materializer unconditionally.
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                emitter, module, enum_name, case_name,
+            );
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
     }
@@ -999,6 +1004,7 @@ fn emit_aarch64_constant_value(
 
 /// Emits one x86_64 boxed Mixed value for a supported class constant.
 fn emit_x86_64_constant_value(
+    module: &Module,
     emitter: &mut Emitter,
     data: &mut DataSection,
     value: &EvalClassConstantValue,
@@ -1032,8 +1038,12 @@ fn emit_x86_64_constant_value(
             enum_name,
             case_name,
         } => {
-            let case_label = enum_case_symbol(enum_name, case_name);
-            abi::emit_load_symbol_to_reg(emitter, "rax", &case_label, 0);
+            // The eval bridge reads a case exactly like user code does, so the read
+            // materializes it on first evaluation. This site has no label generator,
+            // so it calls the idempotent materializer unconditionally.
+            crate::codegen::enum_singletons::emit_lazy_case_load_unguarded(
+                emitter, module, enum_name, case_name,
+            );
             emit_box_current_value_as_mixed(emitter, &PhpType::Object(enum_name.clone()));
         }
     }
@@ -1484,17 +1494,20 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 }
 
 /// Returns a platform-safe body label for one class-constant slot.
+///
+/// `mode` is a compiler-controlled literal and becomes part of the fixed prefix; the PHP names
+/// go through `join_php_symbol()` so slots differing only in underscore placement stay distinct.
 fn slot_body_label(module: &Module, slot: &EvalClassConstantSlot, mode: &str) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_class_constant_{}_{}_{}_{}{}",
-        mode,
-        label_fragment(&slot.reflected_class),
-        label_fragment(&slot.declaring_class),
-        label_fragment(&slot.constant),
+        "{}{}",
+        join_php_symbol(
+            &format!("__elephc_eval_class_constant_{}", mode),
+            &[&slot.reflected_class, &slot.declaring_class, &slot.constant]
+        ),
         suffix
     )
 }
@@ -1504,13 +1517,6 @@ fn slot_miss_label(module: &Module, slot: &EvalClassConstantSlot, mode: &str) ->
     format!("{}_miss", slot_body_label(module, slot, mode))
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-global label using the target's symbol spelling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, symbol: &str) {

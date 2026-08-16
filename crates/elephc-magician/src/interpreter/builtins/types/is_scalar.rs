@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_scalar",
+    contract: "is_scalar",
     area: Types,
-    params: [value],
     direct: IsScalar,
     values: IsScalar,
 }

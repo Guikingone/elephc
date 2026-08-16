@@ -2,7 +2,7 @@
 title: "substr()"
 description: "Returns a portion of a string specified by the offset and length."
 sidebar:
-  order: 422
+  order: 480
 ---
 
 ## substr()
@@ -26,12 +26,6 @@ Returns a portion of a string specified by the offset and length.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/substr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/substr.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

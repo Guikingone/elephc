@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory resource rewind helper.
 
 eval_builtin! {
-    name: "rewinddir",
+    contract: "rewinddir",
     area: Filesystem,
-    params: [dir_handle],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -33,8 +32,10 @@ pub(in crate::interpreter) fn eval_rewinddir_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match evaluated_args {
-        [dir_handle] => super::closedir::eval_unary_directory_result("rewinddir", *dir_handle, context, values),
-        _ => Err(EvalStatus::RuntimeFatal),
-    }
+    super::closedir::eval_unary_directory_values_result(
+        "rewinddir",
+        evaluated_args,
+        context,
+        values,
+    )
 }

@@ -12,6 +12,7 @@ use super::cursor::Cursor;
 use super::literals;
 use super::token::{spanned, SpannedToken, Token, TokenMetadata};
 use crate::errors::CompileError;
+use crate::source::SourceMode;
 
 /// Scans the full PHP source into a stream of syntax tokens with source metadata.
 ///
@@ -20,24 +21,32 @@ use crate::errors::CompileError;
 /// and keywords. Returns `Token::Eof` at end-of-input.
 ///
 /// # Errors
-/// Returns `CompileError` if the file does not open with `<?php`.
-pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
+/// Returns `CompileError` when PHP mode lacks its opening tag, LFC contains a
+/// physical PHP tag at a code boundary, or either mode contains invalid syntax.
+pub fn scan_tokens(
+    source: &str,
+    mode: SourceMode,
+) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
     let mut cursor = Cursor::new(source);
     let mut tokens = Vec::new();
 
-    skip_whitespace_and_comments(&mut cursor);
-
     let span = cursor.span();
-    if cursor.remaining().starts_with("<?php") {
-        for _ in 0..5 {
-            cursor.advance();
+    if mode.requires_open_tag() {
+        skip_whitespace_and_comments(&mut cursor);
+        let span = cursor.span();
+        if cursor.remaining().starts_with("<?php") {
+            for _ in 0..5 {
+                cursor.advance();
+            }
+            tokens.push(spanned(Token::OpenTag, span));
+        } else {
+            return Err(CompileError::new(span, "Expected '<?php' at start of file"));
         }
-        tokens.push(spanned(Token::OpenTag, span));
     } else {
-        return Err(CompileError::new(span, "Expected '<?php' at start of file"));
+        tokens.push(spanned(Token::OpenTag, span));
     }
 
     loop {
@@ -49,7 +58,15 @@ pub fn scan_tokens(source: &str) -> Result<Vec<SpannedToken>, CompileError> {
         }
 
         let span = cursor.span();
-        if cursor.peek() == Some('"') {
+        if matches!(mode, SourceMode::Lfc)
+            && (cursor.remaining().starts_with("<?php")
+                || cursor.remaining().starts_with("?>"))
+        {
+            return Err(CompileError::new(
+                span,
+                "PHP opening and closing tags are not valid in .lfc source files",
+            ));
+        } else if cursor.peek() == Some('"') {
             // Double-quoted strings may contain interpolation ($var)
             let string_tokens = literals::scan_double_string_interpolated(&mut cursor)?;
             tokens.extend(string_tokens);
@@ -230,6 +247,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::Spaceship) }
                 else { Ok(Token::LessEqual) }
             }
+            else if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::LessGreater) }
             else { Ok(Token::Less) }
         }
         '>' => {

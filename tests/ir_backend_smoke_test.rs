@@ -8,6 +8,9 @@
 //! - These tests exercise binary-level CLI compilation instead of only testing
 //!   library helpers.
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -976,9 +979,14 @@ fn ir_backend_handles_scalar_builtins() {
     for (name, source, expected) in [
         ("strlen", "<?php echo strlen(\"hello\");", "5"),
         (
+            // `phpversion()` reports the PHP LANGUAGE version of the compile target, not
+            // elephc's own package version. This harness compiles with the default
+            // `--php-version` (8.5), and elephc reports the profile's `8.5.0` form —
+            // reference PHP 8.5.6 reports `8.5.6`. See
+            // `web_prelude::PhpVersion::version_string`.
             "pi_and_phpversion",
             "<?php echo pi() > 3 ? \"pi\" : \"bad\"; echo \":\"; echo phpversion();",
-            concat!("pi:", env!("CARGO_PKG_VERSION")),
+            "pi:8.5.0",
         ),
         ("intval_float", "<?php echo intval(3.9);", "3"),
         ("intval_str", "<?php echo intval(\"42xyz\");", "42"),
@@ -1133,8 +1141,11 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         (
             "substr_strings",
+            // `substr('Hello', 1, -2)` is "el": PHP reads a negative length as bytes omitted from
+            // the end, not as an error. This expectation used to be "[]", written from an
+            // implementation that clamped every negative length to zero.
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
-            "World:Hello:World:[]:[]",
+            "World:Hello:World:[]:[el]",
         ),
         (
             "substr_replace_strings",
@@ -1339,7 +1350,7 @@ echo "-";
 echo $parts[2];
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("simple_regex_builtins", source),
+        compile_and_run_ir_backend_with_managed_pcre2("simple_regex_builtins", source),
         "1:0:3:aNbN:3:a-c"
     );
 }
@@ -1364,7 +1375,7 @@ echo ":";
 echo count($matches);
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_match_captures", source),
+        compile_and_run_ir_backend_with_managed_pcre2("preg_match_captures", source),
         "1:3:[b][][b]:0:0"
     );
 }
@@ -1379,7 +1390,10 @@ function eir_regex_replace(array $matches): string {
 echo preg_replace_callback("/([a-z])([a-z])/", "eir_regex_replace", "ab cd");
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_replace_callback_static_string", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "preg_replace_callback_static_string",
+            source,
+        ),
         "[ab:a] [cd:c]"
     );
 }
@@ -1394,7 +1408,10 @@ function eir_regex_replace_fcc(array $matches): string {
 echo preg_replace_callback("/[A-Z]/", eir_regex_replace_fcc(...), "AB");
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("preg_replace_callback_static_function_fcc", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "preg_replace_callback_static_function_fcc",
+            source,
+        ),
         "F1F1"
     );
 }
@@ -1687,9 +1704,14 @@ echo "|";
 print_r($map["n"]);
 echo "]";
 "#;
+    // The nested `["a"]` slot dumps its elements: `var_dump` recurses into nested
+    // arrays, so this pins the recursive body rather than the empty `array(2) {\n}`
+    // shell it reported before. Verified byte-for-byte against reference PHP 8.5.6
+    // (`php -d xdebug.mode=off`), which prints the same two elements.
     assert_eq!(
         compile_and_run_ir_backend("mixed_assoc_array_slots", source),
-        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\narray(2) {\n}\n[hello|]"
+        "int(42)\nstring(5) \"hello\"\nbool(true)\nNULL\n\
+         array(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\n[hello|]"
     );
 }
 
@@ -2086,7 +2108,7 @@ echo ($child instanceof $targetChild) ? "T" : "F";
 echo ($child instanceof $targetOther) ? "T" : "F";
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("dynamic_instanceof_targets", source),
+        compile_and_run_ir_backend_with_managed_pcre2("dynamic_instanceof_targets", source),
         "TTFTTFFTF"
     );
 }
@@ -2112,7 +2134,10 @@ echo ($child instanceof $baseName) ? "T" : "F";
 echo ($child instanceof $childName) ? "T" : "F";
 "#;
     assert_eq!(
-        compile_and_run_ir_backend("dynamic_instanceof_classes_with_methods", source),
+        compile_and_run_ir_backend_with_managed_pcre2(
+            "dynamic_instanceof_classes_with_methods",
+            source,
+        ),
         "TT"
     );
 }
@@ -2265,7 +2290,7 @@ try {
 /// Verifies invalid dynamic `instanceof` targets use the runtime fatal path.
 #[test]
 fn ir_backend_fatals_on_invalid_dynamic_instanceof_target() {
-    let run = compile_ir_backend_and_run(
+    let run = compile_ir_backend_and_run_with_managed_pcre2(
         "invalid_dynamic_instanceof_target",
         r#"<?php
 class User {}
@@ -3792,9 +3817,12 @@ echo $row[1];
 
 unlink("a.txt");
 "#;
+    // php -n 8.5.6 answers ["o", "e"]: fgetcsv strips the record's trailing newline
+    // BEFORE splitting on the separator. The previous "o:e\n" expectation pinned the
+    // explode()-based READ_CSV that kept the terminator glued to the last field.
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_csv_current", source),
-        "o:e\n"
+        "o:e"
     );
 }
 
@@ -3830,6 +3858,11 @@ unlink("stream.txt");
 }
 
 /// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.
+///
+/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`
+/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached
+/// current line without advancing the stream — measured on `php -n` 8.5.6, this exact
+/// program prints `aa\n|bb|FE|8|7|`.
 #[test]
 fn ir_backend_handles_spl_file_object_state_helpers() {
     let source = r#"<?php
@@ -3856,7 +3889,7 @@ unlink("meta.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_state_helpers", source),
-        "aa\n|aa|FE|8|7|"
+        "aa\n|bb|FE|8|7|"
     );
 }
 
@@ -4074,7 +4107,13 @@ fn ir_backend_handles_isset_builtin() {
     );
 }
 
-/// Verifies `intdiv()` division-by-zero follows the legacy fatal diagnostic.
+/// Verifies an UNCAUGHT `intdiv()` division-by-zero names PHP's `DivisionByZeroError`.
+///
+/// This test previously pinned a bare `Fatal error: division by zero`, which was
+/// uncatchable: no `catch` clause could ever observe it. The zero-divisor guard now
+/// raises reference PHP 8.5.6's `DivisionByZeroError` with php-src's `Division by
+/// zero` wording, so an uncaught one still exits non-zero — it just names the class.
+/// The catchable side lives in `error_class_hierarchy_tests`.
 #[test]
 fn ir_backend_handles_intdiv_division_by_zero() {
     let run = compile_ir_backend_and_run("intdiv_zero", "<?php echo intdiv(1, 0);", &[]);
@@ -4088,7 +4127,7 @@ fn ir_backend_handles_intdiv_division_by_zero() {
     );
     let stderr = String::from_utf8(run.stderr).expect("intdiv stderr should be utf8");
     assert!(
-        stderr.contains("Fatal error: division by zero"),
+        stderr.contains("Uncaught DivisionByZeroError: Division by zero"),
         "unexpected intdiv stderr: {stderr}"
     );
 }
@@ -4478,9 +4517,9 @@ fn ir_backend_handles_indexed_array_sorting() {
             "312",
         ),
         (
-            "krsort_indexed_ints_preserves_slots",
-            "<?php $a = [1, 2, 3]; krsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "krsort_hash_int_keys_preserves_association",
+            "<?php $a = [2 => 'b', 1 => 'a', 3 => 'c']; krsort($a); foreach ($a as $k => $v) { echo $k; echo $v; }",
+            "3c2b1a",
         ),
         (
             "natsort_indexed_ints",
@@ -4783,9 +4822,13 @@ fn ir_backend_handles_indexed_array_reverse() {
 }
 
 /// Verifies indexed-array deduplication returns first occurrences without mutating the source.
+///
+/// The survivors keep their SOURCE keys, as php does — `array_unique([1,2,1,3,2])` is
+/// `{0:1, 1:2, 3:3}` — so the third survivor is read at `[3]`, not at the `[2]` a reindexed
+/// result used to put it at.
 #[test]
 fn ir_backend_handles_indexed_array_unique() {
-    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[2]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
+    let source = "<?php $a = [1, 2, 1, 3, 2]; $b = array_unique($a); echo count($b); echo ':'; echo $b[0] . $b[1] . $b[3]; echo ':'; echo count($a); echo ':'; echo $a[0] . $a[1] . $a[2] . $a[3] . $a[4];";
     assert_eq!(
         compile_and_run_ir_backend("array_unique_indexed", source),
         "3:123:5:12132"
@@ -4817,13 +4860,17 @@ fn ir_backend_handles_indexed_array_merge_empty_left() {
 fn ir_backend_handles_indexed_array_set_operations() {
     for (name, source, expected) in [
         (
+            // The survivors keep their SOURCE keys, as php does: `array_diff([1,2,3,4], [2,4])`
+            // is `{0:1, 2:3}`, so the second survivor is read at `[2]`.
             "array_diff_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4]; $c = array_diff($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[2];",
             "2:1:3",
         ),
         (
+            // Likewise `array_intersect([1,2,3,4], [2,4,6])` is `{1:2, 3:4}` — neither survivor
+            // sits at key 0, which is exactly what a reindexed result got wrong.
             "array_intersect_indexed_ints",
-            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[0]; echo ':'; echo $c[1];",
+            "<?php $a = [1, 2, 3, 4]; $b = [2, 4, 6]; $c = array_intersect($a, $b); echo count($c); echo ':'; echo $c[1]; echo ':'; echo $c[3];",
             "2:2:4",
         ),
     ] {
@@ -5804,8 +5851,15 @@ echo "after";
         "after"
     );
     let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to
+    // open stream: No such file or directory`. Asserting the whole message, rather than
+    // just the function name, is what would have caught the bare `file_get_contents()`
+    // form this test used to accept.
     assert!(
-        stderr.contains("Warning: file_get_contents()"),
+        stderr.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
         "expected file_get_contents warning, got stderr={stderr}"
     );
 }
@@ -6361,11 +6415,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+// A RELATIONSHIP, not a literal: php derives this from TMPDIR, which on macOS is a private
+// per-user directory and not /tmp. The point here is that the IR backend dispatches the call.
+$t = sys_get_temp_dir();
+echo strlen($t) > 0 && substr($t, 0, 1) === "/" ? "T" : "!";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 
@@ -6710,60 +6767,6 @@ echo is_callable('optional_callable') ? 'yes' : 'no';
     );
 }
 
-/// Verifies the EIR backend compiles and runs the env/runtime state builtins
-/// (error_reporting/ignore_user_abort/set_time_limit/connection_aborted/error_log)
-/// with PHP-identical observable results. error_log's message goes to stderr, so
-/// only the trailing stdout marker is asserted here.
-#[test]
-fn ir_backend_env_runtime_state_builtins() {
-    let out = compile_and_run_ir_backend(
-        "env_runtime_state_builtins",
-        r#"<?php
-$p = error_reporting(0);
-echo $p, "|", error_reporting(), "\n";
-$q = ignore_user_abort(true);
-echo $q, "|", ignore_user_abort(), "\n";
-var_dump(set_time_limit(30));
-echo connection_aborted(), "\n";
-error_log("hi");
-echo "ok\n";
-"#,
-    );
-    assert_eq!(out, "30719|0\n0|1\nbool(true)\n0\nok\n");
-}
-
-/// Verifies the EIR backend compiles and runs output buffering
-/// (ob_start/ob_get_clean/ob_end_flush nesting), headers_sent(), flush(), and
-/// get_class_methods() with PHP-identical observable results.
-#[test]
-fn ir_backend_output_buffering_and_get_class_methods() {
-    let out = compile_and_run_ir_backend(
-        "output_buffering_and_get_class_methods",
-        r#"<?php
-ob_start();
-echo "outer-";
-ob_start();
-echo "inner";
-ob_end_flush();
-echo "-tail";
-$outer = ob_get_clean();
-var_dump($outer);
-var_dump(flush());
-var_dump(headers_sent());
-echo "real";
-var_dump(headers_sent());
-class Base { public function pubBase() {} protected function protBase() {} }
-class Child extends Base { public function pubChild() {} }
-$methods = get_class_methods(new Child());
-foreach ($methods as $m) { echo $m, "\n"; }
-"#,
-    );
-    assert_eq!(
-        out,
-        "string(16) \"outer-inner-tail\"\nNULL\nbool(true)\nrealbool(true)\npubChild\npubBase\n"
-    );
-}
-
 /// Verifies function-variant dispatch fails until the include path activates the variant.
 #[test]
 fn ir_backend_requires_include_before_function_variant_dispatch() {
@@ -6799,6 +6802,13 @@ fn compile_and_run_ir_backend(name: &str, source: &str) -> String {
     compile_and_run_ir_backend_with_args(name, source, &[])
 }
 
+/// Compiles a managed-PCRE2 fixture, runs its output binary, and returns stdout.
+fn compile_and_run_ir_backend_with_managed_pcre2(name: &str, source: &str) -> String {
+    let run = compile_ir_backend_and_run_with_managed_pcre2(name, source, &[]);
+    assert!(run.status.success(), "IR backend binary failed for {name}");
+    String::from_utf8(run.stdout).unwrap()
+}
+
 /// Compiles `source`, runs the output binary with extra args, and returns stdout.
 fn compile_and_run_ir_backend_with_args(name: &str, source: &str, args: &[&str]) -> String {
     let run = compile_ir_backend_and_run(name, source, args);
@@ -6818,12 +6828,32 @@ fn compile_ir_backend_and_run(name: &str, source: &str, args: &[&str]) -> Output
     compile_ir_backend_and_run_with_compile_args(name, source, &[], args)
 }
 
+/// Compiles `source` with a managed-PCRE2 fixture, runs it, and returns raw output.
+fn compile_ir_backend_and_run_with_managed_pcre2(
+    name: &str,
+    source: &str,
+    args: &[&str],
+) -> Output {
+    compile_ir_backend_and_run_with_fixture(name, source, &[], args, true)
+}
+
 /// Compiles `source` with extra compiler flags, then runs the binary.
 fn compile_ir_backend_and_run_with_compile_args(
     name: &str,
     source: &str,
     compile_args: &[&str],
     run_args: &[&str],
+) -> Output {
+    compile_ir_backend_and_run_with_fixture(name, source, compile_args, run_args, false)
+}
+
+/// Compiles and runs one fixture with optional managed-PCRE2 project configuration.
+fn compile_ir_backend_and_run_with_fixture(
+    name: &str,
+    source: &str,
+    compile_args: &[&str],
+    run_args: &[&str],
+    managed_pcre2: bool,
 ) -> Output {
     let dir = std::env::temp_dir().join(format!(
         "elephc_ir_backend_{}_{}_{}",
@@ -6835,8 +6865,12 @@ fn compile_ir_backend_and_run_with_compile_args(
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).expect("failed to write IR backend PHP fixture");
 
-    let compile = Command::new(elephc_cli_bin())
-        .env("XDG_CACHE_HOME", dir.join("cache-root"))
+    let mut command = Command::new(elephc_cli_bin());
+    command.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    if managed_pcre2 {
+        managed_pcre2_support::configure_host_managed_pcre2(&mut command, &dir);
+    }
+    let compile = command
         .current_dir(&dir)
         .args(compile_args)
         .arg(&php_path)

@@ -12,7 +12,8 @@ use crate::errors::CompileWarning;
 use crate::parser::ast::{Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
 
 use super::scope_usage::{
-    ScopeUsage, analyze_function_like_scope, analyze_method_scope, collect_free_reads_in_function_like,
+    ScopeUsage, analyze_closure_scope, analyze_function_like_scope, analyze_method_scope,
+    collect_free_reads_in_function_like,
 };
 
 /// Recursively collects variable read warnings by scanning an expression tree.
@@ -56,10 +57,6 @@ pub(super) fn collect_expr_reads(
         ExprKind::Pipe { value, callable } => {
             collect_expr_reads(value, scope, warnings);
             collect_expr_reads(callable, scope, warnings);
-        }
-        // `[$a, $b] = EXPR`: the target vars are written, not read — only EXPR is a read.
-        ExprKind::ListUnpack { value, .. } => {
-            collect_expr_reads(value, scope, warnings);
         }
         ExprKind::Assignment {
             target,
@@ -183,6 +180,7 @@ pub(super) fn collect_expr_reads(
             variadic,
             body,
             captures,
+            capture_refs,
             is_arrow,
             ..
         } => {
@@ -194,7 +192,14 @@ pub(super) fn collect_expr_reads(
             for name in captures {
                 scope.read(name);
             }
-            analyze_function_like_scope(params, variadic.as_ref(), body, expr.span, warnings);
+            analyze_closure_scope(
+                params,
+                variadic.as_ref(),
+                body,
+                expr.span,
+                capture_refs,
+                warnings,
+            );
         }
         ExprKind::NamedArg { value, .. } => collect_expr_reads(value, scope, warnings),
         ExprKind::PropertyAccess { object, .. }
@@ -210,14 +215,6 @@ pub(super) fn collect_expr_reads(
         ExprKind::BufferNew { len, .. } => collect_expr_reads(len, scope, warnings),
         ExprKind::ObjectClassName { object } => collect_expr_reads(object, scope, warnings),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => {}
-        // `$obj::CONST` — collect variable reads from the evaluated object sub-expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            collect_expr_reads(object, scope, warnings);
-        }
-        // `self::${$expr}` — collect variable reads from the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            collect_expr_reads(property, scope, warnings);
-        }
         ExprKind::NewScopedObject { args, .. } => {
             for arg in args {
                 collect_expr_reads(arg, scope, warnings);
@@ -268,10 +265,6 @@ fn collect_assignment_prelude_reads(
         StmtKind::IncludeOnceMark { .. } => {}
         StmtKind::Assign { value, .. } => collect_expr_reads(value, scope, warnings),
         StmtKind::RefAssign { source, .. } => collect_expr_reads(source, scope, warnings),
-        StmtKind::RefAssignToTarget { target, source, .. } => {
-            collect_expr_reads(target, scope, warnings);
-            collect_expr_reads(source, scope, warnings);
-        }
         _ => {}
     }
 }
@@ -323,23 +316,10 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
             let mut scope = ScopeUsage::default();
             collect_expr_reads(source, &mut scope, warnings);
         }
-        StmtKind::RefAssignToTarget { target, source, .. } => {
-            let mut scope = ScopeUsage::default();
-            collect_expr_reads(target, &mut scope, warnings);
-            collect_expr_reads(source, &mut scope, warnings);
-        }
         StmtKind::ArrayAssign { index, value, .. }
         | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             let mut scope = ScopeUsage::default();
             collect_expr_reads(index, &mut scope, warnings);
-            collect_expr_reads(value, &mut scope, warnings);
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            let mut scope = ScopeUsage::default();
-            collect_expr_reads(property, &mut scope, warnings);
-            if let Some(index) = index {
-                collect_expr_reads(index, &mut scope, warnings);
-            }
             collect_expr_reads(value, &mut scope, warnings);
         }
         StmtKind::NestedArrayAssign { target, value } => {
@@ -500,8 +480,6 @@ pub(super) fn collect_closure_warnings_in_stmt(stmt: &Stmt, warnings: &mut Vec<C
         | StmtKind::ListUnpack { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }

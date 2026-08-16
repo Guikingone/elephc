@@ -198,10 +198,8 @@ fn consumes_operands_by_value(op: Op) -> bool {
             | MixedCastFloat
             | MixedCastString
             | StrConcat
-            | StrBitwise
             | StrLen
             | StrCharAt
-            | StrOffsetSet
             | StrInterpolate
             | StrPersist
             | EchoValue

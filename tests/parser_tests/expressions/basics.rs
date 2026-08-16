@@ -230,22 +230,6 @@ fn test_cast_keywords_are_case_insensitive() {
     }
 }
 
-/// Verifies that `<?php echo (object)$x;` parses to a `Cast` expression with target `Object`.
-/// The `(object)` cast must be recognized as a cast, not a parenthesized `object` constant.
-#[test]
-fn test_cast_object_parses() {
-    let stmts = parse_source("<?php echo (object)$x;");
-    match &stmts[0].kind {
-        StmtKind::Echo(expr) => match &expr.kind {
-            ExprKind::Cast { target, .. } => {
-                assert_eq!(*target, elephc::parser::ast::CastType::Object);
-            }
-            other => panic!("expected cast expression, got {:?}", other),
-        },
-        other => panic!("expected echo statement, got {:?}", other),
-    }
-}
-
 /// Verifies that `<?php echo (1 + 2);` parses as a parenthesized expression, NOT as a cast.
 /// Parentheses around an arithmetic expression must not be interpreted as cast syntax.
 #[test]

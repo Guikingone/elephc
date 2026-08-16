@@ -45,11 +45,6 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         StmtKind::NestedArrayAssign { target, value } => {
             expr_has_includes(target) || expr_has_includes(value)
         }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_has_includes(property)
-                || index.as_ref().is_some_and(expr_has_includes)
-                || expr_has_includes(value)
-        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_has_includes(object) || expr_has_includes(value)
@@ -110,12 +105,9 @@ fn stmt_has_includes(stmt: &Stmt) -> bool {
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
@@ -166,7 +158,6 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::Pipe { value, callable } => {
             expr_has_includes(value) || expr_has_includes(callable)
         }
-        ExprKind::ListUnpack { value, .. } => expr_has_includes(value),
         ExprKind::Assignment {
             target,
             value,
@@ -266,9 +257,6 @@ fn expr_has_includes(expr: &Expr) -> bool {
         | ExprKind::Yield { .. }
         | ExprKind::YieldFrom(_)
         | ExprKind::MagicConstant(_) => false,
-        // `$obj::CONST` — an include can only hide inside the object sub-expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_has_includes(object),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_has_includes(property),
     }
 }
 
@@ -279,139 +267,4 @@ fn instanceof_target_has_includes(target: &InstanceOfTarget) -> bool {
         InstanceOfTarget::Name(_) => false,
         InstanceOfTarget::Expr(expr) => expr_has_includes(expr),
     }
-}
-
-/// Returns true if any statement in the list contains an expression-position value-include.
-fn has_value_include(stmts: &[Stmt]) -> bool {
-    stmts.iter().any(stmt_has_value_include)
-}
-
-/// Returns true if `stmt` contains an `ExprKind::IncludeValue` in any expression position.
-///
-/// This is the detector for the value-include hoister (`hoist_includes`). It mirrors
-/// `stmt_has_includes` exactly, except a statement-level `include`/`require` (`StmtKind::Include`)
-/// is NOT treated as a value-include: those are handled by `resolve_include_stmt`, while this
-/// predicate gates the hoister, which only rewrites expression-position includes. Because
-/// `expr_has_includes` already returns true exactly for `ExprKind::IncludeValue`, dropping the
-/// `Include` arm (and recursing through the value-include variants) is the only change. Keeping
-/// this in lock-step with `stmt_has_includes` preserves detector/hoister symmetry: every position
-/// this flags, `hoist_includes` eliminates (directly, or via recursive resolution of nested bodies).
-pub(super) fn stmt_has_value_include(stmt: &Stmt) -> bool {
-    match &stmt.kind {
-        // Statement-level include/require is resolved by `resolve_include_stmt`, not the hoister.
-        StmtKind::Include { .. } => false,
-        StmtKind::Synthetic(stmts) | StmtKind::IncludeOnceGuard { body: stmts, .. } => {
-            has_value_include(stmts)
-        }
-        StmtKind::Echo(expr)
-        | StmtKind::Throw(expr)
-        | StmtKind::ExprStmt(expr)
-        | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::ListUnpack { value: expr, .. }
-        | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::Assign { value: expr, .. }
-        | StmtKind::TypedAssign { value: expr, .. }
-        | StmtKind::ArrayPush { value: expr, .. }
-        | StmtKind::StaticPropertyAssign { value: expr, .. }
-        | StmtKind::StaticPropertyArrayPush { value: expr, .. } => expr_has_includes(expr),
-        StmtKind::Return(expr) => expr.as_ref().is_some_and(expr_has_includes),
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. }
-        | StmtKind::PropertyArrayAssign { index, value, .. } => {
-            expr_has_includes(index) || expr_has_includes(value)
-        }
-        StmtKind::NestedArrayAssign { target, value } => {
-            expr_has_includes(target) || expr_has_includes(value)
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            expr_has_includes(property)
-                || index.as_ref().is_some_and(expr_has_includes)
-                || expr_has_includes(value)
-        }
-        StmtKind::PropertyAssign { object, value, .. }
-        | StmtKind::PropertyArrayPush { object, value, .. } => {
-            expr_has_includes(object) || expr_has_includes(value)
-        }
-        StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
-            expr_has_includes(condition)
-                || has_value_include(then_body)
-                || elseif_clauses.iter().any(|(condition, body)| {
-                    expr_has_includes(condition) || has_value_include(body)
-                })
-                || else_body.as_ref().is_some_and(|body| has_value_include(body))
-        }
-        StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            expr_has_includes(condition) || has_value_include(body)
-        }
-        StmtKind::NamespaceBlock { body, .. } => has_value_include(body),
-        StmtKind::FunctionDecl { params, body, .. } => {
-            params.iter().any(|(_, _, default, _)| {
-                default.as_ref().is_some_and(expr_has_includes)
-            }) || has_value_include(body)
-        }
-        StmtKind::Try { try_body, catches, finally_body } => {
-            has_value_include(try_body)
-                || catches.iter().any(|catch_clause| has_value_include(&catch_clause.body))
-                || finally_body.as_ref().is_some_and(|body| has_value_include(body))
-        }
-        StmtKind::ClassDecl { properties, methods, .. }
-        | StmtKind::TraitDecl { properties, methods, .. } => {
-            properties
-                .iter()
-                .any(|property| property.default.as_ref().is_some_and(expr_has_includes))
-                || methods_have_value_include(methods)
-        }
-        StmtKind::InterfaceDecl { methods, .. } => methods_have_value_include(methods),
-        StmtKind::Switch { subject, cases, default } => {
-            expr_has_includes(subject)
-                || cases.iter().any(|(values, body)| {
-                    values.iter().any(expr_has_includes) || has_value_include(body)
-                })
-                || default.as_ref().is_some_and(|body| has_value_include(body))
-        }
-        StmtKind::Foreach { array, body, .. } => {
-            expr_has_includes(array) || has_value_include(body)
-        }
-        StmtKind::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            init.as_ref().is_some_and(|stmt| stmt_has_value_include(stmt))
-                || condition.as_ref().is_some_and(expr_has_includes)
-                || update.as_ref().is_some_and(|stmt| stmt_has_value_include(stmt))
-                || has_value_include(body)
-        }
-        StmtKind::EnumDecl { cases, .. } => cases
-            .iter()
-            .any(|case| case.value.as_ref().is_some_and(expr_has_includes)),
-        StmtKind::IncludeOnceMark { .. }
-        | StmtKind::FunctionVariantGroup { .. }
-        | StmtKind::FunctionVariantMark { .. }
-        | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
-        | StmtKind::IfDef { .. }
-        | StmtKind::Break(_)
-        | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
-        | StmtKind::NamespaceDecl { .. }
-        | StmtKind::UseDecl { .. }
-        | StmtKind::Global { .. }
-        | StmtKind::PackedClassDecl { .. }
-        | StmtKind::ExternFunctionDecl { .. }
-        | StmtKind::ExternClassDecl { .. }
-        | StmtKind::ExternGlobalDecl { .. } => false,
-    }
-}
-
-/// Returns true if any method has an expression-position value-include in its parameter
-/// defaults or body. Mirrors `methods_have_includes` for the value-include predicate.
-fn methods_have_value_include(methods: &[ClassMethod]) -> bool {
-    methods.iter().any(|method| {
-        method.params.iter().any(|(_, _, default, _)| {
-            default.as_ref().is_some_and(expr_has_includes)
-        }) || has_value_include(&method.body)
-    })
 }

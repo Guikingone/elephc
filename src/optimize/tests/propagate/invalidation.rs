@@ -166,14 +166,16 @@ fn test_top_level_globals_guard() {
         },
         Span::dummy(),
     )];
-    let (function_effects, static_method_effects, private_instance_method_effects) =
+    let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
+    let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
     let sigs = collect_by_ref_signatures(&program);
 
     with_callable_effects(
         function_effects,
         static_method_effects,
-        private_instance_method_effects,
+        instance_method_effects,
+        instance_dispatch_metadata,
         || {
             with_by_ref_signatures(sigs, || {
                 let expr = call("gw", Vec::new());

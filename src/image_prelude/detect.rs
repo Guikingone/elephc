@@ -258,7 +258,6 @@ fn expr_refs_image(expr: &Expr) -> bool {
             expr_refs_image(value) || expr_refs_image(default)
         }
         ExprKind::Pipe { value, callable } => expr_refs_image(value) || expr_refs_image(callable),
-        ExprKind::ListUnpack { value, .. } => expr_refs_image(value),
         ExprKind::Assignment {
             target,
             value,
@@ -356,9 +355,6 @@ fn expr_refs_image(expr: &Expr) -> bool {
         }
         ExprKind::ClassConstant { receiver }
         | ExprKind::ScopedConstantAccess { receiver, .. } => receiver_refs_image(receiver),
-        // `$obj::CONST` — recurse into the evaluated object expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_refs_image(object),
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => expr_refs_image(property),
         ExprKind::ObjectClassName { object } => expr_refs_image(object),
         ExprKind::NewScopedObject { receiver, args } => {
             receiver_refs_image(receiver) || args.iter().any(expr_refs_image)
@@ -382,12 +378,9 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
     match &stmt.kind {
         // Statements with no image-name position and no child expr/stmt.
         StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
@@ -564,18 +557,6 @@ fn stmt_refs_image(stmt: &Stmt) -> bool {
             value,
             ..
         } => receiver_refs_image(receiver) || expr_refs_image(index) || expr_refs_image(value),
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            value,
-            ..
-        } => {
-            receiver_refs_image(receiver)
-                || expr_refs_image(property)
-                || index.as_ref().is_some_and(expr_refs_image)
-                || expr_refs_image(value)
-        }
         StmtKind::PropertyArrayPush { object, value, .. } => {
             expr_refs_image(object) || expr_refs_image(value)
         }

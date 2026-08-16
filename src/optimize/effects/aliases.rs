@@ -227,13 +227,6 @@ pub(super) fn apply_stmt_callable_aliases(stmt: &Stmt, aliases: &mut HashMap<Str
                 aliases.remove(target);
             }
         }
-        StmtKind::RefAssignToTarget { source, .. } => {
-            // A plain-variable source is rebound to the target lvalue's storage, so any
-            // previously tracked callable alias for it no longer holds.
-            if let ExprKind::Variable(source_name) = &source.kind {
-                aliases.remove(source_name);
-            }
-        }
         StmtKind::StaticVar { name, init } => update_callable_alias(aliases, name, init),
         StmtKind::Global { vars } => {
             for var in vars {

@@ -11,16 +11,9 @@
 //!   `json_decode` instead of a separate area-level helper module.
 
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "json_encode",
+    contract: "json_encode",
     area: Json,
-    params: [
-        value,
-        flags = EvalBuiltinDefaultValue::Int(0),
-        depth = EvalBuiltinDefaultValue::Int(512),
-    ],
     direct: JsonEncode,
     values: JsonEncode,
 }

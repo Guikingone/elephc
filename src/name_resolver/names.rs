@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - PHP class-like names are resolved differently from function and constant fallback lookups.
+//! - The leading segment of a *qualified* name (`M\thing`) is expanded through the
+//!   class/namespace import table for classes, functions, and constants alike
+//!   (`expand_qualified_namespace_alias`); `use function` / `use const` aliases apply only to
+//!   unqualified names, and fully-qualified names are never expanded.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
@@ -122,6 +126,31 @@ pub(super) fn register_imports(
     Ok(())
 }
 
+/// Expands the leading segment of a *qualified* name (contains `\`, no leading `\`)
+/// through the class/namespace import table.
+///
+/// PHP translates the first segment of a qualified name using the class/namespace import
+/// table (plain `use X as A;`) regardless of whether the name ultimately denotes a class,
+/// a function, or a constant. `use function` / `use const` aliases apply only to
+/// *unqualified* names, and fully-qualified names (`\A\b`) are never expanded. Alias
+/// lookup is case-insensitive, and only the first segment is ever substituted.
+///
+/// Returns `None` when the name is unqualified or fully qualified, or when its first
+/// segment is not a registered alias.
+pub(super) fn expand_qualified_namespace_alias(name: &Name, imports: &Imports) -> Option<String> {
+    if name.is_fully_qualified() || name.is_unqualified() {
+        return None;
+    }
+    let first = name.parts.first()?;
+    let alias = imports.classes.get(&php_symbol_key(first))?;
+    let suffix = &name.parts[1..];
+    if suffix.is_empty() {
+        Some(alias.clone())
+    } else {
+        Some(format!("{}\\{}", alias, suffix.join("\\")))
+    }
+}
+
 /// Resolves "self", "parent", "static" to their lowercase special-name form;
 /// delegates to `resolved_class_name` for all other names.
 pub(super) fn resolve_special_or_class_name(
@@ -162,18 +191,10 @@ pub(super) fn resolved_class_name(
                 .canonical_class_like(alias)
                 .unwrap_or_else(|| alias.clone());
         }
-    } else if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.classes.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            let candidate = if suffix.is_empty() {
-                alias.clone()
-            } else {
-                format!("{}\\{}", alias, suffix.join("\\"))
-            };
-            return symbols
-                .canonical_class_like(&candidate)
-                .unwrap_or(candidate);
-        }
+    } else if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return symbols
+            .canonical_class_like(&candidate)
+            .unwrap_or(candidate);
     }
     let candidate = if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -204,14 +225,8 @@ pub(super) fn resolved_class_constant_name(
         {
             return alias.clone();
         }
-    } else if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.classes.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            if suffix.is_empty() {
-                return alias.clone();
-            }
-            return format!("{}\\{}", alias, suffix.join("\\"));
-        }
+    } else if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return candidate;
     }
     if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -264,18 +279,8 @@ pub(super) fn resolve_function_name(
         }
         return local;
     }
-    if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.functions.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            let candidate = if suffix.is_empty() {
-                alias.clone()
-            } else {
-                format!("{}\\{}", alias, suffix.join("\\"))
-            };
-            return symbols
-                .canonical_function(&candidate)
-                .unwrap_or(candidate);
-        }
+    if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return symbols.canonical_function(&candidate).unwrap_or(candidate);
     }
     let candidate = if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -330,14 +335,8 @@ pub(super) fn resolve_constant_name(
         }
         return local;
     }
-    if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.constants.get(first) {
-            let suffix = &name.parts[1..];
-            if suffix.is_empty() {
-                return alias.clone();
-            }
-            return format!("{}\\{}", alias, suffix.join("\\"));
-        }
+    if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return candidate;
     }
     if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -350,81 +349,72 @@ pub(super) fn resolve_constant_name(
 /// Returns true if `name` is a builtin global constant that should bypass symbol-table
 /// resolution (e.g., PHP_OS, SID, STDIN, STDOUT, STDERR, FNM_* pathinfo flags).
 fn is_builtin_global_constant(name: &str) -> bool {
-    if matches!(
-        name,
-        "PHP_OS"
-            | "SID"
-            | "PATHINFO_DIRNAME"
-            | "PATHINFO_BASENAME"
-            | "PATHINFO_EXTENSION"
-            | "PATHINFO_FILENAME"
-            | "PATHINFO_ALL"
-            | "FNM_NOESCAPE"
-            | "FNM_PATHNAME"
-            | "FNM_PERIOD"
-            | "FNM_CASEFOLD"
-            | "ARRAY_FILTER_USE_VALUE"
-            | "ARRAY_FILTER_USE_BOTH"
-            | "ARRAY_FILTER_USE_KEY"
-            | "STDIN"
-            | "STDOUT"
-            | "STDERR"
-            | "PHP_INT_MAX"
-            | "PHP_INT_MIN"
-            | "PHP_FLOAT_MAX"
-            | "PHP_FLOAT_MIN"
-            | "PHP_FLOAT_EPSILON"
-            | "INF"
-            | "NAN"
-            | "M_PI"
-            | "M_E"
-            | "M_SQRT2"
-            | "M_PI_2"
-            | "M_PI_4"
-            | "M_LOG2E"
-            | "M_LOG10E"
-            | "PHP_EOL"
-            | "DIRECTORY_SEPARATOR"
-            | "DEBUG_BACKTRACE_IGNORE_ARGS"
-            | "DEBUG_BACKTRACE_PROVIDE_OBJECT"
-    ) {
-        return true;
-    }
-    // Shared source-of-truth slices for array, JSON, stream/socket, session, error-level, PHP
-    // runtime, preg/PCRE, string-function, sort, mbstring, filter, upload-error, parse_url,
-    // tokenizer, XML, and pcntl signal constants.
-    crate::types::array_constants::ARRAY_INT_CONSTANTS
+        if matches!(
+            name,
+            "PHP_OS"
+                // The PHP version surface, baked per compilation from `--php-version` / `--web`
+                // by `codegen::prescan::collect_constants` — same mechanism as `PHP_OS`.
+                | "PHP_VERSION"
+                | "PHP_VERSION_ID"
+                | "PHP_MAJOR_VERSION"
+                | "PHP_MINOR_VERSION"
+                | "PHP_RELEASE_VERSION"
+                | "PHP_EXTRA_VERSION"
+                | "PHP_SAPI"
+                | "SID"
+                | "PATHINFO_DIRNAME"
+                | "PATHINFO_BASENAME"
+                | "PATHINFO_EXTENSION"
+                | "PATHINFO_FILENAME"
+                | "PATHINFO_ALL"
+                | "PHP_URL_SCHEME"
+                | "PHP_URL_HOST"
+                | "PHP_URL_PORT"
+                | "PHP_URL_USER"
+                | "PHP_URL_PASS"
+                | "PHP_URL_PATH"
+                | "PHP_URL_QUERY"
+                | "PHP_URL_FRAGMENT"
+                | "FNM_NOESCAPE"
+                | "FNM_PATHNAME"
+                | "FNM_PERIOD"
+                | "FNM_CASEFOLD"
+                | "ARRAY_FILTER_USE_VALUE"
+                | "ARRAY_FILTER_USE_BOTH"
+                | "ARRAY_FILTER_USE_KEY"
+                | "STR_PAD_LEFT"
+                | "STR_PAD_RIGHT"
+                | "STR_PAD_BOTH"
+                | "STDIN"
+                | "STDOUT"
+                | "STDERR"
+                | "PHP_INT_MAX"
+                | "PHP_INT_MIN"
+                | "PHP_FLOAT_MAX"
+                | "PHP_FLOAT_MIN"
+                | "PHP_FLOAT_EPSILON"
+                | "INF"
+                | "NAN"
+                | "M_PI"
+                | "M_E"
+                | "M_SQRT2"
+                | "M_PI_2"
+                | "M_PI_4"
+                | "M_LOG2E"
+                | "M_LOG10E"
+                | "PHP_EOL"
+                | "DIRECTORY_SEPARATOR"
+        ) {
+            return true;
+        }
+    // Shared source-of-truth slices for JSON, stream/socket, session, array, and math constants.
+    crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
-        .chain(crate::types::json_constants::JSON_INT_CONSTANTS.iter())
+        .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
-        .chain(crate::types::php_runtime_constants::PHP_RUNTIME_INT_CONSTANTS.iter())
-        .chain(crate::types::preg_constants::PREG_INT_CONSTANTS.iter())
-        .chain(crate::types::string_constants::STRING_INT_CONSTANTS.iter())
-        .chain(crate::types::sort_constants::SORT_INT_CONSTANTS.iter())
-        .chain(crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS.iter())
-        .chain(crate::types::filter_constants::FILTER_INT_CONSTANTS.iter())
-        .chain(crate::types::pcntl_constants::PCNTL_INT_CONSTANTS.iter())
-        .chain(crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS.iter())
-        .chain(crate::types::url_constants::URL_INT_CONSTANTS.iter())
-        .chain(crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS.iter())
-        .chain(crate::types::xml_constants::XML_INT_CONSTANTS.iter())
+        .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
+        .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
-        || crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS
-            .iter()
-            .any(|(constant_name, _, _)| *constant_name == name)
-        || crate::types::php_runtime_constants::PHP_RUNTIME_PLATFORM_CONSTANTS
-            .iter()
-            .any(|(constant_name, _, _)| *constant_name == name)
-        || crate::types::stream_constants::GLOB_PLATFORM_CONSTANTS
-            .iter()
-            .any(|(constant_name, _, _)| *constant_name == name)
-        || crate::types::date_constants::DATE_STRING_CONSTANTS
-            .iter()
-            .any(|(constant_name, _)| *constant_name == name)
-        || matches!(
-            name,
-            "PHP_SAPI" | "PHP_VERSION" | "PHP_OS_FAMILY" | "PCRE_VERSION"
-        )
 }

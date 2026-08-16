@@ -15,7 +15,19 @@ impl EvalStreamResources {
     /// Opens a local directory and returns its resource id.
     pub(crate) fn open_directory(&mut self, path: &str) -> Option<i64> {
         let directory = EvalDirectoryStream::open(path)?;
-        Some(self.insert_directory(directory))
+        let id = self.insert_directory(directory);
+        self.last_directory = Some(id);
+        Some(id)
+    }
+
+    /// Returns the directory a handle-less `readdir()`/`rewinddir()`/`closedir()` works on.
+    ///
+    /// A slot pointing at an already-closed directory answers `None`: php's refusal for a
+    /// stale slot and for an empty one is the same `TypeError: No resource supplied`, so the
+    /// two cases do not need to be told apart.
+    pub(crate) fn last_open_directory(&self) -> Option<i64> {
+        let id = self.last_directory?;
+        self.is_live(id).then_some(id)
     }
 
     /// Opens an incremental hash context and returns its resource id.
@@ -121,8 +133,7 @@ impl EvalStreamResources {
         uri: &str,
         mode: &str,
     ) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.user_wrapper_streams.insert(
             id,
             EvalUserWrapperStream {
@@ -142,8 +153,7 @@ impl EvalStreamResources {
         object: RuntimeCellHandle,
         class_name: &str,
     ) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.user_wrapper_directories.insert(
             id,
             EvalUserWrapperDirectory {
@@ -151,6 +161,8 @@ impl EvalStreamResources {
                 class_name: class_name.to_string(),
             },
         );
+        // A userspace `opendir()` feeds php's last-opened slot exactly like a native one.
+        self.last_directory = Some(id);
         id
     }
 

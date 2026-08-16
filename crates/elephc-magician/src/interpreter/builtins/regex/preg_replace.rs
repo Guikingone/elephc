@@ -12,9 +12,8 @@ use super::super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_replace",
+    contract: "preg_replace",
     area: Regex,
-    params: [pattern, replacement, subject],
     direct: PregReplace,
     values: PregReplace,
 }

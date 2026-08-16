@@ -112,20 +112,11 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::BinaryOp { left, op, right } => {
             let left = fold_expr(*left);
             let right = fold_expr(*right);
-            // `try_fold_precheck_short_circuit` only ever fires inside the pre-checker
-            // extension-guard fold window (see `crate::optimize::function_existence`); it is a
-            // no-op everywhere else, so this adds no behavior to ordinary constant folding.
-            try_fold_binary_op(&op, &left, &right)
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_precheck_short_circuit(
-                        &op, &left, &right,
-                    )
-                })
-                .unwrap_or_else(|| ExprKind::BinaryOp {
-                    left: Box::new(left),
-                    op,
-                    right: Box::new(right),
-                })
+            try_fold_binary_op(&op, &left, &right).unwrap_or_else(|| ExprKind::BinaryOp {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            })
         }
         ExprKind::InstanceOf { value, target } => ExprKind::InstanceOf {
             value: Box::new(fold_expr(*value)),
@@ -149,8 +140,6 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::Clone(inner) => ExprKind::Clone(Box::new(fold_expr(*inner))),
         ExprKind::ErrorSuppress(inner) => ExprKind::ErrorSuppress(Box::new(fold_expr(*inner))),
         ExprKind::Print(inner) => ExprKind::Print(Box::new(fold_expr(*inner))),
-        // `clone` is never a compile-time fold (object identity is a runtime property); only
-        // the operand is folded. Kept impure so DCE cannot drop an allocation/`__clone` call.
         ExprKind::NullCoalesce { value, default } => {
             let value = fold_expr(*value);
             let default = fold_expr(*default);
@@ -169,10 +158,6 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                     callable: Box::new(callable),
                 })
         }
-        ExprKind::ListUnpack { vars, value } => ExprKind::ListUnpack {
-            vars,
-            value: Box::new(fold_expr(*value)),
-        },
         ExprKind::Assignment {
             target,
             value,
@@ -197,37 +182,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         ExprKind::PostIncrement(name) => ExprKind::PostIncrement(name),
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
-        ExprKind::FunctionCall { name, args } => {
-            let args: Vec<Expr> = args.into_iter().map(fold_expr).collect();
-            // Fold closed-world `class_exists`/`interface_exists`/`trait_exists`/`enum_exists` on a
-            // literal name to a boolean when the existence sets are installed (see
-            // `crate::optimize::class_existence`); otherwise try the analogous `function_exists`
-            // fold (see `crate::optimize::function_existence`); otherwise keep the call unchanged.
-            // The `phpversion`/`version_compare` pair runs in the same pre-check window: arguments
-            // are folded first (above), so a `version_compare(phpversion('redis'), …)` guard sees
-            // the already-folded `false` and collapses in this single bottom-up pass.
-            crate::optimize::class_existence::try_fold_class_existence(&name, &args)
-                .or_else(|| crate::optimize::function_existence::try_fold_function_exists(&name, &args))
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_extension_loaded_pre_check(
-                        &name, &args,
-                    )
-                })
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_phpversion_pre_check(&name, &args)
-                })
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_version_compare_pre_check(
-                        &name, &args,
-                    )
-                })
-                .or_else(|| {
-                    crate::optimize::callable_coercion::try_coerce_callable_string_args(
-                        &name, &args,
-                    )
-                })
-                .unwrap_or(ExprKind::FunctionCall { name, args })
-        }
+        ExprKind::FunctionCall { name, args } => ExprKind::FunctionCall {
+            name,
+            args: args.into_iter().map(fold_expr).collect(),
+        },
         ExprKind::ArrayLiteral(items) => {
             ExprKind::ArrayLiteral(items.into_iter().map(fold_expr).collect())
         }
@@ -271,34 +229,21 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             let condition = fold_expr(*condition);
             let then_expr = fold_expr(*then_expr);
             let else_expr = fold_expr(*else_expr);
-            // `try_fold_precheck_ternary` only ever fires inside the pre-checker extension-guard
-            // fold window; elsewhere it is a no-op and `try_fold_ternary`'s stricter (both-branches-
-            // scalar) rule is unchanged.
-            try_fold_ternary(&condition, &then_expr, &else_expr)
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_precheck_ternary(
-                        &condition, &then_expr, &else_expr,
-                    )
-                })
-                .unwrap_or_else(|| ExprKind::Ternary {
+            try_fold_ternary(&condition, &then_expr, &else_expr).unwrap_or_else(|| {
+                ExprKind::Ternary {
                     condition: Box::new(condition),
                     then_expr: Box::new(then_expr),
                     else_expr: Box::new(else_expr),
-                })
+                }
+            })
         }
         ExprKind::ShortTernary { value, default } => {
             let value = fold_expr(*value);
             let default = fold_expr(*default);
-            try_fold_short_ternary(&value, &default)
-                .or_else(|| {
-                    crate::optimize::function_existence::try_fold_precheck_short_ternary(
-                        &value, &default,
-                    )
-                })
-                .unwrap_or_else(|| ExprKind::ShortTernary {
-                    value: Box::new(value),
-                    default: Box::new(default),
-                })
+            try_fold_short_ternary(&value, &default).unwrap_or_else(|| ExprKind::ShortTernary {
+                value: Box::new(value),
+                default: Box::new(default),
+            })
         }
         ExprKind::Cast { target, expr } => {
             let expr = fold_expr(*expr);
@@ -440,21 +385,6 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         },
         ExprKind::ScopedConstantAccess { receiver, name } => {
             ExprKind::ScopedConstantAccess { receiver, name }
-        }
-        // `$obj::CONST` — fold within the object sub-expression; the constant is resolved later.
-        ExprKind::DynamicClassConstantAccess { object, name } => {
-            ExprKind::DynamicClassConstantAccess {
-                object: Box::new(fold_expr(*object)),
-                name,
-            }
-        }
-        // `self::${$expr}` — fold within the dynamic property-name expression; the access node
-        // itself stays dynamic (Phase A does not fold a constant name to a static access).
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            ExprKind::DynamicStaticPropertyAccess {
-                receiver,
-                property: Box::new(fold_expr(*property)),
-            }
         }
         ExprKind::NewScopedObject { receiver, args } => ExprKind::NewScopedObject {
             receiver,

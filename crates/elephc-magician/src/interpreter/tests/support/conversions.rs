@@ -94,7 +94,7 @@ impl FakeOps {
             FakeValue::Array(value) => value.len() as f64,
             FakeValue::Assoc(value) => value.len() as f64,
             FakeValue::Object(_) | FakeValue::Iterator { .. } => 1.0,
-            FakeValue::Resource(value) => (*value + 1) as f64,
+            FakeValue::Resource(value) => self.fake_resource_id(*value) as f64,
             FakeValue::InvokerRefCell(_) => 0.0,
         }
     }
@@ -134,7 +134,7 @@ impl FakeOps {
             FakeValue::Array(_) => "Array".to_string(),
             FakeValue::Assoc(_) => "Array".to_string(),
             FakeValue::Object(_) | FakeValue::Iterator { .. } => "Object".to_string(),
-            FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
+            FakeValue::Resource(value) => format!("Resource id #{}", self.fake_resource_id(value)),
             FakeValue::InvokerRefCell(_) => "[invoker-ref]".to_string(),
         }
     }
@@ -160,7 +160,7 @@ impl FakeOps {
             FakeValue::Bytes(value) => String::from_utf8_lossy(value).into_owned(),
             FakeValue::Array(_) | FakeValue::Assoc(_) => "Array".to_string(),
             FakeValue::Object(_) | FakeValue::Iterator { .. } => "Object".to_string(),
-            FakeValue::Resource(value) => format!("Resource id #{}", value + 1),
+            FakeValue::Resource(value) => format!("Resource id #{}", self.fake_resource_id(*value)),
             FakeValue::InvokerRefCell(_) => "[invoker-ref]".to_string(),
         }
     }

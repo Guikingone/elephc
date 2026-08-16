@@ -7,20 +7,11 @@
 //! Key details:
 //! - Direct calls stay on the source-sensitive by-reference path.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_splice",
+    contract: "array_splice",
     area: Array,
-    params: [
-        array: by_ref,
-        offset,
-        length = EvalBuiltinDefaultValue::Null,
-        replacement = EvalBuiltinDefaultValue::EmptyArray,
-    ],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }
@@ -98,7 +89,11 @@ pub(in crate::interpreter) fn eval_array_splice_direct_args(
                     return Err(EvalStatus::RuntimeFatal);
                 }
                 array = Some(super::mutation::eval_array_mutation_lvalue_arg(
-                    arg, context, scope, values,
+                    "array_splice",
+                    arg,
+                    context,
+                    scope,
+                    values,
                 )?);
             }
             "offset" => {

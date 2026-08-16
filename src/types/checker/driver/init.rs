@@ -12,26 +12,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen::platform::Platform;
 use crate::types::array_constants::ARRAY_INT_CONSTANTS;
-use crate::types::date_constants::{DATE_INT_CONSTANTS, DATE_STRING_CONSTANTS};
-use crate::types::json_constants::JSON_INT_CONSTANTS;
-use crate::types::php_runtime_constants::{
-    PHP_RUNTIME_INT_CONSTANTS, PHP_RUNTIME_PLATFORM_CONSTANTS,
-};
-use crate::types::stream_constants::{GLOB_PLATFORM_CONSTANTS, STREAM_INT_CONSTANTS};
-use crate::types::locale_constants::LOCALE_INT_CONSTANTS;
-use crate::types::preg_constants::PREG_INT_CONSTANTS;
-use crate::types::string_constants::STRING_INT_CONSTANTS;
-use crate::types::sort_constants::SORT_INT_CONSTANTS;
-use crate::types::mbstring_constants::MBSTRING_INT_CONSTANTS;
-use crate::types::filter_constants::FILTER_INT_CONSTANTS;
-use crate::types::pcntl_constants::{PCNTL_INT_CONSTANTS, PCNTL_PLATFORM_SIGNALS};
-use crate::types::upload_constants::UPLOAD_ERR_INT_CONSTANTS;
-use crate::types::url_constants::URL_INT_CONSTANTS;
-use crate::types::tokenizer_constants::TOKENIZER_INT_CONSTANTS;
-use crate::types::xml_constants::XML_INT_CONSTANTS;
+use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
+use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::math_constants::MATH_INT_CONSTANTS;
+use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
+use crate::types::preg_constants::PREG_INT_CONSTANTS;
+use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -39,7 +29,8 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, the
+    /// `PHP_VERSION*` / `PHP_SAPI` version surface, `SID`, pathinfo
     /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
     /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
     /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
@@ -54,6 +45,16 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // The PHP version surface. Only the TYPES are declared here — the values are baked per
+        // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
+        // exactly as `PHP_OS`'s value is baked from the target platform.
+        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_VERSION_ID".to_string(), PhpType::Int);
+        constants.insert("PHP_MAJOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_MINOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_RELEASE_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_EXTRA_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
         // Deprecated session-id constant; elephc is cookie-only so it always
         // resolves to the empty string (see `codegen::prescan::collect_constants`).
         constants.insert("SID".to_string(), PhpType::Str);
@@ -62,6 +63,18 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        for name in [
+            "PHP_URL_SCHEME",
+            "PHP_URL_HOST",
+            "PHP_URL_PORT",
+            "PHP_URL_USER",
+            "PHP_URL_PASS",
+            "PHP_URL_PATH",
+            "PHP_URL_QUERY",
+            "PHP_URL_FRAGMENT",
+        ] {
+            constants.insert(name.to_string(), PhpType::Int);
+        }
         for (name, _value) in ENT_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
@@ -82,7 +95,18 @@ impl Checker {
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in MATH_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in OPENSSL_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in STREAM_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        // STREAM_PF_INET6 is target-divergent (AF_INET6 = 30 on macOS, 10 on Linux).
+        constants.insert("STREAM_PF_INET6".to_string(), PhpType::Int);
+        for (name, _value) in STRING_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PREG_INT_CONSTANTS {
@@ -91,77 +115,12 @@ impl Checker {
         for (name, _value) in DATE_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        for (name, _value) in ERROR_LEVEL_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in PHP_RUNTIME_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in LOCALE_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in STRING_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in SORT_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in MBSTRING_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in FILTER_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in PCNTL_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in UPLOAD_ERR_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in URL_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in TOKENIZER_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        for (name, _value) in XML_INT_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        // Platform-conditional user signals (SIGUSR1/SIGUSR2): only the NAME is
-        // needed for type-checking; the target-specific VALUE is materialized by
-        // the codegen prescan. Register unconditionally (target-agnostic).
-        for (name, _macos_value, _linux_value) in PCNTL_PLATFORM_SIGNALS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        // Platform-conditional runtime constants (PHP_MAXPATHLEN): same pattern —
-        // only the NAME is needed here, the target-specific VALUE is materialized
-        // by the codegen prescan.
-        for (name, _macos_value, _linux_value) in PHP_RUNTIME_PLATFORM_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        // Platform-conditional glob() bit flags (GLOB_MARK/NOSORT/BRACE/...): same
-        // pattern — only the NAME is needed here, the target-specific VALUE is
-        // materialized by the codegen prescan.
-        for (name, _macos_value, _linux_value) in GLOB_PLATFORM_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Int);
-        }
-        // PHP_SAPI, PHP_VERSION, PHP_OS_FAMILY, and PCRE_VERSION are string constants.
-        // Their type is registered here; their values are materialized in prescan.
-        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
-        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
-        constants.insert("PHP_OS_FAMILY".to_string(), PhpType::Str);
-        constants.insert("PCRE_VERSION".to_string(), PhpType::Str);
-        // DATE_* format-string constants (DATE_ATOM, DATE_RFC3339, ...): registered
-        // as Str here; their literal values are materialized in prescan.
-        for (name, _value) in DATE_STRING_CONSTANTS {
-            constants.insert((*name).to_string(), PhpType::Str);
-        }
         for (name, _value) in SESSION_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
-        // debug_backtrace() option flags (not part of the E_* error-level table).
-        constants.insert("DEBUG_BACKTRACE_IGNORE_ARGS".to_string(), PhpType::Int);
-        constants.insert("DEBUG_BACKTRACE_PROVIDE_OBJECT".to_string(), PhpType::Int);
+        for (name, _value) in ERROR_LEVEL_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
         // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
         constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
@@ -192,6 +151,7 @@ impl Checker {
             callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
+            strict_types: false,
             param_specialization_seen: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
@@ -201,7 +161,6 @@ impl Checker {
             reflection_class_targets: HashMap::new(),
             interfaces: HashMap::new(),
             classes: HashMap::new(),
-            static_return_methods: HashSet::new(),
             declared_classes: HashSet::new(),
             enums: HashMap::new(),
             declared_interfaces: HashSet::new(),
@@ -209,13 +168,10 @@ impl Checker {
             declared_trait_methods: HashMap::new(),
             declared_trait_constants: HashMap::new(),
             current_class: None,
-            bound_scope_context: None,
             current_method: None,
             current_method_is_static: false,
             current_by_ref_return: false,
-            active_return_info_scopes: Vec::new(),
             closure_depth: 0,
-            in_callable_body: false,
             extern_functions: HashMap::new(),
             extern_classes: HashMap::new(),
             packed_classes: HashMap::new(),
@@ -223,26 +179,23 @@ impl Checker {
             required_libraries: Vec::new(),
             top_level_env: HashMap::new(),
             active_ref_params: HashSet::new(),
-            declared_byref_param_locals: HashSet::new(),
             active_globals: HashSet::new(),
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
-            declared_typed_locals: HashSet::new(),
-            conditional_assignment_depth: 0,
             eval_barrier_active: false,
+            flow_typed_returns: HashMap::new(),
+            null_probe_scope_is_top_level: false,
+            pending_null_probe_roots: Vec::new(),
+            null_probe_depth: 0,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
-            absent_class_warnings: std::cell::RefCell::new(Vec::new()),
             reference_property_promotions: HashSet::new(),
-            reference_property_rebind_targets: HashSet::new(),
-            func_args_functions: HashSet::new(),
-            compile_time_const_depth: 0,
             throw_access_sites: HashMap::new(),
-            evaluated_expr_types: HashMap::new(),
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
+            string_incdec_locals: HashSet::new(),
         }
     }
 }

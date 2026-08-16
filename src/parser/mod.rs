@@ -8,15 +8,14 @@
 //! Key details:
 //! - Parser output preserves spans and PHP syntax shape for later passes to rewrite safely.
 
+/// PHP alternative control-structure syntax (`:` … `endif;`) body parsing helpers.
+mod alt_syntax;
 /// Defines AST node types representing the PHP syntax tree produced by the parser.
 pub mod ast;
 mod attributes;
 /// Control flow statements: `if`, `while`, `for`, `foreach`, `switch`, `try`, `goto`, and `label` parsing.
 mod control;
 pub mod expr;
-/// Non-plain foreach binding targets (`foreach ($a as $this->k => $obj->v)`): parsing,
-/// lvalue-shape validation, and the hidden-variable + prepended-store desugar.
-mod foreach_target;
 /// Maps tokens that may legally appear as bareword names (identifiers and semi-reserved keywords).
 mod keyword_name;
 mod stmt;
@@ -65,15 +64,48 @@ fn take_anonymous_classes() -> Vec<Stmt> {
 }
 
 /// Parses tokens into an AST program, returning the first error if any.
+#[allow(dead_code)]
 pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
-    match parse_with_recovery(tokens) {
+    parse_with_mode(tokens, crate::source::SourceMode::Php)
+}
+
+/// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
+pub fn parse_internal(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
+    parse_with_mode(tokens, crate::source::SourceMode::Internal)
+}
+
+/// Parses tokens under an explicit physical-file source mode.
+///
+/// Parser-created statements retain the mode so later builtin resolution can
+/// distinguish strict PHP from LFC code after include/autoload AST merging.
+pub fn parse_with_mode(
+    tokens: &[SpannedToken],
+    mode: crate::source::SourceMode,
+) -> Result<Program, CompileError> {
+    match parse_with_recovery_in_mode(tokens, mode) {
         Ok(program) => Ok(program),
         Err(errors) => Err(CompileError::from_many(errors)),
     }
 }
 
 /// Parses tokens with recovery, collecting all syntax errors encountered.
+#[allow(dead_code)]
 pub fn parse_with_recovery(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
+    parse_with_recovery_in_mode(tokens, crate::source::SourceMode::Php)
+}
+
+/// Parses tokens with recovery while tagging parser-created statements with `mode`.
+pub fn parse_with_recovery_in_mode(
+    tokens: &[SpannedToken],
+    mode: crate::source::SourceMode,
+) -> Result<Program, Vec<CompileError>> {
+    crate::source::with_parse_mode(crate::source::SourceProfile::new(mode), || {
+        parse_with_recovery_inner(tokens)
+    })
+}
+
+/// Implements recovery parsing after the source-mode scope has been installed.
+fn parse_with_recovery_inner(tokens: &[SpannedToken]) -> Result<Program, Vec<CompileError>> {
     let mut pos = 0;
     let mut stmts = Vec::new();
     let mut errors = Vec::new();

@@ -14,13 +14,8 @@
 
 
 builtin! {
-    name: "mkdir",
-    area: Io,
-    params: [directory: Str, permissions: Int = crate::builtins::spec::DefaultSpec::Int(511), recursive: Bool = crate::builtins::spec::DefaultSpec::Bool(false), context: Mixed = crate::builtins::spec::DefaultSpec::Null],
-    returns: Bool,
+    contract: "mkdir",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Mkdir,
     ),
-    summary: "Makes a directory.",
-    php_manual: "function.mkdir",
 }

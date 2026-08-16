@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "deg2rad",
+    contract: "deg2rad",
     area: Math,
-    params: [num],
     direct: Deg2rad,
     values: Deg2rad,
 }

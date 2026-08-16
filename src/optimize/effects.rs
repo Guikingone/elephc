@@ -19,9 +19,34 @@ pub(super) use calls::{
     callable_alias_effect,
     expr_call_effect,
     function_call_effect,
-    private_instance_method_call_effect,
+    instance_property_read_effect,
+    instance_method_call_effect,
     static_method_call_effect,
 };
+
+/// Returns true when a binary operator can raise a catchable PHP error at runtime.
+///
+/// PHP 8 arithmetic is not exception-free: `/` and `%` raise `DivisionByZeroError` for a zero
+/// divisor, and `<<` / `>>` raise `ArithmeticError` for a negative shift count. Reporting these
+/// as pure would let the try/catch DCE pass (`optimize::control::dce::tries`) drop the very
+/// `catch` clause that is supposed to observe them. A literal right operand that is provably
+/// safe keeps the expression pure so ordinary arithmetic is not pessimized.
+fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
+    match op {
+        BinOp::Div | BinOp::Mod => !matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value != 0
+        ) && !matches!(
+            &right.kind,
+            ExprKind::FloatLiteral(value) if *value != 0.0
+        ),
+        BinOp::ShiftLeft | BinOp::ShiftRight => !matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value >= 0
+        ),
+        _ => false,
+    }
+}
 
 /// Returns true if any statement in `stmts` may throw an exception.
 /// Shorthand for checking `block_effect(stmts).may_throw`.
@@ -55,9 +80,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             expr_effect(value).with_side_effects()
         }
         StmtKind::RefAssign { .. } => Effect::PURE.with_side_effects(),
-        StmtKind::RefAssignToTarget { target, source, .. } => expr_effect(target)
-            .combine(expr_effect(source))
-            .with_side_effects(),
         StmtKind::ArrayPush { value, .. } | StmtKind::StaticPropertyArrayPush { value, .. } => {
             expr_effect(value).with_side_effects().with_may_throw()
         }
@@ -68,13 +90,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .combine(expr_effect(value))
                 .with_side_effects()
                 .with_may_throw()
-        }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            let mut effect = expr_effect(property).combine(expr_effect(value));
-            if let Some(index) = index {
-                effect = effect.combine(expr_effect(index));
-            }
-            effect.with_side_effects().with_may_throw()
         }
         StmtKind::NestedArrayAssign { target, value } => {
             expr_effect(target)
@@ -193,8 +208,6 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         | StmtKind::Return(None)
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::ExternFunctionDecl { .. }
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. } => Effect::PURE,
@@ -239,13 +252,18 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
-        ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::BinaryOp { left, op, right } => {
+            let operands = expr_effect(left).combine(expr_effect(right));
+            if binary_op_may_throw(op, right) {
+                operands.with_may_throw()
+            } else {
+                operands
+            }
+        }
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))
         }
         ExprKind::Throw(inner) => expr_effect(inner).with_side_effects().with_may_throw(),
-        // `clone $obj` allocates a new object (heap write), shallow-copies properties, and may
-        // dispatch a user `__clone()` that reads/writes properties and throws. Conservative.
         ExprKind::NullCoalesce { value, default } => expr_effect(value).combine(expr_effect(default)),
         ExprKind::Pipe { value, callable } => expr_effect(value)
             .combine(expr_effect(callable))
@@ -266,8 +284,6 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .unwrap_or(Effect::PURE),
             )
             .with_side_effects(),
-        // `[$a, $b] = EXPR` reads EXPR and writes the target locals, so it is impure.
-        ExprKind::ListUnpack { value, .. } => expr_effect(value).with_side_effects(),
         ExprKind::PreIncrement(_)
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
@@ -286,8 +302,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         } => expr_effect(object)
             .combine(expr_effect(method))
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .with_side_effects()
-            .with_may_throw(),
+            .combine(match &method.kind {
+                ExprKind::StringLiteral(method) => {
+                    instance_method_call_effect(object, method)
+                }
+                _ => Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals(),
+            }),
         ExprKind::NewObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
@@ -303,10 +326,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(private_instance_method_call_effect(object, method)),
-        ExprKind::NullsafeMethodCall { object, args, .. } => expr_effect(object)
+            .combine(instance_method_call_effect(object, method)),
+        ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+        } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .with_may_throw(),
+            .combine(instance_method_call_effect(object, method)),
         ExprKind::StaticMethodCall {
             receiver,
             method,
@@ -333,10 +360,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .map(|expr| expr_effect(expr))
                     .unwrap_or(Effect::PURE),
             ),
-        ExprKind::ArrayAccess { array, index } => expr_effect(array)
-            .combine(expr_effect(index))
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::ArrayAccess { array, index } => {
+            let evaluated = expr_effect(array).combine(expr_effect(index));
+            match statically_known_array_read(array, index) {
+                Some(true) => evaluated,
+                Some(false) => evaluated.with_side_effects(),
+                None => evaluated.with_side_effects().with_may_throw(),
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -349,29 +380,26 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
-        ExprKind::PropertyAccess { object, .. }
-        | ExprKind::NullsafePropertyAccess { object, .. } => expr_effect(object).with_may_throw(),
+        ExprKind::PropertyAccess { object, property }
+        | ExprKind::NullsafePropertyAccess { object, property } => expr_effect(object)
+            .combine(instance_property_read_effect(object, property)),
         ExprKind::DynamicPropertyAccess { object, property }
-        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-            expr_effect(object).combine(expr_effect(property))
-        }
+        | ExprKind::NullsafeDynamicPropertyAccess { object, property } => expr_effect(object)
+            .combine(expr_effect(property))
+            .combine(match &property.kind {
+                ExprKind::StringLiteral(property) => {
+                    instance_property_read_effect(object, property)
+                }
+                _ => Effect::PURE
+                    .with_side_effects()
+                    .with_may_throw()
+                    .with_writes_globals(),
+            }),
         ExprKind::StaticPropertyAccess { .. } => Effect::PURE.with_may_throw(),
         ExprKind::FirstClassCallable(target) => callable_target_effect(target),
         ExprKind::BufferNew { len, .. } => expr_effect(len).with_side_effects(),
         ExprKind::ClassConstant { .. } | ExprKind::ScopedConstantAccess { .. } => Effect::PURE,
-        // `$obj::CONST` — the constant read is pure; effects come from evaluating the object.
-        ExprKind::DynamicClassConstantAccess { object, .. } => expr_effect(object),
-        // `self::${$expr}` — reads a static property selected by a runtime name; the name expr
-        // is evaluated (its effects propagate) and an undefined property can fatal, so this is
-        // not pure.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            expr_effect(property).with_may_throw()
-        }
-        // `$value::class` reads runtime object metadata and throws `TypeError` when a gradual
-        // operand holds a non-object, so an unused read must remain observable to DCE.
-        ExprKind::ObjectClassName { object } => expr_effect(object)
-            .with_side_effects()
-            .with_may_throw(),
+        ExprKind::ObjectClassName { object } => expr_effect(object),
         ExprKind::NewScopedObject { args, .. } => combine_effects(args.iter().map(expr_effect))
             .with_side_effects()
             .with_may_throw(),
@@ -391,6 +419,38 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::MagicConstant(_) => {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
+    }
+}
+
+/// Returns whether a literal container read is statically in bounds/present.
+///
+/// `Some(true)` is a warning-free read, `Some(false)` is a known missing offset that can warn
+/// but cannot throw, and `None` means runtime type/key behavior remains dynamic.
+fn statically_known_array_read(array: &Expr, index: &Expr) -> Option<bool> {
+    match (&array.kind, &index.kind) {
+        (ExprKind::ArrayLiteral(items), ExprKind::IntLiteral(index))
+            if items
+                .iter()
+                .all(|item| !matches!(item.kind, ExprKind::Spread(_))) =>
+        {
+            let len = i64::try_from(items.len()).ok()?;
+            Some(*index >= 0 && *index < len)
+        }
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::IntLiteral(index)) => Some(
+            items
+                .iter()
+                .any(|(key, _)| matches!(key.kind, ExprKind::IntLiteral(key) if key == *index)),
+        ),
+        (ExprKind::ArrayLiteralAssoc(items), ExprKind::StringLiteral(index)) => Some(
+            items.iter().any(
+                |(key, _)| matches!(&key.kind, ExprKind::StringLiteral(key) if key == index),
+            ),
+        ),
+        (ExprKind::StringLiteral(value), ExprKind::IntLiteral(index)) => {
+            let len = i64::try_from(value.len()).ok()?;
+            Some((*index >= 0 && *index < len) || (*index < 0 && -*index <= len))
+        }
+        _ => None,
     }
 }
 

@@ -2,13 +2,13 @@
 title: "scandir()"
 description: "Lists files and directories inside the specified path."
 sidebar:
-  order: 150
+  order: 157
 ---
 
 ## scandir()
 
 ```php
-function scandir(string $directory, int $sorting_order = 0, mixed $context = null): array
+function scandir(string $directory, int $sorting_order = 0, mixed $context = null): mixed
 ```
 
 Lists files and directories inside the specified path.
@@ -18,7 +18,7 @@ Lists files and directories inside the specified path.
 - `$sorting_order` (`int`), default `0`, optional
 - `$context` (`mixed`), default `null`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -26,12 +26,6 @@ Lists files and directories inside the specified path.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/scandir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/scandir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

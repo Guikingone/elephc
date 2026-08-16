@@ -8,15 +8,11 @@
 //! Key details:
 //! - Assignment-value parsing intentionally permits assignment expressions where PHP syntax allows them.
 
-mod array_literal;
 mod assignment_targets;
 mod calls;
-mod list_destructure;
 mod prefix;
 mod prefix_complex;
 mod pratt;
-
-pub(crate) use prefix::token_starts_prefix_expression;
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};

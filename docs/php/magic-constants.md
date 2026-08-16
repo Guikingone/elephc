@@ -28,7 +28,6 @@ Each magic constant is lowered to a plain literal **before type checking and cod
 - `__FILE__` and `__DIR__` are replaced after parsing each source file (including any `include`d / `require`d files), against that file's canonical path.
 - `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, and `__TRAIT__` are replaced per source file before that file is inlined, so included files keep their own namespace and lexical scope.
 - `__CLASS__` occurrences imported from a trait are rebound when the trait is flattened into the concrete class. `__METHOD__` and `__TRAIT__` keep the trait declaration identity, as they do in PHP.
-- Magic constants in **class-constant initializers** (`const X = __CLASS__;`), **property defaults** (`public string $x = __CLASS__;`), and **enum case values** (`case A = __CLASS__;`) are lowered with the enclosing class/interface/enum scope, exactly like method bodies. Inside such an initializer `__CLASS__` is the declaring class/interface/enum name, `__NAMESPACE__` is the current namespace, and `__FUNCTION__` / `__METHOD__` are the empty string (there is no enclosing function). This matches PHP — for example symfony/var-dumper's `const UNSET_CLOSURE_FILE_INFO = ['Closure' => __CLASS__.'::unsetClosureFileInfo'];`.
 
 Because the substitution happens before the optimizer's constant-folding pass, expressions like `__DIR__ . '/file.php'` collapse into a single string literal at compile time:
 
@@ -83,30 +82,6 @@ trait Reportable {
         echo __METHOD__;   // "App\Util\Reportable::report"
         echo __TRAIT__;    // "App\Util\Reportable"
     }
-}
-```
-
-### Class-constant and property initializers
-
-```php
-<?php
-namespace App;
-
-class ReflectionCaster {
-    public const UNSET_CLOSURE_FILE_INFO = ['Closure' => __CLASS__ . '::unsetClosureFileInfo'];
-    const OWNER = __CLASS__;      // "App\ReflectionCaster"
-    const NS    = __NAMESPACE__;  // "App"
-    const FN    = __FUNCTION__;   // "" (no enclosing function)
-    public string $label = __CLASS__; // "App\ReflectionCaster"
-}
-
-interface Marker {
-    const SELF = __CLASS__;       // "App\Marker" (the interface's own name)
-}
-
-enum Suit: string {
-    case Hearts = 'H';
-    const KIND = __CLASS__;       // "App\Suit"
 }
 ```
 

@@ -650,220 +650,6 @@ echo 3;
     assert_eq!(out, "3");
 }
 
-/// Compiles a match arm with a trailing comma after its single pattern
-/// (`'c', => 3`) and verifies the trailing comma is treated as a separator,
-/// not a second pattern, so the arm still matches.
-#[test]
-fn test_match_trailing_comma_single_pattern_arm() {
-    let out = compile_and_run(
-        r#"<?php
-$x = 'c';
-$result = match ($x) {
-    'a' => 1,
-    'c', => 3,
-    default => 0,
-};
-echo $result;
-"#,
-    );
-    assert_eq!(out, "3");
-}
-
-/// Compiles a match arm with multiple comma-separated patterns followed by a
-/// trailing comma before `=>` (`'a', 'b', => 1`) and verifies the arm matches
-/// on either pattern.
-#[test]
-fn test_match_trailing_comma_multi_pattern_arm() {
-    let out = compile_and_run(
-        r#"<?php
-$x = 'b';
-$result = match ($x) {
-    'a', 'b', => 1,
-    default => 0,
-};
-echo $result;
-"#,
-    );
-    assert_eq!(out, "1");
-}
-
-/// Compiles a match with a trailing-comma arm that does NOT match followed by
-/// another trailing-comma arm that does, verifying the parser correctly
-/// resumes arm parsing after a trailing comma instead of getting stuck on the
-/// non-matching arm.
-#[test]
-fn test_match_trailing_comma_non_matching_arm_then_matching_arm() {
-    let out = compile_and_run(
-        r#"<?php
-$x = 'c';
-$result = match ($x) {
-    'a', 'b', => 1,
-    'c', 'd', => 2,
-    default => 0,
-};
-echo $result;
-"#,
-    );
-    assert_eq!(out, "2");
-}
-
-/// Compiles a match where the only pattern arm has a trailing comma and does
-/// not match, verifying the `default` arm after it still parses and runs.
-#[test]
-fn test_match_trailing_comma_arm_falls_through_to_default() {
-    let out = compile_and_run(
-        r#"<?php
-$x = 'z';
-$result = match ($x) {
-    'a', 'b', => 1,
-    default => 9,
-};
-echo $result;
-"#,
-    );
-    assert_eq!(out, "9");
-}
-
-/// Verifies array_is_list returns false for a string-keyed associative hash and true for
-/// an empty array. Fixture: array_is_list(['x'=>1,'y'=>2])=false, array_is_list([])=true
-/// (php-verified).
-#[test]
-fn test_array_is_list_assoc_and_empty() {
-    let out = compile_and_run(
-        r#"<?php $h=['x'=>1,'y'=>2]; $e=[]; echo array_is_list($h)?"1":"0", array_is_list($e)?"1":"0";"#,
-    );
-    assert_eq!(out, "01");
-}
-
-/// Verifies array_is_list scans int-keyed hashes: dense 0..n-1 keys are a list, a gap is not.
-/// Fixture: keys {0,1} built at runtime are a list; keys {0,2} are not (php-verified).
-#[test]
-fn test_array_is_list_int_key_hash_sequence() {
-    let out = compile_and_run(
-        r#"<?php
-$list = []; $list[0]="a"; $list[1]="b";
-$gap = [0=>'a', 2=>'b'];
-echo array_is_list($list)?"1":"0", array_is_list($gap)?"1":"0";
-"#,
-    );
-    assert_eq!(out, "10");
-}
-
-/// Verifies array_is_list on a packed indexed array is the constant true.
-/// Fixture: array_is_list([10,20,30]) === true (php-verified).
-#[test]
-fn test_array_is_list_packed_is_true() {
-    let out = compile_and_run(r#"<?php $p=[10,20,30]; echo array_is_list($p)?"yes":"no";"#);
-    assert_eq!(out, "yes");
-}
-
-/// Verifies array_is_list dispatches through a boxed Mixed: a JSON-decoded list is a list,
-/// a JSON-decoded object-as-array is not. Fixture: json_decode('[1,2,3]', true) is a list,
-/// json_decode('{"a":1}', true) is not (php-verified).
-#[test]
-fn test_array_is_list_mixed_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-$a = json_decode('[1,2,3]', true);
-$b = json_decode('{"a":1}', true);
-echo array_is_list($a)?"1":"0", array_is_list($b)?"1":"0";
-"#,
-    );
-    assert_eq!(out, "10");
-}
-
-/// Verifies array_is_list resolves through namespace fallback / case-insensitive lookup.
-/// Fixture: inside a namespace, an unqualified Array_Is_List() still resolves to the builtin.
-#[test]
-fn test_array_is_list_namespaced_fallback() {
-    let out = compile_and_run(
-        r#"<?php namespace App; function make():array { $h=[]; $h["k"]=1; return $h; }
-echo Array_Is_List(make())?"1":"0";"#,
-    );
-    assert_eq!(out, "0");
-}
-
-/// Verifies array_is_list probes the actual runtime heap kind for a `PhpType::Array(Mixed)`
-/// operand instead of const-folding to `true` on the bare static `Array(T)` shape.
-///
-/// A direct single-call-site `array $a` parameter gets narrowed by the checker's call-site
-/// specialization down to the argument's concrete shape (`AssocArray`/`Array(Int)`), which
-/// already dispatched correctly even before this fix and would NOT exercise the bug. To keep
-/// the static type genuinely unresolved (`PhpType::Array(Mixed)`, confirmed via `--emit-ir`
-/// showing `Heap(Array) php=array<mixed>`), `make()` returns either a packed array or a
-/// string-keyed hash depending on a runtime flag, so the checker cannot narrow its return
-/// type — and neither can `is_list()`'s parameter type, since it is fed exactly that
-/// unresolved return value. Fixture: `is_list(make(1))`=true (packed), `is_list(make(0))`=false
-/// (hash) (php-verified; previously both printed "true", a silent miscompile for the hash
-/// case).
-#[test]
-fn test_array_is_list_hash_in_array_typed_slot() {
-    let out = compile_and_run(
-        r#"<?php
-function is_list(array $a): string { return array_is_list($a) ? "true" : "false"; }
-function make(int $flag): array {
-    if ($flag) {
-        $r = [1, 2, 3];
-    } else {
-        $r = ["a" => 1, "b" => 2];
-    }
-    return $r;
-}
-echo is_list(make(1)), ",", is_list(make(0));
-"#,
-    );
-    assert_eq!(out, "true,false");
-}
-
-/// Verifies array_replace overlays later associative arrays last-wins by key, preserving
-/// insertion order. Fixture: replacing ['a'=>1,'b'=>2,'c'=>3] with ['b'=>20,'d'=>40] yields
-/// a=1,b=20,c=3,d=40 in order (php-verified).
-#[test]
-fn test_array_replace_last_wins_and_order() {
-    let out = compile_and_run(
-        r#"<?php
-$base = ['a'=>1,'b'=>2,'c'=>3];
-$over = ['b'=>20,'d'=>40];
-$r = array_replace($base, $over);
-foreach ($r as $k=>$v) { echo "$k=$v;"; }
-"#,
-    );
-    assert_eq!(out, "a=1;b=20;c=3;d=40;");
-}
-
-/// Verifies array_replace with a single argument returns a copy of it.
-/// Fixture: array_replace(['x'=>'v']) yields ['x'=>'v'] (php-verified).
-#[test]
-fn test_array_replace_single_arg_copy() {
-    let out = compile_and_run(
-        r#"<?php $r = array_replace(['x'=>'v']); echo $r['x'];"#,
-    );
-    assert_eq!(out, "v");
-}
-
-/// Verifies array_replace chains three associative arrays with last-wins semantics.
-/// Fixture: replace ['a'=>'1'] with ['a'=>'2','b'=>'2'] then ['a'=>'3'] -> a=3,b=2 (php-verified).
-#[test]
-fn test_array_replace_three_args_chain() {
-    let out = compile_and_run(
-        r#"<?php
-$r = array_replace(['a'=>'1'], ['a'=>'2','b'=>'2'], ['a'=>'3']);
-echo $r['a'], $r['b'];
-"#,
-    );
-    assert_eq!(out, "32");
-}
-
-/// Verifies array_replace resolves through namespace fallback / case-insensitive lookup.
-/// Fixture: inside a namespace, an unqualified Array_Replace() still resolves to the builtin.
-#[test]
-fn test_array_replace_namespaced_fallback() {
-    let out = compile_and_run(
-        r#"<?php namespace App; $r = Array_Replace(['k'=>'a'], ['k'=>'b']); echo $r['k'];"#,
-    );
-    assert_eq!(out, "b");
-}
-
 /// Regression for #357: a null array key after a float key normalizes to the empty
 /// string "" (PHP behavior), not a huge integer sentinel.
 #[test]
@@ -946,4 +732,120 @@ echo $a[null] ?? "miss";
 "#,
     );
     assert_eq!(out, "miss");
+}
+
+// --- array_sum()/array_product() over hash storage ---
+//
+// php's `array_sum()`/`array_product()` walk `Z_ARRVAL_P(input)` with
+// `ZEND_HASH_FOREACH_VAL` (ext/standard/array.c) and never read a key, so hash storage
+// aggregates exactly like the indexed array of its values. The packed forms have always
+// compiled; the hash forms were refused by the EIR backend even though the checker accepted
+// them (`src/builtins/array/array_sum.rs` already returns `Int` for an `AssocArray`), which
+// made `key_preserving_sort_promotes` unable to promote an `asort()` receiver — see
+// `crate::types::key_preserving_sort_promotes`.
+
+/// `array_sum()`/`array_product()` over an INT-VALUED hash, the refusal that blocked promoting
+/// an `asort()` receiver.
+///
+/// Measured with `php -n`: `[5=>3,2=>10,9=>7]` sums to `20` and multiplies to `210`;
+/// `["x"=>3,"y"=>10]` gives `13`/`30`; a single entry `[7=>5]` gives `5`/`5`; a zero among
+/// negatives `[5=>-2,2=>0,9=>3]` gives `1`/`0`; a table grown by explicit int-key stores
+/// (`$h[10]=4; $h[3]=6;`) gives `10`/`24`; and `[5=>1000000,2=>2000000]` gives
+/// `3000000`/`2000000000000`.
+///
+/// RED before this change: `unsupported EIR backend feature: array_sum for PHP type
+/// AssocArray { key: Int, value: Int }` — the receiver never reached a runtime helper.
+#[test]
+fn test_array_sum_and_product_over_an_int_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [5 => 3, 2 => 10, 9 => 7];
+echo array_sum($a), "|", array_product($a), ";";
+$b = ["x" => 3, "y" => 10];
+echo array_sum($b), "|", array_product($b), ";";
+$c = [7 => 5];
+echo array_sum($c), "|", array_product($c), ";";
+$e = [5 => -2, 2 => 0, 9 => 3];
+echo array_sum($e), "|", array_product($e), ";";
+$h = [];
+$h[10] = 4;
+$h[3] = 6;
+echo array_sum($h), "|", array_product($h), ";";
+$i = [5 => 1000000, 2 => 2000000];
+echo array_sum($i), "|", array_product($i);
+"#,
+    );
+    assert_eq!(out, "20|210;13|30;5|5;1|0;10|24;3000000|2000000000000");
+}
+
+/// An EMPTIED int-valued hash aggregates to php's identity elements.
+///
+/// Measured with `php -n`: `$g=[5=>1]; unset($g[5]);` leaves an empty hash whose
+/// `array_sum()` is `0` and whose `array_product()` is `1` — and `var_dump(array_product([]))`
+/// prints `int(1)`, so the product of nothing is an INT one, not a float.
+///
+/// A BOOL-valued receiver is deliberately absent: `[5=>true,2=>false]` infers
+/// `AssocArray { value: Mixed }`, and `array_product()` over Mixed is refused for PACKED
+/// storage too (`array_product for PHP type Array(Mixed)`, measured on `[true,false]` and on
+/// `[1,"2",3]`). That is a pre-existing gap in both storage shapes, not one the hash receiver
+/// introduces, so it stays out of this change.
+///
+/// RED before this change: the same `array_sum for PHP type AssocArray { key: Int, value: Int }`
+/// refusal.
+#[test]
+fn test_array_sum_and_product_over_an_emptied_int_valued_hash() {
+    let out = compile_and_run(
+        r#"<?php
+$g = [5 => 1];
+unset($g[5]);
+echo array_sum($g), "|", array_product($g), "|", count($g);
+"#,
+    );
+    assert_eq!(out, "0|1|0");
+}
+
+/// A hash left behind by `unset()` on a packed receiver aggregates over the SURVIVING values.
+///
+/// Measured with `php -n`: `$d=[1,2,3,4]; unset($d[1]);` leaves `{"0":1,"2":3,"3":4}`, which
+/// sums to `8` and multiplies to `12` — the removed element contributes to neither.
+#[test]
+fn test_array_sum_and_product_over_a_hash_left_by_unset() {
+    let out = compile_and_run(
+        r#"<?php
+$d = [1, 2, 3, 4];
+unset($d[1]);
+echo array_sum($d), "|", array_product($d), "|", json_encode($d);
+"#,
+    );
+    assert_eq!(out, "8|12|{\"0\":1,\"2\":3,\"3\":4}");
+}
+
+/// The hash aggregates own a TEMPORARY values array, so a loop must not leak it.
+///
+/// `array_sum()`/`array_product()` reach hash storage by materializing the values into a
+/// fresh indexed array and reusing the packed helper — the same route `implode()` takes — so
+/// the temporary has to be deep-freed around the result. Running it in a loop is what makes a
+/// single leaked block visible.
+#[test]
+fn test_hash_aggregates_leave_a_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 20; $i++) {
+    $a = [5 => 3, 2 => 10, 9 => 7];
+    $b = ["x" => 2, "y" => 4];
+    echo array_sum($a), array_product($a), array_sum($b), array_product($b);
+}
+"#,
+    );
+    assert!(
+        out.stdout.ends_with("2021068"),
+        "stdout: {} stderr: {}",
+        out.stdout,
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
 }

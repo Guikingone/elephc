@@ -285,36 +285,39 @@ value identity, basic blocks, or dominance belong here.
 
 ## Adding a built-in function
 
-elephc's PHP built-in functions are declared **once** in a single-source registry.
-Each builtin has one *home file* at `src/builtins/<area>/<name>.rs` that declares it
-with the `builtin!` macro; all declarations are collected at link time through the
-`inventory` crate. From that single declaration the compiler derives the catalog
-name-set (case-insensitive lookup, `function_exists`, namespace fallback,
-redeclaration checks), the call signature (named arguments, defaults, by-ref params,
-variadic, arity), the shared semantic contract, backend-neutral EIR lowering, and the
-generated documentation.
+elephc's PHP builtin surface is declared **once** in the dependency-neutral
+`crates/elephc-builtin-contract` catalog. The compiler home file at
+`src/builtins/<area>/<name>.rs` joins checker/EIR semantics to that contract with
+`builtin!`; Magician's matching home file joins eval hooks with `eval_builtin!`.
+Both bindings are collected through `inventory`. Name lookup, signatures, defaults,
+by-reference/variadic shape, strict-PHP visibility, documentation, backend support,
+and optional runtime dispatch therefore come from one stable `BuiltinId` contract.
 
 Do **not** re-add builtin names to the old hand-maintained tables (`catalog.rs`,
 `signatures.rs`, per-area `check_builtin` arms). They are superseded by the registry;
-a builtin is fully wired the moment its home file compiles.
+a builtin is fully wired only when the shared contract and every declared backend
+support route validate together.
 
-### 1. Create the home file
+### 1. Add the shared contract and home file
 
-Add `src/builtins/<area>/<name>.rs` and register it in `src/builtins/<area>/mod.rs`
+Add the neutral PHP surface to `crates/elephc-builtin-contract/src/catalog_data.rs`
+(or `catalog_surfaces.rs` for constructs, dedicated syntax, preludes, and eval-only
+surfaces). It owns the canonical name, area/kind, parameters, defaults, passing mode,
+arity overrides, return declaration, visibility, requirements, and documentation.
+It must not depend on compiler or Magician types.
+
+Then add `src/builtins/<area>/<name>.rs` and register it in `src/builtins/<area>/mod.rs`
 with `pub mod <name>;` (keep the list alphabetical). Areas are `string`, `array`,
 `math`, `io`, `system`, `types`, `callables`, `spl`, `pointers` (plus `internal` for
-compiler-internal builtins). One builtin per home file; the file owns its declaration,
-optional checker hook, and complete backend-neutral semantic descriptor. Start with
-the mandatory `//!` module preamble.
+compiler-internal builtins). One builtin per home file; the compiler file owns only
+its optional checker hook and AOT semantic descriptor. Start with the mandatory `//!`
+module preamble.
 
 ### 2. Declare it with `builtin!`
 
 ```rust
 builtin! {
-    name: "strlen",
-    area: String,
-    params: [string: Str],
-    returns: Int,
+    contract: "strlen",
     semantics: BuiltinSemantics {
         validation: BuiltinValidation::Shared(validate),
         result_type: BuiltinResultType::Declared,
@@ -328,28 +331,14 @@ builtin! {
         callable: BuiltinCallablePolicy::Dynamic(callable_accepts_strlen_source),
         lowering: BuiltinLowering::Eir(lower),
     },
-    summary: "Returns the length of a string.",
-    php_manual: "function.strlen",
 }
 ```
 
-Fields must appear in this canonical order; optional fields (marked `?`) may be
-omitted:
+Production fields appear in this order: `contract`, optional `check`, optional
+`lazy_check`, `semantics`, optional source-dependent `requirements`.
 
-`name`, `area`, `params`, `variadic?`, `min_args?`, `max_args?`, `arity_error?`,
-`returns`, `by_ref_return?`, `check?`, `lazy_check?`, `semantics`, `requirements?`,
-`summary`, `examples?`, `php_manual?`, `deprecation?`, `extension?`, `internal?`.
-
-- **`params`** — `[name: TypeSpec, name: TypeSpec = DefaultSpec::Variant, ...]`. A
-  parameter with `= DefaultSpec::…` is optional; without it, required. Prefix a
-  parameter with `ref` to pass it by reference (mutating builtins):
-  `params: [ref array: Mixed, offset: Int]`. Parameter names become PHP's
-  named-argument keys and must match PHP exactly (Rust keywords work as names via raw
-  identifiers, e.g. `r#type`).
-- **`returns` and param `TypeSpec`** — written as a bare scalar type ident: `Int`,
-  `Float`, `Str`, `Bool`, `Mixed`, `Null`, `Void`. Non-scalar shapes (arrays, unions,
-  resources) are declared as `Mixed`; supply the precise type from a `check` hook when
-  it matters (see the note in step 3).
+- **`contract`** — canonical lowercase name from the neutral catalog. PHP names never
+  select checker, EIR, or backend emitters after this join.
 - **`semantics`** — the complete shared contract for validation, result typing,
   effects, ownership/aliasing, runtime/link requirements, target strategy/support,
   typed runtime-function inventory, argument lowering, callable availability, and
@@ -360,25 +349,13 @@ omitted:
 - **`requirements`** — an optional source-dependent resolver layered over the
   descriptor's fixed requirements. Do not rediscover bridges or runtime features from
   PHP names later in the pipeline.
-- **`DefaultSpec`** — full path form: `DefaultSpec::Null`, `DefaultSpec::Int(0)`,
-  `DefaultSpec::Bool(false)`, `DefaultSpec::Float(1.5)`, `DefaultSpec::Str("…")`,
-  `DefaultSpec::IntMax`, `DefaultSpec::IntMin`, `DefaultSpec::EmptyArray`.
-- **`variadic`** — the PHP name of the trailing variadic parameter, e.g.
-  `variadic: "values"`.
-- **`min_args` / `max_args` / `arity_error`** — override only the arity check (not the
-  derived signature or the parity gate). Use when a builtin's PHP arity is
-  tighter/looser than its declared parameter list, or needs a verbatim error message.
-- **`summary` / `examples` / `php_manual` / `deprecation`** — documentation metadata
-  surfaced by the `gen_builtins` exporter.
-- **`extension: true`** — an elephc extension with no PHP equivalent (`ptr_*`,
-  `zval_*`, `buffer_*`, `class_attribute_*`, …). `--strict-php` hides it from user
-  programs; update `EXPECTED_EXTENSION_BUILTINS` in `src/builtins/parity_tests.rs`.
-- **`internal: true`** — a compiler-internal builtin that is not PHP-visible and is
-  excluded from catalogs and docs.
+- Signature/default/visibility/documentation fields live only on `BuiltinContract`.
+  `extension: true` and `internal: true` are therefore shared by AOT, eval,
+  strict-PHP, parity tests, and generated docs without a second pinned list.
 
 A builtin whose return type does not depend on its arguments and needs no extra
-validation can omit `check` entirely — `returns:` is then authoritative for the
-checker.
+validation can omit `check` entirely — the contract's `returns` field is then
+authoritative for the checker.
 
 ### 3. The `check` hook (type checking)
 
@@ -438,12 +415,11 @@ type predicates.
 
 ### 5. What derives automatically
 
-Once the home file compiles, all of the following see the builtin with no further
-edits: `function_exists()` and case-insensitive/namespaced lookup, the named-argument
-`FunctionSig`, checker validation/result typing, optimizer effects, ownership cleanup,
-runtime/link requirements, direct and runtime-selected callable policy,
-backend-neutral EIR lowering, the arity check and its error message, and the
-`gen_builtins` JSON docs export.
+Once the shared contract and AOT binding compile, all of the following see the builtin
+with no further metadata edits: `function_exists()` and case-insensitive/namespaced
+lookup, the named-argument `FunctionSig`, checker validation/result typing, optimizer
+effects, ownership cleanup, runtime/link requirements, direct and runtime-selected
+callable policy, backend-neutral EIR lowering, arity diagnostics, and generated docs.
 
 ### 6. Surfaces you still wire by hand
 
@@ -458,6 +434,29 @@ user-facing surfaces still need updates when relevant:
   mark a call pure if it can read/write globals, files, the environment, heap state,
   argument storage, or emit output.
 - **Examples and generated docs** for the PHP-visible surface.
+- **Magician support**, when dynamic eval must expose the function. Add the matching
+  `crates/elephc-magician/src/interpreter/builtins/<area>/<name>.rs` binding:
+
+  ```rust
+  eval_builtin! {
+      contract: "strlen",
+      area: String,
+      direct: Strlen,
+      values: Strlen,
+  }
+  ```
+
+  The eval macro contributes only area/home-file and dispatch hooks; signature,
+  defaults, by-reference shape, visibility, and docs come from the shared contract.
+  If the builtin is intentionally unavailable in eval, add a typed support reason in
+  `elephc-builtin-contract::support` rather than an allowlist in a parity test.
+- **Shared boxed-runtime dispatch**, when generated runtime helpers already implement
+  equivalent dynamic semantics. Add a stable `RuntimeBuiltinId`, target-aware AArch64
+  and x86_64 C-ABI wrapper arms, then set the Magician binding hooks to `none`. Keep a
+  hybrid hook only when the helper covers a strict signature subset (for example
+  `intval` base or `round` mode), and record its adapter reason in the shared support
+  contract. By-reference/lvalue, callable, reflection, resource, and eval-declaration
+  semantics remain explicit Magician adapters.
 
 ### 7. Tests, examples, and docs
 
@@ -467,7 +466,8 @@ user-facing surfaces still need updates when relevant:
   feature.
 - Document the PHP surface (signature, parameters, return type, a short example) on the
   relevant `docs/php/` page.
-- The signature/arity parity gates in `src/builtins/parity_tests.rs` must stay green.
+- The shared-contract registry, backend support, signature parity, and generated-docs
+  gates must stay green.
 
 ### 8. Not every "builtin" is a function
 
@@ -479,17 +479,14 @@ into `builtin!`. `buffer_new` is similar (its call form is dedicated syntax lowe
 `buffer_free` are ordinary registry builtins under `src/builtins/pointers/`.
 
 Builtins that are elephc extensions with no PHP equivalent must declare
-`extension: true` in `builtin!` so `--strict-php` hides them from user programs; the
-pinned set lives in `src/builtins/parity_tests.rs` (`EXPECTED_EXTENSION_BUILTINS`).
+`extension: true` on their shared `BuiltinContract` so `--strict-php` hides them from
+both AOT and eval.
 Injected compiler preludes must never call a PHP-visible extension builtin — use an
 `internal: true` `__elephc_*` alias instead (see `src/builtins/pointers/__elephc_ptr_read_string.rs`);
 the `preludes_never_call_php_visible_extension_builtins` gate enforces this.
 
-On the eval side, magician derives its extension set from `EvalArea::RawMemory`
-plus the `SYMBOLS_EXTENSION_BUILTINS` list (`crates/elephc-magician/src/interpreter/builtins/spec.rs`)
-instead of a per-declaration flag; the `extension_builtin_sets_agree_across_registries`
-gate in `tests/builtin_parity_tests.rs` pins that derivation against the compiler
-registry, so adding an extension builtin to either registry forces both sides to agree.
+Magician reads that same flag after joining its binding by `BuiltinId`; there is no
+second extension-name list.
 
 ## Adding functionality via a Rust crate (bridge crates)
 
@@ -626,6 +623,13 @@ not dead-stripped) and, for prelude crates, that its API is declared — useful 
 detection cannot see indirect usage. It is additive and never disables
 auto-detection. Note that it increases binary size by force-including the whole
 crate.
+
+The CLI also has an explicit runtime-capability exception, `--with-regex`.
+Unlike a bridge flag, it enables `RuntimeFeatures::regex` for opaque dynamic
+eval source and requires the project's managed `pcre2` package; it does not add
+an entry to `BRIDGES`. Keep any future non-bridge `--with-<name>` capability in
+the explicit CLI capability list and document why normal source detection
+cannot see it.
 
 ### 6. Tests
 

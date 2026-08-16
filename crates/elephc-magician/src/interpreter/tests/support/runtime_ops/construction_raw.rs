@@ -93,12 +93,30 @@ macro_rules! impl_fake_construction_raw_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::InvokerRefCell(slot as usize)))
     }
+    /// Reports whether a fake HOST resource payload names an already-closed handle.
+    ///
+    /// Reads the fake registry mirror, plus the legacy `-id` sentinel arm that
+    /// `fake_resource_id` already models — the same two states the runtime wrapper
+    /// resolves through `__rt_resource_type_name`.
+    fn resource_is_closed(&mut self, payload: u64) -> Result<bool, EvalStatus> {
+        let payload = payload as i64;
+        Ok(payload < 0 || self.closed_resources.contains(&payload))
+    }
+
     /// Extracts one fake low payload word for raw by-reference staging.
     fn raw_value_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         Ok(match self.get(value) {
             FakeValue::Bool(value) => u64::from(value),
             FakeValue::Float(value) => value.to_bits(),
             FakeValue::Int(value) => value as u64,
+            // A tag-9 cell stores eval's resource key verbatim, exactly as
+            // `__elephc_eval_value_resource` boxes it. Falling through to the
+            // catch-all zero here would make every stream lookup resolve resource 0.
+            // The key is NOT the PHP resource id: it carries
+            // `crate::stream_resources::EVAL_RESOURCE_PAYLOAD_BASE` and is only a
+            // lookup key into `EvalStreamResources`. What a display path reports is
+            // `FakeOps::fake_resource_id`, the fake mirror of the runtime registry.
+            FakeValue::Resource(value) => value as u64,
             FakeValue::String(_) | FakeValue::Bytes(_) => value.as_ptr() as u64,
             FakeValue::Array(_)
             | FakeValue::Assoc(_)

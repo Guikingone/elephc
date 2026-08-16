@@ -118,56 +118,6 @@ counter();
     assert_eq!(out, "123");
 }
 
-/// Verifies a comma-separated `static` declaration creates one persistent slot per variable, each
-/// with its own initializer. `static $a = 1, $b = 2, $c = 3;` reads back as `123`.
-#[test]
-fn test_static_multiple_declaration_initializers() {
-    let out = compile_and_run(
-        r#"<?php
-function c() {
-    static $a = 1, $b = 2, $c = 3;
-    return $a * 100 + $b * 10 + $c;
-}
-echo c();
-"#,
-    );
-    assert_eq!(out, "123");
-}
-
-/// Verifies comma-separated static variables persist and mutate independently across calls:
-/// `$a` counts up from 0 while `$b` counts down from 100.
-#[test]
-fn test_static_multiple_declaration_persist_independently() {
-    let out = compile_and_run(
-        r#"<?php
-function c() {
-    static $a = 0, $b = 100;
-    $a = $a + 1;
-    $b = $b - 1;
-    return $a . ":" . $b;
-}
-echo c(), " ", c(), " ", c();
-"#,
-    );
-    assert_eq!(out, "1:99 2:98 3:97");
-}
-
-/// Verifies a `static` variable with no explicit initializer parses and defaults to null, matching
-/// PHP's `static $x;` (equivalent to `static $x = null;`). Here the unused declaration compiles and
-/// the function returns normally.
-#[test]
-fn test_static_no_initializer_defaults_null() {
-    let out = compile_and_run(
-        r#"<?php
-function c() {
-    static $x;
-    return 7;
-}
-echo c();
-"#,
-    );
-    assert_eq!(out, "7");
-}
 /// Verifies that a static variable declared without an initializer defaults to null.
 #[test]
 fn test_static_without_initializer_defaults_to_null() {
@@ -276,147 +226,6 @@ b();
 "#,
     );
     assert_eq!(out, "110220");
-}
-
-/// Regression test for the once-guard fix (EIR-level `CondBr` wrapping the WHOLE static
-/// initializer evaluation, not just the final store — see `crate::ir_lower::stmt::lower_static_var`):
-/// a direct `static $x = <call-with-side-effect>();` initializer (PHP 8.1+ allows non-constant
-/// static initializers, php-verified: `static $x = make();` across 3 calls prints the side effect
-/// exactly once) must only run its side effect on the FIRST call, not on every call. Before the
-/// fix, `Op::InitStaticLocal`'s codegen re-evaluated the initializer's value-producing
-/// instructions unconditionally on every call (only the final store was once-guarded), so this
-/// would have printed the side effect 3 times instead of once.
-#[test]
-fn test_static_direct_initializer_side_effect_runs_once() {
-    let out = compile_and_run(
-        r#"<?php
-function make() {
-    echo "init;";
-    return 42;
-}
-function f() {
-    static $x = make();
-    return $x;
-}
-echo f();
-echo f();
-echo f();
-"#,
-    );
-    assert_eq!(out, "init;424242");
-}
-
-/// Regression test: a direct `static $obj = new Sentinel();` initializer must construct the
-/// object exactly once across calls (php-verified: PHP 8.1+'s "new in initializers" runs the
-/// constructor once, not once per call) and the returned object identity must persist — reading
-/// a property mutated on a previous call proves the SAME instance survives across calls, not a
-/// freshly reconstructed one.
-#[test]
-fn test_static_direct_initializer_new_object_runs_once_and_persists() {
-    let out = compile_and_run(
-        r#"<?php
-class Sentinel {
-    public int $hits = 0;
-    public function __construct() {
-        echo "ctor;";
-    }
-}
-function f() {
-    static $s = new Sentinel();
-    $s->hits++;
-    return $s->hits;
-}
-echo f();
-echo f();
-echo f();
-"#,
-    );
-    assert_eq!(out, "ctor;123");
-}
-
-/// Regression test: the `static $x; $x ??= <default>;` once-guarded-init fold
-/// (`crate::ir_lower::stmt::fold_static_null_coalesce_pair`) now accepts a closure-literal
-/// default (widened `static_var_default_never_null` gate) now that the whole-initializer
-/// once-guard makes a captured closure safe to fold. The closure must be created exactly once —
-/// asserted by observing that its capture (`$x`, a value captured at creation time) never
-/// changes across calls even though the captured variable's value differs on each call.
-#[test]
-fn test_static_null_coalesce_closure_default_persists_across_calls() {
-    let out = compile_and_run(
-        r#"<?php
-function make() {
-    $x = 10;
-    static $f;
-    $f ??= function () use ($x) {
-        return $x;
-    };
-    return $f();
-}
-echo make();
-echo make();
-echo make();
-"#,
-    );
-    assert_eq!(out, "101010");
-}
-
-/// Regression test: the `static $x; $x ??= <default>;` fold now also accepts a `new` default
-/// (widened `static_var_default_never_null` gate). The constructor side effect must run exactly
-/// once and the same object instance must persist across calls.
-#[test]
-fn test_static_null_coalesce_new_object_default_persists_across_calls() {
-    let out = compile_and_run(
-        r#"<?php
-class Sentinel {
-    public int $hits = 0;
-    public function __construct() {
-        echo "ctor;";
-    }
-}
-function f() {
-    static $s;
-    $s ??= new Sentinel();
-    $s->hits++;
-    return $s->hits;
-}
-echo f();
-echo f();
-echo f();
-"#,
-    );
-    assert_eq!(out, "ctor;123");
-}
-
-/// Regression test matching PHP's own reentrancy behavior for a static initializer that
-/// recurses into the same function mid-evaluation (php-verified: a `new Box($n)` default whose
-/// constructor recurses into `f($n + 1)` and reads/combines the nested static's own value —
-/// `f(0)` prints `ctor(0);ctor(1);ctor(2);` then `201`, and a second `f(0)` prints `201` alone
-/// with no more constructor calls). Each nested call independently observes "uninitialized"
-/// since the once-flag is only set AFTER the outermost completed store, and the LAST completed
-/// store wins — exercising the crash-safety ordering from `Op::StaticLocalInitialized`'s doc
-/// comment: the flag must be set AFTER the store, so a reentrant call mid-initializer still sees
-/// "uninitialized" rather than a torn value.
-#[test]
-fn test_static_reentrant_initializer_matches_php_semantics() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    public int $v;
-    public function __construct($n) {
-        echo "ctor($n);";
-        $this->v = $n < 2 ? f($n + 1) + 100 : 1;
-    }
-}
-function f($n) {
-    static $x;
-    $x ??= new Box($n);
-    return $x->v;
-}
-echo f(0), "\n";
-echo f(0), "\n";
-"#,
-    );
-    assert_eq!(out, "ctor(0);ctor(1);ctor(2);201\n201\n");
 }
 
 // --- Pass by reference ---
@@ -864,132 +673,6 @@ foreach ($c as $k => $v) { echo '[' . $k . ':' . $v . ']'; }
     assert_eq!(out, "[0:10][1:20][x:1]");
 }
 
-/// Verifies an array literal spreads a boxed `mixed` array after a runtime shape check.
-#[test]
-fn test_array_literal_spread_mixed_array_runtime_guard() {
-    let out = compile_and_run(
-        r#"<?php
-function printSpreadValues(mixed $values): void {
-    $spread = ["head", ...$values];
-    foreach ($spread as $key => $value) {
-        echo "[" . $key . ":" . $value . "]";
-    }
-}
-
-printSpreadValues(["x", "y"]);
-"#,
-    );
-    assert_eq!(out, "[0:head][1:x][2:y]");
-}
-
-/// Verifies an array literal rejects a boxed `mixed` scalar instead of silently spreading nothing.
-#[test]
-fn test_array_literal_spread_mixed_scalar_runtime_guard() {
-    let err = compile_and_run_expect_failure(
-        r#"<?php
-function spreadValues(mixed $values): void {
-    $spread = [...$values];
-}
-
-spreadValues(42);
-"#,
-    );
-    assert!(
-        err.contains("array builtin argument must be of type array"),
-        "unexpected gradual spread diagnostic: {err}"
-    );
-}
-
-/// Verifies a call-argument spread of a `mixed` operand into a fixed-arity user function
-/// unpacks its elements positionally through the runtime array guard.
-#[test]
-fn test_call_arg_spread_mixed_into_fixed_arity() {
-    let out = compile_and_run(
-        r#"<?php
-function add($a, $b) { return $a + $b; }
-function f(mixed $x) { return add(...$x); }
-echo f([2, 3]);
-"#,
-    );
-    assert_eq!(out, "5");
-}
-
-/// Verifies a call-argument spread of a `mixed` operand into a method (variadic) works via the
-/// runtime array guard, matching the common Symfony `$obj->method(...$args)` shape.
-#[test]
-fn test_call_arg_spread_mixed_into_method() {
-    let out = compile_and_run(
-        r#"<?php
-class C { function join2(...$n) { return implode("-", $n); } }
-function f(mixed $args) { $c = new C(); return $c->join2(...$args); }
-echo f(["a", "b", "c"]);
-"#,
-    );
-    assert_eq!(out, "a-b-c");
-}
-
-/// Verifies a call-argument spread of a `mixed` operand into a dynamic method call
-/// (`$obj->{$name}(...$args)`) works — the RedisTrait shape that dominates the Symfony fix.
-#[test]
-fn test_call_arg_spread_mixed_into_dynamic_method() {
-    let out = compile_and_run(
-        r#"<?php
-class C { function join2(...$n) { return implode(",", $n); } }
-function f(mixed $args) { $c = new C(); $m = "join2"; return $c->{$m}(...$args); }
-echo f(["x", "y"]);
-"#,
-    );
-    assert_eq!(out, "x,y");
-}
-
-/// Verifies a call-argument spread of a `mixed` operand into a closure/callable variable works.
-#[test]
-fn test_call_arg_spread_mixed_into_closure() {
-    let out = compile_and_run(
-        r#"<?php
-function f(mixed $args) { $fn = fn($a, $b) => $a . $b; return $fn(...$args); }
-echo f(["p", "q"]);
-"#,
-    );
-    assert_eq!(out, "pq");
-}
-
-/// Safety: a call-argument spread of a `mixed` operand holding a non-array scalar raises a
-/// clean `TypeError` fatal (PHP: "Only arrays and Traversables can be unpacked") instead of a
-/// SIGSEGV or a garbage read.
-#[test]
-fn test_call_arg_spread_mixed_scalar_faults_cleanly() {
-    let err = compile_and_run_expect_failure(
-        r#"<?php
-function add($a, $b) { return $a + $b; }
-function f(mixed $x) { return add(...$x); }
-echo f(5);
-"#,
-    );
-    assert!(
-        err.contains("array builtin argument must be of type array"),
-        "unexpected gradual call-arg spread diagnostic: {err}"
-    );
-}
-
-/// Verifies an array literal accepts an `iterable` operand and preserves its string keys.
-#[test]
-fn test_array_literal_spread_iterable_runtime_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-function printSpreadValues(iterable $values): void {
-    $spread = ["head", ...$values];
-    foreach ($spread as $key => $value) {
-        echo "[" . $key . ":" . $value . "]";
-    }
-}
-
-printSpreadValues(["named" => "x", 20 => "y"]);
-"#,
-    );
-    assert_eq!(out, "[0:head][named:x][1:y]");
-}
-
 /// Verifies that a variadic function with a preceding regular parameter receives zero rest elements when called with exactly one argument.
 #[test]
 fn test_variadic_with_regular_and_no_extra() {
@@ -1068,6 +751,168 @@ echo (new Calc())->count_args(10, 20, 30);
 "#,
     );
     assert_eq!(out, "3");
+}
+
+/// Verifies an explicitly `mixed` method variadic remains heterogeneous across call sites
+/// instead of being permanently specialized to the first call's element type.
+#[test]
+fn test_mixed_variadic_method_does_not_specialize_between_calls() {
+    let out = compile_and_run(
+        r#"<?php
+class MixedVariadicCollector {
+    public function count_args(mixed ...$args): int { return count($args); }
+}
+$collector = new MixedVariadicCollector();
+echo $collector->count_args("first") . ":" . $collector->count_args([1, 2], 3.5);
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+// --- Variadic tail element type across call sites ---
+//
+// An UNTYPED `...$rest` has no declared element type, so the checker infers one. It used to
+// infer it from the FIRST call site that resolved the function and never revisit it: the
+// ordinary call path (`respecialized_param_types_for_call`) walks only
+// `seen_idx < regular_param_count`, which structurally excludes the variadic slot from every
+// widening branch. A later call site whose tail held a DIFFERENT scalar type then pushed its
+// raw machine word into an array laid out for the first type, and the value was read back
+// reinterpreted — silently, with no warning and no crash. The cases below pin each direction
+// of that reinterpretation against `php -n` 8.5.6.
+
+/// Verifies a float in the tail survives a call site that earlier passed an int.
+///
+/// PHP 8.5.6 prints `[1]` then `[1.5]`. elephc printed `[1]` then `[4609434218613702656]` —
+/// the IEEE-754 bit pattern of `1.5` read as an integer, because the tail was frozen to
+/// `array<int>` by the first call. Note both calls have the SAME arity: the trigger is a
+/// difference in tail ELEMENT TYPE between call sites, not a difference in argument count.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_a_float() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", 1);
+v("c", 1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
+/// Verifies an int in the tail survives a call site that earlier passed a float.
+///
+/// The mirror image of the case above. PHP 8.5.6 prints `[1.5]` then `[1]`; elephc printed
+/// `[1.5]` then `[5.0e-324]` — the integer `1` reinterpreted as a subnormal double.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_an_int() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("c", 1.5);
+v("a", 1);
+"#,
+    );
+    assert_eq!(out, "[1.5]\n[1]\n");
+}
+
+/// Verifies a bool in the tail keeps its type after an int call site.
+///
+/// PHP 8.5.6 prints `[1]`, `[true]`, `[true,false]`. elephc printed `[1]`, `[1]`, `[1,0]`,
+/// having frozen the tail to `array<int>`, so `json_encode` emitted integers where PHP emits
+/// booleans.
+#[test]
+fn test_variadic_tail_widens_when_a_later_call_passes_a_bool() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", 1);
+v("d", true);
+v("e", true, false);
+"#,
+    );
+    assert_eq!(out, "[1]\n[true]\n[true,false]\n");
+}
+
+/// Verifies a tail that is heterogeneous ACROSS call sites and WITHIN one call compiles and
+/// keeps every element's type, including `null`.
+///
+/// PHP 8.5.6 prints `["s"]`, `["s",1]`, `[1,"s"]`, `["s",1,2.5,true,null]`. elephc refused
+/// the whole program with `EIR backend error: unsupported EIR backend feature: array_push for
+/// PHP type Void` — the frozen tail type left no slot a `null` could be pushed into.
+#[test]
+fn test_variadic_tail_accepts_heterogeneous_elements_across_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+v("a", "s");
+v("b", "s", 1);
+v("c", 1, "s");
+v("d", "s", 1, 2.5, true, null);
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"s\"]\n[\"s\",1]\n[1,\"s\"]\n[\"s\",1,2.5,true,null]\n"
+    );
+}
+
+/// Verifies the same widening on an instance METHOD variadic, whose signatures are stored and
+/// respecialized by a separate code path from free functions. PHP 8.5.6: `[1]` then `[1.5]`.
+#[test]
+fn test_variadic_method_tail_widens_between_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public function v(string $l, ...$rest) { echo json_encode($rest), "\n"; }
+}
+$c = new C();
+$c->v("a", 1);
+$c->v("c", 1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
+/// Verifies the widening also holds when the variadic has NO fixed parameter in front of it,
+/// so the tail starts at argument index 0. PHP 8.5.6 prints `[1]` then `[1.5]`.
+#[test]
+fn test_variadic_tail_without_fixed_parameter_widens_between_call_sites() {
+    let out = compile_and_run(
+        r#"<?php
+function v(...$rest) { echo json_encode($rest), "\n"; }
+v(1);
+v(1.5);
+"#,
+    );
+    assert_eq!(out, "[1]\n[1.5]\n");
+}
+
+/// Verifies associative-array COW cloning retains receiver-bound callable
+/// descriptors. Later insertions must not free descriptors already stored under
+/// earlier keys when their source locals leave scope.
+#[test]
+fn test_assoc_array_cow_clone_retains_callable_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+class CallableHashTarget {
+    public function twice($value) { return $value * 2; }
+    public function triple($value) { return $value * 3; }
+    public function quadruple($value) { return $value * 4; }
+}
+
+$target = new CallableHashTarget();
+$twice = $target->twice(...);
+$callbacks = ["twice" => $twice];
+$triple = $target->triple(...);
+$callbacks["triple"] = $triple;
+$quadruple = $target->quadruple(...);
+$callbacks["quadruple"] = $quadruple;
+unset($twice, $triple, $quadruple);
+echo call_user_func_array($callbacks["twice"], [5]);
+echo ":" . call_user_func_array($callbacks["triple"], [5]);
+echo ":" . call_user_func_array($callbacks["quadruple"], [5]);
+"#,
+    );
+    assert_eq!(out, "10:15:20");
 }
 
 /// Verifies a typed variadic on a closure collects its arguments.

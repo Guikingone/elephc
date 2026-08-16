@@ -29,13 +29,9 @@ pub(super) use crate::types::{collect_attribute_args, collect_attribute_names};
 
 /// Recursively builds and registers `ClassInfo` for `class_name` and its inheritance chain.
 ///
-/// Uses the shared `building` set to detect circular inheritance: `class_name` is inserted before
-/// its parents/interfaces are built and removed once this call fully returns. Crucially, the
-/// removal runs on **every** exit path — success and error — so a class that fails to build for any
-/// reason does not leak into `building` and mis-flag later, unrelated classes as circular. The
-/// actual build work lives in [`build_class_info_body`], which runs while `class_name` is present
-/// in `building` so genuine cycles are still caught by the recursion. Each class gets a unique
-/// `next_class_id`.
+/// Uses `building` set to detect circular inheritance. Validates modifiers, resolves the parent
+/// class recursively, collects properties and methods, validates interface contracts, and finally
+/// inserts the completed `ClassInfo` into `checker.classes`. Each class gets a unique `next_class_id`.
 pub(crate) fn build_class_info_recursive(
     class_name: &str,
     class_map: &HashMap<String, FlattenedClass>,
@@ -57,29 +53,6 @@ pub(crate) fn build_class_info_recursive(
         ));
     }
 
-    // Run the body with `class_name` present in `building` so recursive parent/interface builds
-    // still detect real cycles, then ALWAYS remove it — on Ok and on Err — before propagating the
-    // result. This is the fix for the leak that otherwise polluted `building` on error returns.
-    let result = build_class_info_body(class_name, class_map, checker, next_class_id, building);
-    building.remove(class_name);
-    result
-}
-
-/// Performs the actual `ClassInfo` build for `class_name`, assuming the caller has already inserted
-/// `class_name` into `building` and is responsible for removing it on every exit path.
-///
-/// Loads and validates the flattened declaration, resolves the parent class recursively, collects
-/// properties and methods, validates interface contracts, and inserts the completed `ClassInfo`
-/// into `checker.classes`, bumping `next_class_id`. This function never touches `building` other
-/// than forwarding it to the recursive parent/interface builds, which keeps genuine cycle detection
-/// intact while letting the caller guarantee the cleanup on both success and error.
-fn build_class_info_body(
-    class_name: &str,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &mut Checker,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
-) -> Result<(), CompileError> {
     let class = load_class(class_name, class_map)?;
     validate_class_modifiers(&class)?;
     let parent_info = resolve_parent_info(
@@ -94,7 +67,7 @@ fn build_class_info_body(
 
     let mut state = ClassBuildState::from_parent(parent_info.as_ref());
     properties::apply_properties(&mut state, &class, checker)?;
-    methods::apply_methods(&mut state, &class, class_map, checker, next_class_id, building)?;
+    methods::apply_methods(&mut state, &class, checker)?;
     interfaces::collect_interfaces(&mut state, &class, class_map, checker)?;
     validate_final_constant_constraints(&class, parent_info.as_ref(), &state, checker)?;
     interfaces::validate_interface_contracts(
@@ -111,6 +84,7 @@ fn build_class_info_body(
     let class_info = state.into_class_info(*next_class_id, &class, constructor_param_to_prop)?;
     checker.classes.insert(class.name.clone(), class_info);
     *next_class_id += 1;
+    building.remove(class_name);
     Ok(())
 }
 

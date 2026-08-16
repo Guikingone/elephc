@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the array-search hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_search",
+    contract: "array_search",
     area: Array,
-    params: [needle, haystack, strict = EvalBuiltinDefaultValue::Bool(false)],
     direct: ArraySearch,
     values: ArraySearch,
 }
@@ -51,6 +48,8 @@ pub(in crate::interpreter) fn eval_builtin_array_search(
     };
     let needle = eval_expr(needle, context, scope, values)?;
     let array = eval_expr(array, context, scope, values)?;
+    // `name` is `array_search` or `in_array`; both name argument #2 `$haystack`.
+    super::array_arg_check::eval_check_array_args(name, &[needle, array], context, values)?;
     eval_array_search_result(name, needle, array, values)
 }
 

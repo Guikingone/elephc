@@ -18,9 +18,8 @@ use super::output::{DiscoveryOutput, FunctionVariantRegistry};
 use super::stmts::discover_stmts;
 use super::super::declarations::extract_discoverable_declarations;
 use super::super::engine::resolve_stmts;
-use super::super::engine_includes::is_composer_autoloader_entry;
 use super::super::files::{parse_file, resolve_path};
-use super::super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
+use super::super::include_path::fold_include_path;
 use super::super::state::ResolveState;
 
 /// Processes a statically resolvable `include`/`require` statement.
@@ -55,32 +54,9 @@ pub(super) fn discover_include(
     state: &mut ResolveState,
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
-    let path_str = match fold_include_path(path, state) {
-        Ok(s) => s,
-        Err(msg) => {
-            // Under lenient include lowering (autoloader-spliced library code), an unresolvable
-            // runtime-dynamic include exposes no statically-discoverable declarations and is
-            // lowered to a runtime-fatal stub during expansion, so discovery skips it rather
-            // than failing the compile. Statically-invalid shapes still hard-error.
-            if state.lenient_dynamic_includes
-                && runtime_dynamic_include_path_detail(path).is_some()
-            {
-                return Ok(());
-            }
-            return Err(CompileError::new(span, &msg));
-        }
-    };
+    let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-
-    // elephc's `crate::autoload` reads composer.json (PSR-4/PSR-0/classmap/files) directly and
-    // replaces composer's runtime autoloader wholesale, so the composer autoloader entry and its
-    // generated machinery must not be followed by declaration discovery either. Skipping it here
-    // keeps discovery consistent with `resolve_include_stmt`, which no-ops the same entry, and
-    // avoids exposing composer's dynamic `include $file;` machinery to the strict resolver.
-    if is_composer_autoloader_entry(&resolved) {
-        return Ok(());
-    }
 
     if !resolved.exists() {
         if required {
@@ -106,9 +82,7 @@ pub(super) fn discover_include(
         ));
     }
 
-    let included_stmts = parse_file(&resolved, span)?;
-    let included_stmts =
-        crate::magic_constants::substitute_file_and_scope_constants(included_stmts, &resolved);
+    let included_stmts = parse_file(&resolved, span, &state.conditional_defines)?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();

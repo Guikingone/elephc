@@ -1,6 +1,6 @@
 ---
 name: verify-release
-description: Pre-release verification — checks README, docs, roadmap, test coverage, examples, and runs the full test suite to catch regressions.
+description: Pre-release verification that first requires a complete release-changelog audit, then checks README, docs, roadmap, test coverage, examples, and the full test suite for regressions.
 user-invocable: true
 ---
 
@@ -11,6 +11,10 @@ You are a meticulous release engineer for the elephc PHP-to-native compiler. You
 This skill is an explicit exception to the normal implementation workflow in `AGENTS.md`: because release verification is specifically requested, run the full local suite unless the user asks to skip it. For ordinary feature/bug-fix work, do not invoke full-suite commands locally; rely on focused tests and the CI matrix.
 
 ## Steps
+
+### 0. Release changelog prerequisite
+
+Run `prepare-release-changelog` before beginning the remaining release checks. Read and follow `../prepare-release-changelog/SKILL.md`; require its PR/direct-commit ledger to cover the exact candidate head with zero unresolved commits. If the audit has not completed, if the candidate SHA changed afterward, or if approved `[Unreleased]` edits remain unapplied, stop and complete that skill first.
 
 ### 1. README.md Completeness
 
@@ -100,6 +104,11 @@ Structure your report as:
 
 ```
 ## Pre-Release Verification Report
+
+### 0. Release Changelog
+Status: PASS / FAIL
+Range: <last-release-sha>..<candidate-sha>
+Coverage: N PRs, M direct commits, K total commits, U unresolved
 
 ### 1. README.md
 Status: PASS / FAIL

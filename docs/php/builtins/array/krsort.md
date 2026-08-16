@@ -2,20 +2,19 @@
 title: "krsort()"
 description: "Sorts an array by key in descending order."
 sidebar:
-  order: 54
+  order: 57
 ---
 
 ## krsort()
 
 ```php
-function krsort(array $array, int $flags = 0): bool
+function krsort(array $array): bool
 ```
 
 Sorts an array by key in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 
@@ -25,12 +24,6 @@ Sorts an array by key in descending order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/krsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/krsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

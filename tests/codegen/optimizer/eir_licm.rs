@@ -9,11 +9,11 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - PHP loop variables live in local slots and are reloaded each iteration
-//!   through impure `load_local`, so a loop-invariant *source* expression is not
-//!   yet a pure-operand computation LICM can hoist; the pass's hoisting logic is
-//!   covered by the unit tests on hand-built EIR. These fixtures verify behavior
-//!   is preserved on real loops. `$argc` is 1 with no CLI arguments.
+//! - Mutable PHP loop variables still use effectful `load_local` instructions.
+//!   Read-only scalar inputs and single-assignment entry locals can now be proven
+//!   immutable and hoisted with dependent pure computations; issue-623 structural
+//!   coverage lives in the adjacent `checked_int_sink` module. `$argc` is 1 with
+//!   no CLI arguments.
 
 use super::*;
 

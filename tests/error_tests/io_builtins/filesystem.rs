@@ -9,30 +9,30 @@
 
 use super::*;
 
-/// Verifies `file_get_contents()` rejects zero arguments with arity error.
+/// Verifies `file_get_contents()` rejects both ends of its PHP 8.4 arity range: `$filename` is
+/// required and `$length` is the last accepted argument.
 #[test]
 fn test_error_file_get_contents_wrong_args() {
     expect_error(
         "<?php file_get_contents();",
-        "file_get_contents() takes exactly 1 argument",
+        "file_get_contents() takes 1 to 5 arguments",
+    );
+    expect_error(
+        "<?php file_get_contents(\"a\", false, null, 0, 1, 2);",
+        "file_get_contents() takes 1 to 5 arguments",
     );
 }
 
-/// Verifies returning `file_get_contents()` (typed `Str|False`) from a `: string` function is
-/// ACCEPTED under PHP weak-mode `string`-boundary coercion: the boxed-`Mixed` return boundary
-/// runs `__rt_mixed_cast_string`, which maps the `false` failure marker to `""` (matching
-/// non-`strict_types` PHP), so it flows into the scalar `string` return instead of erroring. This
-/// is the shape Symfony's non-strict Dotenv/Path/Yaml boundaries rely on. (The `int|false`→`:int`
-/// sentinel diagnostic stays loud — see `test_error_readfile_false_return_into_int_return_type` —
-/// because a silent `false`→`0` there hides the classic `0`-is-a-valid-offset footgun.)
+/// Verifies `file_get_contents()` returning `false` is incompatible with declared `string` return type.
 #[test]
-fn test_file_get_contents_false_return_coerces_into_string_return_type() {
-    expect_ok(
+fn test_error_file_get_contents_false_return_rejects_string_return_type() {
+    expect_error(
         r#"<?php
 function read_file(): string {
     return file_get_contents("missing.txt");
 }
 "#,
+        "Function 'read_file' return type expects Str, got Union([Str, False])",
     );
 }
 
@@ -48,14 +48,12 @@ fn test_error_hash_file_wrong_args() {
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {
-    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+    expect_error("<?php readfile();", "readfile() takes 1 to 3 arguments");
 }
 
-/// Verifies the gradual-typing boundary model accepts returning `readfile()` (typed `Int|Bool`)
-/// from an `: int` function: `Bool` is PHP-coercible to `int` (weak mode coerces `false` to `0`),
-/// so the union flows into the scalar return with a runtime boundary guard instead of erroring.
+/// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
 #[test]
-fn test_error_readfile_false_return_into_int_return_type() {
+fn test_error_readfile_false_return_rejects_int_return_type() {
     expect_error(
         r#"<?php
 function dump_file(): int {
@@ -66,20 +64,11 @@ function dump_file(): int {
     );
 }
 
-/// Verifies `file_put_contents()` rejects one argument (PHP allows 2–4) with arity error.
+/// Verifies `file_put_contents()` rejects one argument (requires 2) with arity error.
 #[test]
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes 2 to 4 arguments",
-    );
-}
-
-/// Verifies `file_put_contents()` rejects five arguments (PHP allows 2–4) with arity error.
-#[test]
-fn test_error_file_put_contents_too_many_args() {
-    expect_error(
-        r#"<?php file_put_contents("x", "y", 0, null, 1);"#,
         "file_put_contents() takes 2 to 4 arguments",
     );
 }
@@ -94,18 +83,22 @@ fn test_error_file_exists_wrong_args() {
 }
 
 /// Verifies `mkdir()` rejects zero arguments with arity error.
+///
+/// php's signature is `mkdir($directory, $permissions = 0777, $recursive = false, $context = null)`,
+/// so the range is 1 to 4 — the contract used to stop at the directory, which made the ordinary
+/// `mkdir($p, 0755, true)` a compile error rather than a call.
 #[test]
 fn test_error_mkdir_wrong_args() {
-    // mkdir() gained optional $permissions/$recursive/$context params since
-    // 3a2bb667a; zero args is still invalid (directory is required), just
-    // with a "1 to 4" range message now.
     expect_error("<?php mkdir();", "mkdir() takes 1 to 4 arguments");
 }
 
 /// Verifies `copy()` rejects one argument (requires 2) with arity error.
+///
+/// The wording follows the signature: php declares `copy(string $from, string $to, $context = null)`,
+/// so since `$context` landed the range is 2 or 3, not exactly 2.
 #[test]
 fn test_error_copy_wrong_args() {
-    expect_error(r#"<?php copy("x");"#, "copy() takes exactly 2 arguments");
+    expect_error(r#"<?php copy("x");"#, "copy() takes 2 or 3 arguments");
 }
 
 /// Verifies `link()` rejects one argument (requires 2) with arity error.
@@ -151,11 +144,12 @@ fn test_error_getcwd_wrong_args() {
 }
 
 /// Verifies `scandir()` rejects zero arguments with arity error.
+///
+/// The wording follows the signature: php declares
+/// `scandir(string $directory, int $sorting_order = SCANDIR_SORT_ASCENDING, $context = null)`,
+/// so since the sorting order and then `$context` landed the range is 1 to 3, not exactly 1.
 #[test]
 fn test_error_scandir_wrong_args() {
-    // scandir() gained optional $sorting_order/$context params since
-    // 3a2bb667a; zero args is still invalid (directory is required), just
-    // with a "1 to 3" range message now.
     expect_error("<?php scandir();", "scandir() takes 1 to 3 arguments");
 }
 
@@ -241,13 +235,13 @@ fn test_error_extended_stat_builtins_wrong_args() {
 /// Verifies `unlink()` rejects zero arguments with arity error.
 #[test]
 fn test_error_unlink_wrong_args() {
-    expect_error("<?php unlink();", "unlink() takes exactly 1 argument");
+    expect_error("<?php unlink();", "unlink() takes 1 or 2 arguments");
 }
 
 /// Verifies `rmdir()` rejects zero arguments with arity error.
 #[test]
 fn test_error_rmdir_wrong_args() {
-    expect_error("<?php rmdir();", "rmdir() takes exactly 1 argument");
+    expect_error("<?php rmdir();", "rmdir() takes 1 or 2 arguments");
 }
 
 /// Verifies `chdir()` rejects zero arguments with arity error.
@@ -259,9 +253,7 @@ fn test_error_chdir_wrong_args() {
 /// Verifies `glob()` rejects zero arguments with arity error.
 #[test]
 fn test_error_glob_wrong_args() {
-    // glob() gained an optional $flags param since 3a2bb667a; zero args is
-    // still invalid (pattern is required), just with a "1 or 2" message now.
-    expect_error("<?php glob();", "glob() takes 1 or 2 arguments");
+    expect_error("<?php glob();", "glob() takes exactly 1 argument");
 }
 
 /// Verifies `sys_get_temp_dir()` rejects arguments with arity error.

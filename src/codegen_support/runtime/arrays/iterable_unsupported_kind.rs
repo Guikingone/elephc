@@ -7,6 +7,12 @@
 //!
 //! Key details:
 //! - Iterable helpers dispatch on runtime kind tags and must report unsupported shapes without corrupting iteration state.
+//! - This helper is NOT the `foreach` non-iterable path. PHP warns and skips the loop for
+//!   `foreach (false as $x)`, so those sites call `__rt_warn_foreach_non_iterable`
+//!   (`crate::codegen_support::runtime::arrays::foreach_non_iterable_warning`) instead.
+//!   What remains here are genuine elephc limitations — SPL iterator helpers and
+//!   `IteratorIterator::__construct` receiving a shape the backend cannot lower — where
+//!   aborting is the honest outcome.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -56,6 +62,6 @@ fn emit_iterable_unsupported_kind_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
     emitter.instruction("syscall");                                             // emit the iterable runtime fatal message before terminating
     emitter.instruction("mov edi, 70");                                         // use EX_SOFTWARE as the process exit status for consistency with the AArch64 path
-    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process immediately after the iterable runtime fatal diagnostic
 }

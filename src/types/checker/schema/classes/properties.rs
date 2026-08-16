@@ -319,14 +319,12 @@ fn apply_instance_property(
 }
 
 /// Handles a child-class redeclaration of an instance property inherited from a
-/// parent. When the name collides only with a PRIVATE ancestor property (not actually
-/// inherited in PHP), delegates to `redeclare_private_shadow_as_own_property`, which
-/// treats it as a fresh own declaration. Otherwise validates final, readonly,
-/// by-reference, and visibility constraints via `validate_instance_property_override`,
-/// updates the slot with the child's type or default, merges abstract property contracts
-/// if applicable, and syncs `state.prop_types`, `state.property_declaring_classes`,
-/// `state.final_properties`, `state.readonly_properties`, `state.abstract_properties`,
-/// and `state.reference_properties`.
+/// parent. Validates final, readonly, by-reference, and visibility constraints via
+/// `validate_instance_property_override`. Updates the slot with the child's type
+/// or default, merges abstract property contracts if applicable, and syncs
+/// `state.prop_types`, `state.property_declaring_classes`, `state.final_properties`,
+/// `state.readonly_properties`, `state.abstract_properties`, and
+/// `state.reference_properties`.
 fn apply_instance_property_redeclaration(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
@@ -524,16 +522,12 @@ fn replace_active_property_flags(
     Ok(())
 }
 
-
 /// Validates an instance property override against PHP inheritance rules:
 /// visibility reduction, final override attempts, readonly removal, by-reference
 /// toggling, and making a concrete property abstract. For abstract parent
 /// properties, delegates to `validate_abstract_property_contract`; otherwise
-/// validates type invariance. A property whose name collides only with a PRIVATE
-/// ancestor property is NOT an override (PHP does not inherit private properties):
-/// that case is intercepted upstream in `apply_instance_property_redeclaration` and
-/// handled as a fresh own declaration, so this function returns `Ok` early for it and
-/// never applies the override-visibility or type-invariance checks to a private parent.
+/// validates type invariance. Private parent properties are rejected as
+/// shadowing is not yet supported.
 fn validate_instance_property_override(
     state: &ClassBuildState,
     class: &FlattenedClass,

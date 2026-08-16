@@ -8,8 +8,6 @@
 //! Key details:
 //! - Public module boundaries here are part of the crate-facing compiler API.
 
-/// Shared exhaustive AST function-reference scanner driving pay-for-use prelude injection.
-pub(crate) mod ast_usage;
 pub mod autoload;
 /// Builtin catalog and signature metadata snapshots.
 pub mod builtin_metadata;
@@ -27,12 +25,12 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
-/// Conditionally-injected dynamic-`$filter` `filter_var()` helper prelude.
-pub mod filter_var_prelude;
-/// `$GLOBALS` literal-key aliasing onto ordinary global storage.
-pub mod globals_array;
+/// PHP variadic-argument introspection (`func_num_args`/`func_get_args`/`func_get_arg`) desugaring.
+pub mod func_args;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod dir_prelude;
+pub mod hash_prelude;
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;
@@ -42,30 +40,43 @@ pub mod ir;
 pub mod ir_lower;
 /// IR-level analyses and transforms (liveness, intervals, register allocation).
 pub mod ir_passes;
+/// Ordered typed final-link inputs shared with integration-test providers.
+#[doc(hidden)]
+pub mod link_plan;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
+/// Curated project-native dependency management and artifact resolution.
+#[doc(hidden)]
+pub mod native_deps;
 /// Namespace and use resolution.
 pub mod name_resolver;
 /// Name resolution and mangling.
 pub mod names;
+/// Compile-time OPcache introspection data (directive matrix).
+pub mod opcache;
+/// `opcache_get_configuration()` standard-library prelude injection.
+pub mod opcache_prelude;
 /// Optimizer passes.
 pub mod optimize;
-/// Conditionally-injected `parse_ini_file()` standard-library prelude.
-pub mod parse_ini_prelude;
 /// Parser for PHP syntax.
 pub mod parser;
+/// Selected PHP compatibility version for version-sensitive compiler surfaces.
+pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
-pub mod dom_prelude;
-pub mod return_type_guard;
 pub mod pdo_prelude;
+
+/// PHP language-profile selection and profile-dependence analysis.
+pub mod php_profile;
 /// Resolution of includes.
 pub mod resolver;
-/// Conditionally-injected `register_shutdown_function` prelude (elephc-PHP callback registry).
-pub mod shutdown_prelude;
+/// PHP `sscanf`/`fscanf` engine prelude injection.
+pub mod scanf_prelude;
+/// Physical source-file classification and per-file language profiles.
+pub mod source;
 /// Source span tracking.
 pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.
@@ -75,15 +86,15 @@ mod string_bytes;
 pub mod superglobals;
 /// Termination and exit handling.
 pub mod termination;
-/// Tree-shaking skeleton harvest (class hierarchy + method tables + free functions).
-pub mod tree_shake;
 /// Type system and checking.
+pub mod stream_compliance;
 pub mod types;
 /// Conditionally-injected timezone-introspection prelude (extern + marshalling).
 pub mod tz_prelude;
-/// Conditionally-injected rfc1867 upload-predicate prelude (`is_uploaded_file`/`move_uploaded_file`).
-pub mod upload_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
+/// `ini_restore`).
+pub mod version_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
 pub mod web_prelude;

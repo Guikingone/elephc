@@ -24,10 +24,7 @@ pub fn infer_return_type_syntactic(body: &[Stmt]) -> PhpType {
         collect_return_types_syntactic(stmt, &mut types);
     }
     if types.is_empty() {
-        // A body with no Return statements returns null in PHP, so seed Void rather than
-        // the unsound Int default. This avoids spurious "got Int" diagnostics when a
-        // free function delegates to a static method whose body has no explicit return.
-        return PhpType::Void;
+        return PhpType::Int;
     }
     // Pick the widest type across all return statements
     let mut result = types[0].clone();
@@ -153,6 +150,55 @@ pub(crate) fn wider_type_syntactic(a: &PhpType, b: &PhpType) -> PhpType {
     a.clone()
 }
 
+/// Computes the result type of PHP's `??` / `??=` merge.
+///
+/// `??` performs **no coercion**: it yields the left operand verbatim when that operand is set
+/// and non-null, otherwise the right operand verbatim. Folding the two arms with the general
+/// [`wider_type_syntactic`] heuristic is therefore wrong here — that helper implements PHP's
+/// *coercion* order, in which `Str` absorbs the other arm. Under it `["a" => true]["a"] ?? "M"`
+/// typed as `string`, so the boolean hit came back stringified as `"1"`; the same collapse hit
+/// `int`, `float`, `array` and `mixed` element reads. When the two arms are not the same type
+/// the only honest static answer is `Mixed`, which is exactly what the IR-level merge
+/// (`wider_type_for_merge` in `src/ir_lower/expr/mod.rs`) already materializes — this makes the
+/// checker agree with the code that is actually emitted instead of relabelling one arm.
+///
+/// Containers merge element-wise rather than collapsing to `Mixed` so the pervasive
+/// `$arr ?? []` idiom keeps its element type (an empty literal is `Array(Never)`).
+///
+/// This is deliberately a dedicated helper and not a change to [`wider_type_syntactic`]: that
+/// one is shared with closure return widening, match/ternary joins and array-element widening,
+/// where PHP's coercion order is the right answer.
+pub(crate) fn null_coalesce_merge_type(value_ty: &PhpType, default_ty: &PhpType) -> PhpType {
+    if value_ty == default_ty {
+        return value_ty.clone();
+    }
+    if matches!(value_ty, PhpType::Never | PhpType::Void) {
+        return default_ty.clone();
+    }
+    if matches!(default_ty, PhpType::Never | PhpType::Void) {
+        return value_ty.clone();
+    }
+    if matches!(
+        (value_ty, default_ty),
+        (PhpType::Bool, PhpType::False) | (PhpType::False, PhpType::Bool)
+    ) {
+        return PhpType::Bool;
+    }
+    match (value_ty, default_ty) {
+        (PhpType::Array(left), PhpType::Array(right)) => {
+            PhpType::Array(Box::new(null_coalesce_merge_type(left, right)))
+        }
+        (
+            PhpType::AssocArray { key: left_key, value: left_value },
+            PhpType::AssocArray { key: right_key, value: right_value },
+        ) => PhpType::AssocArray {
+            key: Box::new(merge_array_key_types(*left_key.clone(), *right_key.clone())),
+            value: Box::new(null_coalesce_merge_type(left_value, right_value)),
+        },
+        _ => PhpType::Mixed,
+    }
+}
+
 /// Computes the union of two array types when one operand is an empty indexed array literal.
 ///
 /// Returns `Some(PhpType)` when a + b can be expressed as a single type (identical arrays,
@@ -232,10 +278,7 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 ///
 /// A best-effort syntactic heuristic — not full type inference. Handles literals,
 /// casts, null-coalesce, ternary, match, array literals, binary operators, function calls,
-/// and `new` expressions. Returns a conservative `Mixed` for unrecognized constructs
-/// (unknown expression kinds or unknown builtin names) and `Void` for bodies with no
-/// return statement, so callers see a gradually-assignable seed rather than an unsound
-/// `Int` default.
+/// and `new` expressions. Returns a conservative type for unrecognized constructs.
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
@@ -267,18 +310,34 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
-            | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
+            | "base64_encode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
-            | "str_word_count" | "chunk_split" => PhpType::Str,
-            "strpos" | "strrpos" | "array_search" | "grapheme_strrev" | "fileatime"
+            | "chunk_split" | "quotemeta" | "base_convert"
+            // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
+            // strings. Without these arms an array literal such as `[dechex($n)]` would take
+            // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
+            // string result registers as an integer — `["a"]` came out as `[0]`.
+            | "join" | "dechex" | "decbin" | "decoct" => PhpType::Str,
+            "strpos" | "strrpos" | "stripos" | "strripos"
+            | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
             | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
-            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp" => {
+            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp"
+            // hexdec/bindec/octdec return `int|float`, whose shared codegen representation
+            // is `Mixed`; the boxed cell must not be read back as a raw integer.
+            | "hexdec" | "bindec" | "octdec"
+            // `base64_decode()` returns `string|false` because `$strict = true` rejects a
+            // character outside the Base64 alphabet with `false`. Its representation is the
+            // same boxed `Mixed` cell, so it must not be read back as a string pair.
+            | "base64_decode" => {
                 PhpType::Mixed
             }
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv" | "printf"
-            | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
+            | "rand" | "time" | "fpassthru" | "linkinfo"
+            // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a
+            // future change to that fallback cannot silently retype them.
+            | "substr_count" | "strncmp" | "strncasecmp" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
@@ -297,15 +356,12 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                 PhpType::Bool
             }
             "ptr_sizeof" | "ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
-            // Unknown builtin name: default to Mixed (gradually assignable to any declared
-            // return type) instead of the unsound Int, which produced spurious "got Int"
-            // errors for free functions delegating to static methods calling unlisted builtins.
-            _ => PhpType::Mixed,
+            _ => PhpType::Int,
         },
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             let right_ty = infer_expr_type_syntactic(default);
-            wider_type_syntactic(&left_ty, &right_ty)
+            null_coalesce_merge_type(&left_ty, &right_ty)
         }
         ExprKind::ErrorSuppress(inner) => infer_expr_type_syntactic(inner),
         ExprKind::Print(_) => PhpType::Int,
@@ -422,7 +478,20 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Int
                 }
             }
-            BinOp::Div | BinOp::Pow => PhpType::Float,
+            BinOp::Div => PhpType::Float,
+            BinOp::Pow => {
+                // PHP's `**` keeps an integer result when both operands are ints, the
+                // exponent is non-negative and the value fits; otherwise it is a float.
+                let lt = infer_expr_type_syntactic(left);
+                let rt = infer_expr_type_syntactic(right);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
+                    ty
+                } else {
+                    PhpType::Mixed
+                }
+            }
             BinOp::Eq
             | BinOp::NotEq
             | BinOp::Lt
@@ -438,11 +507,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             _ => PhpType::Int,
         },
         ExprKind::InstanceOf { .. } => PhpType::Bool,
-        // Unrecognized expression kind (Variable, MethodCall, StaticMethodCall, property
-        // access, ...): default to Mixed (gradually assignable to any declared type) instead
-        // of the unsound Int, which produced spurious "got Int" errors for free functions
-        // delegating to static methods whose return expression is e.g. a bare Variable.
-        _ => PhpType::Mixed,
+        _ => PhpType::Int,
     }
 }
 
@@ -454,9 +519,45 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         BinOp::Add => lhs.checked_add(rhs).is_some(),
         BinOp::Sub => lhs.checked_sub(rhs).is_some(),
         BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        BinOp::Pow => int_pow_result_fits(lhs, rhs),
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns whether PHP's `int ** int` keeps an integer result for these literals.
+///
+/// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):
+/// a negative exponent is always a double, `exp == 0` and `base == 0` answer immediately,
+/// and otherwise the square-and-multiply loop reports the first `i64` multiplication that
+/// would overflow — the exact point where PHP promotes the result to a double.
+fn int_pow_result_fits(base: i64, exponent: i64) -> bool {
+    if exponent < 0 {
+        return false;
+    }
+    if exponent == 0 || base == 0 {
+        return true;
+    }
+    let (mut accumulated, mut factor, mut remaining) = (1i64, base, exponent);
+    while remaining >= 1 {
+        if remaining % 2 == 1 {
+            remaining -= 1;
+            match accumulated.checked_mul(factor) {
+                Some(product) => accumulated = product,
+                None => return false,
+            }
+        } else {
+            remaining /= 2;
+            match factor.checked_mul(factor) {
+                Some(product) => factor = product,
+                None => return false,
+            }
+        }
+        if remaining == 0 {
+            return true;
+        }
+    }
+    true
 }
 
 /// Returns `true` when an integer arithmetic expression cannot overflow.

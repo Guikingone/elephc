@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_array_slice_refcounted`, `__rt_array_slice_ref_pos_off` runtime helper assembly for array slice refcounted.
+//! Emits the `__rt_array_slice_refcounted` runtime helper assembly for array slice refcounted.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -7,9 +7,12 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - The slice window is normalized by the shared `slice_bounds` prologue, so the retain loop always
+//!   runs over a non-negative element count that lies inside the source payload.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
 
 /// Emits the `__rt_array_slice_refcounted` runtime helper.
 ///
@@ -17,16 +20,16 @@ use crate::codegen_support::platform::Arch;
 /// is never modified; the returned array owns its elements independently.
 ///
 /// ## ABI
-/// - **ARM64**: `x0` = source array pointer, `x1` = start offset, `x2` = length (`-1` = till end).
-///   Result returned in `x0`.
-/// - **x86_64 Linux**: `rdi` = source array pointer, `rsi` = start offset, `rdx` = length.
+/// - **ARM64**: `x0` = source array pointer, `x1` = `$offset`, `x2` = `$length`, `x3` = 1 when a
+///   `$length` was supplied and 0 when it was omitted or `null`. Result returned in `x0`.
+/// - **x86_64 Linux**: `rdi`, `rsi`, `rdx`, `rcx` with the same meaning.
 ///   Result returned in `rax`.
 ///
 /// ## Slice semantics
-/// - Negative offset: counted backward from end of source, clamped to 0.
-/// - Length `-1` (ARM64) / `-1` sentinel: slice from offset to end of source.
-/// - Length exceeding remaining elements: clamped to available elements.
-/// - Offset out of range: returns an empty array.
+/// Delegated to `emit_slice_bounds`: negative offsets count backward from the end and clamp to the
+/// start, an omitted `$length` slices to the end, a negative `$length` stops that many elements
+/// before the end (clamped to an empty result), and a positive `$length` is clamped to the elements
+/// actually available. An offset past the end yields an empty array.
 pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_slice_refcounted_linux_x86_64(emitter);
@@ -42,24 +45,9 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
-    emitter.instruction("ldr x9, [x0]");                                        // load source array length
-    emitter.instruction("str x9, [sp, #8]");                                    // save source length
 
-    // -- handle negative offset: convert to positive --
-    emitter.instruction("cmp x1, #0");                                          // test whether offset is negative
-    emitter.instruction("b.ge __rt_array_slice_ref_pos_off");                   // skip adjustment for non-negative offsets
-    emitter.instruction("add x1, x9, x1");                                      // convert negative offset into positive index
-    emitter.instruction("cmp x1, #0");                                          // clamp converted offset against zero
-    emitter.instruction("csel x1, xzr, x1, lt");                                // use zero when converted offset is still negative
-
-    emitter.label("__rt_array_slice_ref_pos_off");
-    emitter.instruction("cmp x1, x9");                                          // compare offset with source length
-    emitter.instruction("b.ge __rt_array_slice_ref_empty");                     // return empty array when offset is out of range
-    emitter.instruction("sub x3, x9, x1");                                      // compute maximum possible slice length
-    emitter.instruction("cmn x2, #1");                                          // check whether requested length is -1
-    emitter.instruction("csel x2, x3, x2, eq");                                 // use remaining length when caller requested -1
-    emitter.instruction("cmp x2, x3");                                          // compare requested length with remaining length
-    emitter.instruction("csel x2, x3, x2, gt");                                 // clamp requested length to remaining length
+    // -- normalize the requested slice window against PHP's offset/length rules --
+    emit_slice_bounds(emitter, "__rt_array_slice_ref");
     emitter.instruction("str x1, [sp, #16]");                                   // save normalized offset
     emitter.instruction("str x2, [sp, #24]");                                   // save normalized slice length
 
@@ -91,14 +79,6 @@ pub fn emit_array_slice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return sliced array
-
-    emitter.label("__rt_array_slice_ref_empty");
-    emitter.instruction("mov x0, #0");                                          // request zero-capacity destination array
-    emitter.instruction("mov x1, #8");                                          // use 8-byte slots for heap pointers
-    emitter.instruction("bl __rt_array_new");                                   // allocate empty destination array
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
-    emitter.instruction("ret");                                                 // return empty sliced array
 }
 
 /// Emits the x86_64 Linux variant of `__rt_array_slice_refcounted`.
@@ -114,29 +94,9 @@ fn emit_array_slice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, normalized offset, clamped length, and destination array
     emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the refcounted slice bookkeeping while keeping helper calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across slice normalization and destination construction
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before normalizing the requested slice offset and length
-    emitter.instruction("cmp rsi, 0");                                          // detect the negative-offset case that counts backward from the end of the source indexed array
-    emitter.instruction("jge __rt_array_slice_ref_pos_off_x86");                // skip the backward-from-end adjustment when the requested slice offset is already non-negative
-    emitter.instruction("add rsi, r10");                                        // convert a negative slice offset into a source-length-relative positive offset
-    emitter.instruction("cmp rsi, 0");                                          // clamp the normalized slice offset so it never points before the start of the source indexed array
-    emitter.instruction("jge __rt_array_slice_ref_pos_off_x86");                // keep the normalized slice offset when it no longer points before the start of the source indexed array
-    emitter.instruction("xor esi, esi");                                        // clamp the normalized slice offset to zero when it would still point before the source array start
 
-    emitter.label("__rt_array_slice_ref_pos_off_x86");
-    emitter.instruction("cmp rsi, r10");                                        // detect the out-of-bounds offset case before allocating the destination indexed array
-    emitter.instruction("jge __rt_array_slice_ref_empty_x86");                  // return an empty indexed array when the requested slice offset starts beyond the source length
-    emitter.instruction("mov rcx, r10");                                        // seed the remaining-window scratch register from the source indexed-array logical length
-    emitter.instruction("sub rcx, rsi");                                        // compute the remaining refcounted payload count from the normalized slice offset to the end of the source indexed array
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_slice should run until the end of the source indexed array
-    emitter.instruction("jne __rt_array_slice_ref_known_len_x86");              // keep the explicit requested slice length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining refcounted payload count in the source indexed array
-
-    emitter.label("__rt_array_slice_ref_known_len_x86");
-    emitter.instruction("cmp rdx, rcx");                                        // clamp the requested slice length so it cannot extend beyond the source indexed-array bounds
-    emitter.instruction("jle __rt_array_slice_ref_len_ready_x86");              // keep the explicit requested slice length when it already fits inside the remaining refcounted payload window
-    emitter.instruction("mov rdx, rcx");                                        // clamp the requested slice length down to the remaining refcounted payload count
-
-    emitter.label("__rt_array_slice_ref_len_ready_x86");
+    // -- normalize the requested slice window against PHP's offset/length rules --
+    emit_slice_bounds(emitter, "__rt_array_slice_ref");
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the normalized slice offset across the destination indexed-array constructor call
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the clamped slice length across the destination indexed-array constructor call
     emitter.instruction("mov rdi, rdx");                                        // pass the clamped slice length as the destination indexed-array capacity to the shared constructor
@@ -171,12 +131,4 @@ fn emit_array_slice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the refcounted slice spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the refcounted sliced indexed-array pointer in rax
-
-    emitter.label("__rt_array_slice_ref_empty_x86");
-    emitter.instruction("mov rdi, 0");                                          // request an empty destination indexed-array capacity when the normalized slice offset starts beyond the source length
-    emitter.instruction("mov rsi, 8");                                          // request 8-byte payload slots for the empty destination indexed array
-    emitter.instruction("call __rt_array_new");                                 // allocate the empty destination indexed array through the shared x86_64 constructor
-    emitter.instruction("add rsp, 48");                                         // release the refcounted slice spill slots before returning the empty destination indexed array
-    emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the empty-slice constructor path
-    emitter.instruction("ret");                                                 // return the empty refcounted sliced indexed-array pointer in rax
 }

@@ -2,7 +2,7 @@
 title: "buffer_free()"
 description: "Frees a buffer<T> and nulls the local variable that held it."
 sidebar:
-  order: 65
+  order: 71
 ---
 
 ## buffer_free()
@@ -25,12 +25,6 @@ Frees a buffer<T> and nulls the local variable that held it.
 - **Strict PHP mode**: hidden — this builtin is an elephc extension with no PHP equivalent, so programs compiled with [`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) treat the name as nonexistent, in compiled code and inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

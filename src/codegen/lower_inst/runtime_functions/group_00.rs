@@ -25,9 +25,6 @@ pub(super) fn lower(
         RuntimeFnId::ArrayAny => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_any(ctx, inst)
         }),
-        RuntimeFnId::ArrayChangeKeyCase => Some({
-            crate::codegen::lower_inst::builtins::arrays::lower_array_change_key_case(ctx, inst)
-        }),
         RuntimeFnId::ArrayChunk => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_chunk(ctx, inst)
         }),
@@ -39,6 +36,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ArrayDiff => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_diff(ctx, inst)
+        }),
+        RuntimeFnId::ArrayCountValues => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_count_values(ctx, inst)
         }),
         RuntimeFnId::ArrayDiffAssoc => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_diff_assoc(ctx, inst)

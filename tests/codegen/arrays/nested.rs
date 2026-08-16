@@ -105,37 +105,6 @@ echo count($names);
     assert_eq!(out, "3");
 }
 
-/// Verifies `array_column()` accepts a gradual `Mixed` operand (a `mixed` parameter holding an
-/// array of associative rows) and extracts the requested column through the assert-array boundary,
-/// reading the original hash rows rather than a boxed rebuild.
-#[test]
-fn test_array_column_gradual_mixed_operand() {
-    let out = compile_and_run(
-        r#"<?php
-function col(mixed $u) { return implode(",", array_column($u, "v")); }
-echo col([["id" => 1, "v" => "a"], ["id" => 2, "v" => "b"]]);
-"#,
-    );
-    assert_eq!(out, "a,b");
-}
-
-/// Verifies `array_column()` on a runtime `false` gradual operand fatals with a `TypeError`,
-/// matching PHP 8 (`array_column(false, …)` is a `TypeError`) instead of silently yielding `[]`.
-#[test]
-fn test_array_column_gradual_false_operand_fatals() {
-    let err = compile_and_run_expect_failure(
-        r#"<?php
-function col(mixed $u) { return array_column($u, "v"); }
-$r = col(false);
-echo "unreached";
-"#,
-    );
-    assert!(
-        err.contains("array builtin argument must be of type array"),
-        "unexpected stderr: {err}"
-    );
-}
-
 /// Exercises `array_column()` on rows containing mixed (string and int) values, then iterates both result arrays to confirm ordering and values are preserved.
 #[test]
 fn test_array_column_mixed_row_values() {

@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fileinode",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "fileinode",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fileinode,
     ),
-    summary: "Gets file inode.",
-    php_manual: "function.fileinode",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `fileinode` can return an inode number or `false`.

@@ -15,13 +15,8 @@ use crate::errors::CompileError;
 use crate::names::canonical_name_for_decl;
 use crate::parser::ast::{CatchClause, ClassMethod, ExprKind, Stmt, StmtKind};
 
-use super::contains::stmt_has_value_include;
 use super::discovery::FunctionVariantRegistry;
-use super::engine_includes::{
-    expand_value_include, resolve_include_stmt, try_expand_degraded_property_include,
-    IncludeValueCapture,
-};
-use super::hoist_includes::hoist_value_includes_in_stmt;
+use super::engine_includes::{expand_value_include, resolve_include_stmt, IncludeValueCapture};
 use super::include_path::fold_include_path;
 use super::state::{
     is_define_call_name, namespace_string, normalize_defined_constant_name,
@@ -93,15 +88,7 @@ pub(super) fn resolve_stmts(
     let mut result = Vec::new();
 
     for stmt in stmts {
-        // A `$obj->prop = require $dynamic;` whose degraded runtime-fatal include would otherwise
-        // seed a hidden `mixed` temporary captured into the typed property lowers directly to the
-        // diverging stub, dropping the dead store (see `try_expand_degraded_property_include`): the
-        // include fatals before the assignment, and `prop_set mixed -> Array` has no EIR lowering.
-        if let Some(stub) = try_expand_degraded_property_include(&stmt, state) {
-            result.extend(stub);
-            continue;
-        }
-
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         // Expression-position includes (`$x = require X;` / `return require X;`) are expanded
         // before generic expression resolution so the included file's statements are inlined into
         // the caller's scope rather than resolved as an opaque sub-expression.
@@ -116,29 +103,6 @@ pub(super) fn resolve_stmts(
             result.extend(expanded);
             continue;
         }
-
-        // Nested expression-position includes (e.g. `self::$x ??= require F;` or
-        // `$y = 10 + require F;`) are not caught by the direct-capture fast-path above, so hoist
-        // each one into a fresh temporary evaluated *before* this statement, prepending its
-        // expansion to `result`. The include therefore runs EAGERLY (before the statement); for
-        // pure data-file includes this is observably identical to PHP and consistent with
-        // elephc's compile-time include-inlining model. See `hoist_includes` for the tradeoff.
-        let stmt = if stmt_has_value_include(&stmt) {
-            let mut hoisted = Vec::new();
-            let rewritten = hoist_value_includes_in_stmt(
-                stmt,
-                &mut hoisted,
-                base_dir,
-                declared_once,
-                include_chain,
-                state,
-                function_variants,
-            )?;
-            result.extend(hoisted);
-            rewritten
-        } else {
-            stmt
-        };
 
         let stmt = resolve_stmt_exprs(
             stmt,

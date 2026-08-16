@@ -30,9 +30,6 @@ const BUILTIN_INTERFACE_NAMES: &[&str] = &[
     "SplObserver",
     "SplSubject",
     "Stringable",
-    "UnitEnum",
-    "BackedEnum",
-    "Reflector",
 ];
 
 /// Injects PHP SPL builtin interfaces into the type environment.
@@ -258,43 +255,6 @@ pub(crate) fn inject_builtin_interfaces(
             extends: Vec::new(),
             properties: Vec::new(),
             methods: vec![builtin_interface_method("__toString", TypeExpr::Str)],
-            span: crate::span::Span::dummy(),
-            constants: Vec::new(),
-        },
-    );
-
-    interface_map.insert(
-        "UnitEnum".to_string(),
-        marker_interface("UnitEnum"),
-    );
-
-    interface_map.insert(
-        "BackedEnum".to_string(),
-        InterfaceDeclInfo {
-            name: "BackedEnum".to_string(),
-            extends: vec!["UnitEnum".to_string()],
-            properties: Vec::new(),
-            methods: Vec::new(),
-            span: crate::span::Span::dummy(),
-            constants: Vec::new(),
-        },
-    );
-
-    // PHP: `interface Reflector extends Stringable` — a marker contract every
-    // core Reflection* class implements. Declares no methods of its own; the
-    // `__toString(): string` requirement is inherited from `Stringable`.
-    // Registered for typing/`instanceof` only (per the reflection expansion's
-    // jury addendum): the concrete Reflection* shells satisfy the inherited
-    // `__toString` contract with a method that throws rather than fabricating
-    // PHP's real object-dump text (see `reflection.rs`'s
-    // `builtin_reflection_unsupported_tostring_method`).
-    interface_map.insert(
-        "Reflector".to_string(),
-        InterfaceDeclInfo {
-            name: "Reflector".to_string(),
-            extends: vec!["Stringable".to_string()],
-            properties: Vec::new(),
-            methods: Vec::new(),
             span: crate::span::Span::dummy(),
             constants: Vec::new(),
         },

@@ -20,123 +20,6 @@ fn test_error_call_user_func_wrong_args() {
     );
 }
 
-/// php-verified: real PHP fatals at runtime with "func_get_args() cannot be called from the
-/// global scope". elephc rejects this at compile time instead (a native AOT compiler has no
-/// runtime "global scope" concept to fall back to), with an equivalent message.
-#[test]
-fn test_error_func_get_args_global_scope() {
-    expect_error(
-        r#"<?php func_get_args();"#,
-        "Cannot call func_get_args() from the global scope",
-    );
-}
-
-/// Companion to `test_error_func_get_args_global_scope` for `func_num_args()`.
-#[test]
-fn test_error_func_num_args_global_scope() {
-    expect_error(
-        r#"<?php func_num_args();"#,
-        "Cannot call func_num_args() from the global scope",
-    );
-}
-
-/// Regression guard for the `callable_wrapper_sig` variadic-defaults fix (N1 item 1): a
-/// variadic METHOD with a REQUIRED leading parameter must still reject a call that omits
-/// the required parameter. `callable_wrapper_sig` only relaxed the SYNTHESIZED variadic
-/// slot's own default; the required parameter ahead of it keeps its `None` default and
-/// must still count toward `required`. php -n verified: `class M { function v($first,
-/// ...$rest) {} } (new M)->v();` fatals with `ArgumentCountError: Too few arguments to
-/// function M::v(), 0 passed ... and exactly 1 expected`.
-#[test]
-fn test_error_variadic_method_still_requires_leading_required_param() {
-    expect_error(
-        r#"<?php
-class M {
-    function v($first, ...$rest) {}
-}
-$m = new M();
-$m->v();
-"#,
-        "Method M::v expects at least 1 arguments, got 0",
-    );
-}
-// NOTE: class_exists() (and the other class-like existence probes) accept a
-// dynamic autoload flag: it never contributes an AOT autoload demand and
-// existence still folds from the literal class name. Only the class-relation
-// builtins (class_implements/class_parents/class_uses) keep the literal
-// autoload requirement, covered below.
-
-/// Gated dynamic-invoker form: first-class-callable syntax (`f(...)`) creates a generic
-/// callable descriptor invoked later through the uniform-invoke ABI, which does not know
-/// about an arity-hungry function's hidden trailing arity-count parameter — refused as a
-/// normal compile-time diagnostic (checked in
-/// `Checker::resolve_first_class_callable_sig`) rather than reaching EIR lowering.
-#[test]
-fn test_error_func_num_args_first_class_callable() {
-    expect_error(
-        r#"<?php
-function f($a, $b = 2) { echo func_num_args(); }
-$fn = f(...);
-$fn(1, 2, 3);
-"#,
-        "cannot be used as a first-class callable",
-    );
-}
-
-/// Gated call shape: a spread argument whose length is NOT statically known (a variable, not
-/// a literal array) into an arity-hungry function's call site. A statically-sized spread
-/// (`f(...[7, 8])`) IS supported — see
-/// `codegen::callables::func_args_intrinsics::test_func_num_args_static_spread_call_is_counted`.
-#[test]
-fn test_error_func_num_args_dynamic_spread() {
-    expect_error(
-        r#"<?php
-function f($a, $b = 2) { echo func_num_args(); }
-$args = [1, 2, 3];
-f(...$args);
-"#,
-        "cannot be called with a dynamic-length spread",
-    );
-}
-
-/// Gated call shape: a literal-named callback applied PER-ELEMENT of a runtime array (e.g.
-/// `array_map`) is lowered through a path that cannot append the hidden arity-count operand.
-/// `call_user_func_array()` with a literal name and array IS supported (a different, static
-/// argument-list lowering path) — see
-/// `codegen::callables::func_args_intrinsics::test_func_num_args_through_call_user_func_array_literal_name`.
-#[test]
-fn test_error_func_num_args_array_map_callback_literal_name() {
-    expect_error(
-        r#"<?php
-function dyn($a, $b = 2) { echo func_num_args(); }
-array_map('dyn', [1, 2, 3]);
-"#,
-        "cannot be used as a callback for array_map() callback",
-    );
-}
-
-/// Verifies an arity-hungry virtual method stays rejected when another runtime
-/// implementation can occupy the same dispatch slot.
-#[test]
-fn test_func_num_args_in_method_body_with_union_receiver_is_accepted() {
-    // The sharpest shape of the old refusal: a UNION receiver that can dispatch to the
-    // arity-hungry `C::m` or the plain `D::m`. Relaxing the whole family gives both the same
-    // frame, so either landing is correct. Runtime output pinned in
-    // `tests/codegen/oop/callables/methods.rs`.
-    expect_ok(
-        r#"<?php
-class C {
-    function m($a) { return func_num_args(); }
-}
-class D extends C {
-    function m($a) { return $a; }
-}
-$value = true ? new C() : new D();
-$value->m(1);
-"#,
-    );
-}
-
 /// Verifies that error function exists wrong args.
 #[test]
 fn test_error_function_exists_wrong_args() {
@@ -148,11 +31,22 @@ fn test_error_function_exists_wrong_args() {
     );
 }
 
-// `class_exists()`/`interface_exists()`/`trait_exists()` with a non-literal name
-// or a non-literal autoload flag are no longer AOT-mode errors: they compile to
-// a closed-world `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`
-// registry lookup, cloning the `enum_exists` non-literal path. See the positive
-// codegen coverage in `tests/codegen/casts_and_constants/introspection.rs`.
+/// Verifies that error class exists requires literal name.
+#[test]
+fn test_error_class_exists_requires_literal_name() {
+    // Verifies `class_exists()` with a runtime variable as the first argument
+    // produces a diagnostic because AOT mode requires a string literal.
+    expect_error(
+        r#"<?php $name = "DateTime"; class_exists($name);"#,
+        "class_exists() first argument must be a string literal in AOT mode",
+    );
+}
+
+// NOTE: class_exists() (and the other class-like existence probes) accept a
+// dynamic autoload flag: it never contributes an AOT autoload demand and
+// existence still folds from the literal class name. Only the class-relation
+// builtins (class_implements/class_parents/class_uses) keep the literal
+// autoload requirement, covered below.
 
 /// Verifies that error interface exists wrong args.
 #[test]
@@ -196,18 +90,11 @@ fn test_error_class_implements_wrong_args() {
     );
 }
 
-// `class_implements()`/`class_parents()`/`class_uses()` with a non-literal string
-// name or an object argument are no longer AOT-mode errors: they compile to a
-// closed-world `__rt_class_implements`/`__rt_class_parents`/`__rt_class_uses`
-// per-class relation registry lookup, cloning the `class_exists` non-literal
-// path. See the positive codegen coverage in
-// `tests/codegen/spl/introspection.rs`.
-
-/// Verifies that error class implements requires object or string.
+/// Verifies that error class implements requires literal or object.
 #[test]
-fn test_error_class_implements_requires_object_or_string() {
+fn test_error_class_implements_requires_literal_or_object() {
     expect_error(
-        r#"<?php class_implements(42);"#,
+        r#"<?php $name = "DateTime"; class_implements($name);"#,
         "class_implements() first argument must be an object or string literal in AOT mode",
     );
 }
@@ -319,34 +206,6 @@ fn test_error_class_alias_rejects_runtime_call_shape() {
     );
 }
 
-/// Verifies a non-top-level `class_alias()` with literal class-name arguments is accepted: the
-/// alias target is fixed regardless of statement position, so a call nested inside a function and
-/// `if` (Symfony's `PhpFileLoader` guards `class_alias(AppReference::class, App::class)` this way)
-/// type-checks rather than being rejected as "only supported as a top-level statement".
-#[test]
-fn test_class_alias_literal_names_in_function_ok() {
-    expect_ok(
-        r#"<?php
-class Original {}
-function boot(): void {
-    if (!class_exists('App\\Aliased')) {
-        class_alias(Original::class, 'App\\Aliased');
-    }
-}
-"#,
-    );
-}
-
-/// Negative control: a non-top-level `class_alias()` built from dynamic (non-literal) class names
-/// stays rejected, since AOT cannot resolve the alias target ahead of time.
-#[test]
-fn test_class_alias_dynamic_names_in_function_still_errors() {
-    expect_error(
-        r#"<?php function boot(string $a, string $b): void { class_alias($a, $b); }"#,
-        "class_alias() is only supported as a top-level statement with literal class names",
-    );
-}
-
 // --- Closure / arrow function errors ---
 
 /// Verifies that error call non callable variable.
@@ -355,18 +214,6 @@ fn test_error_call_non_callable_variable() {
     // Verifies invoking a non-callable variable (integer) produces a "not a callable"
     // diagnostic at runtime.
     expect_error(r#"<?php $x = 5; $x(1);"#, "not a callable");
-}
-
-/// Verifies that calling a non-callable integer expression is rejected.
-///
-/// Genuine-error guard for the expression-call site: a concrete `Int` receiver
-/// must still produce a "not a callable" diagnostic after the gradual
-/// acceptance helper is introduced.
-#[test]
-fn test_error_call_non_callable_int_expression() {
-    // Verifies invoking an integer literal expression produces a "not a callable"
-    // diagnostic at the expression-call site.
-    expect_error(r#"<?php echo (5)();"#, "not a callable");
 }
 
 /// Verifies that error call user func ref param requires variable.
@@ -409,13 +256,11 @@ fn test_error_case_insensitive_function_string_introspection_keeps_callback_chec
 /// Verifies that error closure return type rejects mismatch.
 #[test]
 fn test_error_closure_return_type_rejects_mismatch() {
-    // Verifies a closure with an explicit return type that returns a NON-coercible
-    // mismatched type produces a diagnostic showing the expected and actual types. An
-    // `array` return is not weak-coercible to `string` (unlike `int`/`float`/Stringable),
-    // so it stays loud.
+    // Verifies a closure with an explicit return type that returns a mismatched
+    // type produces a diagnostic showing the expected and actual types.
     expect_error(
-        "<?php $f = function(): string { return [1]; };",
-        "Closure return type expects Str, got Array",
+        "<?php $f = function(): string { return 1; };",
+        "Closure return type expects Str, got Int",
     );
 }
 
@@ -583,241 +428,107 @@ fn test_error_pipe_closure_literal_typed_parameter_mismatch() {
     );
 }
 
-/// Verifies the `$this(...)`/`__invoke` first-class-callable relaxation stays scoped: a genuine
-/// method typo used as an FCC (`$this->genuinelyMissingMethod(...)`) still produces the
-/// "Undefined method for first-class callable" diagnostic. Only `__invoke` is permissively
-/// accepted on a class that lacks it, so typo detection for every other method is preserved.
+// --- Argument introspection (`func_num_args` / `func_get_args` / `func_get_arg`) ---
+
+/// Verifies that calling an argument-introspection construct outside any function reports
+/// PHP's "must be called from a function context" error instead of an undefined function.
 #[test]
-fn test_error_this_fcc_missing_method_still_reported() {
+fn test_error_func_num_args_outside_function() {
     expect_error(
-        r#"<?php
-class Foo {
-    public function real(): void {}
-    public function go(): void {
-        $cb = $this->genuinelyMissingMethod(...);
-    }
-}
-$f = new Foo();
-$f->go();
-"#,
-        "Undefined method for first-class callable",
+        "<?php echo func_num_args();",
+        "func_num_args() must be called from a function context",
     );
 }
 
-/// Verifies that a dynamic `$stringVar::cases()` on an unresolved class infers `array<mixed>`
-/// so `array_column()` accepts it (R5). The receiver is a `string` class-name that cannot be
-/// resolved to the concrete enum at compile time.
+/// Verifies that a function with an optional parameter is rejected: elephc collects the
+/// surplus arguments through a hidden variadic and cannot tell a passed argument from a
+/// defaulted one, so it refuses instead of reporting a wrong count.
 #[test]
-fn test_dynamic_cases_call_infers_array_for_array_column() {
-    expect_ok(
-        r#"<?php
-enum E: string { case A = 'a'; case B = 'b'; }
-function f(string $c) { return array_column($c::cases(), 'value'); }
-"#,
-    );
-}
-
-/// Verifies the R5 gate infers the concrete `array<mixed>` (not the gradual `Mixed`) for a
-/// dynamic `cases()`: returning it from an `int`-typed function is a type error, proving the
-/// result is an array.
-#[test]
-fn test_dynamic_cases_call_result_is_array_not_mixed() {
+fn test_error_func_num_args_with_optional_parameter() {
     expect_error(
-        r#"<?php
-enum E: string { case A = 'a'; }
-function f(string $c): int { return $c::cases(); }
-"#,
-        "got Array",
+        "<?php function f($a, $b = 5) { return func_num_args(); } echo f(1);",
+        "parameter $b has a default value",
     );
 }
 
-/// Verifies the R5 gate is strictly `cases`-only: a dynamic non-`cases` static call on an
-/// unresolved receiver keeps its pre-existing gradual `Mixed` inference (accepted here as an
-/// `int` return), so the special case does not widen unrelated dynamic dispatch.
+/// Verifies that a function which already declares a variadic parameter is rejected,
+/// because the body may reassign that parameter and PHP would still report the arguments
+/// actually passed.
 #[test]
-fn test_dynamic_non_cases_call_stays_gradual_mixed() {
-    expect_ok(
-        r#"<?php
-function g(string $c): int { return $c::nonexistent(); }
-"#,
-    );
-}
-
-/// Verifies the R5 gate does not mask genuine errors on a *resolved* receiver: calling an
-/// undefined static method on a known enum still reports `Undefined method`.
-#[test]
-fn test_resolved_static_undefined_method_still_errors() {
+fn test_error_func_get_args_in_variadic_function() {
     expect_error(
-        r#"<?php
-enum E: string { case A = 'a'; }
-echo E::nonexistent();
-"#,
-        "Undefined method: E::nonexistent",
+        "<?php function f(...$r) { return func_get_args(); } var_dump(f(1));",
+        "it declares the variadic parameter $r",
     );
 }
 
-/// Campaign H1 PART A: a callable-variable invocation with TOO FEW arguments stays a loud
-/// compile error ("Too few arguments" is a real PHP `ArgumentCountError`, php -n verified) even
-/// though the same path now tolerates EXTRA arguments (see
-/// `test_callable_variable_tolerates_extra_positional_args` in
-/// `tests/codegen/oop/callables/functions_and_builtins.rs`). Only the upper bound was relaxed.
+/// Verifies php-src's rule that these constructs cannot be called dynamically, here through
+/// first-class callable syntax.
 #[test]
-fn test_error_callable_variable_too_few_args_stays_loud() {
+fn test_error_func_num_args_first_class_callable() {
     expect_error(
-        r#"<?php
-$cb = function ($i) { return $i; };
-echo $cb();
-"#,
-        "expects 1 arguments, got 0",
+        "<?php function f() { $g = func_num_args(...); return $g(); } echo f(1);",
+        "Cannot call func_num_args() dynamically",
     );
 }
 
-/// Regression: a first-class callable created on a value typed as an INTERFACE
-/// (`Greeter $g; $g->greet(...)`) resolves gradually instead of hard-erroring
-/// "Undefined class: Greeter". The interface is registered in the interface map,
-/// never in the class map, so the first-class-callable path must consult interfaces
-/// and fall back to a runtime-dispatched (gradual) callable signature — the concrete
-/// implementor is only known at runtime. See `callables::first_class`.
+/// Verifies the arity check: `func_num_args()` takes no arguments.
 #[test]
-fn test_first_class_callable_on_interface_typed_receiver_resolves() {
-    expect_ok(
-        r#"<?php
-interface Greeter { public function greet(string $n): string; }
-class Hello implements Greeter { public function greet(string $n): string { return "hi $n"; } }
-function run(Greeter $g): string { $fn = $g->greet(...); return $fn("bob"); }
-echo run(new Hello());
-"#,
-    );
-}
-
-/// Negative control for the interface-typed first-class-callable relaxation above:
-/// a first-class callable naming a method that does NOT exist on a statically-known
-/// concrete class still errors, so the relaxation never blanket-accepts typos.
-#[test]
-fn test_first_class_callable_undefined_method_on_known_class_still_errors() {
+fn test_error_func_num_args_rejects_arguments() {
     expect_error(
-        r#"<?php
-class K { public function foo(): void {} }
-function bad(K $k) { return $k->nope(...); }
-bad(new K());
-"#,
-        "Undefined method for first-class callable: K::nope",
+        "<?php function f() { return func_num_args(1); } echo f();",
+        "func_num_args() expects 0 arguments, got 1",
     );
 }
 
-/// Same gate as `test_error_func_num_args_dynamic_spread`, on the METHOD call path.
-///
-/// Before this gate existed the method path had no caller-visible check at all and reached
-/// `crate::ir_lower::expr::func_args_intrinsics::compute_static_passed_count`'s
-/// defense-in-depth `panic!`, aborting the compiler with exit 101 instead of reporting a
-/// diagnostic. `php -n` runs the shape (`n=3`), so this is a documented elephc limitation,
-/// not PHP-invalid input.
+/// Verifies the arity check: `func_get_arg()` requires its `$position` argument.
 #[test]
-fn test_error_func_num_args_dynamic_spread_into_method() {
+fn test_error_func_get_arg_requires_position() {
     expect_error(
-        r#"<?php
-class Only {
-    public function tally(int $a = 0): void { echo func_num_args(); }
-}
-$dynamic = [1, 2, 3];
-(new Only())->tally(...$dynamic);
-"#,
-        "cannot be called with a dynamic-length spread",
+        "<?php function f() { return func_get_arg(); } echo f(1);",
+        "func_get_arg() expects 1 arguments, got 0",
     );
 }
 
-/// The constructor form of the same gate. Constructors are marked arity-hungry without the
-/// closed-world name check (they are direct allocation targets), so this path resolves the
-/// exact `"<impl>::__construct"` key from the allocated class rather than matching on name.
+/// Verifies that surplus *named* arguments stay rejected for a function that only carries
+/// the hidden argument-collection parameter: PHP accepts extra positional arguments there
+/// but still rejects an unknown named one.
 #[test]
-fn test_error_func_num_args_dynamic_spread_into_constructor() {
+fn test_error_surplus_named_argument_to_introspecting_function() {
     expect_error(
-        r#"<?php
-class Ctor {
-    public function __construct(int $a = 0) { echo func_num_args(); }
-}
-$dynamic = [1, 2];
-new Ctor(...$dynamic);
-"#,
-        "cannot be called with a dynamic-length spread",
+        "<?php function f($a) { return func_num_args(); } echo f(1, c: 3);",
+        "has no parameter $c",
     );
 }
 
-/// A genuine polymorphic OVERRIDE is now accepted: `func_args_scan` relaxes the WHOLE
-/// implementation family of a method name together, so both bodies get the same lowered shape
-/// and no dispatch can land on a frame laid out differently.
-///
-/// This used to be refused, and the refusal was a limitation rather than a semantic — the gate
-/// was really about UNIFORMITY, not singularity. The runtime behaviour is pinned in
-/// `tests/codegen/oop/callables/methods.rs`, which is where it belongs: acceptance alone would
-/// only prove the checker changed its mind.
+/// Verifies that a method using the constructs while implementing an interface method is
+/// rejected with a targeted message: the inherited signature has no slot for the collected
+/// surplus arguments.
 #[test]
-fn test_func_num_args_in_overriding_method_is_accepted() {
-    expect_ok(
-        r#"<?php
-abstract class BarBase {
-    public function render(int $max = 0): string { return "base:$max"; }
-}
-class BarChild extends BarBase {
-    public function render(int $max = 0): string
-    {
-        $format = \func_num_args() > 1 ? func_get_arg(1) : 'def';
-        return "child:$max:$format";
-    }
-}
-echo (new BarChild())->render(3);
-"#,
+fn test_error_func_get_args_in_interface_implementation() {
+    expect_error(
+        "<?php interface I { public function q(); } class C implements I { public function q() { return func_num_args(); } }",
+        "the inherited signature cannot be widened to collect surplus arguments",
     );
 }
 
-/// The NAME-GLOBAL axis: two UNRELATED classes sharing a method name, one arity-hungry. Also
-/// accepted now, and for the same reason — `Unrelated::pick` is relaxed alongside
-/// `Picker::pick`, so the gradual-receiver dispatch `ir_lower::expr` performs by method NAME
-/// finds one operand layout whichever body it reaches.
-///
-/// The optional-parameter detail this test was built around still holds: `pick()` and `pick(0)`
-/// are indistinguishable from inside the frame, so this method genuinely needs the hidden argc
-/// operand. It gets it — and so does its namesake.
+/// Verifies a callable string that names nothing is rejected at compile time with the reason
+/// spelled out. PHP throws `TypeError` when the call runs; elephc resolves callables
+/// statically, so the same program cannot be built.
 #[test]
-fn test_func_num_args_optional_param_with_variadic_and_shared_name_is_accepted() {
-    expect_ok(
-        r#"<?php
-class Unrelated {
-    public function pick(): string { return 'plain'; }
-}
-class Picker {
-    public function pick(int $max = 0, string ...$rest): string
-    {
-        return 'n=' . \func_num_args();
-    }
-}
-echo (new Unrelated())->pick();
-echo (new Picker())->pick(1);
-"#,
+fn test_error_callable_parameter_rejects_unknown_name_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } echo apply(\"nosuchfn\", \"a\");",
+        "Undefined function for first-class callable: nosuchfn",
     );
 }
 
-/// Same shape without any declared variadic — the case the ABI-neutral escape hatch could never
-/// cover, since relaxing it ADDS a parameter. Adding it to every implementation of the name is
-/// what makes that safe.
-///
-/// This one carried no `#[test]` attribute and had therefore never run; the two attributes on the
-/// test above are why it appeared twice in the failure list.
+/// Verifies a callable string that is only known at run time is rejected with a named
+/// diagnostic instead of being bound to storage the callee could not invoke.
 #[test]
-fn test_func_num_args_name_shared_with_unrelated_class_is_accepted() {
-    expect_ok(
-        r#"<?php
-class Unrelated {
-    public function grab(): array { return ['plain']; }
-}
-class Adapter {
-    public function grab(): array
-    {
-        return [0 < \func_num_args() ? 'raw' : 'cooked'];
-    }
-}
-echo implode(',', (new Unrelated())->grab());
-echo implode(',', (new Adapter())->grab(true));
-"#,
+fn test_error_callable_parameter_rejects_runtime_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
+        "a callable string must be a compile-time constant here",
     );
 }

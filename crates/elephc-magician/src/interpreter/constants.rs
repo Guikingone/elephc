@@ -11,6 +11,32 @@
 
 use std::sync::atomic::AtomicU64;
 
+/// Requests raw binary output from the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_RAW_DATA: i64 = 1;
+
+/// Disables block-cipher padding in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_ZERO_PADDING: i64 = 2;
+
+/// Prevents zero-padding short cipher keys in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_DONT_ZERO_PAD_KEY: i64 = 4;
+
+/// `parse_url()` component selector for the scheme.
+pub(super) const EVAL_PHP_URL_SCHEME: i64 = 0;
+/// `parse_url()` component selector for the host.
+pub(super) const EVAL_PHP_URL_HOST: i64 = 1;
+/// `parse_url()` component selector for the port.
+pub(super) const EVAL_PHP_URL_PORT: i64 = 2;
+/// `parse_url()` component selector for the user name.
+pub(super) const EVAL_PHP_URL_USER: i64 = 3;
+/// `parse_url()` component selector for the password.
+pub(super) const EVAL_PHP_URL_PASS: i64 = 4;
+/// `parse_url()` component selector for the path.
+pub(super) const EVAL_PHP_URL_PATH: i64 = 5;
+/// `parse_url()` component selector for the query.
+pub(super) const EVAL_PHP_URL_QUERY: i64 = 6;
+/// `parse_url()` component selector for the fragment.
+pub(super) const EVAL_PHP_URL_FRAGMENT: i64 = 7;
+
 /// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
 pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",
@@ -45,17 +71,17 @@ pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
 
 /// Built-in stream wrappers reported by eval `stream_get_wrappers()`.
 pub(super) const EVAL_STREAM_WRAPPERS: &[&str] = &[
-    "file",
-    "php",
-    "data",
-    "ftp",
-    "http",
     "https",
     "ftps",
     "compress.zlib",
     "compress.bzip2",
-    "phar",
+    "php",
+    "file",
     "glob",
+    "data",
+    "http",
+    "ftp",
+    "phar",
 ];
 
 /// Built-in stream transports reported by eval `stream_get_transports()`.
@@ -69,20 +95,15 @@ pub(super) static EVAL_RANDOM_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Built-in stream filters reported by eval `stream_get_filters()`.
 pub(super) const EVAL_STREAM_FILTERS: &[&str] = &[
+    "zlib.*",
+    "bzip2.*",
+    "convert.iconv.*",
+    "string.rot13",
     "string.toupper",
     "string.tolower",
-    "string.rot13",
-    "string.strip_tags",
-    "convert.base64-encode",
-    "convert.base64-decode",
-    "convert.quoted-printable-encode",
-    "convert.quoted-printable-decode",
-    "convert.iconv.*",
+    "convert.*",
+    "consumed",
     "dechunk",
-    "zlib.deflate",
-    "zlib.inflate",
-    "bzip2.compress",
-    "bzip2.decompress",
 ];
 
 /// SPL/core type names reported by eval `spl_classes()`.
@@ -189,8 +210,31 @@ pub(super) const EVAL_WEEKDAY_NAMES: &[&str; 7] = &[
 pub(super) const EVAL_WEEKDAY_SHORT_NAMES: &[&str; 7] =
     &["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-/// Root package manifest used to mirror native `phpversion()` in the eval crate.
-pub(super) const EVAL_ROOT_CARGO_TOML: &str = include_str!("../../../../Cargo.toml");
+/// `PHP_MAJOR_VERSION` — invariant across every profile elephc supports, so unlike
+/// `PHP_VERSION` / `PHP_VERSION_ID` / `PHP_MINOR_VERSION` it needs no lookup through
+/// [`crate::eval_php_profile`]: 8.2 through 8.5 all report `8`.
+pub(super) const EVAL_PHP_MAJOR_VERSION: i64 = 8;
+
+/// `PHP_RELEASE_VERSION` — always `0`, and therefore invariant across profiles: elephc
+/// targets a language profile, not an upstream patch release, so there is no engine build
+/// whose patch component could differ. Reference PHP 8.5.6 reports `6`.
+pub(super) const EVAL_PHP_RELEASE_VERSION: i64 = 0;
+
+/// `PHP_EXTRA_VERSION` — the empty string, exactly as reference PHP reports for a release
+/// build (verified on 8.5.6), and invariant across profiles for the same reason
+/// [`EVAL_PHP_RELEASE_VERSION`] is.
+pub(super) const EVAL_PHP_EXTRA_VERSION: &str = "";
+
+/// `PHP_SAPI` reported from inside `eval()`.
+///
+/// KEEP IN SYNC with `crate::web_prelude::sapi_name()` in the compiler. Unlike the version
+/// surface — which the compiler forwards through
+/// [`crate::eval_php_profile::set_eval_php_version_id`] — nothing forwards `--web`, so this
+/// stays the CLI default, the same choice `opcache_reset` makes with `is_web_sapi = false`.
+/// DOCUMENTED DIVERGENCE: inside a `--web` binary, native `PHP_SAPI` is `cli-server` while
+/// `eval('echo PHP_SAPI;')` reports `cli`. Closing it would take the same one-call bridge the
+/// version surface uses.
+pub(super) const EVAL_PHP_SAPI: &str = "cli";
 
 pub(super) const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
@@ -214,8 +258,22 @@ pub(super) const EVAL_LOCK_NB: i64 = 4;
 pub(super) const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
 pub(super) const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 pub(super) const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
+/// `str_pad()` pads on the left of the input.
+pub(super) const EVAL_STR_PAD_LEFT: i64 = 0;
+/// `str_pad()` pads on the right of the input, which is PHP's default.
+pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
+/// `str_pad()` splits the padding across both sides of the input.
+pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
+/// `round()` breaks exact `.5` ties away from zero, which is PHP's default.
+pub(super) const EVAL_PHP_ROUND_HALF_UP: i64 = 1;
+/// `round()` breaks exact `.5` ties toward zero.
+pub(super) const EVAL_PHP_ROUND_HALF_DOWN: i64 = 2;
+/// `round()` breaks exact `.5` ties toward the nearest even digit.
+pub(super) const EVAL_PHP_ROUND_HALF_EVEN: i64 = 3;
+/// `round()` breaks exact `.5` ties toward the nearest odd digit.
+pub(super) const EVAL_PHP_ROUND_HALF_ODD: i64 = 4;
 pub(super) const EVAL_PREG_SPLIT_NO_EMPTY: i64 = 1;
 pub(super) const EVAL_PREG_SPLIT_DELIM_CAPTURE: i64 = 2;
 pub(super) const EVAL_PREG_SPLIT_OFFSET_CAPTURE: i64 = 4;

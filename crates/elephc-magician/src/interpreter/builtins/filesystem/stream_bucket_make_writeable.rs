@@ -8,9 +8,8 @@
 //! - Returns the first queued bucket from an eval brigade object.
 
 eval_builtin! {
-    name: "stream_bucket_make_writeable",
+    contract: "stream_bucket_make_writeable",
     area: Filesystem,
-    params: [brigade],
     direct: Filesystem,
     values: Filesystem,
 }

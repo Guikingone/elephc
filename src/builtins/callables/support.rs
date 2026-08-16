@@ -24,13 +24,17 @@ use crate::types::PhpType;
 /// Requires that the first argument is a string literal and, if present, the second argument
 /// is a literal bool or int (the autoload flag). Returns `Bool` on success.
 /// Arguments are pre-inferred by the registry common path before this hook runs.
-pub(crate) fn check_class_like_exists(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    // A string literal (or `Name::class`) folds to a compile-time boolean using the
-    // closed world before codegen; a NON-literal name is accepted too and lowered to
-    // the closed-world registry probe (`lower_dynamic_class_like_exists` →
-    // `__rt_class_exists`/`__rt_interface_exists`/`__rt_trait_exists`). elephc's
-    // autoload is a compile-time pass, so the `$autoload` flag has no runtime effect
-    // and accepts any value. The registry common path has already inferred the args.
+pub(crate) fn check_class_like_exists(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    if !matches!(cx.args[0].kind, ExprKind::StringLiteral(_)) {
+        return Err(CompileError::new(
+            cx.span,
+            &format!("{}() first argument must be a string literal in AOT mode", cx.name),
+        ));
+    }
+    // The optional autoload flag may be dynamic: it never contributes an AOT
+    // autoload demand (the demand walker treats non-literals as false), and
+    // existence still folds from the literal class name. The registry common
+    // path has already inferred it.
     Ok(PhpType::Bool)
 }
 
@@ -42,15 +46,11 @@ pub(crate) fn check_class_like_exists(_cx: &mut BuiltinCheckCtx) -> Result<PhpTy
 /// This hook is called with `lazy_check: true` so inference happens here, not in the common path.
 pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let first_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // An object or string literal resolves against the closed world at compile time. A
-    // non-literal string or Mixed name (e.g. a `string|int` return threaded through a variable)
-    // resolves at runtime through `__rt_class_relation_lookup`; the EIR feature scan sets
-    // class_relation_introspection for any non-const argument, so the helper is always emitted.
-    // Anything else (int, array, ...) cannot name a class and stays a compile-time error.
-    let runtime_name_target = matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
+    let dynamic_eval_target = cx.checker.eval_barrier_active
+        && matches!(first_ty.codegen_repr(), PhpType::Mixed | PhpType::Str);
     if !matches!(first_ty, PhpType::Object(_))
         && !matches!(cx.args[0].kind, ExprKind::StringLiteral(_))
-        && !runtime_name_target
+        && !dynamic_eval_target
     {
         return Err(CompileError::new(
             cx.span,
@@ -84,16 +84,4 @@ pub(crate) fn check_class_relation(cx: &mut BuiltinCheckCtx) -> Result<PhpType, 
 /// common path enforces arity = 0 before this hook runs.
 pub(crate) fn check_declared_names(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
-}
-
-/// Returns `array<string, array<string>>` for `get_defined_functions()`.
-///
-/// The result is a two-key assoc array (`'internal'` and `'user'`), each mapping to an
-/// indexed list of lowercased function names. The hook ignores its context because the
-/// builtin takes no arguments; the registry common path enforces arity = 0 before it runs.
-pub(crate) fn check_defined_functions(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    Ok(PhpType::AssocArray {
-        key: Box::new(PhpType::Str),
-        value: Box::new(PhpType::Array(Box::new(PhpType::Str))),
-    })
 }

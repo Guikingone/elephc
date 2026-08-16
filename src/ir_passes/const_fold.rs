@@ -249,6 +249,10 @@ fn try_fold(
         }
         // -- scalar predicates over a constant --
         Op::IsNull => Some((Const::Bool(matches!(operand(0)?, Const::Null)), TypeNarrowing::None)),
+        // A constant NAN is deliberately NOT folded: it is truthy, but PHP 8.5 also reports
+        // the coercion, and the warning lives on the runtime truthiness path this fold would
+        // delete. See `crate::optimize::fold::casts::try_fold_cast`.
+        Op::IsTruthy if matches!(operand(0)?, Const::Float(f) if f.is_nan()) => None,
         Op::IsTruthy => Some((Const::Bool(operand(0)?.truthiness()), TypeNarrowing::None)),
         _ => None,
     }

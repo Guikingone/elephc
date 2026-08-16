@@ -15,15 +15,15 @@ use std::collections::BTreeMap;
 
 use crate::codegen::abi;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SAVED_DEPTHS, TRY_HANDLER_SLOT_SIZE,
 };
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::{method_symbol, static_method_symbol};
+use crate::names::{join_php_symbol, method_symbol, static_method_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -67,7 +67,11 @@ struct EvalStaticMethodSlot {
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
+    "ArgumentCountError",
     "ValueError",
+    "ArithmeticError",
+    "DivisionByZeroError",
+    "AssertionError",
     "UnhandledMatchError",
     "Exception",
     "LogicException",
@@ -685,11 +689,10 @@ fn emit_aarch64_method_exception_boundary_push(
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset));       // save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + 8));   // preserve the caller activation frame across method unwinding
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
-        "str x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // save diagnostic suppression depth for restoration
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
+        emitter.instruction(&format!("str x10, [x29, #{}]", handler_offset + offset));
+    }                                                                            // save every depth a throw would otherwise strand
     emitter.instruction(&format!("add x10, x29, #{}", handler_offset));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
@@ -705,11 +708,10 @@ fn emit_aarch64_method_exception_boundary_pop(emitter: &mut Emitter, handler_off
     emitter.comment("pop eval method exception boundary");
     emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset));       // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
-        "ldr x10, [x29, #{}]",
-        handler_offset + TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // reload the saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        emitter.instruction(&format!("ldr x10, [x29, #{}]", handler_offset + offset));
+        abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
+    }                                                                            // republish every depth saved on the way in
 }
 
 /// Emits an x86_64 boundary handler so native method throws return to magician.
@@ -723,11 +725,13 @@ fn emit_x86_64_method_exception_boundary_push(
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); // save the previous native exception-handler head
     abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
     emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across method unwinding
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!(
-        "mov QWORD PTR [rbp - {}], r10",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // save diagnostic suppression depth for restoration
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
+        emitter.instruction(&format!(
+            "mov QWORD PTR [rbp - {}], r10",
+            handler_base - offset
+        ));
+    }                                                                            // save every depth a throw would otherwise strand
     emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base));         // compute the boundary handler record address
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
     emitter.instruction(&format!(
@@ -744,11 +748,13 @@ fn emit_x86_64_method_exception_boundary_pop(emitter: &mut Emitter, handler_base
     emitter.comment("pop eval method exception boundary");
     emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-    emitter.instruction(&format!(
-        "mov r10, QWORD PTR [rbp - {}]",
-        handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-    ));                                                                          // reload the saved diagnostic suppression depth
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+    for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+        emitter.instruction(&format!(
+            "mov r10, QWORD PTR [rbp - {}]",
+            handler_base - offset
+        ));
+        abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
+    }                                                                            // republish every depth saved on the way in
 }
 
 /// Emits ARM64 class-id and method-name dispatch for helper method bodies.
@@ -804,10 +810,7 @@ fn emit_aarch64_static_method_dispatch(
     fail_label: &str,
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
-        let next_label = format!(
-            "__elephc_eval_static_method_next_{}",
-            label_fragment(class_name)
-        );
+        let next_label = join_php_symbol("__elephc_eval_static_method_next", &[class_name]);
         emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
             emit_aarch64_static_method_name_compare(module, emitter, data, slot, fail_label);
@@ -826,8 +829,8 @@ fn emit_x86_64_static_method_dispatch(
 ) {
     for (class_name, class_slots) in grouped_static_slots(slots) {
         let next_label = format!(
-            "__elephc_eval_static_method_next_{}_x",
-            label_fragment(class_name)
+            "{}_x",
+            join_php_symbol("__elephc_eval_static_method_next", &[class_name])
         );
         emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
@@ -2305,16 +2308,20 @@ fn grouped_static_slots(
 }
 
 /// Returns a platform-safe body label for a method slot.
+///
+/// The class/impl-class/method triplet is joined through `join_php_symbol()` so two slots whose
+/// names differ only in where an underscore falls cannot land on the same label.
 fn method_body_label(module: &Module, slot: &EvalMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_method",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2325,16 +2332,19 @@ fn method_access_miss_label(module: &Module, slot: &EvalMethodSlot) -> String {
 }
 
 /// Returns a platform-safe body label for a static method slot.
+///
+/// Uses the same injective join as `method_body_label()` under a distinct symbol prefix.
 fn static_method_body_label(module: &Module, slot: &EvalStaticMethodSlot) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_static_method_{}_{}_{}{}",
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.impl_class),
-        label_fragment(&slot.method),
+        "{}{}",
+        join_php_symbol(
+            "__elephc_eval_static_method_body",
+            &[&slot.class_name, &slot.impl_class, &slot.method]
+        ),
         suffix
     )
 }
@@ -2400,13 +2410,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

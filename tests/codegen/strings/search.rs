@@ -33,6 +33,71 @@ fn test_substr_negative_offset() {
     assert_eq!(out, "World");
 }
 
+/// A NEGATIVE length is php's "stop this many bytes before the end", and every row here used to
+/// be wrong — silently, with a plausible-looking string.
+///
+/// Two faults compounded. `-1` doubled as the in-band sentinel for "no length argument", so an
+/// explicit `substr($s, 1, -1)` was indistinguishable from the two-argument call and kept the
+/// whole tail; and every other negative length was clamped to zero, so `substr("hello", 0, -2)`
+/// answered `""` where php answers `"hel"`. Whether a length was PASSED is known from the
+/// operand count at compile time and is never encoded in the length's own value now.
+///
+/// The controls matter as much as the fixes: the two-argument form, a zero length, an
+/// over-long length and an out-of-range offset all have to keep their previous answers, since
+/// removing the sentinel touched the path they share.
+#[test]
+fn test_substr_negative_length_omits_bytes_from_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr("hello", 1, -1),   // the row the -1 sentinel swallowed
+    substr("hello", 0, -2),
+    substr("hello", 1, -2),
+    substr("hello", -4, -1),  // negative offset AND negative length
+    substr("hello", 0, -5),   // omits exactly everything
+    substr("hello", 0, -9),   // omits more than there is
+    substr("hello", 1),       // control: two-argument form
+    substr("hello", 1, 2),    // control: ordinary length
+    substr("hello", 1, 0),    // control: empty selection
+    substr("hello", 1, 99),   // control: length past the end
+    substr("hello", -3, 2),   // control: negative offset, positive length
+    substr("hello", 9, 2),    // control: offset past the end
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "ell|hel|el|ell|||ello|el||ello|ll|");
+}
+
+/// The same rule for `substr_replace()`, whose omitted-length signal had the same collision.
+///
+/// A negative length told it to replace nothing (`"hX"` for `substr_replace("hello","X",1,-1)`,
+/// where php answers `"hXo"`). The omitted-length case now reaches the runtime helper as
+/// `i64::MAX` instead of `-1`: the helper bounds the length by the remaining tail, so a
+/// saturating value runs through the end by the ordinary path and needs no sentinel test —
+/// which frees `-1` to mean what php means by it.
+#[test]
+fn test_substr_replace_negative_length_omits_bytes_from_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [
+    substr_replace("hello", "X", 1, -1),
+    substr_replace("hello", "X", 0, -2),
+    substr_replace("hello", "X", 1, -3),
+    substr_replace("hello", "X", -3, -1),  // negative offset AND negative length
+    substr_replace("hello", "X", 1, -9),   // omits more than remains
+    substr_replace("hello", "X", 1),       // control: omitted length
+    substr_replace("hello", "X", 1, 0),    // control: pure insertion
+    substr_replace("hello", "X", 1, 2),    // control: ordinary length
+    substr_replace("hello", "X", 1, 99),   // control: length past the end
+    substr_replace("hello", "X", 9, 2),    // control: offset past the end
+];
+echo implode("|", $rows);
+"#,
+    );
+    assert_eq!(out, "hXo|Xlo|hXllo|heXo|hXello|hX|hXello|hXlo|hX|helloX");
+}
+
 /// Verifies substr accepts a non-negative integer offset derived from a function return via addition.
 /// Regression test: int-to-integer coercion path for the offset expression `$o + 1`.
 /// Fixture: queries with `?` delimiter, strpos + intval, then substr with +1 offset.
@@ -116,14 +181,6 @@ fn test_strrpos() {
 fn test_strrpos_not_found_is_strict_false() {
     let out = compile_and_run(r#"<?php echo strrpos("abcabc", "zz") === false ? "miss" : "hit";"#);
     assert_eq!(out, "miss");
-}
-
-/// Verifies strrpos accepts an optional third `$offset` argument (PHP 2–3 arity).
-/// Fixture: strrpos("hello world","o",5) finds the last "o" at or after offset 5 → 7.
-#[test]
-fn test_strrpos_with_offset() {
-    let out = compile_and_run(r#"<?php echo strrpos("hello world", "o", 5);"#);
-    assert_eq!(out, "7");
 }
 
 /// Verifies strstr returns the portion of the string starting from the first needle occurrence.
@@ -220,276 +277,366 @@ fn test_substr_replace_no_length() {
     assert_eq!(out, "hello!");
 }
 
-/// Verifies `strcspn` returns the length of the leading run not containing any listed character.
-/// Fixture: "hello world" stops at the 'o' (index 4) found in "wo".
-#[test]
-fn test_strcspn_basic() {
-    let out = compile_and_run(r#"<?php echo strcspn("hello world", "wo");"#);
-    assert_eq!(out, "4");
-}
-
-/// Verifies `strcspn` returns the full length when no listed character is present.
-#[test]
-fn test_strcspn_no_match_returns_full_length() {
-    let out = compile_and_run(r#"<?php echo strcspn("abc", "xyz");"#);
-    assert_eq!(out, "3");
-}
-
-/// Verifies `strspn` returns the length of the leading run consisting entirely of listed characters.
-/// Fixture: "42 is the answer" matches "42" against the digit set, stopping at the space.
-#[test]
-fn test_strspn_basic() {
-    let out = compile_and_run(r#"<?php echo strspn("42 is the answer", "1234567890");"#);
-    assert_eq!(out, "2");
-}
-
-/// Verifies `strspn` returns 0 when the first byte is not in the character set.
-#[test]
-fn test_strspn_no_leading_match() {
-    let out = compile_and_run(r#"<?php echo strspn("abc", "0123456789");"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies the 3-argument `strcspn`/`strspn` forms scan a substr-style window
-/// starting at a non-negative offset (the form symfony/yaml relies on).
-///
-/// `strcspn("hello world", " \r\n", 1)` scans "ello world" and stops at the
-/// space (index 4); `strspn("   abc", " ", 1)` counts the two remaining spaces.
-#[test]
-fn test_strcspn_strspn_with_offset() {
-    let out = compile_and_run(
-        r#"<?php echo strcspn("hello world", " \r\n", 1), "|", strspn("   abc", " ", 1);"#,
-    );
-    assert_eq!(out, "4|2");
-}
-
-/// Verifies the 4-argument `strcspn` form clamps the scan to an explicit window,
-/// including PHP's tail-relative negative length.
-///
-/// `strcspn("hello", "xyz", 2, 1)` scans only the 1-byte window "l" (no member,
-/// span 1); `strcspn("hello world", "o", 0, -3)` scans "hello wo" (length
-/// 11 - 3) and stops at 'o' (index 4). Cross-checked against `php -r`.
-#[test]
-fn test_strcspn_with_offset_and_length() {
-    let out = compile_and_run(
-        r#"<?php echo strcspn("hello", "xyz", 2, 1), "|", strcspn("hello world", "o", 0, -3);"#,
-    );
-    assert_eq!(out, "1|4");
-}
-
-/// Verifies `strpbrk` returns the suffix beginning at the first character found in the set.
-/// Fixture: "hello" with set "lo" first matches 'l' at index 2, yielding "llo".
-#[test]
-fn test_strpbrk_found() {
-    let out = compile_and_run(r#"<?php var_dump(strpbrk("hello", "lo"));"#);
-    assert_eq!(out, "string(3) \"llo\"\n");
-}
-
-/// Verifies `strpbrk` returns boolean `false` when no character in the set occurs in the string.
-#[test]
-fn test_strpbrk_not_found_returns_false() {
-    let out = compile_and_run(r#"<?php var_dump(strpbrk("hello", "xyz"));"#);
-    assert_eq!(out, "bool(false)\n");
-}
-
-/// Verifies `strcspn`/`strspn` resolve case-insensitively (PHP builtin names are case-insensitive).
-#[test]
-fn test_strcspn_strspn_case_insensitive() {
-    let out = compile_and_run(r#"<?php echo StrCsPn("hello", "l"), "|", STRSPN("aaab", "a");"#);
-    assert_eq!(out, "2|3");
-}
-
-/// Verifies octdec converts octal string "17" to decimal 15 (1*8 + 7).
-#[test]
-fn test_octdec_basic() {
-    let out = compile_and_run(r#"<?php echo octdec("17");"#);
-    assert_eq!(out, "15");
-}
-
-/// Verifies octdec converts "777" (3 octal sevens) to decimal 511.
-#[test]
-fn test_octdec_three_digits() {
-    let out = compile_and_run(r#"<?php echo octdec("777");"#);
-    assert_eq!(out, "511");
-}
-
-/// Verifies octdec stops parsing at the first non-octal character.
-/// Fixture: "18" stops at '8' (not an octal digit), returning 1.
-#[test]
-fn test_octdec_stops_at_non_octal() {
-    let out = compile_and_run(r#"<?php echo octdec("18");"#);
-    assert_eq!(out, "1");
-}
-
-/// Verifies octdec returns 0 for an empty string.
-#[test]
-fn test_octdec_empty_string() {
-    let out = compile_and_run(r#"<?php echo octdec("");"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies substr_count counts all non-overlapping occurrences of the needle.
-/// Fixture: "hello world hello" contains "hello" twice.
-#[test]
-fn test_substr_count_basic() {
-    let out = compile_and_run(r#"<?php echo substr_count("hello world hello", "hello");"#);
-    assert_eq!(out, "2");
-}
-
-/// Verifies substr_count returns 1 when there is exactly one occurrence.
-#[test]
-fn test_substr_count_single() {
-    let out = compile_and_run(r#"<?php echo substr_count("abcdef", "cd");"#);
-    assert_eq!(out, "1");
-}
-
-/// Verifies substr_count returns 0 when the needle is absent.
-#[test]
-fn test_substr_count_not_found() {
-    let out = compile_and_run(r#"<?php echo substr_count("hello", "xyz");"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies substr_count does not count overlapping occurrences.
-/// Fixture: "aaaa" has two non-overlapping "aa" occurrences (positions 0 and 2).
+/// Verifies `substr_count()` counts non-overlapping occurrences.
+/// `LC_ALL=C php` prints `2` for both `substr_count("hello world", "o")` and
+/// `substr_count("aaaa", "aa")` — matches never overlap.
 #[test]
 fn test_substr_count_non_overlapping() {
-    let out = compile_and_run(r#"<?php echo substr_count("aaaa", "aa");"#);
-    assert_eq!(out, "2");
-}
-
-/// Verifies strstr with before_needle=true returns the prefix before the first occurrence.
-/// Fixture: "user@example.com" split on "@" returns "user".
-#[test]
-fn test_strstr_before_needle_true() {
-    let out = compile_and_run(r#"<?php echo strstr("user@example.com", "@", true);"#);
-    assert_eq!(out, "user");
-}
-
-/// Verifies strstr with before_needle=false returns the suffix starting at the needle.
-/// Fixture: "user@example.com" split on "@" returns "@example.com".
-#[test]
-fn test_strstr_before_needle_false() {
-    let out = compile_and_run(r#"<?php echo strstr("user@example.com", "@", false);"#);
-    assert_eq!(out, "@example.com");
-}
-
-/// Verifies strstr with before_needle=true returns the empty (not-found) result when the
-/// needle is absent. elephc models strstr as `Str`, so the miss path yields an empty string
-/// (mirroring `test_strpos_not_found`); the prefix reconstruction must not corrupt that path.
-#[test]
-fn test_strstr_before_needle_miss() {
-    let out = compile_and_run(r#"<?php echo "[", strstr("hello", "@", true), "]";"#);
-    assert_eq!(out, "[]");
-}
-
-/// Verifies strpos with a starting offset skips the first occurrence and finds the second.
-/// Fixture: "abcabc" contains "c" at both offset 2 and 5; starting from offset 3 finds offset 5.
-#[test]
-fn test_strpos_with_offset() {
-    let out = compile_and_run(r#"<?php echo strpos("abcabc", "c", 3);"#);
-    assert_eq!(out, "5");
-}
-
-/// Verifies strpos with an offset past all occurrences returns strict false.
-#[test]
-fn test_strpos_with_offset_not_found() {
     let out = compile_and_run(
-        r#"<?php echo strpos("abcabc", "c", 6) === false ? "miss" : "hit";"#,
+        r#"<?php echo substr_count("hello world", "o"), "|", substr_count("aaaa", "aa"), "|", substr_count("hello", "z");"#,
     );
-    assert_eq!(out, "miss");
+    assert_eq!(out, "2|2|0");
 }
 
-/// Verifies strpos with offset 0 behaves identically to the 2-arg form.
+/// Verifies `substr_count()` honours the `$offset` argument, including a negative offset
+/// measured back from the subject end. `LC_ALL=C php` prints `1` for both forms.
 #[test]
-fn test_strpos_with_zero_offset() {
-    let out = compile_and_run(r#"<?php echo strpos("abcabc", "c", 0);"#);
-    assert_eq!(out, "2");
-}
-
-/// Verifies strrchr returns the suffix from the last occurrence of the needle's first byte.
-/// Fixture: "a/b/c.php" with needle "." returns ".php" (php-verified).
-#[test]
-fn test_strrchr_basic() {
-    let out = compile_and_run(r#"<?php echo strrchr("a/b/c.php", ".");"#);
-    assert_eq!(out, ".php");
-}
-
-/// Verifies strrchr returns strict false when the needle byte is absent.
-/// Fixture: strrchr("x", "z") === false (php-verified).
-#[test]
-fn test_strrchr_not_found_is_false() {
-    let out = compile_and_run(r#"<?php echo strrchr("x", "z") === false ? "miss" : "hit";"#);
-    assert_eq!(out, "miss");
-}
-
-/// Verifies strrchr uses only the first byte of a multi-byte needle (PHP 8 behavior).
-/// Fixture: strrchr("hello world", "lo") searches for the last 'l' -> "ld" (php-verified).
-#[test]
-fn test_strrchr_multibyte_needle_uses_first_byte() {
-    let out = compile_and_run(r#"<?php echo strrchr("hello world", "lo");"#);
-    assert_eq!(out, "ld");
-}
-
-/// Verifies strrchr resolves through PHP's namespace fallback and case-insensitive lookup.
-/// Fixture: inside a namespace, an unqualified upper-case StrRChr() still resolves to the builtin.
-#[test]
-fn test_strrchr_namespaced_case_insensitive_fallback() {
+fn test_substr_count_offset() {
     let out = compile_and_run(
-        r#"<?php namespace App\Util; echo StrRChr("x/y/z.txt", "/");"#,
+        r#"<?php echo substr_count("hello world", "o", 5), "|", substr_count("hello world", "o", -5);"#,
     );
-    assert_eq!(out, "/z.txt");
+    assert_eq!(out, "1|1");
 }
 
-/// Verifies strnatcmp orders numeric runs by value, not lexically.
-/// Fixture: strnatcmp("img10","img2")=1, strnatcmp("img2","img10")=-1, strnatcmp("a","a")=0
-/// (php-verified).
+/// Verifies `substr_count()` honours `$length`, including the negative form measured back
+/// from the subject end, and treats an explicit `null` like an omitted argument.
+/// `LC_ALL=C php` prints `1`, `1`, `1`, `2`.
 #[test]
-fn test_strnatcmp_numeric_ordering() {
+fn test_substr_count_length() {
     let out = compile_and_run(
-        r#"<?php echo strnatcmp("img10","img2"),",",strnatcmp("img2","img10"),",",strnatcmp("a","a");"#,
+        r#"<?php
+echo substr_count("hello world", "o", 0, 5), "|",
+     substr_count("hello world", "o", 0, -5), "|",
+     substr_count("hello world", "l", 3, 4), "|",
+     substr_count("hello world", "o", 0, null);
+"#,
     );
-    assert_eq!(out, "1,-1,0");
+    assert_eq!(out, "1|1|1|2");
 }
 
-/// Verifies strnatcmp's PHP boundary cases: leading zeros and multi-digit magnitude.
-/// Fixture: strnatcmp("01","1")=0, strnatcmp("2","10")=-1, strnatcmp("100","20")=1
-/// (php-verified).
+/// Verifies `substr_count()` resolves case-insensitively, through a namespace-qualified
+/// call, and by named argument.
 #[test]
-fn test_strnatcmp_leading_zero_and_magnitude() {
+fn test_substr_count_case_insensitive_namespaced_and_named_args() {
     let out = compile_and_run(
-        r#"<?php echo strnatcmp("01","1"),",",strnatcmp("2","10"),",",strnatcmp("100","20");"#,
+        r#"<?php
+echo SUBSTR_COUNT("hello world", "o"), "|",
+     \substr_count("hello world", "o"), "|",
+     substr_count(haystack: "hello world", needle: "o", offset: 5);
+"#,
     );
-    assert_eq!(out, "0,-1,1");
+    assert_eq!(out, "2|2|1");
 }
 
-/// Verifies strnatcmp skips leading whitespace like PHP's php_strnatcmp_ex.
-/// Fixture: strnatcmp(" 1","1")=0, strnatcmp("  12","12")=0 (php-verified).
+/// Verifies `substr_count()` raises php-src's catchable `ValueError`s for an empty needle
+/// and for an `$offset`/`$length` pair that leaves the subject. Messages are verbatim
+/// `LC_ALL=C php` 8.4 output.
 #[test]
-fn test_strnatcmp_leading_whitespace() {
+fn test_substr_count_value_errors() {
     let out = compile_and_run(
-        r#"<?php echo strnatcmp(" 1","1"),",",strnatcmp("  12","12");"#,
+        r#"<?php
+foreach ([["abc", "", 0, null], ["abc", "b", 5, null], ["abc", "b", 0, 9]] as $t) {
+    try {
+        substr_count($t[0], $t[1], $t[2], $t[3]);
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
     );
-    assert_eq!(out, "0,0");
+    assert_eq!(
+        out,
+        "substr_count(): Argument #2 ($needle) must not be empty\n\
+substr_count(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+substr_count(): Argument #4 ($length) must be contained in argument #1 ($haystack)\n"
+    );
 }
 
-/// Verifies strnatcasecmp lowercases before the natural comparison.
-/// Fixture: strnatcasecmp("IMG10","img2")=1, strnatcasecmp("A","a")=0 while strnatcmp("A","a")=-1
-/// (php-verified).
+/// Verifies `strncmp()` compares only the first `$length` bytes and returns php-src's raw
+/// byte difference. `LC_ALL=C php` prints `0`, `-12`, `-1`, `1`, `0` for these calls.
 #[test]
-fn test_strnatcasecmp_case_folding() {
+fn test_strncmp_prefix_and_byte_difference() {
     let out = compile_and_run(
-        r#"<?php echo strnatcasecmp("IMG10","img2"),",",strnatcasecmp("A","a"),",",strnatcmp("A","a");"#,
+        r#"<?php
+echo strncmp("Hello", "Hexxx", 2), "|",
+     strncmp("Hello", "Hexxx", 3), "|",
+     strncmp("abc", "abd", 3), "|",
+     strncmp("abc", "ab", 3), "|",
+     strncmp("abc", "abc", 10);
+"#,
     );
-    assert_eq!(out, "1,0,-1");
+    assert_eq!(out, "0|-12|-1|1|0");
 }
 
-/// Verifies strnatcmp resolves through PHP's namespace fallback and case-insensitive lookup.
-/// Fixture: inside a namespace, an unqualified StrNatCmp() still resolves to the builtin.
+/// Verifies `strncasecmp()` folds ASCII case before comparing the bounded prefix.
+/// `LC_ALL=C php` prints `0`, `-1`, `1`.
 #[test]
-fn test_strnatcmp_namespaced_case_insensitive_fallback() {
+fn test_strncasecmp_ascii_folding() {
     let out = compile_and_run(
-        r#"<?php namespace App\Util; echo StrNatCmp("v2","v10");"#,
+        r#"<?php
+echo strncasecmp("HeLLo", "hellO", 5), "|",
+     strncasecmp("ABC", "abd", 3), "|",
+     strncasecmp("abc", "AB", 3);
+"#,
     );
-    assert_eq!(out, "-1");
+    assert_eq!(out, "0|-1|1");
+}
+
+/// Verifies both length-limited comparisons resolve case-insensitively, through a
+/// namespace-qualified call, and by named argument.
+#[test]
+fn test_strncmp_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+echo STRNCMP("abc", "abd", 3), "|",
+     \strncasecmp("ABC", "abc", 3), "|",
+     strncmp(string1: "abc", string2: "abd", length: 2);
+"#,
+    );
+    assert_eq!(out, "-1|0|0");
+}
+
+/// Verifies both length-limited comparisons raise php-src's catchable `ValueError` for a
+/// negative `$length`. Messages are verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_strncmp_negative_length_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { strncmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strncasecmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "strncmp(): Argument #3 ($length) must be greater than or equal to 0\n\
+strncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
+    );
+}
+
+/// Verifies `join()`, `substr_count()`, `strncmp()`, and `strncasecmp()` keep their PHP
+/// types inside an array literal, whose element typing uses the checker's syntactic
+/// inference table rather than the per-call checked type.
+#[test]
+fn test_new_string_builtins_keep_their_types_inside_array_literals() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([join("-", ["a", "b"]), substr_count("aaa", "a"), strncmp("a", "b", 1), strncasecmp("A", "a", 1)]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(4) {\n  [0]=>\n  string(3) \"a-b\"\n  [1]=>\n  int(3)\n  [2]=>\n  int(-1)\n  [3]=>\n  int(0)\n}\n"
+    );
+}
+
+/// Verifies `strpos()` accepts PHP's third `$offset` argument positionally and by name, and
+/// resolves a negative offset against the haystack length.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_strpos_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strpos("hello world", "o"));
+var_dump(strpos("hello world", "o", 5));
+var_dump(strpos("hello world", "o", -4));
+var_dump(strpos("hello world", "o", offset: 5));
+var_dump(strpos("hello world", "o", offset: -4));
+var_dump(strpos("abc", "", 1));
+var_dump(strpos("abc", "", 3));
+var_dump(strpos("abc", "a", 3));
+var_dump(strpos("hello", "z", 2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(4)\nint(7)\nint(7)\nint(7)\nint(7)\nint(1)\nint(3)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies `strrpos()` accepts PHP's third `$offset` argument positionally and by name.
+/// A non-negative offset starts the right-to-left scan there, while a negative one bounds
+/// where a match may end, so `strrpos("abcabc", "bc", -3)` finds the earlier match.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_strrpos_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strrpos("hello world", "o", 5));
+var_dump(strrpos("hello world", "o", 8));
+var_dump(strrpos("hello world", "o", -3));
+var_dump(strrpos("hello world", "o", offset: -3));
+var_dump(strrpos("abcabc", "bc", -2));
+var_dump(strrpos("abcabc", "bc", -3));
+var_dump(strrpos("abcabc", "bc", -6));
+var_dump(strrpos("abc", "", 1));
+var_dump(strrpos("abc", "", -1));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nbool(false)\nint(7)\nint(7)\nint(4)\nint(1)\nbool(false)\nint(3)\nint(2)\n"
+    );
+}
+
+/// Verifies the `$offset` window is computed from values the optimizer cannot fold, so the
+/// backend's own normalization, `ValueError` guard, and match rebasing are exercised rather
+/// than a compile-time constant. `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_string_position_offset_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$haystack = "abcabc" . ($argc > 100 ? "z" : "");
+$needle = "bc";
+var_dump(strpos($haystack, $needle, $argc + 1));
+var_dump(strrpos($haystack, $needle, -$argc - 2));
+var_dump(strrpos($haystack, $needle, offset: -$argc - 5));
+"#,
+    );
+    assert_eq!(out, "int(4)\nint(1)\nbool(false)\n");
+}
+
+/// Verifies both position builtins raise php-src's catchable `ValueError` for an `$offset`
+/// that does not land inside the haystack, in either direction.
+/// Messages are verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_string_position_offset_out_of_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { strpos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strpos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strrpos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strrpos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
+    );
+}
+
+/// Verifies `stripos()` finds the FIRST case-insensitive occurrence of a needle.
+///
+/// Folding is ASCII-only, matching php-src's locale-independent `zend_tolower_ascii`: the
+/// bracket/brace case checks that the byte range just outside `A`-`Z` is compared verbatim,
+/// and `stripos("Été", "é")` is 3 rather than 1 because `0x89` and `0xA9` do not fold onto
+/// each other. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_stripos_finds_first_case_insensitive_match() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(stripos("Hello World", "WORLD"));
+var_dump(stripos("Hello World", "world"));
+var_dump(stripos("ABCabc", "abc"));
+var_dump(stripos("Hello World", "zz"));
+var_dump(stripos("Hello World", ""));
+var_dump(stripos("[]{}", "{"));
+var_dump(stripos("\xC3\x89t\xC3\xA9", "\xC3\xA9"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(6)\nint(6)\nint(0)\nbool(false)\nint(0)\nint(2)\nint(3)\n"
+    );
+}
+
+/// Verifies `strripos()` finds the LAST case-insensitive occurrence of a needle.
+///
+/// The overlapping `strripos("aAaA", "aa")` case pins the right-to-left scan: a left-to-right
+/// search would answer 0. An empty needle answers the haystack length, like `strrpos()`.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_strripos_finds_last_case_insensitive_match() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strripos("Hello World", "O"));
+var_dump(strripos("ABCabc", "ABC"));
+var_dump(strripos("aAaA", "aa"));
+var_dump(strripos("Hello World", "zz"));
+var_dump(strripos("Hello World", ""));
+"#,
+    );
+    assert_eq!(out, "int(7)\nint(3)\nint(2)\nbool(false)\nint(11)\n");
+}
+
+/// Verifies `stripos()`/`strripos()` accept PHP's third `$offset` argument positionally and
+/// by name, with the same direction-dependent negative-offset rules as `strpos()`/`strrpos()`.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(stripos("Hello World", "O", 5));
+var_dump(stripos("Hello World", "O", -4));
+var_dump(stripos("Hello World", "L", offset: 4));
+var_dump(stripos("aAaA", "aa", 1));
+var_dump(strripos("Hello World", "O", 5));
+var_dump(strripos("aAaA", "aa", -2));
+var_dump(strripos("ABCabc", "ABC", offset: 1));
+var_dump(stripos("abc", "B", 3));
+var_dump(strripos("abc", "B", -3));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nint(7)\nint(9)\nint(1)\nint(7)\nint(2)\nint(3)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies the case-insensitive `$offset` window is computed from values the optimizer cannot
+/// fold, so the backend's own normalization, `ValueError` guard, and match rebasing run rather
+/// than a compile-time constant. `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$haystack = "aBcaBc" . ($argc > 100 ? "z" : "");
+$needle = "bC";
+var_dump(stripos($haystack, $needle, $argc + 1));
+var_dump(strripos($haystack, $needle, -$argc - 2));
+var_dump(strripos($haystack, $needle, offset: -$argc - 5));
+"#,
+    );
+    assert_eq!(out, "int(4)\nint(1)\nbool(false)\n");
+}
+
+/// Verifies both case-insensitive position builtins raise php-src's catchable `ValueError`
+/// for an `$offset` that does not land inside the haystack, in either direction.
+/// Messages are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_out_of_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { stripos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { stripos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strripos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strripos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
+    );
+}
+
+/// Verifies `stripos()`/`strripos()` through case-insensitive, namespaced, and dynamic call
+/// sites, so the registry catalog resolves all three spellings to the same runtime target.
+#[test]
+fn test_case_insensitive_position_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+var_dump(\STRIPOS("Hello World", "WORLD"));
+var_dump(StrRiPos("Hello World", "o"));
+var_dump(call_user_func('stripos', 'FooBar', 'BAR'));
+"#,
+    );
+    assert_eq!(out, "int(6)\nint(7)\nint(3)\n");
 }

@@ -127,11 +127,6 @@ pub(super) fn resolve_stmt_exprs(
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::RefAssign { target, source } => StmtKind::RefAssign { target, source },
-        StmtKind::RefAssignToTarget { target, source, append } => StmtKind::RefAssignToTarget {
-            target: resolve_expr(target, base_dir, declared_once, include_chain, state, function_variants)?,
-            source: resolve_expr(source, base_dir, declared_once, include_chain, state, function_variants)?,
-            append,
-        },
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -247,21 +242,6 @@ pub(super) fn resolve_stmt_exprs(
             receiver,
             property,
             index: resolve_expr(index, base_dir, declared_once, include_chain, state, function_variants)?,
-            value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
-        },
-        StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property,
-            index,
-            append,
-            value,
-        } => StmtKind::DynamicStaticPropertyWrite {
-            receiver,
-            property: Box::new(resolve_expr(*property, base_dir, declared_once, include_chain, state, function_variants)?),
-            index: index
-                .map(|i| resolve_expr(i, base_dir, declared_once, include_chain, state, function_variants))
-                .transpose()?,
-            append,
             value: resolve_expr(value, base_dir, declared_once, include_chain, state, function_variants)?,
         },
         StmtKind::If {
@@ -562,8 +542,6 @@ pub(super) fn resolve_stmt_exprs(
         other @ (StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::NamespaceDecl { .. }
         | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }

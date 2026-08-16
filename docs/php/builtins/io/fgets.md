@@ -2,19 +2,20 @@
 title: "fgets()"
 description: "Gets line from file pointer."
 sidebar:
-  order: 166
+  order: 175
 ---
 
 ## fgets()
 
 ```php
-function fgets(resource $stream): mixed
+function fgets(resource $stream, mixed $length = null): mixed
 ```
 
 Gets line from file pointer.
 
 **Parameters**:
 - `$stream` (`resource`)
+- `$length` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
@@ -24,12 +25,6 @@ Gets line from file pointer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fgets.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

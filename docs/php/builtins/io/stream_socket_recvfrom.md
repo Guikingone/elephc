@@ -2,13 +2,13 @@
 title: "stream_socket_recvfrom()"
 description: "Receives data from a socket, connected or not."
 sidebar:
-  order: 240
+  order: 259
 ---
 
 ## stream_socket_recvfrom()
 
 ```php
-function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = ''): mixed
+function stream_socket_recvfrom(resource $socket, int $length, int $flags = 0, string $address = null): mixed
 ```
 
 Receives data from a socket, connected or not.
@@ -17,7 +17,7 @@ Receives data from a socket, connected or not.
 - `$socket` (`resource`)
 - `$length` (`int`)
 - `$flags` (`int`), default `0`, optional
-- `$address` (`string`), passed by reference, default `''`, optional
+- `$address` (`string`), passed by reference, default `null`, optional
 
 **Returns**: `mixed`
 
@@ -27,12 +27,6 @@ Receives data from a socket, connected or not.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_recvfrom.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

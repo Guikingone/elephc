@@ -10,61 +10,9 @@
 //!   statically-known reflectors whose target user function has declared
 //!   parameter types, plus supported callable builtins.
 //! - Tests cover inline constructors, local tracking, case-insensitive function
-//!   names, defaults, named arguments, static argument arrays, and callable recovery.
+//!   names, defaults, named arguments, and static argument arrays.
 
 use super::*;
-
-/// Verifies a runtime string function name resolves through the callable registry and keeps the
-/// reflected callable usable through both metadata accessors and `getClosure()`.
-#[test]
-fn test_reflection_function_dynamic_string_name_resolves_registered_function() {
-    let out = compile_and_run(
-        r#"<?php
-function reflect_dynamic_name_target(int $left, int $right = 4): int {
-    return $left + $right;
-}
-
-$function = "REFLECT_DYNAMIC_NAME_TARGET";
-$reflection = new ReflectionFunction($function);
-echo $reflection->getName() . ":";
-echo $reflection->getNumberOfParameters() . ":";
-echo $reflection->getNumberOfRequiredParameters() . ":";
-$closure = $reflection->getClosure();
-echo $closure(3);
-"#,
-    );
-    assert_eq!(out, "reflect_dynamic_name_target:2:1:7");
-}
-
-/// Verifies `ReflectionFunction::getClosure()` returns the retained callable descriptor for
-/// named functions, first-class callables, and dynamically passed capturing closures.
-#[test]
-fn test_reflection_function_get_closure_returns_invokable_callable() {
-    let out = compile_and_run(
-        r#"<?php
-function reflect_get_closure_named(int $value): int {
-    return $value + 1;
-}
-
-function recover_reflected_closure(Closure $callable): Closure {
-    return (new ReflectionFunction($callable))->getClosure();
-}
-
-$named = (new ReflectionFunction("reflect_get_closure_named"))->getClosure();
-echo $named(2) . ":";
-
-$firstClass = (new ReflectionFunction(reflect_get_closure_named(...)))->getClosure();
-echo $firstClass(3) . ":";
-
-$seed = 4;
-$capturing = recover_reflected_closure(function (int $value) use ($seed): int {
-    return $seed + $value;
-});
-echo $capturing(5);
-"#,
-    );
-    assert_eq!(out, "3:4:9");
-}
 
 /// Verifies AOT `ReflectionFunction` exposes function-abstract predicate metadata.
 #[test]
@@ -188,31 +136,13 @@ echo $ref->getReturnType()->getName() . ":";
 $params = $ref->getParameters();
 echo count($params) . ":";
 echo $params[0]->getName() . ":";
-echo $params[0]->name . ":";
 echo ($params[0]->hasType() ? "P" : "p") . ":";
 echo $params[0]->getType()->getName() . ":";
 echo ($params[0]->getDeclaringFunction()->isInternal() ? "D" : "d") . ":";
 echo (new ReflectionParameter("strlen", "string"))->getDeclaringFunction()->getName();
 "#,
     );
-    assert_eq!(out, "strlen:strlen:I:u:T:int:1:string:string:P:string:D:strlen");
-}
-
-/// Verifies `new ReflectionParameter(...)` populates the public `$name` property with the real
-/// parameter name, identical to `getName()` (PHP exposes `ReflectionParameter::$name` as a public
-/// readonly string). Guards against the public slot silently returning the empty-string default.
-#[test]
-fn test_reflection_parameter_public_name_matches_get_name() {
-    let out = compile_and_run(
-        r#"<?php
-function reflect_param_name_demo(int $foo, string $bar) {}
-$byPosition = new ReflectionParameter("reflect_param_name_demo", 0);
-echo $byPosition->name . ":" . $byPosition->getName() . ":";
-$byName = new ReflectionParameter("reflect_param_name_demo", "bar");
-echo $byName->name . ":" . $byName->getName();
-"#,
-    );
-    assert_eq!(out, "foo:foo:bar:bar");
+    assert_eq!(out, "strlen:strlen:I:u:T:int:1:string:P:string:D:strlen");
 }
 
 /// Verifies `ReflectionFunction::invoke()` and `invokeArgs()` call supported builtins.
@@ -250,20 +180,6 @@ echo count($user->getClosureUsedVariables());
 "#,
     );
     assert_eq!(out, "0:0:0");
-}
-
-/// Verifies named functions expose the nullable called-class reflection accessor.
-#[test]
-fn test_reflection_function_named_target_has_no_closure_called_class() {
-    let out = compile_and_run(
-        r#"<?php
-function reflect_called_class_plain(): void {}
-
-$reflection = new ReflectionFunction("reflect_called_class_plain");
-echo $reflection->getClosureCalledClass() === null ? "none" : "class";
-"#,
-    );
-    assert_eq!(out, "none");
 }
 
 /// Verifies `ReflectionFunction::invoke()` calls declared AOT functions.

@@ -17,16 +17,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_values",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_values",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayValues,
     ),
-    summary: "Returns all the values of an array, re-indexed numerically.",
-    php_manual: "https://www.php.net/manual/en/function.array-values.php",
 }
 
 /// Returns the re-indexed value-array type for an `array_values` call.
@@ -36,13 +31,12 @@ builtin! {
 /// inferred it once for side effects, and arity is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(elem_ty) => Ok(PhpType::Array(elem_ty)),
         PhpType::AssocArray { value, .. } => Ok(PhpType::Array(value)),
-        // Gradual boundary: a `Mixed` or union-containing-array argument is accepted; the
-        // value element type is unknown, so the result is a list of `Mixed`. EIR emits the
-        // runtime unbox/assert-array guard.
-        t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => Ok(PhpType::Array(Box::new(PhpType::Mixed))),
         _ => Err(CompileError::new(
             cx.span,
             "array_values() argument must be array",

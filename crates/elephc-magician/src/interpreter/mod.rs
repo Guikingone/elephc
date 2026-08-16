@@ -33,9 +33,9 @@ mod output_handlers;
 mod throwables;
 
 use crate::context::{
-    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayReferenceKey, EvalReferenceTarget,
-    EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget, NativeCallableDefault,
-    NativeCallableSignature, NativeFunction,
+    ElephcEvalContext, ElephcEvalExecutionScope, EvalArrayCursor, EvalArrayReferenceKey,
+    EvalReferenceTarget, EvalClosure, EvalClosureCaptureBinding, EvalClosureObjectTarget,
+    NativeCallableDefault, NativeCallableSignature, NativeFunction,
 };
 use crate::errors::{EvalParseError, EvalStatus};
 use crate::eval_ir::{

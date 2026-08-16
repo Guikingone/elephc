@@ -78,7 +78,6 @@ pub enum IntrinsicCallKind {
     SplFixedUnserialize,
     CallbackFilterAccept,
     SplRecursiveAssumeIterator,
-    ThrowableConstruct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -404,30 +403,6 @@ const INTRINSICS: &[IntrinsicSpec] = &[
         method_key: "__elephcassumerecursiveiterator",
         runtime_helper: None,
     },
-    // Built-in Throwable roots have no EIR `__construct` body: the inline `new`
-    // path (`lower_builtin_throwable_new`) fills the compact payload directly, but
-    // a `parent::__construct(...)` chain from a user subclass emits a standalone
-    // `_method_<Root>___construct` reference. Registering these instance intrinsics
-    // makes `emit_intrinsic_method_wrappers` emit that symbol as a tail-call into the
-    // shared `__rt_exception_construct` helper. Both `Exception` and `Error` roots
-    // share the identical `[class_id][msg_ptr][msg_len][code]` payload and helper;
-    // every subclass resolves its inherited `__construct` to one of these two roots.
-    IntrinsicSpec {
-        kind: IntrinsicCallKind::ThrowableConstruct,
-        form: IntrinsicCallForm::Instance,
-        class_key: "exception",
-        class_name: "Exception",
-        method_key: "__construct",
-        runtime_helper: Some("__rt_exception_construct"),
-    },
-    IntrinsicSpec {
-        kind: IntrinsicCallKind::ThrowableConstruct,
-        form: IntrinsicCallForm::Instance,
-        class_key: "error",
-        class_name: "Error",
-        method_key: "__construct",
-        runtime_helper: Some("__rt_exception_construct"),
-    },
 ];
 
 /// Constructs an instance-method intrinsic spec for a Spl class.
@@ -553,20 +528,5 @@ mod tests {
     fn ignores_user_classes_with_matching_method_names() {
         assert!(IntrinsicCall::instance_method("UserFiber", "start").is_none());
         assert!(IntrinsicCall::instance_method("Box", "current").is_none());
-    }
-
-    /// Verifies both Throwable roots resolve `__construct` to the shared runtime helper,
-    /// case-insensitively, so `parent::__construct(...)` wrapper symbols can be emitted.
-    #[test]
-    fn resolves_throwable_root_constructors() {
-        for class in ["Exception", "exception", "Error", "error"] {
-            let call = IntrinsicCall::instance_method(class, "__construct")
-                .unwrap_or_else(|| panic!("{}::__construct should be intrinsic", class));
-            assert_eq!(call.kind(), IntrinsicCallKind::ThrowableConstruct);
-            assert_eq!(call.form(), IntrinsicCallForm::Instance);
-            assert_eq!(call.runtime_helper(), Some("__rt_exception_construct"));
-        }
-        // `__construct` is an instance intrinsic, never a static one.
-        assert!(IntrinsicCall::static_method("Exception", "__construct").is_none());
     }
 }

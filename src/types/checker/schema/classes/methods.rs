@@ -8,8 +8,6 @@
 //! Key details:
 //! - Class metadata is shared globally after construction, so validation must reject inconsistent inheritance early.
 
-use std::collections::{HashMap, HashSet};
-
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{ClassMethod, Visibility};
@@ -26,42 +24,17 @@ use super::{collect_attribute_args, collect_attribute_names};
 /// Validates and registers all methods of a flattened class into the build state.
 /// Enforces abstract/final modifiers, method body presence, and delegates to
 /// `apply_static_method` or `apply_instance_method` based on `method.is_static`.
-///
-/// `checker`/`next_class_id`/`building` are threaded through (mutably) so an override's
-/// covariant return type referencing a class not yet built (e.g. an unrelated sibling
-/// hierarchy) can be built on demand before the override's return-type compatibility is
-/// checked — see `validate_override_signature`.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn apply_methods(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &mut Checker,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
+    checker: &Checker,
 ) -> Result<(), CompileError> {
     for method in &class.methods {
         validate_method_shape(class, method)?;
         if method.is_static {
-            apply_static_method(
-                state,
-                class,
-                class_map,
-                checker,
-                next_class_id,
-                building,
-                method,
-            )?;
+            apply_static_method(state, class, checker, method)?;
         } else {
-            apply_instance_method(
-                state,
-                class,
-                class_map,
-                checker,
-                next_class_id,
-                building,
-                method,
-            )?;
+            apply_instance_method(state, class, checker, method)?;
         }
     }
     Ok(())
@@ -117,14 +90,10 @@ fn validate_method_shape(
 /// final method conflicts, static/instance kind conflicts, visibility reduction,
 /// signature override compatibility, `#[Override]` attribute targets, and registers
 /// the method in the static vtable when visibility is non-private.
-#[allow(clippy::too_many_arguments)]
 fn apply_static_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &mut Checker,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
+    checker: &Checker,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
@@ -166,9 +135,6 @@ fn apply_static_method(
     if let Some(parent_sig) = state.static_sigs.get(&method_key) {
         validate_override_signature(
             checker,
-            class_map,
-            next_class_id,
-            building,
             class,
             method,
             parent_sig,
@@ -243,14 +209,10 @@ fn apply_static_method(
 /// final method conflicts, static/instance kind conflicts, visibility reduction,
 /// signature override compatibility, `#[Override]` attribute targets, and registers
 /// the method in the instance vtable when visibility is non-private.
-#[allow(clippy::too_many_arguments)]
 fn apply_instance_method(
     state: &mut ClassBuildState,
     class: &FlattenedClass,
-    class_map: &HashMap<String, FlattenedClass>,
-    checker: &mut Checker,
-    next_class_id: &mut u64,
-    building: &mut HashSet<String>,
+    checker: &Checker,
     method: &ClassMethod,
 ) -> Result<(), CompileError> {
     let method_key = php_symbol_key(&method.name);
@@ -278,23 +240,26 @@ fn apply_instance_method(
             method,
         ));
     }
-    if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
-        if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
-            return Err(CompileError::new(
-                method.span,
-                &format!(
-                    "Cannot reduce visibility when overriding method: {}::{}",
-                    class.name, method.name
-                ),
-            ));
+    // PHP exempts constructors from ordinary override compatibility: a child may
+    // deliberately reduce constructor visibility (PDOStatement subclasses are the
+    // canonical internal-API example). Signature validation already carries the same
+    // `__construct` exemption; keep visibility validation aligned with it.
+    if method_key != "__construct" {
+        if let Some(parent_visibility) = state.method_visibilities.get(&method_key) {
+            if visibility_rank(&method.visibility) < visibility_rank(parent_visibility) {
+                return Err(CompileError::new(
+                    method.span,
+                    &format!(
+                        "Cannot reduce visibility when overriding method: {}::{}",
+                        class.name, method.name
+                    ),
+                ));
+            }
         }
     }
     if let Some(parent_sig) = state.method_sigs.get(&method_key) {
         validate_override_signature(
             checker,
-            class_map,
-            next_class_id,
-            building,
             class,
             method,
             parent_sig,

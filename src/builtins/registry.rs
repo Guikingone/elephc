@@ -21,6 +21,9 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
 use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
+use elephc_builtin_contract::{
+    aot_support, contracts, BackendImplementation, BackendSupport, RuntimeBuiltinId,
+};
 
 /// The rich runtime form of a PHP builtin function descriptor.
 ///
@@ -52,6 +55,10 @@ pub struct BuiltinDef {
 
 /// Global lazy registry: ASCII-lowercase-keyed map from builtin name to `BuiltinDef`.
 static REGISTRY: OnceLock<HashMap<String, BuiltinDef>> = OnceLock::new();
+
+/// Typed runtime IDs joined to canonical AOT builtin names.
+static RUNTIME_BUILTIN_REGISTRY: OnceLock<HashMap<RuntimeBuiltinId, &'static str>> =
+    OnceLock::new();
 
 /// Builds the registry by iterating all `BuiltinSpec`s collected by `inventory`.
 ///
@@ -106,7 +113,27 @@ fn build_registry() -> HashMap<String, BuiltinDef> {
         };
         map.insert(key, def);
     }
+    validate_shared_aot_coverage(&map);
     map
+}
+
+/// Proves every shared contract has exactly its declared compiler implementation route.
+fn validate_shared_aot_coverage(map: &HashMap<String, BuiltinDef>) {
+    for contract in contracts() {
+        let registered = map.contains_key(contract.name);
+        match aot_support(contract) {
+            BackendSupport::Implemented(BackendImplementation::Registry) => assert!(
+                registered,
+                "shared builtin contract {} requires an AOT registry binding",
+                contract.name
+            ),
+            BackendSupport::Implemented(_) | BackendSupport::Unsupported(_) => assert!(
+                !registered,
+                "shared builtin contract {} must not have an AOT registry binding",
+                contract.name
+            ),
+        }
+    }
 }
 
 /// Returns the global registry, initializing it on first call.
@@ -123,6 +150,43 @@ fn registry() -> &'static HashMap<String, BuiltinDef> {
 pub fn lookup(name: &str) -> Option<&'static BuiltinDef> {
     let lower = name.to_ascii_lowercase();
     registry().get(&lower)
+}
+
+/// Looks up the AOT binding for a boxed-runtime builtin without PHP-name dispatch.
+///
+/// The map is derived from the same shared contract ID used by Magician. Duplicate
+/// runtime IDs or an ABI ID without exactly one AOT binding are hard invariants.
+pub fn lookup_runtime_builtin(id: RuntimeBuiltinId) -> &'static BuiltinDef {
+    let name = runtime_builtin_registry()
+        .get(&id)
+        .copied()
+        .unwrap_or_else(|| panic!("runtime builtin ID {} has no AOT binding", id.as_u32()));
+    lookup(name).expect("runtime builtin registry must point to an AOT binding")
+}
+
+/// Builds the typed runtime-to-AOT join from shared contract identities.
+fn runtime_builtin_registry() -> &'static HashMap<RuntimeBuiltinId, &'static str> {
+    RUNTIME_BUILTIN_REGISTRY.get_or_init(|| {
+        let mut by_runtime_id = HashMap::with_capacity(RuntimeBuiltinId::ALL.len());
+        for def in registry().values() {
+            let Some(runtime_id) = def.spec.runtime_builtin_id() else {
+                continue;
+            };
+            assert!(
+                by_runtime_id.insert(runtime_id, def.name).is_none(),
+                "duplicate AOT binding for runtime builtin ID {}",
+                runtime_id.as_u32()
+            );
+        }
+        for runtime_id in RuntimeBuiltinId::ALL {
+            assert!(
+                by_runtime_id.contains_key(&runtime_id),
+                "runtime builtin ID {} has no AOT binding",
+                runtime_id.as_u32()
+            );
+        }
+        by_runtime_id
+    })
 }
 
 /// Returns `true` if the given name is a known PHP builtin.
@@ -794,11 +858,14 @@ mod tests {
     }
 
     /// Verifies typed runtime lowering derives count's visible arity from registry semantics.
+    ///
+    /// `count()` now declares PHP's optional `$mode`, so the bounds are `1..=2`; the backend
+    /// still accepts a single operand because a statically-zero mode is pruned during lowering.
     #[test]
     fn count_runtime_function_arity_comes_from_registry_semantics() {
         assert_eq!(
             runtime_fn_arity_bounds(crate::ir::RuntimeFnId::Count),
-            Some((1, Some(1))),
+            Some((1, Some(2))),
         );
     }
 
@@ -832,13 +899,15 @@ mod tests {
     }
 
     /// Verifies synthetic array-returning runtime calls retain concrete array metadata.
+    ///
+    /// `Scandir`, `File` and `Glob` left this list when their results became boxed
+    /// `array|false`, the same exit `Fgetcsv` made: the boxed cell IS the representation the
+    /// lowering builds, and refining it to a raw array here made a synthesized call read the
+    /// box as an array header.
     #[test]
     fn array_runtime_fallbacks_preserve_backend_container_layout() {
         for target in [
             crate::ir::RuntimeFnId::Explode,
-            crate::ir::RuntimeFnId::File,
-            crate::ir::RuntimeFnId::Glob,
-            crate::ir::RuntimeFnId::Scandir,
             crate::ir::RuntimeFnId::SplClasses,
         ] {
             assert_eq!(
@@ -848,16 +917,27 @@ mod tests {
                 target.as_eir(),
             );
         }
+        for target in [
+            crate::ir::RuntimeFnId::Scandir,
+            crate::ir::RuntimeFnId::File,
+            crate::ir::RuntimeFnId::Glob,
+        ] {
+            assert_eq!(
+                target.fallback_result_type(&[], &PhpType::Mixed),
+                PhpType::Mixed,
+                "{}'s boxed array|false must NOT be refined to a raw array",
+                target.as_eir(),
+            );
+        }
+    }
+
+    /// Verifies every versioned boxed-runtime ID joins to exactly one canonical AOT binding.
+    #[test]
+    fn runtime_builtin_ids_join_to_aot_contracts() {
+        for runtime_id in RuntimeBuiltinId::ALL {
+            let def = lookup_runtime_builtin(runtime_id);
+            assert_eq!(def.spec.id(), runtime_id.builtin_id());
+            assert_eq!(def.spec.runtime_builtin_id(), Some(runtime_id));
+        }
     }
 }
-
-pub fn returns_independent_storage(name: &str) -> bool {
-    lookup(name).is_some_and(|def| {
-        matches!(
-            def.spec.semantics.result_ownership,
-            crate::builtins::semantics::BuiltinResultOwnership::Fresh
-                | crate::builtins::semantics::BuiltinResultOwnership::Independent
-        )
-    })
-}
-

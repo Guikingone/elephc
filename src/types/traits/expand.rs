@@ -12,21 +12,16 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility,
-};
+use crate::parser::ast::{ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility};
 use crate::span::Span;
 
 use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
-use super::merge::{
-    merge_constants, merge_imported_constant_set, merge_imported_method_set, merge_methods,
-    merge_properties, merge_property_into,
-};
+use super::merge::{merge_imported_method_set, merge_methods, merge_properties, merge_property_into};
 use super::validation::validate_direct_members;
 
 /// Recursively expands a single trait, applying its trait_uses, then merging
 /// all inherited and direct members. Uses `cache` to memoize results and `stack`
-/// to detect circular composition. Returns the fully expanded property/method/constant set
+/// to detect circular composition. Returns the fully expanded property/method set
 /// or a `CompileError` on circular reference, unknown trait, or validation failure.
 fn expand_trait(
     trait_name: &str,
@@ -60,7 +55,7 @@ fn expand_trait(
     )?;
 
     stack.push(trait_name.to_string());
-    let (imported_props, imported_methods, imported_constants) = resolve_trait_uses(
+    let (imported_props, imported_methods) = resolve_trait_uses(
         &trait_info.trait_uses,
         trait_map,
         cache,
@@ -83,17 +78,7 @@ fn expand_trait(
         trait_info.span,
         &format!("trait {}", trait_name),
     )?;
-    let constants = merge_constants(
-        imported_constants,
-        &trait_info.constants,
-        trait_info.span,
-        &format!("trait {}", trait_name),
-    )?;
-    let expanded = ExpandedTrait {
-        properties,
-        methods,
-        constants,
-    };
+    let expanded = ExpandedTrait { properties, methods };
     cache.insert(trait_name.to_string(), expanded.clone());
     Ok(expanded)
 }
@@ -101,11 +86,11 @@ fn expand_trait(
 /// For each `TraitUse` in `trait_uses`, expands the referenced traits, applies
 /// insteadof/alias adaptations, resolves visibility overrides, selects the
 /// dominant method from each `HashMap` of candidates, and accumulates all
-/// imported properties, methods, and constants into their accumulated member sets.
+/// imported properties and methods into `all_properties` and `all_methods`.
 ///
 /// `owner_label` is a human-readable context string (e.g., `"class Foo"` or
 /// `"trait Bar"`) used only in error messages. `owner_span` is the source span
-/// used for error location. Returns imported properties, methods, and constants on success.
+/// used for error location. Returns `([ClassProperty], [ClassMethod])` on success.
 pub(super) fn resolve_trait_uses(
     trait_uses: &[TraitUse],
     trait_map: &HashMap<String, TraitDeclInfo>,
@@ -113,14 +98,12 @@ pub(super) fn resolve_trait_uses(
     stack: &mut Vec<String>,
     owner_label: &str,
     owner_span: Span,
-) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
+) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>), CompileError> {
     let mut all_properties = Vec::new();
     let mut all_methods = Vec::new();
-    let mut all_constants = Vec::new();
 
     for trait_use in trait_uses {
         let mut imported_properties = Vec::new();
-        let mut imported_constants = Vec::new();
         let mut candidates: HashMap<String, Vec<ImportedMethod>> = HashMap::new();
         let mut method_order = Vec::new();
         let listed_trait_names: HashSet<String> = trait_use
@@ -158,12 +141,6 @@ pub(super) fn resolve_trait_uses(
                         decl: method,
                     });
             }
-            merge_imported_constant_set(
-                &mut imported_constants,
-                expanded.constants,
-                trait_use.span,
-                owner_label,
-            )?;
         }
 
         let mut suppressed: HashMap<String, HashSet<String>> = HashMap::new();
@@ -275,15 +252,9 @@ pub(super) fn resolve_trait_uses(
             false,
         )?;
         merge_imported_method_set(&mut all_methods, selected_methods, owner_span, owner_label)?;
-        merge_imported_constant_set(
-            &mut all_constants,
-            imported_constants,
-            owner_span,
-            owner_label,
-        )?;
     }
 
-    Ok((all_properties, all_methods, all_constants))
+    Ok((all_properties, all_methods))
 }
 
 /// Filters `candidates` using `suppressed` trait-of-origin, applies visibility

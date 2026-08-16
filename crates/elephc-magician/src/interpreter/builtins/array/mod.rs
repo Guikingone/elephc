@@ -8,9 +8,13 @@
 //! - Leaf files register metadata through `eval_builtin!` and own the concrete
 //!   direct or evaluated-argument adapter used by registry hooks.
 
+// `implode()` lives in the string area but carries an ARRAY argument, so the shared
+// checker has to be reachable from outside this module.
+pub(in crate::interpreter) mod array_arg_check;
 mod array_chunk;
 mod array_column;
 mod array_combine;
+mod array_count_values;
 mod array_diff;
 mod array_diff_key;
 mod array_fill;
@@ -24,6 +28,7 @@ mod array_keys;
 mod array_map;
 mod array_merge;
 mod array_pad;
+mod array_pointer;
 mod array_pop;
 mod array_product;
 mod array_push;
@@ -42,18 +47,24 @@ mod array_walk;
 mod arsort;
 mod asort;
 mod count;
+mod current;
 mod direct_dispatch;
+mod end;
 mod in_array;
 mod iterator_apply;
 mod iterator_count;
 mod iterator_to_array;
+mod key;
 mod krsort;
 mod ksort;
 mod mutating_dispatch;
 mod mutation;
 mod natcasesort;
 mod natsort;
+mod next;
+mod prev;
 mod range;
+mod reset;
 mod rsort;
 mod shuffle;
 mod sort;
@@ -62,6 +73,7 @@ mod uksort;
 mod usort;
 mod values_dispatch;
 
+pub(in crate::interpreter) use array_pointer::eval_array_pointer_move;
 pub(in crate::interpreter) use array_pop::eval_array_pop_shift_replacement;
 pub(in crate::interpreter) use array_push::{
     eval_array_push_unshift_count_result, eval_array_push_unshift_replacement,

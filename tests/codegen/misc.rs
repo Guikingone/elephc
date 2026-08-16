@@ -254,25 +254,6 @@ echo $x;
     assert_eq!(out, "9");
 }
 
-/// Verifies a nullable local becomes non-null after `??=` even when the assignment is nested in a
-/// comparison, allowing a following decrement to use the filled integer value.
-#[test]
-fn test_null_coalesce_assignment_in_comparison_narrows_nullable_int() {
-    let out = compile_and_run(
-        r#"<?php
-function remaining(?int $limit): int {
-    if (1 > $limit ??= 100) {
-        throw new InvalidArgumentException("positive limit required");
-    }
-    --$limit;
-    return $limit;
-}
-echo remaining(null), ":", remaining(4);
-"#,
-    );
-    assert_eq!(out, "99:3");
-}
-
 /// Verifies null-coalescing assignment leaves a non-null string unchanged.
 #[test]
 fn test_null_coalesce_assignment_keeps_non_null_string() {
@@ -498,53 +479,59 @@ echo label(5) . "|" . label(-1);
     assert_eq!(out, "positive|zero or negative");
 }
 
-/// Verifies `$GLOBALS['name']` reads the global of that name from inside a function, which PHP
-/// resolves through the global symbol table. elephc models it as a compile-time alias onto the
-/// same storage a `global $name;` import would use, so no runtime table is needed for a literal
-/// key. Before this was modelled the read compiled and silently returned `0`.
+/// Verifies `constant()` returns the value of a `define()`d or `const`-declared global
+/// constant with the constant's own PHP type.
 #[test]
-fn test_globals_literal_key_read() {
+fn test_constant_returns_defined_values() {
     let out = compile_and_run(
         r#"<?php
-$alpha = 'A';
-$num = 42;
-function readIt(): string { return $GLOBALS['alpha']; }
-function readNum() { return $GLOBALS['num']; }
-echo readIt(), readNum();
+define("FOO", 42);
+define("BAR", "hello");
+define("BAZ", 3.5);
+define("QUX", true);
+const CC = 7;
+echo constant("FOO"), "|", constant("BAR"), "|", constant("BAZ"), "|", var_export(constant("QUX"), true), "|", constant("CC");
 "#,
     );
-    assert_eq!(out, "A42");
+    assert_eq!(out, "42|hello|3.5|true|7");
 }
 
-/// Verifies `$GLOBALS['name'] = …` writes THROUGH to the global, so a later top-level read sees
-/// the new value — the aliasing property that makes the model faithful rather than a copy.
+/// Verifies `constant()` resolves case-insensitively, namespaced, by named argument, and with
+/// a leading `\` on the constant NAME itself (PHP looks the global table up either way).
 #[test]
-fn test_globals_literal_key_write_is_visible_at_top_level() {
+fn test_constant_case_insensitive_namespaced_and_named_args() {
     let out = compile_and_run(
         r#"<?php
-$alpha = 'A';
-function w(): void { $GLOBALS['alpha'] = 'WRITTEN'; }
-w();
-echo $alpha;
+define("N", 5);
+echo CONSTANT("N"), "|", \constant("N"), "|", constant(name: "N"), "|", constant("\\N");
 "#,
     );
-    assert_eq!(out, "WRITTEN");
+    assert_eq!(out, "5|5|5|5");
 }
 
-/// Verifies `isset($GLOBALS['x'])` distinguishes a declared global from an absent name, and that
-/// an absent key under `??` yields the default rather than a warning — both matching `php -n`.
+/// Verifies `constant()` keeps the referenced constant's PHP type rather than widening to
+/// `mixed`, including for the predefined constant surface.
 #[test]
-fn test_globals_isset_and_absent_key_default() {
+fn test_constant_preserves_constant_type() {
     let out = compile_and_run(
         r#"<?php
-$a = 1;
-function t(): string {
-    return (isset($GLOBALS['a']) ? 'set' : 'unset')
-        . (isset($GLOBALS['zz']) ? 'set' : 'unset')
-        . ($GLOBALS['nope'] ?? 'DEF');
-}
-echo t();
+define("V", 9);
+echo gettype(constant("V")), "|", gettype(constant("PHP_EOL")), "|", gettype(constant("M_PI")), "|", constant("PHP_INT_MAX");
 "#,
     );
-    assert_eq!(out, "setunsetDEF");
+    assert_eq!(out, "integer|string|double|9223372036854775807");
+}
+
+/// Verifies `constant()` inside a namespace performs a GLOBAL lookup, so the unqualified and
+/// the `\`-qualified call agree.
+#[test]
+fn test_constant_inside_namespace_is_a_global_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+define("APP_X", 11);
+echo constant("APP_X"), "|", \constant("APP_X");
+"#,
+    );
+    assert_eq!(out, "11|11");
 }

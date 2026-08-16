@@ -9,8 +9,16 @@
 
 use super::*;
 
-/// Verifies asort maintains key-value associations and sorts by values in ascending order.
-/// Fixture: [3, 1, 2] → sorted [1, 2, 3] → first element $a[0] should be 1.
+/// Verifies `asort()` orders an indexed receiver's VALUES ascending.
+///
+/// TRACKED DIVERGENCE, and this fixture pins only the half that holds. php passes
+/// `renumber = 0` to `zend_array_sort`, so it permutes the keys instead of rebuilding them:
+/// `php -n -r '$a=[3,1,2]; asort($a); echo $a[0], json_encode($a);'` prints
+/// `3{"1":1,"2":2,"0":3}`, where `$a[0]` is still the array's ORIGINAL first element. A packed
+/// receiver has no room for that permutation, so it is reindexed here and `$a[0]` reads the
+/// SMALLEST value instead. Preserving those keys means converting the receiver to a hash — the
+/// conversion `natsort()`/`natcasesort()` now perform, see `crate::types::key_preserving_sort_promotes`
+/// for why `asort` is not on it yet.
 #[test]
 fn test_asort() {
     let out = compile_and_run(
@@ -23,8 +31,8 @@ echo $a[0];
     assert_eq!(out, "1");
 }
 
-/// Verifies arsort maintains key-value associations and sorts by values in descending order.
-/// Fixture: [1, 3, 2] → sorted descending [3, 2, 1] → first element $a[0] should be 3.
+/// The descending spelling, with the same tracked divergence: php prints `1` for `$a[0]` after
+/// `$a=[1,3,2]; arsort($a);` (the original first element), where a reindexed receiver reads `3`.
 #[test]
 fn test_arsort() {
     let out = compile_and_run(
@@ -51,32 +59,20 @@ echo count($a);
     assert_eq!(out, "3");
 }
 
-/// Verifies ksort accepts the optional second `$flags` argument (PHP 1–2 arity).
-/// Fixture: associative array with integer-string keys sorted with SORT_STRING.
-#[test]
-fn test_ksort_with_flags() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [3 => "c", 1 => "a", 2 => "b"];
-ksort($a, SORT_STRING);
-echo $a[1] . $a[2] . $a[3];
-"#,
-    );
-    assert_eq!(out, "abc");
-}
-
-/// Verifies krsort sorts by keys in descending order, preserving values.
-/// Fixture: [1, 2, 3] with string keys → sorted descending → count remains 3.
+/// Verifies krsort sorts by keys in descending order, preserving key/value association.
+/// An indexed array stores its keys as slot positions, so the receiver must be a hash;
+/// fixture: [2 => 1, 1 => 2, 3 => 3] → descending key order 3, 2, 1 with values 3, 1, 2.
 #[test]
 fn test_krsort() {
     let out = compile_and_run(
         r#"<?php
-$a = [1, 2, 3];
+$a = [2 => 1, 1 => 2, 3 => 3];
 krsort($a);
 echo count($a);
+foreach ($a as $k => $v) { echo ":", $k, "=", $v; }
 "#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "3:3=3:2=1:1=2");
 }
 
 /// Verifies natsort sorts values naturally (human ordering), preserving key-value associations.

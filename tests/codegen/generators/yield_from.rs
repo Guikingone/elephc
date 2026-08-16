@@ -300,100 +300,6 @@ foreach (outer() as $v) { echo $v; echo " "; }
     assert_eq!(out, "0 1 2 ");
 }
 
-/// Regression: `yield from inner()` where `inner(): iterable` is a generator
-/// function (typed as `Object("Generator")`). The type-based `yield from` gate
-/// still accepts a Generator-typed function-call operand. Cross-checked against
-/// `php -r` → "12".
-#[test]
-fn test_generator_yield_from_iterable_hinted_function_call() {
-    let out = compile_and_run(
-        r#"<?php
-function inner(): iterable { yield 1; yield 2; }
-function outer(): iterable { yield from inner(); }
-foreach (outer() as $x) { echo $x; }
-"#,
-    );
-    assert_eq!(out, "12");
-}
-
-/// Verifies an `iterable` parameter dispatches arrays through ordinary iteration and Generator
-/// objects through delegated send/return semantics.
-#[test]
-fn test_generator_yield_from_iterable_parameter_runtime_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-function dynamic_inner(): iterable {
-    $sent = yield 1;
-    yield $sent;
-    return 9;
-}
-
-function dynamic_outer(iterable $source): iterable {
-    $return = yield from $source;
-    echo "return=", is_null($return) ? "null" : $return, ";";
-}
-
-foreach (dynamic_outer([2, 3]) as $value) {
-    echo $value;
-}
-echo "|";
-
-$generator = dynamic_outer(dynamic_inner());
-echo $generator->current(), ":";
-echo $generator->send(7), ":";
-$generator->next();
-"#,
-    );
-    assert_eq!(out, "23return=null;|1:7:return=9;");
-}
-
-/// Verifies a gradual `mixed` source uses the same runtime array/Generator split as `iterable`,
-/// preserving delegated send/return behavior without statically accepting concrete scalars.
-#[test]
-fn test_generator_yield_from_mixed_parameter_runtime_dispatch() {
-    let out = compile_and_run(
-        r#"<?php
-function mixed_dynamic_inner(): iterable {
-    $sent = yield 4;
-    yield $sent;
-    return 11;
-}
-
-function mixed_dynamic_outer(mixed $source): iterable {
-    $return = yield from $source;
-    echo "return=", is_null($return) ? "null" : $return, ";";
-}
-
-foreach (mixed_dynamic_outer([5, 6]) as $value) {
-    echo $value;
-}
-echo "|";
-
-$generator = mixed_dynamic_outer(mixed_dynamic_inner());
-echo $generator->current(), ":";
-echo $generator->send(8), ":";
-$generator->next();
-"#,
-    );
-    assert_eq!(out, "56return=null;|4:8:return=11;");
-}
-
-/// Verifies `yield from $a` where `$a` is an array-TYPED VARIABLE (parameter
-/// declared `array $a`). Previously the syntactic gate only accepted an array
-/// LITERAL; the type-based gate now accepts any array-typed operand, which
-/// codegen lowers to an iterator loop over the array. A value-only loop is used
-/// to avoid PHP key-collision surprises. Cross-checked against `php -r` → "1299".
-#[test]
-fn test_generator_yield_from_array_typed_variable() {
-    let out = compile_and_run(
-        r#"<?php
-function outer(array $a): iterable { yield from $a; yield 99; }
-foreach (outer([1, 2]) as $x) { echo $x; }
-"#,
-    );
-    assert_eq!(out, "1299");
-}
-
 /// Verifies `yield from` passes arguments through to the inner generator,
 /// then chains a second `yield from` for additional delegation. Tests
 /// sequential delegation with argument passthrough.
@@ -416,4 +322,48 @@ foreach (combined() as $v) { echo $v; echo " "; }
 "#,
     );
     assert_eq!(out, "0 1 2 10 11 ");
+}
+
+/// Verifies `yield from` accepts an *associative* array literal, mixing an
+/// explicit integer key with a string key. The desugared iterator loop already
+/// handled hash storage; only the checker's `yield from` gate rejected the
+/// literal, so this compiles and forwards both keys verbatim.
+#[test]
+fn test_generator_yield_from_assoc_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function g() { yield from [5 => "x", "s" => "y"]; }
+foreach (g() as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "5=x s=y ");
+}
+
+/// Verifies a keyed literal whose key is a *computed* expression, delegated
+/// between two ordinary yields. The forwarded keys must not advance the outer
+/// generator's implicit-key counter: the bare `yield "b"` after the delegation
+/// still gets key 1, not 31.
+#[test]
+fn test_generator_yield_from_computed_key_literal_keeps_outer_counter() {
+    let out = compile_and_run(
+        r#"<?php
+function g(int $i) { yield "a"; yield from [$i * 10 => "L", "k" => "M"]; yield "b"; }
+foreach (g(3) as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "0=a 30=L k=M 1=b ");
+}
+
+/// Verifies `yield from` over a local variable holding an associative array,
+/// not just a literal. The delegated string keys pass through and the following
+/// bare `yield` resumes the outer auto-key at 0.
+#[test]
+fn test_generator_yield_from_assoc_array_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function g() { $rows = ["p" => 1, "q" => 2]; yield from $rows; yield 3; }
+foreach (g() as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "p=1 q=2 0=3 ");
 }

@@ -10,18 +10,12 @@
 //! - The check hook validates that the first argument is an object or string literal
 //!   and that the optional autoload arg is a literal bool or int.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "class_parents",
-    area: Callables,
-    params: [object_or_class: Mixed, autoload: Bool = DefaultSpec::Bool(true)],
-    returns: Mixed,
+    contract: "class_parents",
     check: crate::builtins::callables::support::check_class_relation,
     lazy_check: true,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ClassParents,
     ),
-    summary: "Returns the parent classes of the given class.",
-    php_manual: "function.class-parents",
 }

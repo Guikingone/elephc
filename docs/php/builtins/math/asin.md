@@ -2,7 +2,7 @@
 title: "asin()"
 description: "Returns the arcsine of a number in radians."
 sidebar:
-  order: 256
+  order: 275
 ---
 
 ## asin()
@@ -24,12 +24,6 @@ Returns the arcsine of a number in radians.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/asin.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/asin.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

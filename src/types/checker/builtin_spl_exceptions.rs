@@ -15,9 +15,9 @@ use crate::types::traits::FlattenedClass;
 
 use super::builtin_types::InterfaceDeclInfo;
 
-/// (class_name, parent_name) — every entry is a marker subclass that inherits constructor,
-/// getMessage, and the message property from Exception transitively. Holds the SPL hierarchy
-/// plus the core engine exceptions elephc's preludes can throw.
+/// (class_name, parent_name) — every SPL exception is a marker subclass that
+/// inherits constructor, getMessage, and the message property from Exception
+/// transitively.
 const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("LogicException", "Exception"),
     ("BadFunctionCallException", "LogicException"),
@@ -32,11 +32,6 @@ const SPL_EXCEPTION_HIERARCHY: &[(&str, &str)] = &[
     ("RangeException", "RuntimeException"),
     ("UnderflowException", "RuntimeException"),
     ("UnexpectedValueException", "RuntimeException"),
-    // Not SPL, but modeled identically: PHP 8.4's engine exception for
-    // `request_parse_body()`, which `crate::web_prelude` implements and throws. Declared here
-    // rather than as prelude PHP so `new RequestParseBodyException(...)` uses `Exception`'s
-    // real constructor instead of a prelude subclass reaching for `parent::__construct`.
-    ("RequestParseBodyException", "Exception"),
 ];
 
 /// Injects SPL exception class declarations into the checker metadata.

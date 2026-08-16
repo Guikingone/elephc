@@ -32,19 +32,6 @@ class Greeter {
 $g = new Greeter();
 $g->hello();
 
-// Magic constants also work in class-constant initializers and property
-// defaults: __CLASS__ is the declaring class FQN, and __FUNCTION__/__METHOD__
-// are empty because there is no enclosing function. This is exactly the shape
-// symfony/var-dumper uses (const X = ['Closure' => __CLASS__.'::method']).
-class Registry {
-    const OWNER = __CLASS__;
-    const INFO  = ['self' => __CLASS__ . '::describe'];
-    public string $label = __CLASS__;
-}
-echo "  Registry::OWNER      = " . Registry::OWNER . "\n";
-echo "  Registry::INFO[self] = " . Registry::INFO['self'] . "\n";
-echo "  (new Registry)->label = " . (new Registry())->label . "\n";
-
 // Inside a trait method, __CLASS__ is rebound to the class that uses the
 // trait, while __METHOD__ and __TRAIT__ keep the trait declaration identity.
 trait Reportable {

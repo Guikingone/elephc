@@ -7,19 +7,38 @@ sidebar:
 
 ## declare
 
-`declare(strict_types=1);` is accepted at the top of a file. elephc compiles a
-statically-typed subset and is **always strict**, so the directive is parsed and
-treated as a no-op rather than toggling a runtime mode. The `ticks` and `encoding`
-directives are likewise accepted and ignored. Directive values must be PHP
-literals; `strict_types` must be the first statement, use the statement form, and
-have the integer value `0` or `1`.
+`declare(strict_types=1);` switches the file to PHP's strict parameter binding.
+Like PHP, the directive is scoped to the **physical file it appears in**: it does
+not propagate into files that file includes, it does not reach back into the file
+that included it, and it is the file containing the *call site* — not the file
+declaring the callee — that decides which rules apply.
+
+Under the directive, a declared scalar parameter accepts only an argument of
+exactly that type, plus PHP's one surviving widening of `int` into a declared
+`float`. Every other conversion PHP performs in coercive mode is a compile error
+naming the `TypeError` PHP would throw — see
+[Types → Strict types](./types.md#strict-types) for the full table and the
+surfaces the directive does and does not reach, and
+[Types → Parameter type coercion](./types.md#parameter-type-coercion) for what a
+file without the directive accepts.
+
+`declare(strict_types=0);` is the explicit spelling of PHP's default and changes
+nothing.
+
+The `ticks` and `encoding` directives are accepted and ignored.
+Directive values must be PHP literals; `strict_types` must be the first
+statement, use the statement form, and have the integer value `0` or `1`.
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-echo "always strict";
+function takesInt(int $i) { return $i; }
+
+echo takesInt(42);        // 42
+echo takesInt((int) "7"); // 7   — an explicit cast is always fine
+// echo takesInt(true);   // compile error: must be of type int, bool given
 ```
 
 The block form runs its body in the enclosing scope:
@@ -56,6 +75,9 @@ if ($x > 0) {
     echo "zero";
 }
 ```
+
+PHP's alternative `if ($x): … elseif … else: … endif;` form is also accepted —
+see [Alternative syntax](#alternative-syntax).
 
 ## while
 
@@ -113,6 +135,34 @@ foreach ($nums as &$value) {
     $value *= 2;
 }
 ```
+
+The value target can also be a destructuring pattern, in either spelling, with or
+without a key:
+
+```php
+$points = [[1, 2], [3, 4]];
+foreach ($points as [$x, $y]) {
+    echo "$x,$y\n";
+}
+foreach ($points as list($x, $y)) { /* same thing */ }
+foreach ($points as $i => [$x, $y]) {
+    echo "$i: $x,$y\n";
+}
+
+// Keyed, skipped, and nested patterns work exactly as they do in an assignment.
+$rows = [["name" => "Ada", "role" => "admin"]];
+foreach ($rows as ["name" => $name, "role" => $role]) {
+    echo "$name is $role\n";
+}
+foreach ([[1, 2, 3]] as [, $second]) { echo $second; }
+foreach ([[1, [2, 3]]] as [$a, [$b, $c]]) { echo $a, $b, $c; }
+```
+
+A destructuring pattern binds one element per iteration and then unpacks it, so it
+follows the rules in [Array destructuring](./arrays.md): keyed and unkeyed entries
+cannot be mixed, and an empty pattern (`foreach ($x as [])`) is an error. The `&`
+reference marker applies to a variable target, never to a whole pattern, so
+`foreach ($x as &[$a, $b])` is rejected.
 
 Use `foreach ($arr as $key => &$value)` when both the key and a mutable
 element reference are needed. The key itself cannot be bound by reference.
@@ -226,6 +276,86 @@ switch ($x) {
 }
 ```
 
+## Alternative syntax
+
+`if`, `while`, `for`, `foreach`, and `switch` all accept PHP's alternative
+syntax: a `:` opens the body instead of `{`, and a matching `endif;`,
+`endwhile;`, `endfor;`, `endforeach;`, or `endswitch;` closes it. (`declare`
+uses the same shape with `enddeclare;` — see above.)
+
+```php
+<?php
+if ($x > 0):
+    echo "positive";
+elseif ($x < 0):
+    echo "negative";
+else:
+    echo "zero";
+endif;
+
+while ($i < 3):
+    $i++;
+endwhile;
+
+for ($i = 0; $i < 3; $i++):
+    echo $i;
+endfor;
+
+foreach ([1, 2, 3] as $value):
+    echo $value;
+endforeach;
+
+switch ($x):
+    case 1:
+        echo "one";
+        break;
+    default:
+        echo "other";
+endswitch;
+```
+
+The two forms are exactly equivalent — the alternative body compiles to the same
+code as the braced one — and they nest freely in either direction, so an
+alternative `if` can sit inside a braced `foreach` and vice versa.
+
+Two rules match PHP:
+
+- **One style per `if` chain.** Every branch of a given `if` must use the same
+  form. `if ($x) { ... } else: ... endif;` is rejected, as is
+  `if ($x): ... else { ... } endif;`. Note that this means `else if` (two words)
+  cannot be used in an alternative chain — write `elseif`.
+- **The terminator needs its semicolon.** `endif`, `endwhile`, `endfor`,
+  `endforeach`, and `endswitch` are each followed by `;`.
+
+Since elephc has no inline-HTML mode, the alternative forms are a pure
+readability choice rather than a templating feature.
+
+## goto
+
+**`goto` is not supported.** Both the statement and its target label are
+rejected at compile time:
+
+```text
+error[2:1]: `goto` is not supported: elephc compiles structured control flow
+only, so a jump to an arbitrary label inside a function has no lowering.
+Please restructure the jump with `break`, `continue`, a loop flag, or an early
+`return`
+
+error[4:1]: `goto` labels are not supported: the label `end:` can only be
+reached by `goto`, which elephc does not support.
+```
+
+elephc analyses control flow structurally — termination and reachability
+analysis, flow-sensitive type narrowing, loop and branch pruning, and constant
+propagation all assume the statement tree describes the CFG. An arbitrary
+intra-function jump breaks that assumption, so the construct is rejected outright
+rather than partially supported. Use `break` (including `break 2;`), `continue`,
+a loop flag, or an early `return` instead; those cover PHP's common `goto` use
+of bailing out of nested loops.
+
+`goto` is still a reserved word, so it cannot be used as a function name — but,
+as in PHP, it remains valid as a method or constant name (`$obj->goto()`).
+
 ## match expression
 
 PHP 8 style match. No fall-through, returns a value, uses strict comparison (`===`).
@@ -285,6 +415,33 @@ Supported subset:
 - built-in `Error` and `Exception` classes and the `Throwable` interface are available without declaring them
 - `Error` and `Exception` provide `$message`, `$code`, `$previous`, `__construct($message = "", $code = 0, $previous = null)`, and the standard `Throwable` methods: `getMessage()`, `getCode()`, `getFile()`, `getLine()`, `getTrace()`, `getTraceAsString()`, `getPrevious()`, and `__toString()`
 - the SPL exception hierarchy is built-in: `LogicException`, `BadFunctionCallException`, `BadMethodCallException`, `DomainException`, `InvalidArgumentException`, `LengthException`, `OutOfRangeException`, `RuntimeException`, `OutOfBoundsException`, `OverflowException`, `RangeException`, `UnderflowException`, `UnexpectedValueException`. Each is a marker subclass that inherits the constructor, `$message`, and the standard `Throwable` methods from `Exception`. Catch a specific type (`InvalidArgumentException`), an intermediate parent (`LogicException`), or the root (`Exception`/`Throwable`)
+- the built-in `Error` hierarchy is available on the same terms, with PHP's exact parents:
+
+  | class | extends |
+  | --- | --- |
+  | `Error` | implements `Throwable` |
+  | `TypeError` | `Error` |
+  | `ArgumentCountError` | `TypeError` |
+  | `ValueError` | `Error` |
+  | `ArithmeticError` | `Error` |
+  | `DivisionByZeroError` | `ArithmeticError` |
+  | `AssertionError` | `Error` |
+  | `UnhandledMatchError` | `Error` |
+  | `FiberError` | `Error` |
+
+  Each is a marker subclass inheriting the constructor, `$message`, `$code`, `$previous`, and the standard `Throwable` methods from `Error`, exactly as the SPL exceptions inherit theirs from `Exception`. Catch matching walks the whole chain, so an `ArgumentCountError` is caught by `catch (ArgumentCountError)`, `catch (TypeError)`, `catch (Error)`, and `catch (Throwable)` — the first matching clause in source order wins. `Error` and `Exception` remain disjoint branches of `Throwable`: neither catches the other.
+- `intdiv($a, 0)` raises a catchable `DivisionByZeroError` with PHP's `Division by zero` message. `intdiv(PHP_INT_MIN, -1)` raises the parent `ArithmeticError` with `Division of PHP_INT_MIN by -1 is not an integer`, matching PHP.
+
+Divergences in the `Error` hierarchy:
+
+- **Static rejection instead of a runtime `ArgumentCountError`/`TypeError`.** elephc is an AOT compiler: a call whose arity or argument types are provably wrong is a COMPILE error, not a runtime throw. `opcache_reset(1)` fails the build with `Function 'opcache_reset' expects 0 arguments, got 1`, where PHP 8.5 would compile it and throw `ArgumentCountError: opcache_reset() expects exactly 0 arguments, 1 given` when the line executes. The `catch (\ArgumentCountError $e)` clause itself compiles fine — only the statically provable error is reported earlier and more loudly. Wrap a genuinely dynamic call if you need the runtime behavior.
+- `AssertionError` can be thrown, caught, and inspected from userland, but nothing in elephc raises it: `assert()` is not a supported builtin (`Undefined function: assert`), so there is no `zend.assertions=1` path to fail.
+- `UnhandledMatchError` can be thrown and caught from userland, but an unmatched `match` arm is still a fatal terminator rather than a constructed, catchable `UnhandledMatchError` (see the `match` section above).
+- `$a / 0` and `$a % 0` do NOT throw. `/` yields `INF` and `%` yields `0`, where PHP 8 raises `DivisionByZeroError` with `Division by zero` / `Modulo by zero`. Use `intdiv()` when you need the catchable error.
+- An UNCAUGHT throwable prints `Fatal error: Uncaught <Class>: <message> in <file>:<line>` and exits `255`, matching PHP up to the STACK TRACE, which elephc omits — PHP follows the first line with `Stack trace:`, `#0 {main}` and `  thrown in <file> on line <n>`. The file and line are the CONSTRUCTION site, as in PHP: an exception built on line 2 and thrown on line 5 reports line 2. `getFile()` and `getLine()` return the same pair; `getTrace()` and `getTraceAsString()` remain an empty array and an empty string, because elephc keeps no call stack.
+- A throwable raised by a CODEGEN GUARD (`intdiv()` by zero, the `array_keys()` argument check) names its class and message and exits `255` like any other, but carries NO ` in <file>:<line>` suffix: it is synthesized by the compiler rather than by a user `new`, so there is no construction site to report. `getLine()` returns `0` for these. PHP does report the operation's own line here.
+- The file reported for an uncaught throwable is the COMPILED SCRIPT's path. EIR spans carry a line and column but no filename, so code merged in from an `include` reports the including script's path rather than its own.
+- Engine-only `Error` subclasses are NOT declared: `ParseError`, `CompileError`, `DateError`/`DateObjectError`/`DateRangeError`, `Random\RandomError`/`Random\BrokenRandomEngineError`, `Uri\UriError`, and `FFI\Exception`. They exist in PHP only to report failures elephc either resolves at compile time (a parse error) or does not implement, so declaring them would add a name that nothing can ever raise.
 - `throw <expr>;` where `<expr>` has an object type implementing `Throwable`
 - `throw <expr>` can also be used inside expressions such as `??` and ternaries
 - `catch (ClassName $e)` and `catch (TypeA | TypeB $e)` for multi-catch

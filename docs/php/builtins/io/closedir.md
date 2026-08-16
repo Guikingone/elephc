@@ -2,19 +2,19 @@
 title: "closedir()"
 description: "Closes directory handle."
 sidebar:
-  order: 159
+  order: 166
 ---
 
 ## closedir()
 
 ```php
-function closedir(resource $dir_handle): void
+function closedir(resource $dir_handle = null): void
 ```
 
 Closes directory handle.
 
 **Parameters**:
-- `$dir_handle` (`resource`)
+- `$dir_handle` (`resource`), default `null`, optional
 
 **Returns**: `void`
 
@@ -24,12 +24,6 @@ Closes directory handle.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/closedir.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

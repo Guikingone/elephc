@@ -13,25 +13,25 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "rewinddir",
-    area: Io,
-    params: [dir_handle: Mixed],
-    returns: Void,
+    contract: "rewinddir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Rewinddir,
     ),
-    summary: "Rewind directory handle.",
-    php_manual: "function.rewinddir",
 }
 
 /// Validates the directory handle is a stream resource and returns `Void`.
+///
+/// `$dir_handle` is OPTIONAL — omitted, it means php's last opened directory stream — so the
+/// argument is only type-checked when one is actually written.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    crate::types::checker::builtins::io::common::ensure_stream_resource(
-        cx.checker,
-        cx.name,
-        &cx.args[0],
-        cx.env,
-    )?;
+    if let Some(arg) = cx.args.first() {
+        crate::types::checker::builtins::io::common::ensure_optional_stream_resource(
+            cx.checker,
+            cx.name,
+            arg,
+            cx.env,
+        )?;
+    }
     Ok(PhpType::Void)
 }

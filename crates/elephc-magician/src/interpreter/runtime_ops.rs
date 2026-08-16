@@ -12,12 +12,80 @@
 
 use std::ffi::c_void;
 
+use elephc_builtin_contract::RuntimeBuiltinId;
+
 use crate::errors::EvalStatus;
 use crate::eval_ir::EvalBinOp;
 use crate::value::RuntimeCellHandle;
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Calls a typed boxed-cell runtime builtin when this implementation supports it.
+    ///
+    /// Test and embedding implementations inherit this adapter over the existing
+    /// value-operation contract. The generated-runtime adapter overrides it with
+    /// the versioned C ABI, so Magician does not select production helpers by name.
+    fn runtime_builtin_call(
+        &mut self,
+        id: RuntimeBuiltinId,
+        args: &[RuntimeCellHandle],
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+        let result = match (id, args) {
+            (RuntimeBuiltinId::Boolval, [value]) => self.cast_bool(*value)?,
+            (RuntimeBuiltinId::Floatval, [value]) => self.cast_float(*value)?,
+            (RuntimeBuiltinId::Intval, [value]) => self.cast_int(*value)?,
+            (RuntimeBuiltinId::IsArray, [value]) => {
+                let is_array = matches!(self.type_tag(*value)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC);
+                self.bool_value(is_array)?
+            }
+            (RuntimeBuiltinId::IsNull, [value]) => {
+                let is_null = self.is_null(*value)?;
+                self.bool_value(is_null)?
+            }
+            (RuntimeBuiltinId::Abs, [value]) => self.abs(*value)?,
+            (RuntimeBuiltinId::Ceil, [value]) => self.ceil(*value)?,
+            (RuntimeBuiltinId::Floor, [value]) => self.floor(*value)?,
+            (RuntimeBuiltinId::Sqrt, [value]) => self.sqrt(*value)?,
+            (RuntimeBuiltinId::Fdiv, [left, right]) => self.fdiv(*left, *right)?,
+            (RuntimeBuiltinId::Fmod, [left, right]) => self.fmod(*left, *right)?,
+            (RuntimeBuiltinId::Pow, [left, right]) => self.pow(*left, *right)?,
+            (RuntimeBuiltinId::Round, [value]) => self.round(*value, None)?,
+            (RuntimeBuiltinId::Round, [value, precision]) => {
+                self.round(*value, Some(*precision))?
+            }
+            (RuntimeBuiltinId::Strrev, [value]) => self.strrev(*value)?,
+            (RuntimeBuiltinId::ArrayKeyExists, [key, array]) => {
+                self.array_key_exists(*key, *array)?
+            }
+            (RuntimeBuiltinId::ObGetLevel, []) => {
+                let level = self.ob_level()?;
+                self.int(level)?
+            }
+            (RuntimeBuiltinId::ObGetLength, []) => match self.ob_length()? {
+                Some(length) => self.int(length)?,
+                None => self.bool_value(false)?,
+            },
+            (RuntimeBuiltinId::ObClean, []) => {
+                let cleaned = self.ob_clean()?;
+                self.bool_value(cleaned)?
+            }
+            (RuntimeBuiltinId::ObFlush, []) => {
+                let flushed = self.ob_flush()?;
+                self.bool_value(flushed)?
+            }
+            (RuntimeBuiltinId::ObEndClean, []) => {
+                let ended = self.ob_end(false)?;
+                self.bool_value(ended)?
+            }
+            (RuntimeBuiltinId::ObEndFlush, []) => {
+                let ended = self.ob_end(true)?;
+                self.bool_value(ended)?
+            }
+            _ => return Ok(None),
+        };
+        Ok(Some(result))
+    }
+
     /// Creates a runtime indexed-array cell with room for at least `capacity` elements.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -208,12 +276,6 @@ pub trait RuntimeValueOps {
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
         constructor: RuntimeCellHandle,
-        // `getNumberOfParameters()` reads a dedicated baked count slot rather than
-        // `count(__parameters)` (the compiled AOT side backs it the same way — see
-        // `crate::types::checker::builtin_types::reflection` on the elephc side) because a
-        // dynamic descriptor-backed `ReflectionFunction` construction path can report a count
-        // without materializing a real `ReflectionParameter[]` array.
-        parameter_count: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Returns generated AOT ReflectionMethod flags for a class/method pair.
@@ -388,6 +450,14 @@ pub trait RuntimeValueOps {
     /// Extracts the high raw payload word from a boxed Mixed cell.
     fn raw_value_high_word(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Reports whether a HOST resource payload names an already-closed handle.
+    ///
+    /// The answer belongs to the compiled program's resource registry, not to eval:
+    /// since the generation-safe registry migration a live payload is an opaque handle
+    /// and `fclose` publishes the closed state on the registry slot, so no property of
+    /// the payload word itself can tell the two apart.
+    fn resource_is_closed(&mut self, payload: u64) -> Result<bool, EvalStatus>;
+
     /// Duplicates one raw string payload so a staged native by-ref slot owns it.
     fn retain_raw_string_words(&mut self, ptr: u64, len: u64) -> Result<(u64, u64), EvalStatus>;
 
@@ -416,6 +486,12 @@ pub trait RuntimeValueOps {
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the PHP OBJECT HANDLE — the small dense integer `spl_object_id()`
+    /// reports and `var_dump()` prints as `object(C)#N`. This is deliberately not
+    /// `object_identity`: that one is the storage address, which destructor
+    /// bookkeeping keys on, while this one must match the AOT engine's pool.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
     /// Returns the object identity that would be freed by releasing this owned cell, if any.
     fn final_object_identity_for_release(
         &mut self,
@@ -431,6 +507,17 @@ pub trait RuntimeValueOps {
     /// Emits or suppresses one PHP runtime warning through the target runtime.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus>;
 
+    /// Raises the `@` diagnostic-suppression depth for the expression being evaluated.
+    ///
+    /// php's error-suppression operator silences every diagnostic raised while its inner
+    /// expression evaluates — value and exceptions pass through untouched. The depth
+    /// nests, because `@` expressions do.
+    fn suppress_begin(&mut self);
+
+    /// Lowers the `@` diagnostic-suppression depth; the pair must unwind on EVERY exit,
+    /// exceptional ones included, or one caught throw would silence the rest of the run.
+    fn suppress_end(&mut self);
+
     /// Creates a runtime null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus>;
 
@@ -442,6 +529,24 @@ pub trait RuntimeValueOps {
 
     /// Creates a runtime resource cell with a zero-based native resource payload.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Creates a runtime cell for an eval-owned incremental hash context.
+    ///
+    /// SEPARATE FROM `resource()` ON PURPOSE. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT, which draws from the object-handle space and consumes
+    /// nothing from the per-request RESOURCE counter that `get_resource_id()` and
+    /// `var_dump()` report. Routing hash contexts through `resource()` made
+    /// `eval('hash_init("md5"); $x = fopen(...);')` report an id one higher than PHP
+    /// for `$x`, and shifted the host program's later `fopen()`s too, because eval and
+    /// the compiled program share one id counter.
+    ///
+    /// The cell still carries runtime tag 9, because that is the shape
+    /// `eval_resource_payload` reads the table key back out of; what changes is the
+    /// resource KIND word, which becomes 5 = eval-owned inert handle: no PHP id is
+    /// bound and no destructor runs. `value` is a key into `EvalStreamResources`, which
+    /// owns the real `elephc_crypto` handle and frees it in its own `Drop` — this cell
+    /// must never free anything.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;

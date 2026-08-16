@@ -75,7 +75,7 @@ pub(super) fn lower_extern_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
 
     let assignments =
         abi::build_outgoing_arg_assignments_for_target(ctx.emitter.target, &c_param_types, 0);
-    let overflow_bytes = abi::materialize_outgoing_args(ctx.emitter, &assignments);
+    let overflow_bytes = abi::materialize_outgoing_c_abi_args(ctx.emitter, &assignments);
     let symbol = ctx.emitter.target.extern_symbol(&decl.name);
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::emit_release_temporary_stack(ctx.emitter, overflow_bytes);
@@ -285,7 +285,6 @@ fn materialize_extern_static_function_descriptor_callback(
             function_name,
         ),
         Some(&invoker_label),
-        false,
     );
     abi::emit_symbol_address(
         ctx.emitter,
@@ -306,8 +305,9 @@ fn const_string_value<'a>(ctx: &'a FunctionContext<'_>, value: ValueId) -> Optio
     if !matches!(inst.op, Op::ConstStr) {
         return None;
     }
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     ctx.module
         .data
@@ -481,8 +481,9 @@ fn first_class_callable_target<'a>(
     ctx: &'a FunctionContext<'_>,
     inst: &Instruction,
 ) -> Option<&'a str> {
-    let Some(Immediate::Data(data)) = inst.immediate else {
-        return None;
+    let data = match inst.immediate {
+        Some(Immediate::Data(data)) | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => return None,
     };
     ctx.module
         .data

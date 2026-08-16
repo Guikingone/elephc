@@ -37,3 +37,31 @@ pub(in crate::interpreter) fn eval_throw_type_error<T>(
     context.set_pending_throw(exception);
     Err(EvalStatus::UncaughtThrowable)
 }
+
+/// Creates and schedules a `ValueError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_builtin_value_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("ValueError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}
+
+/// Creates and schedules a `DivisionByZeroError` through eval's normal Throwable channel.
+pub(in crate::interpreter) fn eval_throw_builtin_division_by_zero_error<T>(
+    message: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<T, EvalStatus> {
+    let exception = values.new_object("DivisionByZeroError")?;
+    let message = values.string(message)?;
+    let code = values.int(0)?;
+    values.construct_object(exception, vec![message, code])?;
+    context.set_pending_throw(exception);
+    Err(EvalStatus::UncaughtThrowable)
+}

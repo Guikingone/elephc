@@ -22,56 +22,6 @@ echo count($b);
     assert_eq!(out, "3");
 }
 
-/// Verifies `array_unique()` accepts the optional second `$flags` argument (PHP 1–2 arity).
-/// Fixture: `[1, 2, 2, 3]` with SORT_STRING → 3 unique values.
-#[test]
-fn test_array_unique_with_flags() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [1, 2, 2, 3];
-$b = array_unique($a, SORT_STRING);
-echo count($b);
-"#,
-    );
-    assert_eq!(out, "3");
-}
-
-/// Verifies `array_unique()` accepts an `array|false` gradual operand when its runtime value is
-/// an array, preserves first occurrences, and exposes an ordinary `array<mixed>` result.
-#[test]
-fn test_array_unique_gradual_array_union_operand() {
-    let out = compile_and_run(
-        r#"<?php
-function maybe_values(bool $ok): array|false {
-    return $ok ? [1, 1, 2] : false;
-}
-$values = array_unique(maybe_values(true));
-foreach ($values as $value) {
-    echo $value;
-}
-"#,
-    );
-    assert_eq!(out, "12");
-}
-
-/// Verifies gradual Mixed slots use default `SORT_STRING` value comparison instead of
-/// Mixed-cell pointer identity or numeric loose equality.
-#[test]
-fn test_array_unique_gradual_mixed_slots_use_sort_string_semantics() {
-    let out = compile_and_run(
-        r#"<?php
-function maybe_values(bool $ok): array|false {
-    return $ok ? [10, "010", 10, "010"] : false;
-}
-$values = array_unique(maybe_values(true));
-foreach ($values as $value) {
-    echo $value . "|";
-}
-"#,
-    );
-    assert_eq!(out, "10|010|");
-}
-
 /// Verifies `array_diff()` returns values from `$a` not present in `$b`; count of `[1,2,3,4]` vs `[2,4]` is 2.
 #[test]
 fn test_array_diff() {

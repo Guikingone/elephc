@@ -11,19 +11,15 @@
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::names::Name;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind, MagicConstant, StaticReceiver};
+use crate::parser::ast::{Expr, ExprKind, MagicConstant, StaticReceiver};
 use crate::span::Span;
 
-use super::assignment_targets::is_non_local_assignment_target;
-use super::list_destructure::{
-    try_parse_bracket_destructure_expr, try_parse_list_construct_destructure_expr,
-};
-use super::calls::{parse_first_class_callable_parens, parse_scoped_static_call, peek_cast};
+use super::calls::{parse_scoped_static_call, peek_cast};
 use super::prefix_complex::{
     parse_arrow_closure, parse_attributed_closure, parse_closure, parse_match_expr,
     parse_named_expr, parse_new_object,
 };
-use super::pratt::{build_incdec_value, parse_expr_bp};
+use super::pratt::parse_expr_bp;
 use super::{parse_args, parse_expr};
 
 /// Parses a prefix (unary or primary) PHP expression and returns the resulting AST node.
@@ -51,11 +47,7 @@ pub(super) fn parse_prefix(
         Token::At => parse_unary(tokens, pos, span, ExprKind::ErrorSuppress, 35),
         Token::Print => parse_unary(tokens, pos, span, ExprKind::Print, 7),
         Token::Throw => parse_unary(tokens, pos, span, ExprKind::Throw, 0),
-        // `clone` binds tighter than `**` in PHP (php-verified: `clone $a ** 2` is a
-        // TypeError on `A ** int`, i.e. `(clone $a) ** 2`), so its operand bp (38) sits
-        // above `**`'s lhs bp (37) while the unconditional postfix loop still folds
-        // `clone $a->b` into `clone ($a->b)`.
-        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 38),
+        Token::Clone => parse_unary(tokens, pos, span, ExprKind::Clone, 35),
         Token::True => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(true)),
         Token::False => parse_simple(tokens, pos, span, ExprKind::BoolLiteral(false)),
         Token::Null => parse_simple(tokens, pos, span, ExprKind::Null),
@@ -213,46 +205,11 @@ pub(super) fn parse_prefix(
         }
         Token::Variable(name) => parse_variable(tokens, pos, span, name.clone()),
         Token::LParen => parse_group_or_cast(tokens, pos, span),
-        // `[pattern] = RHS` in expression position with a skipped/keyed/nested/non-variable
-        // pattern desugars onto the statement-form destructuring; the all-simple-positional
-        // shape (and every plain literal) falls through to the array-literal parser so the
-        // pre-existing Pratt `ExprKind::ListUnpack` path stays byte-identical.
-        Token::LBracket => {
-            match try_parse_bracket_destructure_expr(tokens, pos)? {
-                Some(expr) => Ok(expr),
-                None => parse_array_literal(tokens, pos, span),
-            }
-        }
+        Token::LBracket => parse_array_literal(tokens, pos, span),
         Token::Match => parse_match_expr(tokens, pos, span),
         Token::Function => parse_closure(tokens, pos, span, false),
         Token::Fn => parse_arrow_closure(tokens, pos, span, false),
         Token::AttrOpen => parse_attributed_closure(tokens, pos, span),
-        // `list(pattern) = RHS` used in expression position (e.g. `if (list(, $b) = $arr)`),
-        // PHP's long-form destructuring construct. Only intercepted when the matching `)` is
-        // followed by a plain `=`; otherwise the identifier proceeds through the ordinary
-        // named-expression path for its usual diagnostics.
-        Token::Identifier(name)
-            if name.eq_ignore_ascii_case("list")
-                && matches!(tokens.get(*pos + 1).map(|(t, _)| t), Some(Token::LParen)) =>
-        {
-            match try_parse_list_construct_destructure_expr(tokens, pos)? {
-                Some(expr) => Ok(expr),
-                None => parse_named_expr(tokens, pos, span),
-            }
-        }
-        // A leading `\` before a global constant (`\PHP_INT_MAX`, `\INF`, `\DIRECTORY_SEPARATOR`,
-        // `\PHP_EOL`, `\true`, …) only denotes the global namespace. Those constants are global and
-        // are lexed as dedicated tokens rather than identifiers, so the fully-qualified-name path
-        // would reject them ("Expected name"). Consume the `\` and parse the constant token itself.
-        Token::Backslash
-            if tokens
-                .get(*pos + 1)
-                .map(|(token, _)| is_backslashable_global_constant(token))
-                .unwrap_or(false) =>
-        {
-            *pos += 1; // consume the leading `\`
-            parse_prefix(tokens, pos)
-        }
         Token::Identifier(_) | Token::Enum | Token::Backslash => {
             parse_named_expr(tokens, pos, span)
         }
@@ -283,158 +240,13 @@ pub(super) fn parse_prefix(
             parse_scoped_static_call(tokens, pos, span, StaticReceiver::Parent, "parent")
         }
         Token::New => parse_new_object(tokens, pos, span),
-        // `clone <expr>` — PHP prefix operator on the `clone new` precedence tier (binds
-        // tighter than `**`, looser than postfix `->`/`[]`/()`). Operand bp 38 sits just
-        // above `**`'s lhs bp (37) so `clone $a ** 2` parses as `(clone $a) ** 2`, while the
-        // unconditional postfix loop still folds `clone $a->b` into `clone ($a->b)`.
-        Token::This => parse_this(tokens, pos, span),
+        Token::This => parse_simple(tokens, pos, span, ExprKind::This),
         Token::Yield => parse_yield(tokens, pos, span),
-        Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
-            // `include`/`require` (optionally `_once`) are expressions in PHP: they evaluate to
-            // the included file's top-level `return` value (or 1). Reuse the shared value-include
-            // parser so an include in operand position (`$x ??= require F`, `f(require F)`, a
-            // ternary branch, …) produces the same `IncludeValue` node as `$x = require F`.
-            Ok(crate::parser::stmt::try_parse_value_include(tokens, pos)?
-                .expect("include keyword guarantees a value-include expression"))
-        }
-        // A bare `$` in prefix (non-receiver) position is a local variable-variable
-        // (`$$name` / `${expr}`). The lexer emits `Token::Dollar` without context; only a
-        // static receiver's `::` promotes it to a dynamic static property access, so here it
-        // is always the unsupported variable-variable form.
-        Token::Dollar => Err(CompileError::new(
-            span,
-            "Variable variables (`$$name`) are not supported: variable names must be known at compile time",
-        )),
         other => Err(CompileError::new(
             span,
             &format!("Unexpected token: {:?}", other),
         )),
     }
-}
-
-/// Returns true when `token` is a global constant that is lexed as a dedicated token (rather than
-/// an identifier) and may be written with a leading `\` (`\PHP_INT_MAX`, `\INF`, `\PHP_EOL`,
-/// `\DIRECTORY_SEPARATOR`, `\true`, …). Used so a fully-qualified reference to such a constant
-/// skips the leading backslash and parses the constant directly instead of failing name parsing.
-/// Magic constants (`__LINE__`, `__DIR__`, …) are intentionally excluded: PHP does not namespace
-/// them, so `\__LINE__` is not valid.
-fn is_backslashable_global_constant(token: &Token) -> bool {
-    matches!(
-        token,
-        Token::True
-            | Token::False
-            | Token::Null
-            | Token::Inf
-            | Token::Nan
-            | Token::PhpIntMax
-            | Token::PhpIntMin
-            | Token::PhpFloatMax
-            | Token::PhpFloatMin
-            | Token::PhpFloatEpsilon
-            | Token::MPi
-            | Token::ME
-            | Token::MSqrt2
-            | Token::MPi2
-            | Token::MPi4
-            | Token::MLog2e
-            | Token::MLog10e
-            | Token::PhpEol
-            | Token::PhpOs
-            | Token::DirectorySeparator
-            | Token::Stdin
-            | Token::Stdout
-            | Token::Stderr
-    )
-}
-
-/// Returns true when `token` can begin a prefix/primary PHP expression — i.e. when
-/// [`parse_prefix`] would accept it as the first token of an expression.
-///
-/// Used by the statement dispatcher to recognise a *bare expression statement* whose leading
-/// token is a value or unary operator (e.g. `0 > $T && $T += 0x40;`, `!$ok && fail();`,
-/// `new Foo();`) rather than a keyword/variable already routed to a dedicated statement parser.
-/// PHP allows any expression as a statement, so keeping this predicate in lockstep with
-/// [`parse_prefix`] ensures such statements are parsed instead of rejected at statement position.
-/// The keyword-led prefix forms (`print`, `throw`, `yield`, `include`/`require`) are listed for
-/// completeness but never reach the predicate: the dispatcher routes them to dedicated parsers
-/// before its fallback arm consults this function.
-pub(crate) fn token_starts_prefix_expression(token: &Token) -> bool {
-    matches!(
-        token,
-        // Unary / prefix operators
-        Token::Minus
-            | Token::Bang
-            | Token::Tilde
-            | Token::At
-            | Token::Print
-            | Token::Throw
-            | Token::PlusPlus
-            | Token::MinusMinus
-            // Literals and boolean/null keywords
-            | Token::True
-            | Token::False
-            | Token::Null
-            | Token::Inf
-            | Token::Nan
-            | Token::StringLiteral(_)
-            | Token::IntLiteral(_)
-            | Token::FloatLiteral(_)
-            // PHP / math named constants lowered at parse time
-            | Token::PhpIntMax
-            | Token::PhpIntMin
-            | Token::PhpFloatMax
-            | Token::PhpFloatMin
-            | Token::PhpFloatEpsilon
-            | Token::MPi
-            | Token::ME
-            | Token::MSqrt2
-            | Token::MPi2
-            | Token::MPi4
-            | Token::MLog2e
-            | Token::MLog10e
-            | Token::Stdin
-            | Token::Stdout
-            | Token::Stderr
-            | Token::PhpEol
-            | Token::PhpOs
-            | Token::DirectorySeparator
-            // Magic constants
-            | Token::DunderLine
-            | Token::DunderDir
-            | Token::DunderFile
-            | Token::DunderFunction
-            | Token::DunderClass
-            | Token::DunderMethod
-            | Token::DunderNamespace
-            | Token::DunderTrait
-            // Variables, grouping, array / closure / match constructs
-            | Token::Variable(_)
-            | Token::LParen
-            | Token::LBracket
-            | Token::Match
-            | Token::Function
-            | Token::Fn
-            | Token::AttrOpen
-            // Names and scope receivers
-            | Token::Identifier(_)
-            | Token::Backslash
-            | Token::Self_
-            | Token::Static
-            | Token::Parent
-            // Object construction / cloning / `$this` / yield / includes
-            | Token::New
-            | Token::Clone
-            | Token::This
-            | Token::Yield
-            | Token::Include
-            | Token::IncludeOnce
-            | Token::Require
-            | Token::RequireOnce
-            // Bare `$` (variable-variable marker): routed to the prefix parser so a
-            // statement-position `$$name` / `${expr}` reports the unsupported-variable-variable
-            // diagnostic instead of a generic "unexpected token".
-            | Token::Dollar
-    )
 }
 
 /// Parses `yield` and `yield from` expressions. Consumes the `yield` token and optionally
@@ -532,11 +344,8 @@ fn parse_unary(
 }
 
 /// Parses a prefix `++` or `--` increment/decrement operator. Consumes the operator,
-/// then the target. A bare variable (`++$x`) keeps the dedicated `PreIncrement`/
-/// `PreDecrement` node. A complex l-value (`++$obj->p`, `++$a[$i]`, `++$this->n`,
-/// `++Foo::$s`) is parsed at a binding power above every binary operator — so only
-/// postfix member access attaches — and desugared to compound-assignment form, which
-/// yields the new value like PHP. Returns an error if the target is not an l-value.
+/// then expects a `Variable` token next. Returns `PreIncrement` or `PreDecrement` with the
+/// variable name. Returns an error if a variable does not follow the operator.
 fn parse_prefix_inc_dec(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -544,14 +353,8 @@ fn parse_prefix_inc_dec(
     increment: bool,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
-    // Fast path: a bare variable with no complex-l-value continuation keeps its
-    // dedicated prefix node (preserving bare-variable increment semantics).
-    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
-        let continues_complex = matches!(
-            tokens.get(*pos + 1).map(|(token, _)| token),
-            Some(Token::Arrow | Token::QuestionArrow | Token::LBracket | Token::DoubleColon)
-        );
-        if !continues_complex {
+    if *pos < tokens.len() {
+        if let Token::Variable(name) = &tokens[*pos].0 {
             let name = name.clone();
             *pos += 1;
             return Ok(Expr::new(
@@ -562,25 +365,6 @@ fn parse_prefix_inc_dec(
                 },
                 span,
             ));
-        }
-    }
-    // Complex l-value: parse the target above every binary operator (38 > the highest
-    // infix binding power, 37), so binary operators stay with the enclosing context.
-    if matches!(
-        tokens.get(*pos).map(|(token, _)| token),
-        Some(
-            Token::Variable(_)
-                | Token::This
-                | Token::Self_
-                | Token::Static
-                | Token::Parent
-                | Token::Identifier(_)
-                | Token::Backslash
-        )
-    ) {
-        let target = parse_expr_bp(tokens, pos, 38)?;
-        if is_non_local_assignment_target(&target) {
-            return Ok(build_incdec_value(target, increment, true, span));
         }
     }
     Err(CompileError::new(
@@ -604,20 +388,6 @@ fn parse_variable(
     name: String,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
-    // `$GLOBALS` is only meaningful as `$GLOBALS['name']`; the Pratt postfix-`[` arm rewrites
-    // that shape into an alias variable before it is ever seen as a `$GLOBALS` read. Reaching
-    // here with anything but a following `[` therefore means the program uses `$GLOBALS` as a
-    // whole array (`count`, `foreach`, passing it along) or replaces it outright. Neither is
-    // supported, and both used to miscompile silently, so refuse them at the parse choke point.
-    if name == "GLOBALS" {
-        let next = tokens.get(*pos).map(|(t, _)| t);
-        if let Some(message) = crate::globals_array::unsupported_use_message(
-            matches!(next, Some(Token::LBracket)),
-            matches!(next, Some(Token::Assign)),
-        ) {
-            return Err(CompileError::new(span, message));
-        }
-    }
     if *pos < tokens.len() {
         match &tokens[*pos].0 {
             Token::PlusPlus => {
@@ -630,19 +400,6 @@ fn parse_variable(
             }
             Token::LParen => {
                 *pos += 1;
-                if parse_first_class_callable_parens(tokens, pos)? {
-                    // `$callable(...)` creates a Closure from the value held in `$callable`.
-                    // Model it as an `__invoke` first-class method target so invokable objects
-                    // materialize a real callable descriptor. The lowering keeps this an identity
-                    // operation when the variable already contains a callable descriptor.
-                    return Ok(Expr::new(
-                        ExprKind::FirstClassCallable(CallableTarget::Method {
-                            object: Box::new(Expr::new(ExprKind::Variable(name), span)),
-                            method: "__invoke".to_string(),
-                        }),
-                        span,
-                    ));
-                }
                 let args = parse_args(tokens, pos, span)?;
                 let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                 return Ok(Expr::new(ExprKind::ClosureCall { var: name, args }, span));
@@ -653,56 +410,13 @@ fn parse_variable(
     Ok(Expr::new(ExprKind::Variable(name), span))
 }
 
-/// Parses a `$this` expression, mirroring `parse_variable`'s `(`-handling so `$this(...)`
-/// and `$this(args)` are recognized in the prefix parser (the Pratt postfix `(` gate does not
-/// include `ExprKind::This`). Only intercepts a following `(`; `->`, `::`, and `[` are left to
-/// the Pratt postfix loop so `$this->m()` etc. keep working. Returns:
-/// - `FirstClassCallable(Method{ object: This, method: "__invoke" })` for the FCC form `$this(...)`
-///   (a callable value of the current instance's `__invoke`),
-/// - `ExprCall { callee: This, args }` for a direct invoke `$this(args)`, and
-/// - a bare `This` node otherwise.
-fn parse_this(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    span: Span,
-) -> Result<Expr, CompileError> {
-    *pos += 1;
-    if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
-        *pos += 1;
-        if parse_first_class_callable_parens(tokens, pos)? {
-            // `$this(...)` is the first-class-callable form: it produces a callable value of the
-            // current instance's `__invoke`. Reuses the fully-working Method-FCC path; on a class
-            // that lacks `__invoke` the checker/codegen relaxations keep it callable-typed and
-            // link-safe (runtime-dead when guarded by `is_callable($this)`).
-            return Ok(Expr::new(
-                ExprKind::FirstClassCallable(CallableTarget::Method {
-                    object: Box::new(Expr::new(ExprKind::This, span)),
-                    method: "__invoke".to_string(),
-                }),
-                span,
-            ));
-        }
-        let args = parse_args(tokens, pos, span)?;
-        return Ok(Expr::new(
-            ExprKind::ExprCall {
-                callee: Box::new(Expr::new(ExprKind::This, span)),
-                args,
-            },
-            span,
-        ));
-    }
-    Ok(Expr::new(ExprKind::This, span))
-}
-
 /// Parses a grouped expression `(...)` or a type cast `(type) expr`. If `peek_cast` detects
 /// a cast, consumes the cast syntax and returns a `Cast` node with the target type and inner
 /// expression parsed at binding power 35 (the unary-operator level). This makes a cast bind
 /// tighter than `* / % + - .` and the comparison/logical operators — so `(int)$x + 3` parses
 /// as `((int)$x) + 3`, matching PHP — while `**` (left bp 37) still binds tighter than the cast.
 /// Otherwise parses as a grouped expression: consumes `(` and `)`, then checks for an immediate
-/// call (`inner(args)`) to support expression-call syntax. Also recognizes the first-class-callable
-/// form `($expr)(...)`, mirroring `parse_variable`'s `$var(...)` handling: the grouped value is
-/// returned as-is rather than wrapped in an `ExprCall`.
+/// call (`inner(args)`) to support expression-call syntax.
 fn parse_group_or_cast(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -729,12 +443,6 @@ fn parse_group_or_cast(
     if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
         let call_span = tokens[*pos].1.span;
         *pos += 1;
-        if parse_first_class_callable_parens(tokens, pos)? {
-            // `($expr)(...)` is the first-class-callable form on a parenthesized expression.
-            // As with `$var(...)`, the grouped value is expected to already be a callable, so
-            // the closure-creation form evaluates to that value directly.
-            return Ok(inner);
-        }
         let args = parse_args(tokens, pos, call_span)?;
         let call_span = crate::parser::expr::span_through_prev_token(tokens, *pos, call_span);
         return Ok(Expr::new(
@@ -759,8 +467,7 @@ fn parse_array_literal(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
-    *pos += 1;
-    super::array_literal::parse_array_entries(tokens, pos, span, &Token::RBracket, "Expected ']'")
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RBracket, "']'")
 }
 
 /// Parses the legacy `array(...)` literal form after its opening parenthesis.
@@ -769,12 +476,143 @@ pub(super) fn parse_legacy_array_literal(
     pos: &mut usize,
     span: Span,
 ) -> Result<Expr, CompileError> {
+    parse_array_literal_with_terminator(tokens, pos, span, &Token::RParen, "')'")
+}
+
+/// Parses an array literal body up to `closing`, starting at the opening token.
+fn parse_array_literal_with_terminator(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    closing: &Token,
+    closing_desc: &str,
+) -> Result<Expr, CompileError> {
     *pos += 1;
-    super::array_literal::parse_array_entries(tokens, pos, span, &Token::RParen, "Expected ')'")
+    let mut elems = Vec::new();
+    let mut assoc_elems = Vec::new();
+    let mut is_assoc = false;
+    let mut first = true;
+    let mut next_auto_key = 0i64;
+    let mut auto_key_initialized = false;
+    while *pos < tokens.len() && tokens[*pos].0 != *closing {
+        if !first {
+            if tokens[*pos].0 != Token::Comma {
+                return Err(CompileError::new(
+                    tokens[*pos].1.span,
+                    "Expected ',' between array elements",
+                ));
+            }
+            *pos += 1;
+            if *pos < tokens.len() && tokens[*pos].0 == *closing {
+                break;
+            }
+        }
+        if *pos < tokens.len() && tokens[*pos].0 == Token::Ellipsis {
+            let spread_span = tokens[*pos].1.span;
+            *pos += 1;
+            let inner = parse_expr(tokens, pos)?;
+            if !is_assoc {
+                elems.push(Expr::new(ExprKind::Spread(Box::new(inner)), spread_span));
+            }
+            first = false;
+            continue;
+        }
+        reject_reference_array_element(tokens, pos, closing)?;
+        let expr = parse_expr(tokens, pos)?;
+        if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
+            if !is_assoc {
+                promote_indexed_array_items_to_assoc(&mut elems, &mut assoc_elems);
+            }
+            is_assoc = true;
+            *pos += 1;
+            reject_reference_array_element(tokens, pos, closing)?;
+            let value = parse_expr(tokens, pos)?;
+            update_next_auto_key_from_explicit_key(
+                &expr,
+                &mut next_auto_key,
+                &mut auto_key_initialized,
+            );
+            assoc_elems.push((expr, value));
+        } else if is_assoc {
+            let key = Expr::new(ExprKind::IntLiteral(next_auto_key), expr.span);
+            assoc_elems.push((key, expr));
+            next_auto_key += 1;
+            auto_key_initialized = true;
+        } else {
+            elems.push(expr);
+            next_auto_key += 1;
+            auto_key_initialized = true;
+        }
+        first = false;
+    }
+    if *pos >= tokens.len() || tokens[*pos].0 != *closing {
+        return Err(CompileError::new(
+            span,
+            &format!("Expected {closing_desc}"),
+        ));
+    }
+    *pos += 1;
+    if is_assoc {
+        Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
+    } else {
+        Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
+    }
+}
+
+/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
+/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+///
+/// PHP stores such an element as a reference cell that aliases the source variable's storage,
+/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
+/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
+/// construct cannot be honoured without either silently copying or leaving the array holding a
+/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
+///
+/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
+/// after it and does not report cascading errors for the remaining elements.
+fn reject_reference_array_element(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    closing: &Token,
+) -> Result<(), CompileError> {
+    let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
+        return Ok(());
+    };
+    let span = metadata.span;
+    skip_to_array_literal_end(tokens, pos, closing);
+    Err(CompileError::new(
+        span,
+        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
+         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
+         to alias an existing array element",
+    ))
+}
+
+/// Advances `pos` past the remainder of the current array literal, including its `closing`
+/// token, tracking nested `[`/`(` pairs so inner literals and calls are skipped whole.
+///
+/// Stops at end-of-input if the literal is unterminated, leaving `pos` at `Eof`.
+fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: &Token) {
+    let mut depth = 0usize;
+    while let Some((token, _)) = tokens.get(*pos) {
+        match token {
+            Token::Eof => return,
+            Token::LBracket | Token::LParen => depth += 1,
+            Token::RBracket | Token::RParen => {
+                if depth == 0 && token == closing {
+                    *pos += 1;
+                    return;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        *pos += 1;
+    }
 }
 
 /// Converts positional items parsed before a keyed array entry into integer-keyed pairs.
-pub(super) fn promote_indexed_array_items_to_assoc(
+fn promote_indexed_array_items_to_assoc(
     elems: &mut Vec<Expr>,
     assoc_elems: &mut Vec<(Expr, Expr)>,
 ) {
@@ -794,7 +632,7 @@ pub(super) fn promote_indexed_array_items_to_assoc(
 /// The first integer-like key seeds the cursor unconditionally so a leading
 /// negative key continues from there (PHP 8.3 semantics); later keys only
 /// raise it.
-pub(super) fn update_next_auto_key_from_explicit_key(
+fn update_next_auto_key_from_explicit_key(
     key: &Expr,
     next_auto_key: &mut i64,
     auto_key_initialized: &mut bool,

@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ob_get_contents",
-    area: Io,
-    params: [],
-    returns: Mixed,
+    contract: "ob_get_contents",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ObGetContents,
     ),
-    summary: "Returns the contents of the output buffer.",
-    php_manual: "function.ob-get-contents",
 }
 
 /// Returns `Union(Str, False)`: the buffered bytes on success, `false` when no

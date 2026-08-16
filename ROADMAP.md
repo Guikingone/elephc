@@ -586,6 +586,121 @@ items below are intentionally deferred to a later milestone. They are either
 niche, genuinely large (multi-week), or blocked by an upstream-library limit —
 none are needed for typical stream usage.
 
+- [x] **`fgetcsv`/`fputcsv` full PHP 8.4 signatures** — `fgetcsv` now accepts
+  `$enclosure` and `$escape` (default `""` = RFC 4180 doubling mode), and
+  `fputcsv` accepts `$escape` (default `"\\"`) and `$eol` (default `"\n"`,
+  PHP 8.1+). The EIR lowering extracts the first byte of each delimiter string,
+  packs them into a `csv_opts` word (`esc<<16 | enc<<8 | sep`), and passes it
+  to the runtime. `__rt_fgetcsv` implements a 5-state machine
+  (OutsideField/InField/InQuotedField/AfterEscape/AfterCloseQuote) honoring
+  custom separator, enclosure, and escape; `__rt_fputcsv` honors custom
+  separator, enclosure, escape, and end-of-line. ARM64 + x86_64.
+- [x] **PSFS return-code propagation** — `__rt_user_filter_brigade_invoke`
+  now observes the user filter's `int` return value: `PSFS_PASS_ON` (2)
+  walks the output brigade as before; `PSFS_FEED_ME` (1) returns the original
+  input buffer unchanged so the stream layer can re-read and re-invoke;
+  `PSFS_ERR_FATAL` (0) returns an empty result to signal a fatal filter
+  error. Previously only PASS_ON produced output and the other two codes
+  were silently treated as empty output. ARM64 + x86_64.
+- [x] **`stream_select` → `poll(2)`** — `__rt_stream_select` now builds a
+  stack-allocated `struct pollfd` array (capacity 256) and invokes `poll(2)`
+  instead of `select(2)`, removing the 64-fd ceiling that blocked servers
+  with more than 64 concurrent connections. Read entries use `POLLIN`,
+  write entries `POLLOUT`, except entries `POLLPRI`. Synthetic user-wrapper
+  descriptors are still resolved via `stream_cast(STREAM_CAST_FOR_SELECT)`.
+  Descriptors that resolve to -1 (no `stream_cast`) are kept in the pollfd
+  array so indices stay aligned, but `revents & (POLLIN|POLLOUT|POLLPRI)`
+  filtering drops them from the ready subset (matching PHP, which excludes
+  non-selectable wrappers). Timeout: `seconds`/`microseconds` are combined
+  into a millisecond count; a sentinel null/infinite maps to `-1` (block
+  forever). macOS uses `bl _poll` (libSystem); Linux uses the native poll
+  syscall (73 on ARM64, 7 on x86_64). ARM64 + x86_64.
+- [x] **`stream_get_meta_data` real `wrapper_type` and `uri` (file://)** —
+  `__rt_fopen` now records the opened URI and a wrapper id (0=plainfile) per
+  fd via a new `__rt_stream_record_meta` runtime helper, backed by three
+  per-fd tables (`_stream_wrapper_id`, `_stream_uri_ptr`, `_stream_uri_len`).
+  `__rt_stream_get_meta_data` reads these tables and maps the wrapper id to
+  the matching wrapper-name literal (plainfile/http/https/ftp/ftps/phar/php/
+  data/compress.zlib/compress.bzip2/glob/user), falling back to "plainfile"
+  for unset fds. The URI is read from the per-fd pointer/length pair, falling
+  back to an empty string. The URI is persisted via `__rt_str_persist` so it
+  survives past the caller's string lifetime. ARM64 + x86_64.
+- [x] **Extended `stream_get_meta_data` wrapper instrumentation** — the
+  `emit_record_stream_meta_after_fd` lowering helper now instruments
+  php://memory and php://temp (wrapper_id=6), data:// (wrapper_id=7),
+  http:// (wrapper_id=1), ftp:// (wrapper_id=3), compress.zlib://
+  (wrapper_id=8), and compress.bzip2:// (wrapper_id=9), so
+  `stream_get_meta_data()` reports the real `wrapper_type` and `uri` for
+  these wrappers.
+- [x] **Full `stream_socket_client`/`server` signatures** —
+  `stream_socket_client` now accepts the full 7-arg PHP signature
+  (address, &$errno, &$errstr, $timeout, $flags, $context, $peername),
+  and `stream_socket_server` accepts the full 6-arg signature
+  (address, &$errno, &$errstr, $flags, $context, $peername). The check
+  hook validates that $errno and $errstr are plain variables (by-ref).
+  The runtime currently ignores the extra args (errno/errstr not yet
+  written); this lands the signature surface for compilation.
+- [x] **Full `file_get_contents`/`file_put_contents`/`readfile` signatures** —
+  `file_get_contents` accepts the 5-arg signature (filename,
+  use_include_path, context, offset, length); `file_put_contents` accepts
+  the 4-arg signature (filename, data, flags, context) with data widened
+  from Str to Mixed; `readfile` accepts the 3-arg signature (filename,
+  use_include_path, context). The runtime currently ignores the extra
+  args; this lands the signature surface.
+- [x] **User-registered filters in `stream_get_filters()`** —
+  `stream_get_filters()` now appends user-registered filter names from
+  the runtime `_user_filter_registry` to the built-in static list, via a
+  new `__rt_stream_get_filters` runtime helper that scans the 128-slot
+  registry. ARM64 + x86_64.
+- [x] **`%c` and `%x` format specifiers in `sscanf`/`fscanf`** — the
+  `__rt_sscanf` runtime helper (shared by `sscanf` and `fscanf`) now
+  supports `%c` (single character) and `%x` (hexadecimal integer with
+  optional sign, `0x` prefix, and hex digits) alongside the existing
+  `%d`/`%f`/`%s`/`%%`. A lone sign with no digits is backtracked.
+  ARM64 + x86_64.
+- [x] **HTTP wrapper method/headers/content/redirects** — investigation
+  confirmed the HTTP wrapper already reads `http.method`, `http.header`,
+  `http.content`, `http.follow_location`, and `http.max_redirects` from
+  the stream context via `__rt_http_build_request`. POST with headers
+  and content is verified working. Redirects (up to `max_redirects`)
+  are supported. The remaining gap is the `$http_response_header`
+  auto-populated superglobal variable.
+- [x] **`stream_set_chunk_size` effective in `stream_get_contents`** —
+  `__rt_stream_get_contents` and `__rt_stream_get_contents_bounded` now
+  read the per-fd chunk size from `_stream_chunk_size[fd]` instead of
+  hardcoding 4096. Synthetic user-wrapper fds skip the table lookup.
+  ARM64 + x86_64.
+- [x] **True `stream_filter_prepend` with 2-slot filter chain** — the
+  `_stream_read_filters` and `_stream_write_filters` tables are widened
+  to 512 bytes (2 slots per fd: slot 0 at index fd, slot 1 at fd+256).
+  `stream_filter_prepend` shifts the current slot-0 filter to slot 1
+  before attaching the new filter at slot 0. `stream_filter_append`
+  checks if slot 0 is occupied and falls back to slot 1.
+  `stream_filter_remove` clears both slots. `__rt_fread` applies a
+  2-slot filter chain (slot 0 then slot 1). Verified: prepend(toupper)
+  + append(rot13) produces rot13(UPPER(input)). ARM64 + x86_64.
+- [x] **`stream_is_local` based on scheme/wrapper_id** —
+  `stream_is_local` now returns `false` for `http://`, `https://`,
+  `ftp://`, and `ftps://` streams. For string-literal arguments, the
+  scheme prefix is checked at compile time. For resource arguments, the
+  per-fd `wrapper_id` table is consulted (ids 1–4 = non-local).
+  ARM64 + x86_64.
+- [x] **`getaddrinfo` replaces `gethostbyname` in DNS resolver** —
+  `__rt_resolve_host` now uses libc `getaddrinfo` with `AF_INET` hints
+  instead of the deprecated `gethostbyname`. This modernizes the DNS
+  resolver and allows resolution of host names with only AAAA records.
+  `freeaddrinfo` is called after the address is copied. ARM64 + x86_64.
+- [x] **`$http_response_header` superglobal** — the auto-populated
+  `$http_response_header` variable is now declared as a global
+  `Array<Str>` in the type checker and uses global storage. After
+  `fopen("http://...")`, the lowering calls
+  `__rt_get_http_response_headers` (a new runtime helper that splits
+  `_http_resp_buf` at CRLF boundaries into an indexed array of header
+  lines), boxes the result as `Mixed(array)`, and stores it into the
+  mangled global slot `_eir_global_http_u_response_u_header`. Reads of
+  `$http_response_header` load the boxed Mixed from the global. Returns
+  an empty array when no HTTP response has been received. ARM64 + x86_64.
+
 - [x] **User stream-filter `$params`** — the 4th `stream_filter_append`/`prepend`
   argument is honored for the built-in compression filters (Phase 39) and is now
   exposed to *userspace* filters as `$this->params` on classes extending PHP's
@@ -933,6 +1048,8 @@ runtime helpers are reused and driven through EIR lowering.
 Optimization work should now be driven by benchmarks, generated assembly size,
 and 0.x validation rather than by speculative pass work.
 
+- [x] Curated native dependencies v1 — `elephc native add/install/update/remove/list/doctor/prune`, exact comment-preserving manifests and deterministic locks, content-addressed target/ABI/toolchain cache, transactional verified source builds, explicit cache cleanup, and read-only compile-time resolution. PCRE2 10.47 links through an opaque Elephc shim with no production system-library fallback; zlib 1.3.2 proves the catalog/recipe path is generic. This remains separate from Composer packages, Rust bridge crates, user `extern` linking, and toolchain installation.
+
 - [x] Generators reimplemented on stackful coroutines (issue #329) — a generator body is compiled by the normal EIR backend and runs on its own coroutine stack (reusing the Fiber runtime), replacing the v1 state-machine lowering on the EIR path. `Generator::throw()` now raises the exception at the suspended `yield`, so a `try`/`catch` inside the generator body handles it and resumes instead of always terminating the generator and propagating to the caller; in-generator method calls, arbitrary control flow, and `try`/`finally` around `yield` work like ordinary functions. `yield from` over generators delegates through `__rt_gen_delegate` (forwarding sent values and returning the inner `getReturn()`) and over arrays desugars into an iterator loop; `send()`/`getReturn()`/closure captures preserved; Generator GC frees the coroutine stack and boxed key/value/return cells.
 - [x] Closure rebinding — `Closure::bind()`, `bindTo()`, and `Closure::call()` rebind a closure to a new receiver; a top-level closure that captures `$this` now binds it correctly instead of losing the receiver, and a by-reference `Closure::bind` stored in a variable and called later is tracked as a static callable so the call carries the bound cell directly (`__rt_closure_bind`) rather than going through the generic descriptor invoker
 - [x] New magic methods `__callStatic`, `__isset`, and `__unset` — a static call to an undeclared method dispatches to `__callStatic`; `isset()`/`empty()` on an undeclared property route through `__isset` (and only read `__get` when `__isset` is truthy, so an unset virtual property is empty without ever being read); and `unset($obj->prop)` on a virtual property calls `__unset`
@@ -941,7 +1058,7 @@ and 0.x validation rather than by speculative pass work.
 - [x] Enum case `->name` property (issue #330) — every enum case, pure or backed, exposes the read-only `name` string holding the case identifier (`E::A->name` is `"A"`), matching PHP's `UnitEnum::$name`; backed cases keep `->value`, `$this->name` is readable inside enum methods, and access works through direct case access, an aliasing variable, `cases()`, and string interpolation
 - [x] Source maps v2 — richer mappings for functions / expressions / labels and a more stable machine-readable schema for external tooling (`elephc-source-map` version 2: function ranges with entry symbols, in-function labels, opcode-tagged instruction mappings; schema contract in `docs/compiling/source-maps.md`)
 - [x] Memory-model-aware propagation for heap-backed locals and targeted runtime invalidations beyond `unset($var)` and the currently modeled local writes — locals holding all-scalar array literals carry a COW-snapshot fact (`$a[<const>]` folds, `list()` unpacks, `$b = $a` copies), and side-effecting statements now invalidate only the locals they can write: known writes and complex `unset` targets stay exact, calls kill their by-ref argument roots (user signatures pre-scanned, builtin signatures from the registry, callback-invoking builtins treated as unknown callees) plus top-level facts only when the callee transitively writes `global` storage, all backed by a reference-volatility ledger covering `&`-aliases, by-ref captures/foreach/args, `global`/`static` bindings, and superglobals
-- [x] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) as the single HashContext destructor and making `hash_final` finalize a *clone* (leaving the original owned by its Mixed box) so a finalized context that later leaves scope is freed exactly once — closing the double-final/use-after-free hole documented in `src/codegen/runtime/strings/hash_context.rs`. `popen` pipes (kind 3 → `__rt_pclose`) and `opendir` streams (kind 4 → `__rt_closedir`) are released the same way, and an explicit `fclose`/`pclose`/`closedir` stamps a `-1` sentinel into the box so a descriptor (whose fd number may be reused) is never closed twice
+- [x] Resource scope-cleanup — auto-free tag-9 resource handles that leave scope without their explicit close (today an unclosed `fopen()` leaks its fd and an unfinalized `hash_init()` context leaks its heap state until process exit; `functions/cleanup.rs` skips `Resource`s by design). Prerequisites: a resource-kind subtype in the Mixed cell so the cleanup pass can pick the right destructor (fd → `close()`, HashContext → `elephc_crypto_free`, …), and aliasing safety (resources have no refcount; `$b = $a` would double-free under naive scope-free). Includes wiring the currently-uncalled `elephc_crypto_free` (`_elephc_crypto_free_fn` slot + publish entry + a `__rt_hash_ctx_free` helper) as the single HashContext destructor and making `hash_final` finalize a *clone* (leaving the original owned by its Mixed box) so a finalized context that later leaves scope is freed exactly once — closing the double-final/use-after-free hole documented in `src/codegen_support/runtime/strings/hash_context.rs`. `popen` pipes (kind 3 → `__rt_pclose`) and `opendir` streams (kind 4 → `__rt_closedir`) are released the same way, and an explicit `fclose`/`pclose`/`closedir` stamps a `-1` sentinel into the box so a descriptor (whose fd number may be reused) is never closed twice
 - [x] Experimental PHP `eval()` support — eligible literal fragments are parsed at compile time and lowered to native EIR (including direct or scope-backed caller-local synchronization); dynamic strings and unsupported literal shapes fall back to the optional statically linked `elephc-magician` EvalIR interpreter (auto-linked when required, forced with `--with-eval`), preserving caller/global scope updates, dynamic functions/classes/constants, callables, reflection, builtins, exceptions, and ownership/COW semantics within the supported subset
 - [x] Output-buffering builtins — `ob_start` through `ob_list_handlers` (13 builtins) on one shared buffer stack across native and eval'd code, capturing every stdout writer, with user output handlers (closures, first-class callables, function-name strings, eval-registered callables), `chunk_size` auto-flushing, cleanable/flushable/removable `flags` gating, and PHP-shaped `ob_get_status()` reporting
 - [x] `--strict-php` flag — accept only PHP-compatible constructs: extension syntax is rejected with per-violation diagnostics across the main file, includes, and autoloaded files, extension builtins behave exactly as under the PHP interpreter (`function_exists()` false, undefined-function fatal with a hint naming the disabled extension), and the mode reaches `eval()` with PHP's execute-time semantics
@@ -950,8 +1067,8 @@ and 0.x validation rather than by speculative pass work.
 - [x] `$object::class` on object expressions — returns the receiver's concrete runtime class name, evaluates the receiver exactly once, and rejects statically known non-object receivers
 - [x] `mb_strlen()` — nullable optional `$encoding` argument, UTF-8 malformed-sequence handling, byte-count aliases, iconv-backed multibyte encodings, callable dispatch, catchable `ValueError` for unknown encodings
 - [x] `static $x;` function-static declarations without an initializer — desugar to `= null` in both the native and Magician `eval()` parsers, matching PHP
-- [ ] Purity / may-throw v2 for dynamic instance dispatch, richer property/array reads, and less pessimistic builtin modeling (feeds the EIR effects table)
-- [ ] Guard reasoning v2 for dead-code elimination — broader range reasoning and multi-variable facts beyond current strict-scalar, boolean, loose-comparison, and safe relational-complement guards
+- [x] Purity / may-throw v2 — closed-world instance dispatch now unions concrete override summaries (with exact fixed-construction/final/private targets), named and dynamic property reads distinguish declared untyped slots, typed-slot throws, missing-property warnings, hooks, and `__get`, known array offsets separate silent reads from undefined-key warnings, and registry/runtime builtin effects use shared argument-sensitive contracts instead of the previous blanket barrier. A final whole-module fixed point writes these summaries onto refinable EIR call/property instructions before validation, while unresolved/eval/external targets retain conservative defaults
+- [x] Guard reasoning v2 for dead-code elimination — integer interval facts from `$x <op> int` relational branches when `$x` has a proven integer domain from an exact `int` parameter, typed local, or literal guard (intersected across nested paths and discharged for transitive relational / strict-int contradictions and impossible `switch` int cases); cross-variable relational / strict-equality atoms with safe complements, full exact coupling after strict substitution, and pure non-throwing `while` / `for` body-entry strengthening, still under the path-local AST `GuardState` protocol with write invalidation, float/string-domain refusal, NaN-safe false-branch policy, and no general CFG join
 - [ ] Exception-aware DCE v2 — exact thrown-type / handler reachability, nested try rethrow modeling, and less conservative finally-path invalidation
 - [ ] Control-flow normalization v2 — broader canonicalization of nested block/control shells before CFG-aware optimization passes
 - [ ] Composite conditional include function variants — extend include-graph exclusivity from one direct `if` / `elseif` / `else` chain to nested/composed conditional paths where declarations are pairwise exclusive only after combining multiple branch decisions

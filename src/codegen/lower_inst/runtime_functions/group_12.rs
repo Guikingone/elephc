@@ -19,15 +19,36 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::ArrayPtrSeek => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_seek(ctx, inst)
+        }),
+        RuntimeFnId::ArrayPtrKey => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_key(ctx, inst)
+        }),
+        RuntimeFnId::ArrayPtrValue => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_value(ctx, inst)
+        }),
+        RuntimeFnId::BaseConvert => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base_convert(ctx, inst)
+        }),
+        RuntimeFnId::ChunkSplit => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_chunk_split(ctx, inst)
+        }),
+        RuntimeFnId::StrWordCount => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_str_word_count(ctx, inst)
+        }),
+        RuntimeFnId::CountChars => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_count_chars(ctx, inst)
+        }),
+        RuntimeFnId::Strtr => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_strtr(ctx, inst)
+        }),
         RuntimeFnId::MethodExists => Some({
             crate::codegen::lower_inst::builtins::lower_member_exists(
                 ctx,
                 inst,
                 "method_exists",
             )
-        }),
-        RuntimeFnId::MemoryGetUsage => Some({
-            crate::codegen::lower_inst::builtins::system::lower_memory_get_usage(ctx, inst)
         }),
         RuntimeFnId::PropertyExists => Some({
             crate::codegen::lower_inst::builtins::lower_member_exists(
@@ -56,6 +77,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::Gettype => Some({
             crate::codegen::lower_inst::builtins::lower_gettype(ctx, inst)
+        }),
+        RuntimeFnId::IntvalBase => Some({
+            crate::codegen::lower_inst::builtins::types::lower_intval_base(ctx, inst)
         }),
         RuntimeFnId::IsCallable => Some({
             crate::codegen::lower_inst::builtins::lower_is_callable(ctx, inst)

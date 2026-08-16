@@ -34,14 +34,16 @@ function repeat(string $label, int $count): string {
 - Typed parameters can use default values
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
+- Arguments are bound to declared scalar parameters using PHP's default (coercive) rules where elephc can reproduce them exactly — `takesString(42)` passes `"42"`, `takesInt(5.0)` passes `5`. Conversions PHP decides at run time with a `Deprecated:` notice or a `TypeError` are compile errors instead. A file that opens with `declare(strict_types=1)` switches to PHP's strict binding, where only an exact type match and the `int`→`float` widening are accepted; see [Types → Parameter type coercion](./types.md#parameter-type-coercion) and [Types → Strict types](./types.md#strict-types) for the full tables
+- A `callable` parameter accepts a compile-time-constant callable string (`"strtoupper"`, `"Formatter::wrap"`) as well as closures and first-class callables; see [Types → Callable strings](./types.md#callable-strings)
 - Variadic parameters may carry a type hint (`function f(int ...$xs)`), including on methods, closures, and arrow functions; every argument collected into the variadic is checked against the declared element type, just like a regular typed parameter. An untyped variadic accepts heterogeneous arguments.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
-- A `return` may yield a value statically known only to be a base class or an implemented interface of the declared object return type (e.g. a factory method returning the result of a helper declared to return a less specific type). This is accepted, but a runtime `instanceof` check is compiled in at the `return` boundary: on a match the caller sees the precise declared type, and on a mismatch a catchable `TypeError` is thrown with PHP's exact wording (`"f(): Return value must be of type D, B returned"`, using the actual runtime class). Interface-declared, union-declared, and nullable (`?D`) return types are all covered; `return $this` never needs this check since `$this`'s static type is always the declaring class. A value whose static type shares no subtype relationship with any declared return arm is still rejected at compile time — the guard only covers base→derived directions a runtime check can actually resolve.
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
 - Named arguments are supported for known-signature calls: user-defined functions, methods, closures, built-ins, and extern functions
 - Callable variables and `callable` parameters whose concrete target is known only through a runtime descriptor can also use named arguments, named-after-spread calls, and positional prefixes before indexed spreads; descriptor metadata applies parameter names, defaults, variadics, and by-reference flags at invocation time
 - Argument expressions are evaluated in PHP source order, then codegen normalizes the resulting values into ABI parameter order
 - Named arguments can follow spread arguments, as in `foo(...$args, suffix: "!")`; positional arguments cannot follow either named arguments or spread arguments
+- Argument unpacking cannot follow a named argument: `foo(c: 9, ...$args)` is a compile-time error ("cannot use argument unpacking after named arguments"), matching PHP's fatal. The rule is syntactic, so it applies whatever the unpacked array contains — including a static string-keyed literal such as `foo(c: 9, ...["a" => 1])` — and on every call surface, including calls whose target is only known at run time. Back-to-back spreads (`foo(...$a, ...$b)`) and a string-keyed spread on its own (`foo(...["a" => 1])`) stay legal.
 - Associative-array unpacking maps string keys to named arguments (`foo(...["name" => "Ada"])`) and keeps numeric keys positional. Variable associative-array spreads can satisfy any parameter by string key, including parameters after explicit named arguments. Duplicate static string keys use PHP's last-wins behavior before argument planning.
 - A positional spread into a variadic function fills regular parameters first; only excess spread elements are collected into the variadic parameter. If a spread is too short to fill required parameters, the call fails instead of reading beyond the array payload.
 - User-defined variadic functions collect unknown named arguments into the variadic parameter using string keys
@@ -57,6 +59,27 @@ function factorial($n) {
 }
 echo factorial(10); // 3628800
 ```
+
+Recursion depth is bounded by the real call stack, and running off the end is
+reported instead of crashing. Every compiled function checks the stack pointer
+against the measured stack floor on entry; when it is exhausted the program
+writes
+
+```
+Fatal error: Maximum call stack size reached. Infinite recursion?
+```
+
+to stderr and exits with status 255 — the same class of controlled diagnostic
+PHP 8.3+ produces for runaway recursion, and the same exit status PHP uses for
+an uncaught fatal error.
+
+The floor comes from `getrlimit(RLIMIT_STACK)` minus a small reserve, so the
+usable depth follows the process stack limit: roughly 50 000 frames of a small
+function on a default 8 MiB stack. Function bodies that run on a coroutine
+stack — generator bodies and `Fiber` callables — get a floor derived from that
+coroutine's own 256 KiB stack instead, which is roughly 1 400 frames of the same
+function. Deepen `ulimit -s` if a legitimately deep algorithm needs more room on
+the main stack.
 
 ## Default parameter values
 
@@ -294,27 +317,6 @@ $hello = $greeter->hello(...);
 echo $hello("Ada"); // Hello Ada
 ```
 
-The dynamic form `$callable(...)`, where `$callable` is a variable holding a callable (a closure,
-another first-class callable, or a callable value), creates a callable from that value. Because a
-callable-typed variable already holds a callable, the result can be stored and invoked like any
-other callable:
-
-```php
-<?php
-$f = strlen(...);
-$g = $f(...);   // re-wrap the callable held in $f
-echo $g("hello"); // 5
-```
-
-The result of a function or method call can be invoked directly by following it with another
-argument list, so a method that returns a closure can be called in one expression:
-
-```php
-<?php
-$result = $object->makeAdder(1)(41); // calls the closure returned by makeAdder
-echo Box::factory()();               // also works on static-method results
-```
-
 Captured first-class callable targets (`static::method(...)` and `$obj->method(...)`) can be called directly through a local callable variable or as an immediate callable expression such as `($obj->method(...))("Ada")`. Branch-shaped immediate calls and equivalent `call_user_func()` / `call_user_func_array()` calls that select captured callable descriptors at runtime, such as `($ok ? $a->method(...) : $b->method(...))($value)`, `($ok ? $a->method(...) : $b->method(...))(...$args, suffix: "!")`, `call_user_func($ok ? $a->method(...) : $b->method(...), $value)`, or `call_user_func_array($ok ? $a->method(...) : $b->method(...), [$value])`, route through descriptor invokers for positional arguments, named arguments, spread prefixes, defaults, and variadics. Method first-class callable variables also invoke through the stored descriptor environment, so `$fn = $obj->method(...); $obj = $other; $fn()` still uses the receiver captured when `$fn` was created while descriptor metadata applies names, defaults, variadics, and by-reference flags. A callable variable or array element whose descriptor was selected earlier at runtime also invokes through the descriptor metadata, including by-reference parameter decisions that are only known from the stored descriptor. `callable` parameters with no local signature metadata follow the same descriptor path for named arguments and positional prefixes before indexed spreads, including source-variable mutation for runtime by-reference parameters. Direct captured callable values can also be passed to callback paths that forward captured callable environments, including `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `call_user_func()`, and `call_user_func_array()`. When a captured callable is stored in a local variable or received through a `callable` parameter, these callback runtimes retain the descriptor itself rather than rebuilding captures from current source locals. Branch-shaped runtime selection of captured callable descriptors is supported for `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, `preg_replace_callback()`, `iterator_apply()`, `CallbackFilterIterator`, and `RecursiveCallbackFilterIterator`. Callable descriptors carry signature defaults, by-reference flags, variadic metadata, receiver/capture environments, and the invocation shape for function, builtin, extern, closure, first-class, static-method, instance-method, callable-array, and invokable-object forms. For by-reference callback parameters, `call_user_func()` preserves source-variable mutation even when the visible callback signature is known only through the runtime descriptor. `call_user_func_array()` passes original variable slots from literal argument arrays such as `call_user_func_array($cb, [$value])`; dynamic argument arrays are accepted through temporary reference cells, so callback writes do not mutate the source array or source variable. PHP disallows nullsafe first-class callable syntax (`$obj?->method(...)`), and elephc reports the same error.
 
 `call_user_func()` and `call_user_func_array()` also accept PHP callable arrays (`[$object, "method"]`, `[ClassName::class, "method"]`) and invokable objects. Dynamic string callback dispatch resolves user functions, declared extern functions, supported builtin wrappers such as `STRLEN`, and public static method strings such as `"Formatter::wrap"`; the matched descriptor's generated invoker receives a boxed argument container, branches on whether it holds an indexed array or associative hash, applies the resolved descriptor signature, and returns a boxed `mixed`. String variables can also be invoked directly as PHP variable functions, for example `$callback = "STRLEN"; echo $callback("hello");`, and they use the same descriptor invoker path for names, defaults, variadics, and by-reference parameter metadata. Callable-array variables and literals can also be invoked directly, for example `$callback = [$object, "wrap"]; echo $callback(value: "ok");` or `([$object, "wrap"])(value: "ok")`, and direct instance-method callable arrays read the receiver stored in the callable array before invoking the descriptor. Objects with public `__invoke()` can also be called directly through descriptor metadata, so `$runner(suffix: "?")` and `(new Runner())(suffix: "?")` apply defaults, named arguments, variadics, and by-reference flags through the same invoker path. Direct callable-array variables and literals may resolve the method or static receiver from runtime strings, so `$method = "wrap"; $callback = [$object, $method]; $callback(...)`, `([$object, $method])(...)`, `$callback = [$class, $method]; ($callback)(...)`, and `([$class, $method])(...)` select the matching public method descriptor at the call site. Public static-method callable arrays use the same descriptor invoker path for direct variable and literal calls, `call_user_func()`, and `call_user_func_array()`, including associative argument containers and positional prefixes before indexed spreads. Public instance-method callable arrays and invokable objects use descriptor invokers for direct `call_user_func()` calls, including single-spread forwarding such as `call_user_func([$object, "method"], ...$args)` and positional prefixes followed by indexed spreads such as `call_user_func([$object, "method"], "head", ...$args)`. They use the same descriptor path for `call_user_func_array()` calls with literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque `mixed`/union argument containers. Receiver-bound runtime-opaque containers are unboxed at runtime, dispatch by indexed-array versus associative-hash tag, and prepend the receiver as descriptor slot zero before invoking the descriptor adapter. For `call_user_func_array()`, descriptor invokers operate on a cloned Mixed argument container so the caller's `$args` array keeps its original layout after invocation.
@@ -332,10 +334,6 @@ function test() {
 
 ## Static variables
 
-A `static` variable keeps its value between calls to the function. Several variables may be declared
-in one `static` statement, separated by commas, and an initializer may be omitted (it defaults to
-`null`, exactly like `static $x = null;`).
-
 ```php
 <?php
 function counter() {
@@ -345,15 +343,6 @@ function counter() {
 }
 counter(); // 1
 counter(); // 2
-
-function totals() {
-    static $hits = 0, $misses = 0; // one persistent slot each
-    // ...
-}
-
-function once() {
-    static $cache; // no initializer — defaults to null on the first call
-}
 ```
 
 The initializer is optional: `static $x;` declares the variable with an
@@ -444,51 +433,6 @@ $items = [1, 2, 3];                  // typed literal, boxed to match the proper
 echo implode(", ", $bag->items);     // 1, 2, 3
 ```
 
-The reference can also flow the other way: an object property can be made an alias of
-another value with `$obj->prop = &$source`. The source may be a variable or another
-object property; writing through either name is observed through the other:
-
-```php
-<?php
-class Box { public $value; }
-
-$box = new Box();
-$n = 5;
-$box->value = &$n;      // the property aliases the local variable
-$n = 9;
-echo $box->value;       // 9 (writes to $n are seen through the property)
-
-class Node { public array $refs = []; }
-$a = new Node();
-$b = new Node();
-$b->refs = &$a->refs;   // both properties now share one storage cell
-$a->refs["x"] = 1;
-echo count($b->refs);   // 1
-```
-
-One element of a **static-property array** can be reference-aliased to another element of the
-same static array with `self::$a[$dir] = &self::$a[$k]` (also `static::` / `Class::`). Both
-elements then share one storage cell, so a write through either element — or a re-assignment of
-either element — is observed through the other:
-
-```php
-<?php
-class Cache {
-    public static array $entries = [];
-}
-
-Cache::$entries['k'] = ['first', []];
-Cache::$entries['d'] = &Cache::$entries['k'];  // 'd' aliases 'k'
-Cache::$entries['k'][0] = 'updated';
-echo Cache::$entries['d'][0];                  // updated
-echo (Cache::$entries['k'] === Cache::$entries['d']) ? 'same' : 'diff'; // same
-```
-
-The reference source must itself be an element of the same static-property array; aliasing from a
-plain variable, from a different static property, or into a non-static array element is reported as
-a compile-time error (those forms are follow-up features). Reference assignment into a plain local
-array element (`$arr[$key] = &$source`) is likewise not yet supported and is a compile-time error.
-
 ## Reference returns
 
 A function or method declared with `&` before its name returns a reference to the
@@ -567,6 +511,54 @@ A type hint on the variadic constrains its elements: `function sum(int ...$nums)
 collects integers into `$nums`, and every argument passed to the variadic is checked
 against the declared element type, so passing an argument of the wrong type is
 rejected. An untyped variadic (`...$nums`) accepts heterogeneous arguments.
+
+## Argument introspection
+
+`func_num_args()`, `func_get_args()` and `func_get_arg($position)` read the arguments the
+current call actually received, including the surplus positional arguments PHP allows past
+a function's declared parameter list:
+
+```php
+<?php
+function log_all() {
+    echo func_num_args(), ": ";
+    foreach (func_get_args() as $arg) {
+        echo $arg, " ";
+    }
+}
+log_all("a", "b", "c"); // 3: a b c
+
+function first_extra($label) {
+    return func_get_arg(1);
+}
+echo first_extra("label", "extra"); // extra
+```
+
+They work in functions, methods (instance and static), closures and arrow functions, and
+report the *current* values of the declared parameters, so a parameter the body reassigned
+— or wrote through by reference — is reflected in `func_get_args()`, exactly as in PHP. An
+out-of-range or negative position throws `ValueError` with PHP's message.
+
+elephc implements these constructs by giving the function a hidden variadic parameter that
+collects the surplus arguments, which constrains where they can be used. They are rejected,
+with a diagnostic naming the reason, when:
+
+- the call is outside any function (PHP raises the same "must be called from a function
+  context" error at runtime);
+- the function declares a parameter with a default value — the hidden variadic cannot tell
+  a passed argument from a defaulted one;
+- the function already declares its own variadic parameter — read that parameter instead;
+- the method overrides a parent method or implements an interface method — the inherited
+  signature has no slot for the collected arguments;
+- the call is dynamic (`func_num_args(...)`, `$f = "func_num_args"; $f()`), which PHP also
+  rejects with "Cannot call func_num_args() dynamically".
+
+Surplus *positional* arguments are only accepted by functions that use one of these three
+constructs; every other function keeps elephc's compile-time arity check. Surplus *named*
+arguments stay rejected either way, matching PHP.
+
+Because the three constructs are rewritten by the compiler rather than dispatched as
+builtin calls, `function_exists()` reports `false` for them, where PHP reports `true`.
 
 ## Spread operator
 

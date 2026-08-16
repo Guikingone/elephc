@@ -8,9 +8,8 @@
 //! - Eval does not maintain a PHP realpath cache, so this returns a stable empty array.
 
 eval_builtin! {
-    name: "realpath_cache_get",
+    contract: "realpath_cache_get",
     area: Filesystem,
-    params: [],
     direct: Filesystem,
     values: Filesystem,
 }

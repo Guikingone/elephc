@@ -12,7 +12,7 @@ use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassMethod, ClassProperty};
 use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
@@ -152,79 +152,6 @@ pub(super) fn merge_imported_method_set(
         existing.push(method);
     }
     Ok(())
-}
-
-/// Merges imported trait constants with constants declared directly by a class-like owner.
-///
-/// PHP permits duplicate trait constants only when their complete declarations are compatible.
-/// A compatible direct declaration replaces the imported copy so its source metadata remains
-/// authoritative; incompatible duplicates abort composition.
-pub(super) fn merge_constants(
-    imported: Vec<ClassConst>,
-    local: &[ClassConst],
-    span: Span,
-    owner_label: &str,
-) -> Result<Vec<ClassConst>, CompileError> {
-    let mut merged = imported;
-    for constant in local {
-        if let Some(index) = merged
-            .iter()
-            .position(|existing| existing.name == constant.name)
-        {
-            if merged[index] != *constant {
-                return Err(incompatible_constant_error(
-                    span,
-                    owner_label,
-                    &constant.name,
-                ));
-            }
-            merged[index] = constant.clone();
-        } else {
-            merged.push(constant.clone());
-        }
-    }
-    Ok(merged)
-}
-
-/// Adds constants imported from one trait-use group, collapsing compatible duplicates.
-pub(super) fn merge_imported_constant_set(
-    existing: &mut Vec<ClassConst>,
-    incoming: Vec<ClassConst>,
-    span: Span,
-    owner_label: &str,
-) -> Result<(), CompileError> {
-    for constant in incoming {
-        if let Some(current) = existing
-            .iter()
-            .find(|existing| existing.name == constant.name)
-        {
-            if current != &constant {
-                return Err(incompatible_constant_error(
-                    span,
-                    owner_label,
-                    &constant.name,
-                ));
-            }
-            continue;
-        }
-        existing.push(constant);
-    }
-    Ok(())
-}
-
-/// Builds the shared diagnostic for incompatible constants encountered during composition.
-fn incompatible_constant_error(
-    span: Span,
-    owner_label: &str,
-    constant_name: &str,
-) -> CompileError {
-    CompileError::new(
-        span,
-        &format!(
-            "{} has incompatible duplicate trait constant '{}'",
-            owner_label, constant_name
-        ),
-    )
 }
 
 /// Returns true if `left` and `right` have matching visibility, type_expr,

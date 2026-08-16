@@ -44,6 +44,7 @@ pub(super) fn discover_stmts(
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for stmt in stmts {
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         discover_stmt(stmt, base_dir, loaded_paths, include_chain, state, output)?;
     }
     Ok(())
@@ -342,13 +343,6 @@ fn discover_stmt(
             discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
         }
-        StmtKind::DynamicStaticPropertyWrite { property, index, value, .. } => {
-            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
-            if let Some(index) = index {
-                discover_expr(index, base_dir, loaded_paths, include_chain, state, output)?;
-            }
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
-        }
         StmtKind::NestedArrayAssign { target, value } => {
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
@@ -363,12 +357,9 @@ fn discover_stmt(
         | StmtKind::FunctionVariantGroup { .. }
         | StmtKind::FunctionVariantMark { .. }
         | StmtKind::RefAssign { .. }
-        | StmtKind::RefAssignToTarget { .. }
         | StmtKind::IfDef { .. }
         | StmtKind::Break(_)
         | StmtKind::Continue(_)
-        | StmtKind::Goto(_)
-        | StmtKind::Label(_)
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }

@@ -417,10 +417,6 @@ pub(crate) fn insert_enum_metadata(
     // User-declared enum constants. Values are kept as their parsed expressions, matching the
     // class-constant representation.
     let mut constants = HashMap::new();
-    // Declaration order for enumeration; see `ClassInfo::constant_order`. Enum CASES are
-    // tracked separately (`enum_cases`) and reflection lists them ahead of these, matching
-    // PHP's own order.
-    let mut constant_order = Vec::new();
     let mut constant_types = HashMap::new();
     let mut constant_visibilities = HashMap::new();
     let mut final_constants = HashSet::new();
@@ -428,7 +424,6 @@ pub(crate) fn insert_enum_metadata(
     let mut constant_attribute_args = HashMap::new();
     for constant in user_constants {
         constants.insert(constant.name.clone(), constant.value.clone());
-        constant_order.push(constant.name.clone());
         if let Some(type_expr) = &constant.type_expr {
             constant_types.insert(
                 constant.name.clone(),
@@ -469,7 +464,15 @@ pub(crate) fn insert_enum_metadata(
             is_readonly_class: true,
             allow_dynamic_properties: false,
             constants,
-            constant_order,
+            constant_deprecations: user_constants
+                .iter()
+                .filter_map(|constant| {
+                    crate::types::checker::schema::validation::extract_deprecation(
+                        &constant.attributes,
+                    )
+                    .map(|reason| (constant.name.clone(), reason))
+                })
+                .collect(),
             constant_types,
             constant_visibilities,
             final_constants,
@@ -505,9 +508,7 @@ pub(crate) fn insert_enum_metadata(
             static_property_visibilities: HashMap::new(),
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
-            own_property_decl_order: Vec::new(),
             method_decls,
-            method_decls_unfolded: Vec::new(),
             methods,
             static_methods,
             late_static_method_returns,
@@ -528,7 +529,6 @@ pub(crate) fn insert_enum_metadata(
             static_vtable_slots: HashMap::new(),
             interfaces,
             constructor_param_to_prop: Vec::new(),
-            rebound_reference_properties: Default::default(),
         },
     );
     checker.enums.insert(

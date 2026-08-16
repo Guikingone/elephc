@@ -12,9 +12,8 @@ use super::define::eval_constant_name;
 use super::super::super::*;
 
 eval_builtin! {
-    name: "defined",
+    contract: "defined",
     area: Core,
-    params: [constant_name],
     direct: Core,
     values: Core,
 }

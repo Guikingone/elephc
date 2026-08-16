@@ -46,11 +46,6 @@ pub enum ExprKind {
     Throw(Box<Expr>),
     ErrorSuppress(Box<Expr>),
     Print(Box<Expr>),
-    /// PHP `clone $expr`: shallow-copies the object held by `expr` and, if the runtime
-    /// class (or an ancestor) declares `__clone()`, invokes it on the new object with no
-    /// arguments. The operand must evaluate to an object. Binds tighter than `**` and
-    /// looser than postfix `->`/`[]`/`()`, matching PHP's `clone new` precedence tier.
-    Clone(Box<Expr>),
     NullCoalesce {
         value: Box<Expr>,
         default: Box<Expr>,
@@ -68,17 +63,6 @@ pub enum ExprKind {
         result_target: Option<Box<Expr>>,
         prelude: Vec<Stmt>,
         conditional_value_temp: Option<String>,
-    },
-    /// List-destructuring assignment used in expression position:
-    /// `[$a, $b] = EXPR` (e.g. `if ([$a, $b] = $pairs ?? null)`). Evaluates `value`
-    /// once, assigns each element positionally to the simple variables in `vars`, and
-    /// yields `value` (the whole right-hand side), matching PHP. This is the
-    /// expression-position twin of `StmtKind::ListUnpack`; the parser only produces it
-    /// for the all-simple-`$variable` positional case (keyed/nested/non-variable targets
-    /// stay statement-only).
-    ListUnpack {
-        vars: Vec<String>,
-        value: Box<Expr>,
     },
     PreIncrement(String),
     PostIncrement(String),
@@ -174,6 +158,7 @@ pub enum ExprKind {
         required_parent: Name,
         args: Vec<Expr>,
     },
+    Clone(Box<Expr>),
     PropertyAccess {
         object: Box<Expr>,
         property: String,
@@ -193,15 +178,6 @@ pub enum ExprKind {
     StaticPropertyAccess {
         receiver: StaticReceiver,
         property: String,
-    },
-    /// `self::${$expr}` / `C::${$expr}` — a static property accessed by a name computed
-    /// at runtime. The receiver's class is statically known (self/static/parent/Named);
-    /// only the property name is dynamic. The `property` sub-expression is evaluated for
-    /// its value (coerced to a string) and its side effects, then matched against the
-    /// class's declared static properties at codegen time.
-    DynamicStaticPropertyAccess {
-        receiver: StaticReceiver,
-        property: Box<Expr>,
     },
     MethodCall {
         object: Box<Expr>,
@@ -252,14 +228,6 @@ pub enum ExprKind {
         receiver: StaticReceiver,
         name: String,
     },
-    /// `$obj::CONST` / `expr::CONST` — a class constant accessed through an object or
-    /// variable whose class is only known by type. The class is resolved from `object`'s
-    /// static type at type-check time (closed world); the constant value is compile-time.
-    /// The `object` sub-expression is still evaluated for its side effects.
-    DynamicClassConstantAccess {
-        object: Box<Expr>,
-        name: String,
-    },
     /// `new self()`, `new static()`, `new parent()`. Distinct from `NewObject`
     /// which uses a fixed class name; this variant carries a `StaticReceiver`
     /// so that codegen can apply late static binding for `static`.
@@ -295,10 +263,6 @@ pub enum CastType {
     String,
     Bool,
     Array,
-    /// PHP `(object)` cast. Converts arrays to `stdClass` (keys become property
-    /// names), wraps scalars in a `stdClass` with a single `scalar` property,
-    /// turns `null` into an empty `stdClass`, and returns objects unchanged.
-    Object,
 }
 
 #[derive(Debug, Clone, PartialEq)]

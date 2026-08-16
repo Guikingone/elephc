@@ -9,16 +9,15 @@
 //! Key details:
 //! - Statement environments must merge conservatively across branches, loops, throws, returns, and unreachable paths.
 
-mod assignments;
+pub(crate) mod assignments;
 mod control_flow;
-pub(crate) mod narrowing;
+mod narrowing;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{ExprKind, Stmt, StmtKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::types::TypeEnv;
 
 use super::Checker;
-use super::functions::ReturnInfo;
 
 /// Statement-level type checking for the Checker context.
 impl Checker {
@@ -33,8 +32,30 @@ impl Checker {
     /// Returns an error for unresolved conditionals, namespace/use directives,
     /// includes, or invalid break/continue levels.
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
+        // `declare(strict_types=1)` is scoped to the physical file the statement was written in,
+        // and the checker only ever sees the merged program, so the file's answer travels on the
+        // statement. Save/restore rather than assign: a strict file's `include` of a coercive one
+        // must not leave the includer's setting behind, and vice versa.
+        let outer_strict_types = self.strict_types;
+        self.strict_types = stmt.strict_types;
+        let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
+            self.check_stmt_in_current_source_mode(stmt, env)
+        });
+        self.strict_types = outer_strict_types;
+        result
+    }
+
+    /// Checks one statement after its physical source profile has been installed.
+    fn check_stmt_in_current_source_mode(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
+                if self.check_empty_indexed_nested_append(stmts, env)? {
+                    return Ok(());
+                }
                 for stmt in stmts {
                     self.check_stmt(stmt, env)?;
                 }
@@ -64,7 +85,6 @@ impl Checker {
             }
             StmtKind::Assign { .. }
             | StmtKind::RefAssign { .. }
-            | StmtKind::RefAssignToTarget { .. }
             | StmtKind::ArrayAssign { .. }
             | StmtKind::NestedArrayAssign { .. }
             | StmtKind::ArrayPush { .. }
@@ -77,7 +97,6 @@ impl Checker {
             | StmtKind::StaticPropertyAssign { .. }
             | StmtKind::StaticPropertyArrayPush { .. }
             | StmtKind::StaticPropertyArrayAssign { .. }
-            | StmtKind::DynamicStaticPropertyWrite { .. }
             | StmtKind::PropertyArrayPush { .. }
             | StmtKind::PropertyArrayAssign { .. } => self.check_assignment_like_stmt(stmt, env),
             StmtKind::Foreach { .. }
@@ -94,18 +113,22 @@ impl Checker {
             StmtKind::PackedClassDecl { .. } => Ok(()),
             StmtKind::Break(levels) => self.check_loop_exit(stmt.span, "break", *levels),
             StmtKind::Continue(levels) => self.check_loop_exit(stmt.span, "continue", *levels),
-            // `goto`/label carry no value and reference a control-flow label, not a typed name.
-            // Label resolution (undefined/duplicate target) is validated separately over the whole
-            // function body; nothing to type-check at the individual statement level here.
-            StmtKind::Goto(_) | StmtKind::Label(_) => Ok(()),
             StmtKind::ExprStmt(expr) => {
                 self.infer_type_with_assignment_effects(expr, env)?;
                 Ok(())
             }
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
-                let return_info = if let Some(e) = expr {
-                    let ty = self.infer_type_with_assignment_effects(e, env)?;
+                if let Some(e) = expr {
+                    let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    // Record the type as observed HERE, in flow order, so the later
+                    // flow-insensitive return-coverage pass does not apply a narrowing that
+                    // only holds further down the body to this return. See
+                    // `Checker::flow_typed_returns`.
+                    self.flow_typed_returns.insert(
+                        stmt as *const Stmt as usize,
+                        (stmt.span, returned),
+                    );
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.
                     if self.current_by_ref_return {
@@ -137,18 +160,6 @@ impl Checker {
                             }
                         }
                     }
-                    ReturnInfo {
-                        ty,
-                        has_value: true,
-                    }
-                } else {
-                    ReturnInfo {
-                        ty: PhpType::Void,
-                        has_value: false,
-                    }
-                };
-                if let Some(return_infos) = self.active_return_info_scopes.last_mut() {
-                    return_infos.push(return_info);
                 }
                 Ok(())
             }

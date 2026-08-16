@@ -87,9 +87,6 @@ pub(super) fn discover_expr(
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(callable, base_dir, loaded_paths, include_chain, state, output)?;
         }
-        ExprKind::ListUnpack { value, .. } => {
-            discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
-        }
         ExprKind::Assignment { target, value, result_target, prelude, .. } => {
             discover_expr(target, base_dir, loaded_paths, include_chain, state, output)?;
             discover_expr(value, base_dir, loaded_paths, include_chain, state, output)?;
@@ -224,14 +221,6 @@ pub(super) fn discover_expr(
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => {}
-        // `$obj::CONST` — discover declarations inside the evaluated object sub-expression.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            discover_expr(object, base_dir, loaded_paths, include_chain, state, output)?;
-        }
-        // `self::${$expr}` — discover declarations inside the dynamic property-name expr.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            discover_expr(property, base_dir, loaded_paths, include_chain, state, output)?;
-        }
         ExprKind::Yield { key, value } => {
             if let Some(k) = key {
                 discover_expr(k, base_dir, loaded_paths, include_chain, state, output)?;

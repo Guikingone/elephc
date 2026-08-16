@@ -12,47 +12,23 @@
 //!   "touch() takes 1, 2, or 3 arguments" (the registry default for a 1-required,
 //!   3-max builtin produces "1 to 3 arguments").
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
 use crate::types::checker::Checker;
 use crate::types::{PhpType, TypeEnv};
 
 builtin! {
-    name: "touch",
-    area: Io,
-    params: [filename: Str, mtime: Int = DefaultSpec::Null, atime: Int = DefaultSpec::Null],
-    arity_error: "touch() takes 1, 2, or 3 arguments",
-    returns: Bool,
+    contract: "touch",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Touch,
     ),
-    summary: "Sets access and modification time of a file.",
-    php_manual: "function.touch",
 }
 
 /// Returns `Bool` after validating `touch()` timestamp arguments via `check_touch`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     check_touch(cx.checker, cx.args, cx.span, cx.env)
-}
-
-/// Returns true when a `touch()` timestamp argument type is acceptable for `?int`.
-///
-/// `touch(string $filename, ?int $mtime = null, ?int $atime = null)` — so the accepted set is
-/// exactly "gradual int, or null". The int side delegates to the ONE shared
-/// `accepts_gradual_int` predicate (which covers `int`, `float`, `bool`, `false`, `mixed` and
-/// unions of those), so Symfony's `touch($tmp, $expiresAt ?: time() + 31556952)` — whose
-/// argument elephc infers as the `int|float` arithmetic result — type-checks. `Void` is
-/// elephc's null tag and is accepted here (and only here) because `?int` declares it.
-fn timestamp_arg_is_acceptable(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Void => true,
-        PhpType::Union(members) => {
-            !members.is_empty() && members.iter().all(timestamp_arg_is_acceptable)
-        }
-        other => crate::types::checker::builtins::numeric::accepts_gradual_int(other),
-    }
 }
 
 /// Validates `touch()` arity (1–3 args) and timestamp argument types.
@@ -79,7 +55,7 @@ fn check_touch(
     let mut timestamp_types = Vec::new();
     for arg in args.iter().skip(1) {
         let ty = checker.infer_type(arg, env)?;
-        if !timestamp_arg_is_acceptable(&ty) {
+        if !matches!(ty, PhpType::Int | PhpType::Void) {
             return Err(CompileError::new(
                 arg.span,
                 "touch() timestamp arguments must be int or null",

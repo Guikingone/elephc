@@ -207,30 +207,6 @@ fn test_htmlspecialchars_roundtrip() {
     assert_eq!(out, "<div>\"test\"</div>");
 }
 
-/// Verifies `html_entity_decode()` accepts the optional second `$flags` argument (PHP 1–3 arity).
-/// Fixture: html_entity_decode("&lt;b&gt;", ENT_QUOTES) decodes to "<b>".
-#[test]
-fn test_html_entity_decode_with_flags() {
-    let out = compile_and_run(r#"<?php echo html_entity_decode("&lt;b&gt;", ENT_QUOTES);"#);
-    assert_eq!(out, "<b>");
-}
-
-/// Verifies `htmlentities()` accepts the optional second `$flags` argument (PHP 1–4 arity).
-/// Fixture: htmlentities("<b>", ENT_QUOTES) encodes to "&lt;b&gt;".
-#[test]
-fn test_htmlentities_with_flags() {
-    let out = compile_and_run(r#"<?php echo htmlentities("<b>", ENT_QUOTES);"#);
-    assert_eq!(out, "&lt;b&gt;");
-}
-
-/// Verifies `htmlspecialchars()` accepts the optional second `$flags` argument (PHP 1–4 arity).
-/// Fixture: htmlspecialchars("<b>", ENT_QUOTES) encodes to "&lt;b&gt;".
-#[test]
-fn test_htmlspecialchars_with_flags() {
-    let out = compile_and_run(r#"<?php echo htmlspecialchars("<b>", ENT_QUOTES);"#);
-    assert_eq!(out, "&lt;b&gt;");
-}
-
 /// Verifies `urlencode()` percent-encodes spaces as `+` and special chars (`&`, `=`) as `%XX`.
 #[test]
 fn test_urlencode() {
@@ -280,12 +256,146 @@ fn test_base64_roundtrip() {
     assert_eq!(out, "Test 123!");
 }
 
-/// Verifies `base64_decode()` accepts the optional second `$strict` argument
-/// (PHP `base64_decode(string $string, bool $strict = false)`) and still decodes.
+/// Regression: `base64_decode()` skips embedded whitespace instead of decoding it.
+///
+/// The old chunked decoder consumed four raw bytes per iteration, so a space, newline, or tab
+/// inside the payload shifted the rest of the input into the wrong quartet lane and produced
+/// silent garbage (`"SGVs bG8="` decoded to `48656c01b1bc` instead of `Hello`). php-src's
+/// reverse table marks exactly tab, LF, FF, CR, and space skippable, so all four spellings
+/// below decode to `Hello`. Expected values are `LC_ALL=C php 8.4.20` output.
 #[test]
-fn test_base64_decode_strict_arg() {
-    let out = compile_and_run(r#"<?php echo base64_decode("SGVsbG8=", true);"#);
-    assert_eq!(out, "Hello");
+fn test_base64_decode_skips_embedded_whitespace() {
+    let out = compile_and_run(
+        r#"<?php
+echo base64_decode("SGVs bG8="), "|";
+echo base64_decode("SGVs\nbG8="), "|";
+echo base64_decode("SGVs\tbG8="), "|";
+echo base64_decode("SGVs\r\nbG8=");
+"#,
+    );
+    assert_eq!(out, "Hello|Hello|Hello|Hello");
+}
+
+/// Regression: `base64_decode()` decodes an unpadded final group.
+///
+/// The old decoder required a full four-character chunk, so it dropped the trailing group
+/// entirely and returned `"Hel"` for `"SGVsbG8"`. php-src flushes whatever the accumulator
+/// holds: 2 leftover characters yield 1 byte and 3 yield 2. Expected values are
+/// `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_accepts_missing_padding() {
+    let out = compile_and_run(
+        r#"<?php
+echo base64_decode("SGVsbG8"), "|";
+echo bin2hex(base64_decode("ab")), "|";
+echo bin2hex(base64_decode("abc")), "|";
+echo bin2hex(base64_decode("a")), "|";
+echo bin2hex(base64_decode("AA==")), "|";
+echo bin2hex(base64_decode("AAA="));
+"#,
+    );
+    assert_eq!(out, "Hello|69|69b7||00|0000");
+}
+
+/// Regression: a stray byte is DROPPED by the lax decoder, not folded into the output.
+///
+/// The old table mapped every non-alphabet byte to sextet 0, so `"SGVsbG8*"` decoded to
+/// `"Hello\0"` — one byte longer than PHP's `"Hello"`. The same rule makes a `=` in the middle
+/// of the payload transparent in lax mode. Expected values are `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_lax_drops_invalid_characters() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(base64_decode("SGVsbG8*")), "|";
+echo bin2hex(base64_decode("SGV=sbG8=")), "|";
+echo bin2hex(base64_decode("=SGVsbG8=")), "|";
+echo bin2hex(base64_decode("!!!!")), "|";
+echo bin2hex(base64_decode("SGVsbG8=extra"));
+"#,
+    );
+    assert_eq!(out, "48656c6c6f|48656c6c6f|48656c6c6f||48656c6c6f1ec6dada");
+}
+
+/// Verifies the `$strict` parameter returns `false` on every input php-src rejects.
+///
+/// Covers all four `goto fail` paths: a byte outside the alphabet, data after a padding
+/// character, a truncated one-character final group, and an invalid padding amount. Whitespace
+/// stays skippable in strict mode, and an empty string is still a successful empty decode.
+/// Expected values are `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_strict_mode() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(base64_decode("SGVsbG8=", true));
+var_dump(base64_decode("SGVsbG8", true));
+var_dump(base64_decode("SGVs bG8=", true));
+var_dump(base64_decode("SGVsbG8*", true));
+var_dump(base64_decode("SGV=sbG8=", true));
+var_dump(base64_decode("a", true));
+var_dump(base64_decode("SGVsbG8==", true));
+var_dump(base64_decode("A===", true));
+var_dump(base64_decode("", true));
+var_dump(base64_decode("==", true));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(5) \"Hello\"\n",
+            "string(5) \"Hello\"\n",
+            "string(5) \"Hello\"\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "string(0) \"\"\n",
+            "bool(false)\n",
+        )
+    );
+}
+
+/// Verifies `base64_decode()` through a case-insensitive and a namespaced call site.
+///
+/// PHP resolves an unqualified builtin call inside a namespace by falling back to the global
+/// function table, and builtin names are case-insensitive; both spellings must reach the same
+/// typed runtime target as the plain lowercase call.
+#[test]
+fn test_base64_decode_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo \BASE64_DECODE("SGVsbG8="), "|";
+echo Base64_Decode("SGk="), "|";
+var_dump(base64_decode("SGVsbG8*", true));
+"#,
+    );
+    assert_eq!(out, "Hello|Hi|bool(false)\n");
+}
+
+/// Verifies `base64_decode()` over an input far past the 64 KiB bounded-scratch capacity.
+///
+/// A 160000-character payload cannot be served from `_concat_buf`, so `__rt_concat_reserve`
+/// hands back an owned heap block instead; the decode must still round-trip exactly, and the
+/// strict decoder must handle a `chunk_split()`-wrapped copy whose embedded newlines are
+/// skipped rather than decoded.
+#[test]
+fn test_base64_decode_above_scratch_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$raw = str_repeat("elephc-base64-bounded-scratch-", 4000);
+$enc = base64_encode($raw);
+echo strlen($enc), "|", strlen(base64_decode($enc)), "|";
+echo (base64_decode($enc) === $raw ? "roundtrip-ok" : "roundtrip-bad"), "|";
+$wrapped = chunk_split($enc, 76, "\n");
+echo (base64_decode($wrapped, true) === $raw ? "wrapped-ok" : "wrapped-bad"), "|";
+var_dump(base64_decode($wrapped . "*", true));
+"#,
+    );
+    assert_eq!(
+        out,
+        "160000|120000|roundtrip-ok|wrapped-ok|bool(false)\n"
+    );
 }
 
 /// Verifies `ctype_alpha()` returns `"1"` (truthy) for an all-alphabetic string "Hello".
@@ -516,101 +626,6 @@ echo inet_pton("nonsense") === false ? "F" : "S";
     assert_eq!(out, "SF");
 }
 
-// --- base conversion builtins: bindec, dechex, decoct, decbin ---
-
-/// Verifies `bindec()` converts the binary string "101" to integer 5.
-#[test]
-fn test_bindec_basic() {
-    let out = compile_and_run(r#"<?php echo bindec("101");"#);
-    assert_eq!(out, "5");
-}
-
-/// Verifies `bindec()` ignores non-binary characters (matching PHP behaviour).
-#[test]
-fn test_bindec_ignores_non_binary_chars() {
-    let out = compile_and_run(r#"<?php echo bindec("1a0b1");"#);
-    assert_eq!(out, "5");
-}
-
-/// Verifies `bindec()` returns 0 for an empty string.
-#[test]
-fn test_bindec_empty_string() {
-    let out = compile_and_run(r#"<?php echo bindec("");"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies `dechex()` converts 255 to "ff".
-#[test]
-fn test_dechex_basic() {
-    let out = compile_and_run(r#"<?php echo dechex(255);"#);
-    assert_eq!(out, "ff");
-}
-
-/// Verifies `dechex()` converts 0 to "0".
-#[test]
-fn test_dechex_zero() {
-    let out = compile_and_run(r#"<?php echo dechex(0);"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies `dechex()` converts 16 to "10".
-#[test]
-fn test_dechex_sixteen() {
-    let out = compile_and_run(r#"<?php echo dechex(16);"#);
-    assert_eq!(out, "10");
-}
-
-/// Verifies `decoct()` converts 8 to "10".
-#[test]
-fn test_decoct_basic() {
-    let out = compile_and_run(r#"<?php echo decoct(8);"#);
-    assert_eq!(out, "10");
-}
-
-/// Verifies `decoct()` converts 0 to "0".
-#[test]
-fn test_decoct_zero() {
-    let out = compile_and_run(r#"<?php echo decoct(0);"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies `decbin()` converts 5 to "101".
-#[test]
-fn test_decbin_basic() {
-    let out = compile_and_run(r#"<?php echo decbin(5);"#);
-    assert_eq!(out, "101");
-}
-
-/// Verifies `decbin()` converts 0 to "0".
-#[test]
-fn test_decbin_zero() {
-    let out = compile_and_run(r#"<?php echo decbin(0);"#);
-    assert_eq!(out, "0");
-}
-
-/// Verifies the combined base-conversion acceptance: bindec|dechex|decoct|decbin together.
-#[test]
-fn test_base_conversion_combined() {
-    let out = compile_and_run(
-        r#"<?php echo bindec("101"),"|",dechex(255),"|",decoct(8),"|",decbin(5);"#,
-    );
-    assert_eq!(out, "5|ff|10|101");
-}
-
-/// Verifies `preg_last_error_msg()` returns "No error" (stub implementation).
-#[test]
-fn test_preg_last_error_msg_no_error() {
-    let out = compile_and_run(r#"<?php echo preg_last_error_msg();"#);
-    assert_eq!(out, "No error");
-}
-
-/// Verifies `preg_last_error()` returns 0 (PREG_NO_ERROR, stub implementation).
-#[test]
-fn test_preg_last_error_zero() {
-    let out = compile_and_run(r#"<?php echo preg_last_error();"#);
-    assert_eq!(out, "0");
-}
-
 /// EC-11 (#506): htmlspecialchars()/htmlentities() accept the optional ENT_* flags argument
 /// (the common `htmlspecialchars($s, ENT_QUOTES)` form) and the ENT_* constants resolve to their
 /// PHP values. Byte-parity vs PHP 8.5 for ENT_QUOTES escaping (the runtime applies ENT_QUOTES).
@@ -647,4 +662,528 @@ fn test_htmlentities_coercion_error_names_htmlentities() {
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `bin2hex()` of a 100 KB payload — whose 200 KB hexadecimal expansion cannot fit the
+/// shared 64 KiB concat scratch buffer — produces the full correct result instead of writing past
+/// the scratch end into the adjacent BSS globals (concat-scratch overflow regression).
+#[test]
+fn test_bin2hex_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("\x00\x11\xfe", 40000);
+$h = bin2hex($s);
+echo strlen($h), "|", substr($h, 0, 6), "|", substr($h, -6);
+"#,
+    );
+    assert_eq!(out, "240000|0011fe|0011fe");
+}
+
+/// Verifies `base64_encode()` / `base64_decode()` round-trip a payload whose encoding exceeds the
+/// 64 KiB concat scratch buffer, so both directions take the heap fallback and stay byte-exact.
+#[test]
+fn test_base64_roundtrip_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("elephc", 20000);
+$e = base64_encode($s);
+$d = base64_decode($e);
+echo strlen($e), "|", substr($e, 0, 8), "|", strlen($d), "|", ($d === $s ? "same" : "DIFF");
+"#,
+    );
+    assert_eq!(out, "160000|ZWxlcGhj|120000|same");
+}
+
+/// Verifies `urlencode()` of a payload whose worst-case 3x percent-encoded expansion exceeds the
+/// 64 KiB concat scratch buffer keeps every escape intact through the heap fallback.
+#[test]
+fn test_urlencode_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("%~", 30000);
+$e = urlencode($s);
+echo strlen($e), "|", substr($e, 0, 6), "|", substr($e, -6);
+"#,
+    );
+    assert_eq!(out, "180000|%25%7E|%25%7E");
+}
+
+/// Verifies `hex2bin()` decoding a hexadecimal string longer than the 64 KiB concat scratch
+/// buffer still produces the exact binary payload.
+#[test]
+fn test_hex2bin_input_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$h = str_repeat("41", 70000);
+$b = hex2bin($h);
+echo strlen($b), "|", substr($b, 0, 3), "|", substr($b, -3);
+"#,
+    );
+    assert_eq!(out, "70000|AAA|AAA");
+}
+
+/// Verifies `rawurlencode()` of a payload whose worst-case 3x percent-encoded expansion exceeds
+/// the 64 KiB concat scratch buffer keeps every RFC 3986 escape intact through the heap fallback.
+#[test]
+fn test_rawurlencode_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$e = rawurlencode(str_repeat("%~ ", 30000));
+echo strlen($e), "|", substr($e, 0, 9), "|", substr($e, -9);
+"#,
+    );
+    assert_eq!(out, "210000|%25~%20%2|20%25~%20");
+}
+
+/// Verifies `urldecode()` of a percent-encoded payload longer than the 64 KiB concat scratch
+/// buffer decodes every escape through the heap fallback.
+#[test]
+fn test_urldecode_input_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$u = urldecode(str_repeat("%41+", 30000));
+echo strlen($u), "|", substr($u, 0, 4), "|", substr($u, -4);
+"#,
+    );
+    assert_eq!(out, "60000|A A |A A ");
+}
+
+/// Verifies `quotemeta()` escapes every php-src metacharacter and leaves other bytes alone.
+#[test]
+fn test_quotemeta() {
+    let out = compile_and_run(
+        r#"<?php echo quotemeta("Hello world. (can you hear me?) [yes] \$5 + 3 * 2 = 11 \\ ^end");"#,
+    );
+    assert_eq!(
+        out,
+        r#"Hello world\. \(can you hear me\?\) \[yes\] \$5 \+ 3 \* 2 = 11 \\ \^end"#
+    );
+}
+
+/// Verifies `quotemeta()` returns an empty string unchanged and passes non-metacharacters through.
+#[test]
+fn test_quotemeta_empty_and_plain() {
+    let out = compile_and_run(
+        r#"<?php echo "|", quotemeta(""), "|", quotemeta("no specials here"), "|";"#,
+    );
+    assert_eq!(out, "||no specials here|");
+}
+
+/// Verifies `quotemeta()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_quotemeta_case_insensitive_and_namespaced() {
+    let out = compile_and_run(r#"<?php echo QuoteMeta("A.B"), "|", \quotemeta("C*D");"#);
+    assert_eq!(out, "A\\.B|C\\*D");
+}
+
+/// Verifies `quotemeta()` of a payload whose worst-case 2x expansion exceeds the 64 KiB concat
+/// scratch buffer keeps every escape intact through the bounded heap fallback.
+#[test]
+fn test_quotemeta_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$q = quotemeta(str_repeat("a.b(c)", 20000));
+echo strlen($q), "|", substr($q, 0, 10), "|", substr($q, -10);
+"#,
+    );
+    assert_eq!(out, "180000|a\\.b\\(c\\)a|)a\\.b\\(c\\)");
+}
+
+/// Verifies `chunk_split()` appends the separator after every chunk, including the trailing
+/// partial one, and reproduces php-src's lone-separator result for an empty subject.
+#[test]
+fn test_chunk_split() {
+    let out = compile_and_run(
+        r#"<?php
+echo chunk_split("abcdefgh", 3, "-"), "|";
+echo chunk_split("abcdef", 3, "-"), "|";
+echo chunk_split("", 3, "-"), "|";
+echo chunk_split("ab", 5, "|");
+"#,
+    );
+    assert_eq!(out, "abc-def-gh-|abc-def-|-|ab|");
+}
+
+/// Verifies `chunk_split()` defaults to 76-byte chunks joined by CRLF and accepts an empty
+/// separator without inserting anything.
+#[test]
+fn test_chunk_split_defaults_and_empty_separator() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(chunk_split("abc")), "|", chunk_split("abcdefgh", 3, "");
+"#,
+    );
+    assert_eq!(out, "6162630d0a|abcdefgh");
+}
+
+/// Verifies `chunk_split()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_chunk_split_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php echo Chunk_Split("xyz", 1, "."), "|", \chunk_split("xyz", 2, ".");"#,
+    );
+    assert_eq!(out, "x.y.z.|xy.z.");
+}
+
+/// Verifies `chunk_split()` raises php-src's `ValueError` for a non-positive `$length`.
+#[test]
+fn test_chunk_split_non_positive_length_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { chunk_split("ab", 0, "|"); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { chunk_split("ab", -1, "|"); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "chunk_split(): Argument #2 ($length) must be greater than 0\nchunk_split(): Argument #2 ($length) must be greater than 0"
+    );
+}
+
+/// Verifies `chunk_split()` of a result larger than the 64 KiB concat scratch buffer keeps
+/// every chunk boundary intact through the bounded heap fallback.
+#[test]
+fn test_chunk_split_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = chunk_split(str_repeat("A", 80000), 40, "==");
+echo strlen($s), "|", substr($s, 38, 6), "|", substr($s, -5);
+"#,
+    );
+    assert_eq!(out, "84000|AA==AA|AAA==");
+}
+
+/// Verifies `str_word_count()` counts php-src's words and returns them as a plain list,
+/// including the apostrophe-joined form and the empty-subject shortcuts.
+#[test]
+fn test_str_word_count() {
+    let out = compile_and_run(
+        r#"<?php
+echo str_word_count("Hello friend, you're looking          good today!"), "|";
+echo implode(",", str_word_count("Hello friend, you're looking good today!", 1)), "|";
+echo str_word_count(""), "|", count(str_word_count("", 1));
+"#,
+    );
+    assert_eq!(out, "6|Hello,friend,you're,looking,good,today|0|0");
+}
+
+/// Verifies `str_word_count()` format 2 keys every word by its byte offset in the subject.
+#[test]
+fn test_str_word_count_offset_map() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (str_word_count("Hello friend, you're here", 2) as $offset => $word) { echo $offset, ":", $word, " "; }
+"#,
+    );
+    assert_eq!(out, "0:Hello 6:friend 14:you're 21:here ");
+}
+
+/// Verifies `str_word_count()` honours the extra `$characters` alphabet and php-src's rule
+/// that a leading `'`/`-` and a trailing `-` are dropped unless the list re-admits them.
+#[test]
+fn test_str_word_count_characters_and_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", str_word_count("fri3nd", 1)), "|";
+echo implode(",", str_word_count("fri3nd", 1, "3")), "|";
+echo implode(",", str_word_count("-abc-", 1)), "|";
+echo implode(",", str_word_count("-abc-", 1, "-")), "|";
+echo implode(",", str_word_count("'abc'", 1)), "|";
+echo implode(",", str_word_count("a-b'c", 1));
+"#,
+    );
+    assert_eq!(out, "fri,nd|fri3nd|abc|-abc-|abc'|a-b'c");
+}
+
+/// Verifies `str_word_count()` resolves through case-insensitive, namespaced, and named
+/// argument call forms.
+#[test]
+fn test_str_word_count_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php echo Str_Word_Count("a b c"), "|", \str_word_count("a b c"), "|", str_word_count(string: "a b", format: 1)[1];"#,
+    );
+    assert_eq!(out, "3|3|b");
+}
+
+/// Verifies `str_word_count()` raises php-src's `ValueError` for a `$format` outside 0..2.
+#[test]
+fn test_str_word_count_invalid_format_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { str_word_count("ab", 3); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { str_word_count("ab", -1); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "str_word_count(): Argument #2 ($format) must be a valid format value\nstr_word_count(): Argument #2 ($format) must be a valid format value"
+    );
+}
+
+/// Verifies `str_word_count()` format 1 keeps growing its result array well past the initial
+/// capacity, so the appended words survive every reallocation.
+#[test]
+fn test_str_word_count_list_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$words = str_word_count(str_repeat("alpha beta ", 8000), 1);
+echo count($words), "|", $words[0], "|", $words[15999];
+"#,
+    );
+    assert_eq!(out, "16000|alpha|beta");
+}
+
+/// Verifies `count_chars()` returns the used-byte tally for mode 1 and the used / unused byte
+/// lists for modes 3 and 4.
+#[test]
+fn test_count_chars_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$used = count_chars("hello world", 1);
+foreach ($used as $byte => $count) { echo $byte, "=", $count, " "; }
+echo "|", count_chars("hello world", 3), "|", strlen(count_chars("hello world", 4));
+"#,
+    );
+    assert_eq!(
+        out,
+        "32=1 100=1 101=1 104=1 108=3 111=2 114=1 119=1 | dehlorw|248"
+    );
+}
+
+/// Verifies `count_chars()` mode 0 (and the omitted default) tallies all 256 byte values while
+/// mode 2 keeps only the ones the subject never uses.
+#[test]
+fn test_count_chars_full_and_unused_tallies() {
+    let out = compile_and_run(
+        r#"<?php
+$all = count_chars("aab", 0);
+$unused = count_chars("aab", 2);
+$default = count_chars("aab");
+echo count($all), "|", $all[97], "|", $all[98], "|", $all[0], "|";
+echo count($unused), "|", $unused[0], "|", (isset($unused[97]) ? "y" : "n"), "|";
+echo count($default), "|", $default[97];
+"#,
+    );
+    assert_eq!(out, "256|2|1|0|254|0|n|256|2");
+}
+
+/// Verifies `count_chars()` returns php-src's empty results for an empty subject.
+#[test]
+fn test_count_chars_empty_subject() {
+    let out = compile_and_run(
+        r#"<?php
+echo count(count_chars("", 1)), "|", strlen(count_chars("", 3)), "|", strlen(count_chars("", 4)), "|", count(count_chars("", 2));
+"#,
+    );
+    assert_eq!(out, "0|0|256|256");
+}
+
+/// Verifies `count_chars()` resolves through case-insensitive, namespaced, and named argument
+/// call forms.
+#[test]
+fn test_count_chars_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php echo Count_Chars("abc", 3), "|", \count_chars("cba", 3), "|", count_chars(string: "zya", mode: 3), "|", count(count_chars(string: "aab", mode: 1));"#,
+    );
+    assert_eq!(out, "abc|abc|ayz|2");
+}
+
+/// Verifies `count_chars()` raises php-src's `ValueError` for a `$mode` outside 0..4.
+#[test]
+fn test_count_chars_invalid_mode_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { count_chars("ab", 5); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { count_chars("ab", -1); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)\ncount_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)"
+    );
+}
+
+/// Verifies `strtr()` replacement pairs apply longest-match-first in one left-to-right pass
+/// with no re-substitution of already replaced text.
+#[test]
+fn test_strtr_replacement_pairs() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("foo bar", ["foo"=>"bar","bar"=>"baz"]), "|";
+echo strtr("hi all, I said hello", ["hello"=>"hi","hi"=>"hello"]), "|";
+echo strtr("abc", ["a"=>"b","ab"=>"X"]), "|";
+echo strtr("abcabc", ["abc"=>"x","bca"=>"y"]), "|";
+echo strtr("aXbXc", ["X"=>"","b"=>"BB"]);
+"#,
+    );
+    assert_eq!(out, "bar baz|hello all, I said hi|Xc|xx|aBBc");
+}
+
+/// Verifies `strtr()` skips keys longer than the subject, matches numeric-string and integer
+/// keys through their decimal spelling, and returns the subject for an empty pair list.
+#[test]
+fn test_strtr_key_edge_cases() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("abc", ["abcd"=>"X"]), "|";
+echo strtr("12345", [1=>"one", 23=>"two-three"]), "|";
+echo strtr("0a1", ["0"=>"zero","1"=>"one"]), "|";
+echo strtr("abc", []), "|";
+echo strtr("abc", ["a","b"]);
+"#,
+    );
+    assert_eq!(out, "abc|onetwo-three45|zeroaone|abc|abc");
+}
+
+/// Verifies the three-argument `strtr()` byte translation truncates to the shorter list, never
+/// re-translates an already written byte, and lets a later pair win for the same source byte.
+#[test]
+fn test_strtr_pairwise() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("abcd", "abc", "xy"), "|";
+echo strtr("abcd", "ab", "xyz"), "|";
+echo strtr("abcd", "", ""), "|";
+echo strtr("aab", "ab", "ba"), "|";
+echo strtr("a", "aa", "xy");
+"#,
+    );
+    assert_eq!(out, "xycd|xycd|abcd|bba|y");
+}
+
+/// Verifies `strtr()` resolves through case-insensitive, namespaced, and named argument call
+/// forms in both of its shapes.
+#[test]
+fn test_strtr_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php $map = ["b"=>"B"]; echo StrTr("abc", "abc", "xyz"), "|", \strtr("abc", ["a"=>"1"]), "|", strtr(string: "abc", from: $map), "|", strtr(string: "abc", from: "ab", to: "xy");"#,
+    );
+    assert_eq!(out, "xyz|1bc|aBc|xyc");
+}
+
+/// Verifies a `strtr()` result far larger than the 64 KiB concat scratch buffer stays intact
+/// through the bounded heap fallback.
+#[test]
+fn test_strtr_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$out = strtr(str_repeat("ab", 50000), ["ab" => "cdef"]);
+echo strlen($out), "|", substr($out, 0, 8), "|", substr($out, -8);
+"#,
+    );
+    assert_eq!(out, "200000|cdefcdef|cdefcdef");
+}
+
+/// Verifies `quoted_printable_encode()` escapes exactly the byte classes php-src escapes.
+///
+/// Control bytes, `0x7F`, high-bit bytes, and `=` itself always become `=XX`; ordinary
+/// printable ASCII is copied through. A TRAILING space stays a literal space (php-src only
+/// escapes a space that is directly followed by a `CR`), while a trailing tab is a control
+/// byte and always becomes `=09`. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_escapes_php_byte_classes() {
+    let out = compile_and_run(
+        r#"<?php
+echo quoted_printable_encode("Hello, World!"), "|";
+echo quoted_printable_encode(""), "|";
+echo quoted_printable_encode("a=b=c"), "|";
+echo quoted_printable_encode("caf\xC3\xA9"), "|";
+echo quoted_printable_encode("\x00\x01\x1F\x7F\x80"), "|";
+echo quoted_printable_encode("a\tb"), "|";
+echo quoted_printable_encode("a "), "|";
+echo quoted_printable_encode("a\t");
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello, World!||a=3Db=3Dc|caf=C3=A9|=00=01=1F=7F=80|a=09b|a |a=09"
+    );
+}
+
+/// Verifies `quoted_printable_encode()` line-ending handling.
+///
+/// An embedded `CRLF` is a hard line break and is copied through unchanged, but a lone `CR`
+/// or `LF` is an ordinary control byte and becomes `=0D`/`=0A`. A space directly before a
+/// `CRLF` is escaped so transport cannot strip it. Expected values are verbatim
+/// `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_line_endings() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(quoted_printable_encode("a \r\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\r\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\rb")), "|";
+echo bin2hex(quoted_printable_encode("line1\r\nline2\r\n"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "613d32300d0a62|610d0a62|613d304162|613d304462|6c696e65310d0a6c696e65320d0a"
+    );
+}
+
+/// Verifies the 76-character soft line break: 75 columns of payload followed by a trailing `=`
+/// and a `CRLF`.
+///
+/// A 75-byte line is emitted whole; the 76th byte moves to a new line behind `=\r\n`
+/// (`...61 3d 0d 0a 61`). 30 `=` characters encode to 93 bytes — more than php-src's own
+/// `3 * length` allocation bound, which is why the runtime reserves `4 * len + 8`. The last
+/// two cases pin php-src's UTF-8 lookahead allowance: a 2-byte lead breaks one column earlier
+/// than an ASCII escape and a 3-byte lead two columns earlier, so a character is never split
+/// across the fold. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_soft_line_breaks() {
+    let out = compile_and_run(
+        r#"<?php
+echo strlen(quoted_printable_encode(str_repeat("a", 75))), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 76))), "|";
+echo strlen(quoted_printable_encode(str_repeat("=", 30))), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 74) . "\xC3\xA9")), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 73) . "\xE2\x82\xAC"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "75|6161616161616161616161616161616161616161616161616161616161616161616161616",
+            "1616161616161616161616161616161616161616161616161616161616161616161616161616",
+            "13d0d0a61|93|616161616161616161616161616161616161616161616161616161616161616",
+            "1616161616161616161616161616161616161616161616161616161616161616161616161616",
+            "1616161613d0d0a3d43333d4139|616161616161616161616161616161616161616161616161",
+            "6161616161616161616161616161616161616161616161616161616161616161616161616161",
+            "61616161616161616161613d0d0a3d45323d38323d4143",
+        )
+    );
+}
+
+/// Verifies `quoted_printable_encode()` through case-insensitive, namespaced, named-argument,
+/// and dynamic call sites, so the registry catalog resolves every spelling to one target.
+#[test]
+fn test_quoted_printable_encode_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo \QUOTED_PRINTABLE_ENCODE("caf\xC3\xA9"), "|";
+echo Quoted_Printable_Encode("a=b"), "|";
+echo quoted_printable_encode(string: "x\tz"), "|";
+echo call_user_func('quoted_printable_encode', "= ");
+"#,
+    );
+    assert_eq!(out, "caf=C3=A9|a=3Db|x=09z|=3D ");
+}
+
+/// Verifies `quoted_printable_encode()` over a result far past the 64 KiB bounded-scratch
+/// capacity, so `__rt_concat_reserve` serves the reservation from an owned heap block.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_above_scratch_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$raw = str_repeat("=\xC3\xA9 x", 20000);
+$out = quoted_printable_encode($raw);
+echo strlen($raw), "|", strlen($out), "|", md5($out);
+"#,
+    );
+    assert_eq!(out, "100000|228997|e5e2d387e026fd978522763ba791144f");
 }

@@ -2,7 +2,7 @@
 title: "ob_get_clean()"
 description: "Gets the current buffer contents and deletes the current output buffer."
 sidebar:
-  order: 195
+  order: 207
 ---
 
 ## ob_get_clean()
@@ -23,12 +23,6 @@ Gets the current buffer contents and deletes the current output buffer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/ob_get_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/ob_get_clean.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -1,162 +1,97 @@
 //! Purpose:
-//! Generator methods — class instance/static methods whose bodies contain
-//! `yield`/`yield from` must be recognized as generators and return a
-//! `Generator` object (never `Void` or the declared `iterable`/`Generator`
-//! hint value), mirroring how generator free-functions already behave.
+//! Regression tests for generator *methods*: a class method whose body contains
+//! `yield` must be typed as returning a `Generator`, exactly like a generator
+//! function, whether or not it carries a `: Generator` return hint.
 //!
 //! Called from:
 //!  - `cargo test` via the integration test harness; aggregated under
 //!    `tests::codegen::generators` in `tests/codegen/generators/mod.rs`.
 //!
 //! Key details:
-//!  - Regression coverage for the method-return-type pass generator guard
-//!    (`src/types/checker/method_pass.rs::update_method_return_type`). Before
-//!    the guard, a generator method with a declared `: iterable` hint and no
-//!    `return` wrongly fired "must return a value on every path" and its
-//!    effective return type was overwritten to `Void`/the hint.
+//!  - Before the fix the checker's method pass inferred `void` for an unhinted
+//!    generator method (its body has no value `return`), so `foreach` over the
+//!    call warned "null given" and never ran the loop; a `: Generator` hint hit
+//!    the "must return a value on every path" coverage check and failed to
+//!    compile at all. Free functions were unaffected, so every fixture here
+//!    iterates a *method* result.
+//!  - Expected values are real `LC_ALL=C php` 8.4 output.
 
 use crate::support::*;
 
-/// Verifies a generator INSTANCE method declared `: iterable` with only `yield`
-/// (no `return`) type-checks and iterates. Before the method-pass generator
-/// guard this failed with "Method 'Bag::all' must return a value on every path".
-/// Cross-checked against `php -r` → "123".
+/// Verifies that a method whose body yields, declared with no return hint at
+/// all, is still typed as a `Generator`: `foreach` over the call iterates the
+/// yielded values with PHP's auto-incrementing keys instead of warning that the
+/// method returned null.
 #[test]
-fn test_generator_instance_method_with_iterable_hint() {
+fn test_generator_method_without_return_hint_iterates() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
+class Box {
     private array $items = [1, 2, 3];
-    public function all(): iterable { foreach ($this->items as $x) { yield $x; } }
+    public function items() { foreach ($this->items as $i) { yield $i; } }
 }
-$b = new Bag();
-foreach ($b->all() as $x) { echo $x; }
+foreach ((new Box)->items() as $k => $v) { echo "$k:$v "; }
 "#,
     );
-    assert_eq!(out, "123");
+    assert_eq!(out, "0:1 1:2 2:3 ");
 }
 
-/// Verifies a generator method with NO declared return type + only `yield`
-/// infers a `Generator` return (not `Void`), so the caller can iterate it.
-/// Cross-checked against `php -r` → "12".
+/// Verifies the same shape with an explicit `: Generator` return hint, plus a
+/// static generator method and a generator method with a `return` value read
+/// back through `getReturn()`. The hint used to trip the declared-return
+/// coverage check, which a generator body legitimately cannot satisfy.
 #[test]
-fn test_generator_method_without_declared_return_type() {
+fn test_generator_method_with_generator_return_hint_iterates() {
     let out = compile_and_run(
         r#"<?php
-class C {
-    public function g() { yield 1; yield 2; }
+class Box {
+    private array $items = [4, 5];
+    public function items(): Generator { foreach ($this->items as $i) { yield $i; } }
+    public static function letters(): Generator { yield "a"; yield "b"; }
+    public function tally(): Generator { yield 1; return 7; }
 }
-$c = new C();
-foreach ($c->g() as $x) { echo $x; }
+$b = new Box();
+foreach ($b->items() as $k => $v) { echo "$k:$v "; }
+foreach (Box::letters() as $k => $v) { echo "$k:$v "; }
+$g = $b->tally();
+foreach ($g as $v) { echo $v; }
+echo " ", $g->getReturn();
 "#,
     );
-    assert_eq!(out, "12");
+    assert_eq!(out, "0:4 1:5 0:a 1:b 1 7");
 }
 
-/// Verifies a STATIC generator method declared `: iterable` returns a
-/// `Generator` object identically to an instance generator method — the
-/// method-pass generator guard runs before the static/instance slot write.
-/// Cross-checked against `php -r` → "12".
+/// Verifies generator methods reached through a trait and through an abstract
+/// declaration: the trait method is flattened into the using class and the
+/// override is checked against the abstract `: Generator` signature, so both
+/// must survive the generator return-type override without a coverage error.
 #[test]
-fn test_static_generator_method_with_iterable_hint() {
+fn test_generator_method_through_trait_and_abstract_override() {
     let out = compile_and_run(
         r#"<?php
-class C {
-    public static function g(): iterable { yield 1; yield 2; }
-}
-foreach (C::g() as $x) { echo $x; }
+trait Yielder { public function two(): Generator { yield "t0"; yield "t1"; } }
+class Holder { use Yielder; }
+abstract class Base { abstract public function seq(): Generator; }
+class Impl extends Base { public function seq(): Generator { yield "i0"; } }
+foreach ((new Holder)->two() as $k => $v) { echo "$k=$v "; }
+foreach ((new Impl)->seq() as $k => $v) { echo "$k=$v "; }
 "#,
     );
-    assert_eq!(out, "12");
+    assert_eq!(out, "0=t0 1=t1 0=i0 ");
 }
 
-/// Repro D from the spec: `yield from $this->otherGeneratorMethod()`. The
-/// generator-method RETURN fix makes `$this->all()` type as `Object("Generator")`
-/// (verified: the diagnostic reads `got Object("Generator")`, not `got Iterable`),
-/// and the `yield from` CONSUMER arm
-/// (`src/types/checker/inference/expr/mod.rs`) now gates on the operand's TYPE
-/// (array or Generator) rather than its syntactic kind, so a METHOD-CALL
-/// operand returning a Generator is accepted and delegated via
-/// `__rt_gen_delegate`. Cross-checked against `php -r` → "123".
+/// Verifies a wider return hint that still accepts a `Generator` keeps working:
+/// `iterable` is a supertype of `Generator`, so PHP accepts the declaration and
+/// the method iterates normally.
 #[test]
-fn test_generator_method_yield_from_generator_method_call() {
+fn test_generator_method_with_iterable_return_hint() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    private array $items = [1, 2, 3];
-    public function all(): iterable { foreach ($this->items as $x) { yield $x; } }
-    public function combined(): iterable { yield from $this->all(); }
+class Box {
+    public function items(): iterable { yield 1; yield 2; }
 }
-$b = new Bag();
-foreach ($b->combined() as $x) { echo $x; }
+foreach ((new Box)->items() as $k => $v) { echo "$k:$v "; }
 "#,
     );
-    assert_eq!(out, "123");
-}
-
-/// Verifies `yield from self::inner()` where a STATIC generator method delegates
-/// to another static generator method. `self::inner()` types as
-/// `Object("Generator")`, which the type-based `yield from` gate now accepts
-/// (any syntactic form of a Generator-typed operand is delegated via
-/// `__rt_gen_delegate`). Cross-checked against `php -r` → "12".
-#[test]
-fn test_generator_yield_from_static_method_delegation() {
-    let out = compile_and_run(
-        r#"<?php
-class C {
-    public static function inner(): iterable { yield 1; yield 2; }
-    public static function outer(): iterable { yield from self::inner(); }
-}
-foreach (C::outer() as $x) { echo $x; }
-"#,
-    );
-    assert_eq!(out, "12");
-}
-
-/// Repro X1: a `: iterable` generator method that RECURSIVELY delegates to
-/// itself via `yield from $this->upto(...)` (receiver `$this`, typed as the
-/// declaring class, so the callee's return type is resolved from its own
-/// signature). Before the `build_method_sig` generator seed fix, `upto`'s
-/// signature was seeded from the `: iterable` hint, so while `upto`'s body was
-/// being checked (before the method pass ran) the self-call `$this->upto(...)`
-/// resolved as `Iterable` and `yield from` rejected it ("got Iterable").
-/// Seeding `Generator` at the signature layer makes the self-recursive call
-/// resolve as a delegatable Generator from the start.
-/// Cross-checked against `php -r` → "321".
-#[test]
-fn test_generator_method_direct_self_recursion() {
-    let out = compile_and_run(
-        r#"<?php
-class Counter {
-    public function upto(int $n): iterable {
-        yield $n;
-        if ($n > 1) { yield from $this->upto($n - 1); }
-    }
-}
-$c = new Counter();
-foreach ($c->upto(3) as $v) { echo $v; }
-"#,
-    );
-    assert_eq!(out, "321");
-}
-
-/// Repro Z1: two `: iterable` generator methods `a()`/`b()` that MUTUALLY
-/// recurse via `yield from $this->b()` / `yield from $this->a()` with a
-/// terminating guard. Each method's signature is now seeded `Generator`, so the
-/// cross-references resolve as delegatable Generators from the start (before the
-/// method pass runs) instead of the stale `Iterable` seed.
-/// Cross-checked against `php -r` → "120340".
-#[test]
-fn test_generator_method_mutual_recursion() {
-    let out = compile_and_run(
-        r#"<?php
-class Spec {
-    public function a(int $n): iterable { yield $n; if ($n < 4) { yield from $this->b($n + 1); } }
-    public function b(int $n): iterable { yield $n * 10; if ($n < 4) { yield from $this->a($n + 1); } }
-}
-$s = new Spec();
-foreach ($s->a(1) as $v) { echo $v; }
-"#,
-    );
-    assert_eq!(out, "120340");
+    assert_eq!(out, "0:1 1:2 ");
 }

@@ -10,14 +10,14 @@
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{
+    BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX,
+};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
 use super::super::expect_semicolon;
-use super::compound::{
-    assignment_operator, assignment_value, is_valid_reference_source, AssignmentOperator,
-};
+use super::compound::{assignment_operator, assignment_value, AssignmentOperator};
 
 /// Parses a postfix assignment where the target involves property access, array access,
 /// or other complex expressions. Detects `+=` append style via `[]` in the target.
@@ -64,27 +64,7 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
         return Err(CompileError::new(span, "Invalid assignment target"));
     }
 
-    // The tokens before the top-level `=` parse to a complete expression, but if that expression
-    // is not itself an assignable target shape — e.g. `A ?: $x->p` (short-ternary) or `cond && $x->p`
-    // — then this is not a statement-level assignment: the `=` binds to the adjacent lvalue *inside*
-    // the expression (PHP parses `A ?: $x = B` as `A ?: ($x = B)`). Bail without consuming so the
-    // caller parses the whole statement as a bare expression statement, where the Pratt parser
-    // performs that adjacent-lvalue binding. A genuinely invalid target still surfaces an error there.
-    if !parsed_lhs_is_assignable_target(&lhs_expr) {
-        return Ok(None);
-    }
-
     *pos = assign_pos + 1;
-    // `$obj->prop = &$src` / `$arr[$k] = &$src`: reference assignment into a
-    // property or array-element lvalue. The plain-variable form is handled by the
-    // simple-variable assignment parser; here the LHS is a complex lvalue. The
-    // append form (`$a[] = &$src`, `$a[$k][] = &$src`) routes here too and is
-    // distinguished by `is_append`, with `lhs_expr` naming the CONTAINER.
-    if op == AssignmentOperator::Assign
-        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
-    {
-        return parse_postfix_ref_assign(lhs_expr, tokens, pos, is_append, span).map(Some);
-    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
@@ -150,87 +130,10 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
             },
             span,
         )),
-        // A postfix LHS that parsed down to a plain variable is a plain assignment. This is
-        // reachable because `$GLOBALS['name']` is rewritten to a single alias variable while
-        // its tokens still look like a postfix `[` target, so the postfix parser owns the
-        // statement but must emit the simple-variable form.
-        ExprKind::Variable(name) => StmtKind::Assign { name, value },
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
     Ok(Some(Stmt::new(stmt, span)))
-}
-
-/// Parses reference assignment into a complex lvalue (`$obj->prop = &$src`,
-/// `$obj->$name = &$src`, `$arr[$k] = &$src`, or an append `$arr[] = &$src` /
-/// `$arr[$k][] = &$src`) after the leading `&` has been detected.
-///
-/// `lhs_expr` is the already-parsed target lvalue. When `append` is `true`, `lhs_expr`
-/// is the CONTAINER (a `Variable`, `ArrayAccess`, `PropertyAccess`, or
-/// `StaticPropertyAccess`) with no sentinel index. Consumes the `&`, parses the
-/// reference source, validates that the source is a legal reference source and that the
-/// target has a supported lvalue shape, then returns a `RefAssignToTarget` statement.
-/// Plain-variable reference assignment is handled by the simple-variable assignment
-/// parser instead.
-fn parse_postfix_ref_assign(
-    lhs_expr: Expr,
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    append: bool,
-    span: Span,
-) -> Result<Stmt, CompileError> {
-    *pos += 1; // consume the `&`
-    let source = parse_expr(tokens, pos)?;
-    if !is_valid_reference_source(&source.kind) {
-        return Err(CompileError::new(
-            span,
-            "Reference assignment source must be a variable, array/property element, or a by-reference call",
-        ));
-    }
-    // A static-property source is only supported into a plain-variable target
-    // (`$e = &self::$n`); aliasing it into a complex lvalue (`$obj->prop = &self::$n`)
-    // is a later slice. Reject it here so it does not silently become a value copy.
-    if matches!(source.kind, ExprKind::StaticPropertyAccess { .. }) {
-        return Err(CompileError::new(
-            span,
-            "Reference assignment source must be a variable, array/property element, or a by-reference call",
-        ));
-    }
-    // Non-append targets are a property or an explicit-key array element. Append targets are
-    // instead the CONTAINER itself: a plain `Variable` (`$a[] = &…`), a nested `ArrayAccess`
-    // (`$a[$k][] = &…`), or a property/static-property container (the checker then rejects the
-    // property-container append forms as unsupported).
-    let target_shape_ok = if append {
-        matches!(
-            lhs_expr.kind,
-            ExprKind::Variable(_)
-                | ExprKind::ArrayAccess { .. }
-                | ExprKind::PropertyAccess { .. }
-                | ExprKind::StaticPropertyAccess { .. }
-        )
-    } else {
-        matches!(
-            lhs_expr.kind,
-            ExprKind::PropertyAccess { .. }
-                | ExprKind::DynamicPropertyAccess { .. }
-                | ExprKind::ArrayAccess { .. }
-        )
-    };
-    if !target_shape_ok {
-        return Err(CompileError::new(
-            span,
-            "Reference assignment target must be a variable, array element, or object property",
-        ));
-    }
-    expect_semicolon(tokens, pos)?;
-    Ok(Stmt::new(
-        StmtKind::RefAssignToTarget {
-            target: lhs_expr,
-            source,
-            append,
-        },
-        span,
-    ))
 }
 
 /// Lowers an append through a nested array target (`$a[0][] = $value`) into a
@@ -244,7 +147,7 @@ fn lower_nested_append_assignment(
 ) -> Result<Stmt, CompileError> {
     let mut lowerer = EffectfulTargetLowerer::new(span);
     let target = lowerer.stabilize_array_target(target);
-    let temp = lowerer.next_temp_name();
+    let temp = lowerer.next_nested_append_temp_name();
     lowerer.stmts.push(Stmt::new(
         StmtKind::Assign {
             name: temp.clone(),
@@ -265,34 +168,15 @@ fn lower_nested_append_assignment(
 }
 
 /// Builds the statement that writes `value` back into an already-stabilized
-/// assignment target. Supports the same local, property, dynamic property,
-/// static property, and array target families as postfix assignment lowering.
-/// Also reused by the foreach lvalue-binding desugar
-/// (`crate::parser::foreach_target`) so per-iteration stores share the exact
-/// statement shapes the assignment parser produces.
-pub(crate) fn assignment_target_store_stmt(
+/// assignment target. Supports the same local, property, static property, and
+/// array target families as postfix assignment lowering.
+fn assignment_target_store_stmt(
     target: Expr,
     value: Expr,
     span: Span,
 ) -> Result<StmtKind, CompileError> {
     match target.kind {
         ExprKind::Variable(name) => Ok(StmtKind::Assign { name, value }),
-        // `$obj->{$name} = $v` / `$obj->$name = $v` — dynamic property writes have no
-        // dedicated StmtKind; they reuse the expression-position assignment node, the
-        // same shape `try_parse_postfix_assignment` emits for a dynamic-property LHS.
-        ExprKind::DynamicPropertyAccess { object, property } => Ok(StmtKind::ExprStmt(Expr::new(
-            ExprKind::Assignment {
-                target: Box::new(Expr::new(
-                    ExprKind::DynamicPropertyAccess { object, property },
-                    span,
-                )),
-                value: Box::new(value),
-                result_target: None,
-                prelude: Vec::new(),
-                conditional_value_temp: None,
-            },
-            span,
-        ))),
         ExprKind::PropertyAccess { object, property } => Ok(StmtKind::PropertyAssign {
             object,
             property,
@@ -385,16 +269,6 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
         return Ok(None);
     }
 
-    // A top-level assignment before the trailing `++`/`--` means this is an assignment
-    // statement whose right-hand side ends in a postfix increment (`$x = $o->n++;`),
-    // not a discarded postfix-increment statement. Defer to the expression parser, which
-    // desugars the complex-l-value postfix increment in value position.
-    if let Some((assign_pos, _)) = find_top_level_assignment(tokens, start) {
-        if assign_pos < incdec_pos {
-            return Ok(None);
-        }
-    }
-
     let lhs = &tokens[start..incdec_pos];
     let contains_complex_target = lhs
         .iter()
@@ -411,74 +285,6 @@ pub(in crate::parser::stmt) fn try_parse_postfix_incdec(
     }
 
     *pos = incdec_pos + 1;
-    expect_semicolon(tokens, pos)?;
-
-    lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
-}
-
-/// Parses a discarded pre-increment/decrement on a complex l-value target
-/// (`++$obj->prop;`, `--$arr[$k];`).
-///
-/// In a statement context the expression result is unused, so a prefix `++`/`--`
-/// is observably identical to the postfix form and lowers to the same
-/// read-modify-write shape as `$target += 1`. A bare local target (`++$x;`) is
-/// left to the existing local-variable parser so its `PreIncrement` AST node,
-/// which downstream passes already handle, is preserved.
-///
-/// Returns `Ok(None)` when the statement does not start with `++`/`--` followed
-/// by a variable and a complex-target marker, so the caller falls back to
-/// `parse_incdec_stmt`.
-pub(in crate::parser::stmt) fn try_parse_prefix_incdec(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    span: Span,
-) -> Result<Option<Stmt>, CompileError> {
-    let start = *pos;
-    let is_increment = match tokens.get(start).map(|(token, _)| token) {
-        Some(Token::PlusPlus) => true,
-        Some(Token::MinusMinus) => false,
-        _ => return Ok(None),
-    };
-
-    // A static-scope l-value target (`++self::$n;`, `--Foo::$n;`, `++\Ns\Foo::$n;`) begins
-    // with a static receiver token rather than a variable. It is parsed through the general
-    // expression grammar — which desugars the prefix increment to a compound assignment and
-    // rejects non-l-value operands (e.g. `++FOO;`) — and emitted as an expression statement,
-    // mirroring how the postfix form `self::$n++;` already parses at statement position.
-    if matches!(
-        tokens.get(start + 1).map(|(token, _)| token),
-        Some(
-            Token::Self_
-                | Token::Static
-                | Token::Parent
-                | Token::Identifier(_)
-                | Token::Backslash
-        )
-    ) {
-        let expr = parse_expr(tokens, pos)?;
-        expect_semicolon(tokens, pos)?;
-        return Ok(Some(Stmt::new(StmtKind::ExprStmt(expr), span)));
-    }
-
-    // The l-value must begin with a variable or `$this`, and the token after it must
-    // be a complex-target marker (`->`, `?->`, `[`). A bare `++$x;` (marker is `;`)
-    // is left to `parse_incdec_stmt`, which keeps the `PreIncrement` node.
-    if !matches!(
-        tokens.get(start + 1).map(|(token, _)| token),
-        Some(Token::Variable(_) | Token::This)
-    ) {
-        return Ok(None);
-    }
-    if !matches!(
-        tokens.get(start + 2).map(|(token, _)| token),
-        Some(Token::Arrow | Token::QuestionArrow | Token::LBracket)
-    ) {
-        return Ok(None);
-    }
-
-    let mut probe = start + 1;
-    let lhs_expr = parse_expr(tokens, &mut probe)?;
-    *pos = probe;
     expect_semicolon(tokens, pos)?;
 
     lower_postfix_incdec_assignment(lhs_expr, is_increment, span).map(Some)
@@ -521,23 +327,25 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
-    // `self::$a[$dir] = &self::$a[$k]`: reference assignment into a static-property
-    // array element. The leading `&` after the `=` routes to the shared reference-assign
-    // parser (mirroring the property/array-element form in `try_parse_postfix_assignment`),
-    // which validates the target/source shapes and emits `RefAssignToTarget`. The append form
-    // (`self::$a[] = &$x`) parses here too (with `is_append`) and is rejected by the checker
-    // as an unsupported static-property append target rather than mis-parsing.
-    if op == AssignmentOperator::Assign
-        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
-    {
-        return parse_postfix_ref_assign(lhs_expr, tokens, pos, is_append, span).map(Some);
-    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }
     let value = assignment_value(lhs_expr.clone(), op, rhs, span);
+
+    // `self::$b[$k][] = $v` (and its `static::` / `parent::` / `Named::` siblings) is an append
+    // through a *nested* target. The trailing `[]` was stripped from the LHS tokens above, so
+    // `lhs_expr` is an `ExprKind::ArrayAccess` and the `if is_append` guard on the bare
+    // `StaticPropertyAccess` arm below — which only ever handles `self::$b[] = $v` — cannot
+    // match it. Left alone it falls into the plain `ArrayAccess` arm, which ignores `is_append`
+    // entirely and emits `StaticPropertyArrayAssign`: the append is silently dropped and the
+    // bucket is OVERWRITTEN with the single value. Route it through the same read/append/
+    // write-back desugar every other nested-append target already uses; the write-back builder
+    // (`assignment_target_store_stmt`) already supports the static-property family.
+    if is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+        return lower_nested_append_assignment(lhs_expr, value, span).map(Some);
+    }
 
     let stmt = match lhs_expr.kind {
         ExprKind::StaticPropertyAccess { receiver, property } if is_append => {
@@ -547,33 +355,12 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
                 value,
             }
         }
-        // `self::${$n}[] = v` — a push through a dynamic-named static property.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } if is_append => {
-            StmtKind::DynamicStaticPropertyWrite {
-                receiver,
-                property,
-                index: None,
-                append: true,
-                value,
-            }
-        }
         ExprKind::ArrayAccess { array, index } => match array.kind {
             ExprKind::StaticPropertyAccess { receiver, property } => {
                 StmtKind::StaticPropertyArrayAssign {
                     receiver,
                     property,
                     index: *index,
-                    value,
-                }
-            }
-            // `self::${$n}[$k] = v` — an array-element write through a dynamic-named static
-            // property (the DebugClassLoader shape).
-            ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-                StmtKind::DynamicStaticPropertyWrite {
-                    receiver,
-                    property,
-                    index: Some(*index),
-                    append: false,
                     value,
                 }
             }
@@ -587,51 +374,15 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
             property,
             value,
         },
-        // `self::${$n} = v` — a direct write through a dynamic-named static property.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            StmtKind::DynamicStaticPropertyWrite {
-                receiver,
-                property,
-                index: None,
-                append: false,
-                value,
-            }
-        }
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 
     Ok(Some(Stmt::new(stmt, span)))
 }
 
-/// Returns true when `expr` (the expression parsed from the tokens before a top-level `=`) is an
-/// assignable target shape: a variable, array element, or object/static property access. When it
-/// is anything else — a short-ternary, ternary, binary operation, or call result that merely
-/// *contains* a postfix access — the leading `=` is not a statement-level assignment but binds to
-/// an lvalue inside the expression, so `try_parse_postfix_assignment` bails to bare-expression
-/// parsing. Mirrors the shapes accepted by `expr::is_assignment_expression_target`.
-fn parsed_lhs_is_assignable_target(expr: &Expr) -> bool {
-    matches!(
-        expr.kind,
-        ExprKind::Variable(_)
-            | ExprKind::ArrayAccess { .. }
-            | ExprKind::PropertyAccess { .. }
-            | ExprKind::DynamicPropertyAccess { .. }
-            | ExprKind::StaticPropertyAccess { .. }
-    )
-}
-
 /// Scans tokens starting from `start` (skipping nested parentheses, brackets, and braces)
 /// and returns the position and operator of the first top-level assignment at nesting depth 0.
 /// Returns `None` if no assignment operator is found before a semicolon at depth 0.
-///
-/// Bails (`None`) as soon as a top-level ternary `?` is seen before any assignment operator:
-/// once the statement is fundamentally a conditional expression (`$c ? $a[0]=7 : $a[0]=8;`), any
-/// `=` reachable from here belongs to an assignment nested inside one of the ternary's branches,
-/// not to a single postfix-assignment lvalue chain that starts at `start`. Deferring to the general
-/// expression parser lets the Pratt loop build the ternary and let each branch's own assignment
-/// bind independently — scanning past the `?` would otherwise try to parse the dangling prefix
-/// before the first `=` (e.g. `$c ? $a[0]`) as a standalone expression and hard-error on the
-/// incomplete ternary instead of falling back gracefully.
 fn find_top_level_assignment(
     tokens: &[SpannedToken],
     start: usize,
@@ -652,9 +403,6 @@ fn find_top_level_assignment(
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
-            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return None;
-            }
             _ if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 if let Some(op) = assignment_operator(&tokens[pos].0) {
                     return Some((pos, op));
@@ -672,11 +420,6 @@ fn find_top_level_assignment(
 ///
 /// Nested occurrences inside indexes or call arguments are ignored so expressions
 /// such as `$items[$i++] = 1` remain assignment statements with an effectful index.
-///
-/// Bails (`None`) on a top-level ternary `?` before any `++`/`--` is found, for the same reason
-/// `find_top_level_assignment` does: a `++`/`--` beyond the `?` belongs to one of the ternary's
-/// branches, and the whole statement must fall back to general expression parsing instead of being
-/// misread as a discarded postfix/prefix increment on a dangling prefix.
 fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Option<(usize, bool)> {
     let mut paren_depth = 0usize;
     let mut bracket_depth = 0usize;
@@ -692,9 +435,6 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
             Token::LBrace => brace_depth += 1,
             Token::RBrace => brace_depth = brace_depth.saturating_sub(1),
             Token::Semicolon if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
-                return None;
-            }
-            Token::Question if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
                 return None;
             }
             Token::PlusPlus if paren_depth == 0 && bracket_depth == 0 && brace_depth == 0 => {
@@ -719,9 +459,6 @@ fn find_top_level_postfix_incdec(tokens: &[SpannedToken], start: usize) -> Optio
 pub(crate) fn can_replay_assignment_target(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => true,
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            can_replay_assignment_target(property)
-        }
         ExprKind::ArrayAccess { array, index } => {
             can_replay_assignment_target(array) && can_replay_assignment_target(index)
         }
@@ -858,7 +595,10 @@ fn lower_effectful_postfix_assignment(
 }
 
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
-fn lower_postfix_incdec_assignment(
+///
+/// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
+/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+pub(in crate::parser::stmt::assign) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,
@@ -1017,6 +757,24 @@ impl EffectfulTargetLowerer {
         let name = format!(
             "__elephc_compound_{}_{}_{}",
             self.span.line, self.span.col, self.next_temp
+        );
+        self.next_temp += 1;
+        name
+    }
+
+    /// Mints the temporary that holds the bucket of a nested append, under its own reserved
+    /// prefix.
+    ///
+    /// The prefix is what lets IR lowering recognize a nested-append `Synthetic` group and
+    /// lower it as a fused, in-place append instead of the read/copy/write-back it desugars
+    /// to here. `next_temp_name`'s prefix is shared with the `.=` / `+=` desugars, which emit
+    /// the same statement shapes, so it cannot serve as that signal. PHP source cannot forge
+    /// either lock: the name is not a legal PHP identifier and `StmtKind::Synthetic` has no
+    /// surface syntax.
+    fn next_nested_append_temp_name(&mut self) -> String {
+        let name = format!(
+            "{}{}_{}_{}",
+            NESTED_APPEND_TEMP_PREFIX, self.span.line, self.span.col, self.next_temp
         );
         self.next_temp += 1;
         name

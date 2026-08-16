@@ -9,7 +9,7 @@
 //! - Diagnostics should map shared planner errors back to source spans without duplicating call semantics.
 
 use crate::errors::CompileError;
-use crate::parser::ast::{CallableTarget, Expr, ExprKind};
+use crate::parser::ast::{Expr, ExprKind};
 use crate::types::call_args::{self, CallArgPlanError};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
@@ -58,13 +58,9 @@ fn call_arg_plan_error(
                 callee_desc
             ),
         ),
-        CallArgPlanError::SpreadAfterNamed { span } => CompileError::new(
-            span,
-            &format!(
-                "{} cannot use argument unpacking after named arguments",
-                callee_desc
-            ),
-        ),
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            spread_after_named_error(span, callee_desc)
+        }
         CallArgPlanError::MissingRequired { span, param_idx } => {
             let param_name = sig
                 .params
@@ -79,15 +75,17 @@ fn call_arg_plan_error(
     }
 }
 
-/// Returns `true` if `ty` is `PhpType::Callable` or a `Union` containing `Callable` as a member
-/// (e.g. a nullable `?callable` parameter). Used to scope the string-callable coercion in
-/// `Checker::coerce_callable_string_args` to genuinely `callable`-typed parameter positions.
-fn type_accepts_callable(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Callable => true,
-        PhpType::Union(members) => members.iter().any(type_accepts_callable),
-        _ => false,
-    }
+/// Builds the diagnostic for PHP's compile-time
+/// "Cannot use argument unpacking after named arguments" fatal, prefixed with
+/// the callee description used by the rest of the call diagnostics.
+fn spread_after_named_error(span: crate::span::Span, callee_desc: &str) -> CompileError {
+    CompileError::new(
+        span,
+        &format!(
+            "{} cannot use argument unpacking after named arguments",
+            callee_desc
+        ),
+    )
 }
 
 /// Returns a boolean vector indicating which argument positions contain assoc-spread sources
@@ -116,17 +114,36 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 }
 
 impl Checker {
-    /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    /// Enforces PHP's syntactic "no argument unpacking after named arguments"
+    /// rule on a call surface whose callee is not resolvable at compile time
+    /// (string callables, `new $class(...)`), where no signature is available to
+    /// run the shared planner against.
     ///
-    /// A non-nullsafe, non-dynamic `$obj->prop` fetch (`ExprKind::PropertyAccess`) also
-    /// qualifies — mirrors `super::is_by_ref_property_arg`, which the same call-validation
-    /// paths already use to skip `require_boxed_by_ref_storage` for these args, and
-    /// `crate::ir_lower::expr::lower_by_ref_property_arg_with_signature`, which already
-    /// lowers this exact shape through a hidden-temp copy-in/copy-out (any by-ref parameter
-    /// type, not just arrays — the property is never widened; the callee writes into the
-    /// temp, and the temp is copied back into the property on the normal-return edge). Only
-    /// the checker gate was missing this case, rejecting programs the rest of the pipeline
-    /// already supports (e.g. `Helper::fill($this->refs)` for `fill(array &$refs)`).
+    /// The rule itself stays in `crate::types::call_args`; this only maps its
+    /// error onto the same diagnostic the planner-backed surfaces produce.
+    pub(crate) fn require_no_spread_after_named_args(
+        &self,
+        args: &[Expr],
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        call_args::validate_no_spread_after_named(args).map_err(|err| match err {
+            CallArgPlanError::SpreadAfterNamed { span } => {
+                spread_after_named_error(span, callee_desc)
+            }
+            // The rule only reports `SpreadAfterNamed`; the remaining variants
+            // need a signature to plan against and cannot originate here. Keep
+            // the match exhaustive so a future rule still reports a real span.
+            CallArgPlanError::UnknownNamed { span, .. }
+            | CallArgPlanError::Duplicate { span, .. }
+            | CallArgPlanError::PositionalAfterNamed { span }
+            | CallArgPlanError::PositionalAfterSpread { span }
+            | CallArgPlanError::MissingRequired { span, .. } => {
+                CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
+            }
+        })
+    }
+
+    /// Returns true when an argument expression is an l-value supported by by-reference calls.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
@@ -134,7 +151,6 @@ impl Checker {
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
-            ExprKind::PropertyAccess { .. } => Ok(true),
             ExprKind::ArrayAccess { array, .. } if matches!(array.kind, ExprKind::Variable(_)) => {
                 Ok(matches!(
                     self.infer_type(array, env)?.codegen_repr(),
@@ -147,6 +163,10 @@ impl Checker {
 
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
     /// to be collected into the variadic parameter.
+    ///
+    /// The one exception is the hidden variadic added by `crate::func_args` to collect the
+    /// surplus positional arguments `func_get_args()` exposes: the callee declares no
+    /// variadic of its own, so PHP still rejects an unknown named argument there.
     pub(crate) fn normalize_named_call_args(
         &self,
         sig: &FunctionSig,
@@ -155,7 +175,16 @@ impl Checker {
         callee_desc: &str,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
-        self.normalize_call_args(sig, args, span, callee_desc, false, true, env)
+        let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
+        self.normalize_call_args(
+            sig,
+            args,
+            span,
+            callee_desc,
+            false,
+            allow_unknown_named_variadic,
+            env,
+        )
     }
 
     /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
@@ -183,31 +212,6 @@ impl Checker {
         allow_unknown_named_variadic: bool,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
-        let (normalized_args, _) = self.normalize_call_args_with_default_mask(
-            sig,
-            args,
-            span,
-            callee_desc,
-            trim_trailing_defaults,
-            allow_unknown_named_variadic,
-            env,
-        )?;
-        Ok(normalized_args)
-    }
-
-    /// Normalizes call arguments and records which regular parameter slots were synthesized from
-    /// declaration defaults rather than supplied by the caller.
-    #[allow(clippy::too_many_arguments)]
-    fn normalize_call_args_with_default_mask(
-        &self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        callee_desc: &str,
-        trim_trailing_defaults: bool,
-        allow_unknown_named_variadic: bool,
-        env: &TypeEnv,
-    ) -> Result<(Vec<Expr>, Vec<bool>), CompileError> {
         let assoc_spread_sources = assoc_spread_sources(args, env);
         let plan = call_args::plan_call_args_with_regular_param_count_and_assoc_spreads(
             sig,
@@ -219,107 +223,7 @@ impl Checker {
             &assoc_spread_sources,
         )
         .map_err(|err| call_arg_plan_error(sig, callee_desc, err))?;
-        let default_regular_args = plan
-            .regular_args
-            .iter()
-            .map(|arg| matches!(arg, call_args::PlannedRegularArg::Default(_)))
-            .collect();
-        let mut normalized_args = plan.normalized_args();
-        // Only plain positional call sites (no named/spread arguments) are eligible: the real
-        // AST-level rewrite in `crate::optimize::callable_coercion` (which runs post-check, since
-        // this checker never mutates the real program AST) only handles that same shape — see its
-        // module docs. Accepting a wider shape HERE than that pass can actually rewrite would
-        // type-check cleanly but reach codegen with an uncoerced string literal in a
-        // `callable`-typed ABI slot, which is a real, previously-hit segfault class, not a
-        // hypothetical one. Both sides must stay in lockstep.
-        if !args
-            .iter()
-            .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
-        {
-            self.coerce_callable_string_args(sig, &mut normalized_args);
-        }
-        Ok((normalized_args, default_regular_args))
-    }
-
-    /// Coerces literal string-callable arguments at `Callable`-typed regular-parameter
-    /// positions into their first-class-callable equivalent (`ExprKind::FirstClassCallable`)
-    /// at COMPILE TIME, reusing the `funcname(...)` first-class-callable machinery so the
-    /// coerced argument gets the exact same arity/support validation as writing `funcname(...)`
-    /// directly at the call site (including the arity-hungry `func_get_args()` rejection —
-    /// `infer_type` on the rewritten node runs `resolve_first_class_callable_sig`, which already
-    /// enforces that).
-    ///
-    /// PHP accepts a bare function-name string (`'strtoupper'`) anywhere a `callable` is
-    /// expected; elephc's `callable`-typed-parameter checking otherwise rejects a `string`
-    /// argument outright ("expects Callable, got Str"). Scope for this cycle (JURY ADDENDUM #2
-    /// on the N1 checker-bundle spec — explicit decision, documented, not silent):
-    /// - Only a LITERAL string (`ExprKind::StringLiteral`) naming a KNOWN function — user-
-    ///   declared (resolved or forward-declared), `extern`, or a builtin with a first-class-
-    ///   callable signature — is coerced. A non-literal string (e.g. a variable holding a name)
-    ///   is left alone: dynamic name resolution is out of scope, so the existing "expects
-    ///   Callable, got Str" diagnostic still fires, honestly, instead of silently miscompiling.
-    /// - `'Class::method'` static-method strings are NOT coerced this cycle: PHP's visibility
-    ///   rules for a static-method callable string depend on the CALLING scope, and this seam
-    ///   has no access to that context here — coercing without enforcing visibility would
-    ///   silently under-check, which this project's campaign law forbids. Left loud (unchanged)
-    ///   rather than risked.
-    /// - `[$obj, 'method']` array-form callables are NOT coerced: unlike a bare string,
-    ///   resolving this form needs the receiver's runtime type and a bound-method closure,
-    ///   which does not drop out trivially from this seam. Left loud (unchanged).
-    ///
-    /// Called from `normalize_call_args`, the single choke point shared by every user-function,
-    /// method, builtin, and extern call-argument normalization path (see
-    /// `normalize_named_call_args`/`normalize_builtin_call_args` above), so this one seam covers
-    /// every `callable`-typed parameter uniformly — including the shutdown-function prelude's
-    /// `register_shutdown_function(callable $callback, ...)` — without a per-call-site opt-in.
-    fn coerce_callable_string_args(&self, sig: &FunctionSig, args: &mut [Expr]) {
-        let regular_param_count = call_args::regular_param_count(sig);
-        for (idx, arg) in args.iter_mut().enumerate().take(regular_param_count) {
-            let ExprKind::StringLiteral(name) = &arg.kind else {
-                continue;
-            };
-            let is_callable_param = sig
-                .params
-                .get(idx)
-                .is_some_and(|(_, ty)| type_accepts_callable(ty));
-            if !is_callable_param {
-                continue;
-            }
-            if let Some(canonical) = self.coercible_callable_string_target(name) {
-                arg.kind = ExprKind::FirstClassCallable(CallableTarget::Function(
-                    crate::names::Name::unqualified(canonical),
-                ));
-            }
-        }
-    }
-
-    /// Resolves `name` (case-insensitively) to a function elephc's first-class-callable
-    /// machinery already knows how to target: a user-declared function (resolved or forward-
-    /// declared via `fn_decls`), an `extern` declaration, or a builtin with a
-    /// `first_class_callable_builtin_sig`. Returns the canonical name to embed in the coerced
-    /// `FirstClassCallable` node, or `None` if `name` does not resolve to anything usable — the
-    /// caller then leaves the string argument untouched so the ordinary type-mismatch
-    /// diagnostic still fires.
-    ///
-    /// Read-only: does not trigger signature resolution as a side effect (a forward-declared
-    /// function is matched by name only here). Full resolution — and rejection of targets the
-    /// first-class-callable ABI cannot dispatch, such as arity-hungry functions — happens when
-    /// the coerced node is itself type-checked immediately afterward, exactly as it would for
-    /// literal `name(...)` syntax (see `resolve_first_class_callable_sig`).
-    fn coercible_callable_string_target(&self, name: &str) -> Option<String> {
-        if let Some(canonical) = self.canonical_function_name_folded(name) {
-            return Some(canonical);
-        }
-        if let Some(canonical) = self.canonical_extern_function_name_folded(name) {
-            return Some(canonical);
-        }
-        if crate::name_resolver::is_builtin_function(name) {
-            let canonical = crate::types::checker::builtins::canonical_builtin_function_name(name)?;
-            if crate::types::first_class_callable_builtin_sig(&canonical).is_some() {
-                return Some(canonical);
-            }
-        }
-        None
+        Ok(plan.normalized_args())
     }
 
     /// Returns true if `expected` and `actual` are compatible according to PHP assignment
@@ -373,11 +277,7 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if Self::types_compatible(expected, actual)
-            || self.type_accepts(expected, actual)
-            || Self::array_family_gradual_accepts(expected, actual)
-            || self.gradual_boundary_accepts(expected, actual)
-        {
+        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             Ok(())
         } else {
             Err(CompileError::new(
@@ -385,95 +285,6 @@ impl Checker {
                 &format!("{} expects {:?}, got {:?}", context, expected, actual),
             ))
         }
-    }
-
-    /// Like `require_compatible_arg_type`, but additionally admits the PHP weak-mode value-boundary
-    /// coercions the call-argument codegen realizes (`weak_boundary_coercion_accepts`): a concrete
-    /// scalar or Stringable object into a `string` parameter, and a scalar/Stringable/union into a
-    /// boxed-`Mixed` union parameter — plus the base→derived checked downcast
-    /// (`call_arg_downcast_guardable`). Used ONLY at call-argument positions whose codegen lowers
-    /// through `lower_args_with_signature` (which coerces the argument, and emits the downcast
-    /// guard, at the boundary); property and static-property stores keep using the strict
-    /// `require_compatible_arg_type` because they emit neither.
-    ///
-    /// `param_is_declared` is the parameter's `FunctionSig::declared_params` bit. It gates ONLY
-    /// the downcast fallback, and it must: for an UNDECLARED parameter `expected` is a type
-    /// elephc INFERRED, and PHP performs no check there at all, so enforcing it at runtime would
-    /// throw a `TypeError` on a program PHP runs (`function pick($x) { if ($x instanceof A) …}`
-    /// infers `A` and then rejects every non-`A` caller). Lowering gates its emission on the same
-    /// bit, so acceptance and enforcement stay in step.
-    pub(crate) fn require_compatible_call_arg_type(
-        &self,
-        expected: &PhpType,
-        actual: &PhpType,
-        span: crate::span::Span,
-        context: &str,
-        param_is_declared: bool,
-    ) -> Result<(), CompileError> {
-        match self.require_compatible_arg_type(expected, actual, span, context) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                if self.weak_boundary_coercion_accepts(expected, actual)
-                    || (param_is_declared && self.call_arg_downcast_guardable(expected, actual))
-                    || (param_is_declared
-                        && Self::call_arg_weak_refusal_guardable(expected, actual))
-                {
-                    Ok(())
-                } else {
-                    Err(err)
-                }
-            }
-        }
-    }
-
-    /// Returns true when a call ARGUMENT may flow into a declared weak-CONVERSION parameter
-    /// (`string`/`int`/`float`/`bool`/`array`, or their `?T` spellings) behind the runtime REFUSAL
-    /// guard `crate::ir_lower::checked_downcast::emit_scalar_coercion_refusal_guard` emits at this
-    /// same boundary.
-    ///
-    /// This is the acceptance half of the observation that a declared type is a RUNTIME check in
-    /// PHP, not a static one. Symfony's `ParameterBagInterface::get()` returns
-    /// `array|bool|string|int|float|\UnitEnum|null` and hands it straight to a `?string` parameter;
-    /// `php -n` runs that, converting the scalars, passing a string or null through, and raising a
-    /// catchable `TypeError` for an array or a non-`Stringable` object. Refusing it at COMPILE time
-    /// rejected a program PHP runs.
-    ///
-    /// Gated on `weak_boundary_is_tag_decidable`, which is strictly stronger than what the emitter
-    /// needs, and the asymmetry is the whole point: EMITTING refusals is always an improvement (each
-    /// one turns a silent miscompile into PHP's own `TypeError`), while ACCEPTING a flow the checker
-    /// used to reject is only sound when the refusal list is COMPLETE. A `string` member reaching an
-    /// `int` parameter is the boundary that keeps failing that gate — `f("7")` converts and
-    /// `f("abc")` throws, and no runtime TAG test can tell them apart — so such a flow stays loud.
-    ///
-    /// Deliberately NOT wired into `weak_boundary_coercion_accepts`, whose other caller is the
-    /// RETURN boundary (`crate::types::checker::functions::returns`). That boundary emits no refusal
-    /// guard, so widening it there would trade a compile error for a silent wrong value — which is
-    /// exactly what `tests/error_tests/weak_coercion_negatives.rs` pins.
-    fn call_arg_weak_refusal_guardable(expected: &PhpType, actual: &PhpType) -> bool {
-        // The guard reads a runtime tag, so the argument must arrive BOXED. A concretely-typed
-        // argument has no tag to test and keeps the strict check.
-        if actual.codegen_repr() != PhpType::Mixed {
-            return false;
-        }
-        let Some(target) = crate::types::checked_downcast::weak_coercion_target(expected) else {
-            return false;
-        };
-        crate::types::checked_downcast::weak_boundary_is_tag_decidable(target, actual)
-    }
-
-    /// Returns true when a call ARGUMENT may flow into `expected` behind the runtime checked
-    /// downcast `crate::ir_lower::expr::coerce_operands_to_params` emits at this same boundary.
-    ///
-    /// Deliberately a thin delegation to the shared `checked_downcast_guardable` rather than a
-    /// second hierarchy walk: the return boundary uses the same predicate, and a safety predicate
-    /// with two implementations is two predicates whose permissiveness unions — the shape that
-    /// already cost this codebase a double free once.
-    pub(crate) fn call_arg_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
-        self.checked_downcast_guardable(
-            expected,
-            actual,
-            crate::types::checked_downcast::GuardPosition::Argument,
-        )
     }
 
     /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.
@@ -507,6 +318,69 @@ impl Checker {
         )
     }
 
+    /// Validates a direct call to a method or constructor of `owner_class`, applying PHP's
+    /// coercive parameter binding when that class is declared in user source.
+    ///
+    /// Only surfaces whose arguments reach EIR through `lower_args_with_signature` may opt in:
+    /// that is where the matching argument rewrite runs, and accepting a binding without it
+    /// would hand raw storage to a differently typed parameter slot. Compiler-injected classes
+    /// (SPL, `Exception`, reflection, …) lower several of their members through bespoke
+    /// emitters instead, so they stay on the strict path.
+    pub(crate) fn check_user_declared_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_is_user_declared(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            coercive,
+        )
+    }
+
+    /// `check_user_declared_call` for a callee that also accepts spread arguments into
+    /// by-reference parameters materialized by descriptor invokers.
+    pub(crate) fn check_user_declared_call_allowing_by_ref_spread(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_is_user_declared(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            true,
+            coercive,
+        )
+    }
+
+    /// Returns true when `class_name` is a class-like symbol declared in user source.
+    ///
+    /// Compiler-injected classes carry `Span::dummy()` as their declaration span, which is the
+    /// only marker distinguishing them from user declarations. An unknown name is treated as
+    /// not user-declared so an unresolved receiver never silently gains coercive binding.
+    fn class_is_user_declared(&self, class_name: &str) -> bool {
+        self.classes
+            .get(class_name)
+            .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())
+    }
+
     /// Validates a known callable call while allowing spread arguments for by-reference
     /// parameters that will be materialized by descriptor invokers at runtime.
     pub(crate) fn check_known_callable_call_allowing_by_ref_spread(
@@ -528,30 +402,10 @@ impl Checker {
         )
     }
 
-    /// Validates a user-defined callback while allowing it to ignore surplus positional values.
-    ///
-    /// PHP passes the callback surface's full argument list, but user functions and closures read
-    /// only their declared parameters. Internal builtins keep their own strict arity validation.
-    pub(crate) fn check_known_user_callback_call(
-        &mut self,
-        sig: &FunctionSig,
-        args: &[Expr],
-        span: crate::span::Span,
-        caller_env: &TypeEnv,
-        callee_desc: &str,
-    ) -> Result<PhpType, CompileError> {
-        self.check_known_callable_call_with_options(
-            sig,
-            args,
-            span,
-            caller_env,
-            callee_desc,
-            false,
-            true,
-        )
-    }
-
     /// Shared implementation for known callable call validation.
+    ///
+    /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its
+    /// declared parameters; see `check_user_declared_call` for when that is sound.
     fn check_known_callable_call_with_options(
         &mut self,
         sig: &FunctionSig,
@@ -560,34 +414,28 @@ impl Checker {
         caller_env: &TypeEnv,
         callee_desc: &str,
         allow_by_ref_spread: bool,
-        allow_extra_positional: bool,
+        coercive_param_binding: bool,
     ) -> Result<PhpType, CompileError> {
-        let (normalized_args, default_regular_args) = self.normalize_call_args_with_default_mask(
-            sig,
-            args,
-            span,
-            callee_desc,
-            false,
-            true,
-            caller_env,
-        )?;
+        let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
         let args = normalized_args.as_slice();
         let effective_arg_count = args
             .iter()
             .filter(|a| !matches!(a.kind, ExprKind::Spread(_)))
             .count();
         let has_spread = args.iter().any(|a| matches!(a.kind, ExprKind::Spread(_)));
-        let required = sig.defaults.iter().filter(|d| d.is_none()).count();
-        // A callable-variable invocation (`$cb(...)`) is scoped precisely by the `callee_desc`
-        // format string `"callable ${name}"` (see `infer_closure_call_type`/`infer_expr_call_type`
-        // in `inference/ops.rs`). PHP never errors on extra positional args to a non-variadic
-        // function/closure invoked through a variable — only "too few" is a real PHP error
-        // (`ArgumentCountError`). The runtime invoker for this path forwards the full argument
-        // vector and the callee reads only its declared params, so surplus args are ABI-safe.
-        // Direct user-function/method calls are NOT covered by this prefix and keep the strict
-        // upper bound below (elephc's direct-call ABI materializes exact params).
-        let is_callable_var_invocation =
-            allow_extra_positional || callee_desc.starts_with("callable $");
+        let regular_param_count = if sig.variadic.is_some() {
+            sig.params.len().saturating_sub(1)
+        } else {
+            sig.params.len()
+        };
+        // The variadic collector is represented as the signature's final param
+        // with no default expression, but it never contributes to minimum arity.
+        let required = sig
+            .defaults
+            .iter()
+            .take(regular_param_count)
+            .filter(|default| default.is_none())
+            .count();
 
         if sig.ref_params.iter().any(|is_ref| *is_ref) && has_spread && !allow_by_ref_spread {
             return Err(CompileError::new(
@@ -610,9 +458,7 @@ impl Checker {
                         ),
                     ));
                 }
-            } else if effective_arg_count < required
-                || (!is_callable_var_invocation && effective_arg_count > sig.params.len())
-            {
+            } else if effective_arg_count < required || effective_arg_count > sig.params.len() {
                 return Err(CompileError::new(
                     span,
                     &format!(
@@ -625,11 +471,6 @@ impl Checker {
             }
         }
 
-        let regular_param_count = if sig.variadic.is_some() {
-            sig.params.len().saturating_sub(1)
-        } else {
-            sig.params.len()
-        };
         let variadic_elem_ty = sig.variadic.as_ref().and_then(|_| {
             sig.params.last().and_then(|(_, ty)| match ty {
                 PhpType::Array(elem) => Some((**elem).clone()),
@@ -644,12 +485,7 @@ impl Checker {
                 continue;
             }
             if param_idx < regular_param_count {
-                let uses_default = default_regular_args
-                    .get(param_idx)
-                    .copied()
-                    .unwrap_or(false);
-                if !uses_default
-                    && sig.ref_params.get(param_idx).copied().unwrap_or(false)
+                if sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !self.is_by_ref_argument_lvalue(arg, caller_env)?
                 {
                     let param_name = sig
@@ -666,10 +502,8 @@ impl Checker {
                     ));
                 }
                 if let Some((param_name, expected_ty)) = sig.params.get(param_idx) {
-                    if !uses_default
-                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
                         && sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                        && !super::is_by_ref_property_arg(arg)
                     {
                         self.require_boxed_by_ref_storage(
                             expected_ty,
@@ -678,17 +512,54 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    self.require_compatible_call_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("{} parameter ${}", callee_desc, param_name),
-                        sig.declared_params.get(param_idx).copied().unwrap_or(false),
-                    )?;
+                    // `strict_types` applies to every declared parameter type, including the
+                    // closure and first-class-callable surfaces that stay off the coercive
+                    // path. Builtin signatures carry `declared_params: false` throughout
+                    // (`crate::builtins::registry`), so this never fires for an internal
+                    // function whose parameter types the checker does not consume.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false) {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
+                    if coercive_param_binding
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                            None,
+                            sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                        )?;
+                    } else {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                 }
             } else if let (Some(vname), Some(expected_ty)) =
                 (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
             {
+                // The variadic occupies the last `declared_params` slot, so gating on it keeps
+                // the strict rejection off builtin variadics, whose registry-derived parameter
+                // types the checker does not otherwise consume.
+                if sig.declared_params.last().copied().unwrap_or(false) {
+                    self.require_strict_types_param_binding(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                    )?;
+                }
                 self.require_compatible_arg_type(
                     expected_ty,
                     &actual_ty,

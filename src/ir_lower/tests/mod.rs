@@ -16,6 +16,7 @@ use crate::ir::{print_module, Terminator};
 
 mod arrays;
 mod corpus;
+mod effects;
 mod exhaustive;
 mod ownership;
 
@@ -34,24 +35,45 @@ fn lower_file(path: &Path) -> crate::ir::Module {
 /// Runs the `--emit-ir` frontend ordering for a source string and base path.
 fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate::ir::Module {
     let target = Target::detect_host();
-    let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
-    let parsed = crate::parser::parse(&tokens).expect("parse failed");
+    let source_mode = crate::source::SourceMode::from_path(main_file_path);
+    let tokens =
+        crate::lexer::tokenize_with_mode(source, source_mode).expect("tokenize failed");
+    let parsed =
+        crate::parser::parse_with_mode(&tokens, source_mode).expect("parse failed");
     let main_file_path = PathBuf::from(main_file_path);
-    let parsed = crate::magic_constants::substitute_file_and_scope_constants(parsed, &main_file_path);
-    let parsed = crate::conditional::apply(parsed, &HashSet::new());
+    let defines = HashSet::new();
+    let parsed = crate::source::finalize_physical_program(
+        parsed,
+        &main_file_path,
+        source_mode,
+        &defines,
+    )
+    .expect("physical-source finalization failed");
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
-    let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
+    let (ast, _) =
+        crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
+            .expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
-    let ast = crate::dom_prelude::inject(ast);
     let ast = crate::pdo_prelude::inject_if_used(ast, false);
     let ast = crate::tz_prelude::inject_if_used(ast, false);
     let ast = crate::list_id_prelude::inject_if_used(ast);
     let ast = crate::var_export_prelude::inject_if_used(ast);
     let ast = crate::image_prelude::inject_if_used(ast, false);
+    let ast = crate::dir_prelude::inject_if_used(ast);
+    let ast = crate::hash_prelude::inject_if_used(ast, false);
+    let ast = crate::scanf_prelude::inject_if_used(ast);
     let ast = crate::name_resolver::resolve(ast).expect("name resolution failed");
-    let ast = crate::return_type_guard::inject(ast);
-    let (ast, _autoload_warnings) =
-        crate::autoload::run(ast, parent, &autoload_registry).expect("autoload failed");
+    let (ast, _) = crate::autoload::run_collecting_included_with_defines(
+        ast,
+        parent,
+        &autoload_registry,
+        &defines,
+    )
+    .expect("autoload failed");
+    // Mirrors `pipeline::compile`, which desugars the `func_get_args()` family between
+    // `autoload::run` and constant folding. Without it an example using those functions
+    // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
+    let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
     let ast = crate::optimize::fold_constants(ast);
     let check_result = crate::types::check_with_target(&ast, target).expect("type check failed");
     let ast = crate::optimize::propagate_constants(ast);

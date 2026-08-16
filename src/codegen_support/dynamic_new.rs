@@ -4,19 +4,28 @@
 //!
 //! Called from:
 //! - `crate::codegen_support::collect_dynamic_object_factory_classes_in_expr()`.
+//! - `crate::codegen::lower_inst::objects` candidate selection.
+//! - `crate::ir_lower::expr` dynamic-`new` argument planning.
 //!
 //! Key details:
 //! - These classes have known allocation/runtime layouts and can be included in
 //!   emitted class metadata for `new $name` factory paths.
+//! - `known_dynamic_new_builtin_class_names()` is the shared "not a user class"
+//!   filter: EIR lowering must not synthesize fixed-class construction for these
+//!   names because their allocation is runtime-managed, not AOT-emitted.
 
 /// Returns builtin class names with allocation paths that are safe for dynamic `new`.
 pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static str] {
     &[
+        "ArgumentCountError",
+        "ArithmeticError",
         "ArrayIterator",
         "ArrayObject",
+        "AssertionError",
         "BadFunctionCallException",
         "BadMethodCallException",
         "CallbackFilterIterator",
+        "DivisionByZeroError",
         "DomainException",
         "Error",
         "Exception",
@@ -44,5 +53,91 @@ pub(crate) fn supported_dynamic_new_builtin_class_names() -> &'static [&'static 
         "UnderflowException",
         "UnexpectedValueException",
         "ValueError",
+    ]
+}
+
+/// Returns builtin class names that must not be mistaken for user-instantiable classes.
+pub(crate) fn known_dynamic_new_builtin_class_names() -> &'static [&'static str] {
+    &[
+        "AppendIterator",
+        "ArgumentCountError",
+        "ArrayIterator",
+        "ArrayObject",
+        "AssertionError",
+        "BadFunctionCallException",
+        "BadMethodCallException",
+        "CachingIterator",
+        "CallbackFilterIterator",
+        "DirectoryIterator",
+        "DivisionByZeroError",
+        "DomainException",
+        "EmptyIterator",
+        "Error",
+        "Exception",
+        "Fiber",
+        "FiberError",
+        "FilesystemIterator",
+        "FilterIterator",
+        "Generator",
+        "GlobIterator",
+        "InfiniteIterator",
+        "InternalIterator",
+        "InvalidArgumentException",
+        "IteratorIterator",
+        "JsonException",
+        "LengthException",
+        "LimitIterator",
+        "LogicException",
+        "MultipleIterator",
+        "NoRewindIterator",
+        "OutOfBoundsException",
+        "OutOfRangeException",
+        "OverflowException",
+        "ParentIterator",
+        "Phar",
+        "PharData",
+        "RangeException",
+        "RecursiveArrayIterator",
+        "RecursiveCachingIterator",
+        "RecursiveCallbackFilterIterator",
+        "RecursiveDirectoryIterator",
+        "RecursiveFilterIterator",
+        "RecursiveIteratorIterator",
+        "RecursiveRegexIterator",
+        "ReflectionAttribute",
+        "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionEnum",
+        "ReflectionClassConstant",
+        "ReflectionEnumBackedCase",
+        "ReflectionEnumUnitCase",
+        "ReflectionException",
+        "ReflectionFunction",
+        "ReflectionMethod",
+        "ReflectionNamedType",
+        "ReflectionParameter",
+        "ReflectionProperty",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+        "RegexIterator",
+        "RuntimeException",
+        "SplDoublyLinkedList",
+        "SplFileInfo",
+        "SplFileObject",
+        "SplFixedArray",
+        "SplHeap",
+        "SplMaxHeap",
+        "SplMinHeap",
+        "SplObjectStorage",
+        "SplPriorityQueue",
+        "SplQueue",
+        "SplStack",
+        "SplTempFileObject",
+        "TypeError",
+        "UnderflowException",
+        "UnexpectedValueException",
+        "ValueError",
+        "ArithmeticError",
+        "stdClass",
     ]
 }

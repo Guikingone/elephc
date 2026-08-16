@@ -10,10 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_walk",
+    contract: "array_walk",
     area: Array,
-    params: [array: by_ref, callback],
-    by_ref: [array],
     direct: none,
     values: ArrayMutating,
 }
@@ -77,7 +75,7 @@ fn eval_array_walk_direct_args(
                 if array_target.is_some() {
                     return Err(EvalStatus::RuntimeFatal);
                 }
-                array_target = Some(super::mutation::eval_array_mutation_lvalue_arg(arg, context, scope, values)?);
+                array_target = Some(super::mutation::eval_array_mutation_lvalue_arg("array_walk", arg, context, scope, values)?);
             }
             "callback" => {
                 if callback.is_some() {

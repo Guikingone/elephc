@@ -7,9 +7,6 @@
 //!
 //! Key details:
 //! - Object inference depends on flattened class metadata, visibility, inheritance, and declared property types.
-//! - The bare `object` pseudo-type uses an empty nominal name and requires runtime property dispatch.
-//! - Null-coalescing property probes treat a definitely absent property as PHP null without
-//!   performing an ordinary property read.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
@@ -18,56 +15,6 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
-    /// Infers the value side of `$object->property ?? $fallback`.
-    ///
-    /// PHP applies `isset` semantics here: a definitely undeclared property on a known class is
-    /// absent and contributes `Void` (null) instead of raising the ordinary undefined-property
-    /// diagnostic. Declared, magic, dynamic, and uncertain receivers retain normal property
-    /// inference so their result type and visibility rules remain unchanged.
-    pub(crate) fn infer_property_null_coalesce_type(
-        &mut self,
-        object: &Expr,
-        property: &str,
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
-        let object_ty = self.infer_type(object, env)?;
-        let class_name = match &object_ty {
-            PhpType::Object(class_name) => Some(class_name.clone()),
-            PhpType::Union(_) => self.union_single_object_class(&object_ty),
-            _ => None,
-        };
-        if class_name.as_deref().is_some_and(|class_name| {
-            self.null_coalesce_property_is_definitely_absent(class_name, property)
-        }) {
-            return Ok(PhpType::Void);
-        }
-        self.infer_property_access_type(object, property, expr, env)
-    }
-
-    /// Returns whether a known class has no declared, magic, dynamic, or descendant property
-    /// surface that could satisfy a null-coalescing probe.
-    fn null_coalesce_property_is_definitely_absent(
-        &self,
-        class_name: &str,
-        property: &str,
-    ) -> bool {
-        if class_name.is_empty()
-            || crate::types::checker::builtin_stdclass::is_stdclass(class_name)
-        {
-            return false;
-        }
-        let Some(class_info) = self.classes.get(class_name) else {
-            return false;
-        };
-        class_info.visible_property(property).is_none()
-            && !class_info.methods.contains_key("__get")
-            && !class_info.allow_dynamic_properties
-            && self
-                .abstract_descendant_property_type(class_name, property)
-                .is_none()
-    }
-
     /// Infers the type of a property access expression (`$obj->prop`).
     ///
     /// Returns the declared property type on class/object, handles `Mixed`
@@ -90,7 +37,7 @@ impl Checker {
         }
         let obj_ty = self.infer_type(object, env)?;
         if let PhpType::Object(class_name) = &obj_ty {
-            return self.infer_property_on_class_type(class_name, property, object, expr);
+            return self.infer_property_on_class_type(class_name, property, expr);
         }
         // Non-nullsafe property access on a nullable / union object type is
         // allowed when the union resolves to a single object class.
@@ -103,7 +50,7 @@ impl Checker {
             if let Ok(Some((class_name, nullable))) =
                 self.nullsafe_object_receiver(&obj_ty, expr, "property access")
             {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
+                let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
                 return if nullable {
                     Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
                 } else {
@@ -111,7 +58,7 @@ impl Checker {
                 };
             }
             if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                return self.infer_property_on_class_type(&class_name, property, object, expr);
+                return self.infer_property_on_class_type(&class_name, property, expr);
             }
             // Union of two or more distinct object classes (`A|B`): the property
             // must exist on every object member; codegen dispatches on the runtime
@@ -120,7 +67,7 @@ impl Checker {
             if object_classes.len() >= 2 {
                 let mut property_types = Vec::with_capacity(object_classes.len());
                 for class_name in &object_classes {
-                    property_types.push(self.infer_property_on_class_type(class_name, property, object, expr)?);
+                    property_types.push(self.infer_property_on_class_type(class_name, property, expr)?);
                 }
                 return Ok(self.normalize_union_type(property_types));
             }
@@ -159,6 +106,11 @@ impl Checker {
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
+        // `isset($n->p)` / `$n->p ?? $d` reach through a null receiver in PHP and answer
+        // `false` / the default; only a probe context may do so.
+        if matches!(obj_ty, PhpType::Void) && self.null_probe_depth > 0 {
+            return Ok(PhpType::Void);
+        }
         Err(CompileError::new(
             expr.span,
             "Property access requires an object or typed pointer",
@@ -181,31 +133,16 @@ impl Checker {
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
-        match self.nullsafe_object_receiver(&obj_ty, expr, "property access") {
-            Ok(Some((class_name, nullable))) => {
-                let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
-                if nullable {
-                    Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
-                } else {
-                    Ok(property_ty)
-                }
-            }
-            Ok(None) => Ok(PhpType::Void),
-            Err(strict_err) => {
-                // Gradual union receiver the strict single-class resolver rejects
-                // (`Foo|false`, or a union carrying a `Mixed` member). A `?->` receiver may
-                // be non-object at runtime, so the result always admits `Void`.
-                if let Some(class_name) = self.union_single_object_class(&obj_ty) {
-                    let property_ty = self.infer_property_on_class_type(&class_name, property, object, expr)?;
-                    return Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]));
-                }
-                if matches!(&obj_ty, PhpType::Union(members)
-                    if members.iter().any(|member| matches!(member, PhpType::Mixed)))
-                {
-                    return Ok(PhpType::Mixed);
-                }
-                Err(strict_err)
-            }
+        let Some((class_name, nullable)) =
+            self.nullsafe_object_receiver(&obj_ty, expr, "property access")?
+        else {
+            return Ok(PhpType::Void);
+        };
+        let property_ty = self.infer_property_on_class_type(&class_name, property, expr)?;
+        if nullable {
+            Ok(self.normalize_union_type(vec![property_ty, PhpType::Void]))
+        } else {
+            Ok(property_ty)
         }
     }
 
@@ -267,28 +204,10 @@ impl Checker {
         &self,
         class_name: &str,
         property: &str,
-        receiver: &Expr,
         expr: &Expr,
     ) -> Result<PhpType, CompileError> {
-        if class_name.is_empty() {
-            return Ok(PhpType::Mixed);
-        }
         if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
             return Ok(PhpType::Mixed);
-        }
-        // The builtin enum interfaces `UnitEnum`/`BackedEnum` are registered as
-        // interfaces, not classes, so a value narrowed to one of them (e.g. via
-        // `$v instanceof \BackedEnum`) misses the `self.classes` lookup below. PHP
-        // exposes a fixed property surface on these interfaces: every enum case has
-        // a string `->name`, and backed-enum cases additionally have a `->value`
-        // typed `int|string`. Resolve those directly instead of reporting the
-        // interface as an undefined class.
-        match (class_name.trim_start_matches('\\'), property) {
-            ("UnitEnum" | "BackedEnum", "name") => return Ok(PhpType::Str),
-            ("BackedEnum", "value") => {
-                return Ok(PhpType::Union(vec![PhpType::Int, PhpType::Str]))
-            }
-            _ => {}
         }
         if let Some(class_info) = self.classes.get(class_name) {
             if let Some(visibility) = class_info.property_visibilities.get(property) {
@@ -297,7 +216,7 @@ impl Checker {
                     .get(property)
                     .map(String::as_str)
                     .unwrap_or(class_name);
-                if !self.can_access_property(receiver, declaring_class, visibility) {
+                if !self.can_access_member(declaring_class, visibility) {
                     return Err(CompileError::new(
                         expr.span,
                         &format!(
@@ -326,87 +245,15 @@ impl Checker {
                 // value is statically `Mixed` because we cannot infer it.
                 return Ok(PhpType::Mixed);
             }
-            if let Some(ty) =
-                self.abstract_descendant_property_type(class_name, property)
-            {
-                return Ok(ty);
-            }
-            // A `Closure::bind(fn () => $this->prop, $newThis, …)` receiver needs no redirect
-            // here: `infer_this_type` already types the rebound `$this` as `$newThis`'s class, so
-            // `class_name` IS the class that must declare the property. A genuinely absent
-            // property therefore still falls through to the loud error below — now naming the
-            // bound receiver's class rather than the lexical or scope class.
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        // A value narrowed to an interface type (e.g. `$m instanceof \Reflector`
-        // then `$m->name`) misses the `self.classes` lookup above because interfaces
-        // are registered in `self.interfaces`/`self.declared_interfaces`, never in
-        // `self.classes`. PHP interfaces cannot declare instance properties, so any
-        // property read on an interface-typed receiver is a dynamic read resolved on
-        // the concrete implementor at runtime; its static type is therefore `Mixed`,
-        // not a compile error. This generalizes the fixed `UnitEnum`/`BackedEnum`
-        // property surface handled above to every builtin/user marker interface
-        // (`Reflector`, which all core `Reflection*` shells implement, is the case
-        // that motivated it: `ReflectionCaster::addMap()` reads `$m->name`).
-        let interface_key = class_name.trim_start_matches('\\');
-        if self.interfaces.contains_key(interface_key)
-            || self.declared_interfaces.contains(interface_key)
-        {
-            return Ok(PhpType::Mixed);
-        }
         Err(CompileError::new(
             expr.span,
             &format!("Undefined class: {}", class_name),
         ))
-    }
-
-    /// Resolves a property exposed by at least one concrete child of an abstract receiver.
-    ///
-    /// PHP permits a value typed as an abstract base to hold different concrete children. A
-    /// property present on only some children is therefore a runtime-checked read: matching
-    /// children expose their declared type, while a non-matching child warns and yields null.
-    fn abstract_descendant_property_type(
-        &self,
-        class_name: &str,
-        property: &str,
-    ) -> Option<PhpType> {
-        let base = self.classes.get(class_name)?;
-        if !base.is_abstract {
-            return None;
-        }
-        let mut property_types = Vec::new();
-        let mut has_missing_concrete_child = false;
-        for (candidate_name, candidate) in &self.classes {
-            if candidate.is_abstract
-                || candidate_name == class_name
-                || !self.is_subclass_of(candidate_name, class_name)
-            {
-                continue;
-            }
-            let visible = candidate.visible_property(property).and_then(|(_, (_, ty))| {
-                let visibility = candidate
-                    .property_visibilities
-                    .get(property)
-                    .cloned()
-                    .unwrap_or(crate::parser::ast::Visibility::Public);
-                (visibility == crate::parser::ast::Visibility::Public).then_some(ty.clone())
-            });
-            if let Some(ty) = visible {
-                property_types.push(ty);
-            } else {
-                has_missing_concrete_child = true;
-            }
-        }
-        if property_types.is_empty() {
-            return None;
-        }
-        if has_missing_concrete_child {
-            property_types.push(PhpType::Void);
-        }
-        Some(self.normalize_union_type(property_types))
     }
 
     /// Returns precise SPL runtime storage metadata for callback-filter internals.
@@ -533,21 +380,25 @@ impl Checker {
     /// Resolves the static receiver (named, `self::`, `static::`, `parent::`)
     /// to a class name, then looks up the declared static property type after
     /// validating visibility rules.
+    ///
+    /// A flow narrowing recorded for the same place (`self::$p === null` guards,
+    /// `self::$p = <non-null>` writes) wins over the declared type, the same way
+    /// `infer_property_access_type` consults its instance-property key.
     pub(crate) fn infer_static_property_access_type(
         &mut self,
         receiver: &StaticReceiver,
         property: &str,
         expr: &Expr,
+        env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let Some(key) = self.narrowed_static_property_env_key(receiver, property, expr) {
+            if let Some(narrowed) = env.get(&key) {
+                return Ok(narrowed.clone());
+            }
+        }
         let class_name = self.resolve_static_property_receiver(receiver, expr)?;
         let Some(class_info) = self.classes.get(&class_name) else {
             if self.eval_barrier_active && matches!(receiver, StaticReceiver::Named(_)) {
-                return Ok(PhpType::Mixed);
-            }
-            // Static property access on a class that is unknown everywhere in the closed world is
-            // an absent optional dependency: degrade to `Mixed` with a warning instead of erroring.
-            if !self.class_like_exists(&class_name) {
-                self.warn_absent_class(expr.span, &class_name);
                 return Ok(PhpType::Mixed);
             }
             return Err(CompileError::new(
@@ -586,53 +437,6 @@ impl Checker {
             })
     }
 
-    /// Infers the result type of a dynamic static property access (`self::${$expr}`).
-    ///
-    /// The receiver's class must be statically known (self/static/parent/Named); the property
-    /// name is a runtime string. Evaluates the name expression (for validation/side effects),
-    /// then requires the class to be resolvable so codegen can enumerate its declared static
-    /// properties. Returns the common declared type of those static properties, or `Mixed` when
-    /// they are heterogeneous. Errors loudly when the class is not statically known (unknown or
-    /// absent), because a dynamic access cannot be lowered without candidate properties.
-    pub(crate) fn infer_dynamic_static_property_access_type(
-        &mut self,
-        receiver: &StaticReceiver,
-        property: &Expr,
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
-        // Evaluate the name expression for its type (gradual: string-ish or Mixed is fine).
-        let name_ty = self.infer_type(property, env)?;
-        if !matches!(name_ty, PhpType::Str | PhpType::Mixed | PhpType::Int) {
-            return Err(CompileError::new(
-                property.span,
-                &format!(
-                    "Dynamic static property name must be a string, got `{}`",
-                    name_ty
-                ),
-            ));
-        }
-        let class_name = self.resolve_static_property_receiver(receiver, expr)?;
-        let Some(class_info) = self.classes.get(&class_name) else {
-            return Err(CompileError::new(
-                expr.span,
-                "Dynamic static property access requires a statically-known class",
-            ));
-        };
-        let mut types = class_info.static_properties.iter().map(|(_, ty)| ty.clone());
-        let Some(first) = types.next() else {
-            return Err(CompileError::new(
-                expr.span,
-                &format!("Class {} has no static properties", class_name),
-            ));
-        };
-        if types.all(|ty| ty == first) {
-            Ok(first)
-        } else {
-            Ok(PhpType::Mixed)
-        }
-    }
-
     /// Resolves a static property receiver to its class name.
     ///
     /// `Named` returns the class directly. `Self_`/`Static` require a class
@@ -669,37 +473,9 @@ impl Checker {
 
     /// Infers the type of `$this` inside a class method.
     ///
-    /// A non-static closure declared inside a static method has no enclosing receiver, but PHP
-    /// permits it to reference `$this` so `Closure::bind()` can install one later; that receiver
-    /// remains `Mixed`. Direct static-method use still errors, as does top-level use outside a
-    /// bindable closure. Instance methods resolve to `Object(current_class)`.
-    ///
-    /// An `if ($this instanceof I) { … }` guard records a narrowed receiver type under
-    /// `narrowed_this_env_key`; when present it wins, so a method that lives only on the proven
-    /// subtype type-checks inside the guarded region.
-    pub(crate) fn infer_this_type(
-        &mut self,
-        expr: &Expr,
-        env: &TypeEnv,
-    ) -> Result<PhpType, CompileError> {
-        // Inside a `Closure::bind(fn () => $this->prop, $newThis [, $scope])` body, `$this` IS
-        // `$newThis` — not the lexically enclosing object, and not the `$scope` class, which
-        // governs visibility only. Resolve it first: the enclosing frame's own `$this` facts (a
-        // narrowing in `env`, or a static-method rejection) describe a different receiver
-        // entirely and must not leak into the rebound body. Property existence, by-reference
-        // property promotion and codegen's `build_bound_closure_binding` then all key off the
-        // same class.
-        if let Some(context) = self.bound_scope_context.as_ref() {
-            if let Some(this_class) = context.this_class.as_ref() {
-                return Ok(PhpType::Object(this_class.clone()));
-            }
-        }
-        if let Some(narrowed) = env.get(Self::narrowed_this_env_key()) {
-            return Ok(narrowed.clone());
-        }
-        if self.current_method_is_static && self.closure_depth > 0 {
-            return Ok(PhpType::Mixed);
-        }
+    /// Errors if called from a static method or outside a class context.
+    /// Returns `PhpType::Object(current_class)` for valid contexts.
+    pub(crate) fn infer_this_type(&mut self, expr: &Expr) -> Result<PhpType, CompileError> {
         if self.current_method_is_static {
             return Err(CompileError::new(
                 expr.span,

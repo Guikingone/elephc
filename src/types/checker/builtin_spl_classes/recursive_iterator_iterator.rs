@@ -51,10 +51,6 @@ fn recursive_iterator_iterator_properties() -> Vec<ClassProperty> {
         storage_property("depth", TypeExpr::Int),
         storage_property("slot", TypeExpr::Int),
         storage_property("currentValid", TypeExpr::Bool),
-        // PHP's `maxDepth`: the deepest level the traversal may DESCEND to, with `-1` meaning
-        // "any depth". Stored as an int (never `false`) so the descend gate stays a plain integer
-        // comparison; `getMaxDepth()` maps `-1` back to PHP's `false`.
-        storage_property("maxDepth", TypeExpr::Int),
     ]
 }
 
@@ -81,25 +77,6 @@ fn spl_recursive_iterator_iterator_methods() -> Vec<ClassMethod> {
             Vec::new(),
             Some(TypeExpr::Int),
             recursive_iterator_iterator_get_depth_body(),
-        ),
-        method_with_body(
-            "setMaxDepth",
-            vec![param_default("maxDepth", TypeExpr::Int, int_expr(-1))],
-            Some(TypeExpr::Void),
-            recursive_iterator_iterator_set_max_depth_body(),
-        ),
-        method_with_body(
-            "getMaxDepth",
-            Vec::new(),
-            // PHP: `getMaxDepth(): int|false` — `false` when any depth is allowed.
-            Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::False])),
-            recursive_iterator_iterator_get_max_depth_body(),
-        ),
-        method_with_body(
-            "__elephcMayDescend",
-            Vec::new(),
-            Some(TypeExpr::Bool),
-            recursive_iterator_iterator_may_descend_body(),
         ),
         method_with_body(
             "getInnerIterator",

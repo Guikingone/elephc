@@ -8,7 +8,7 @@
 //! Key details:
 //! - Constant lookup happens before name resolution, so namespace strings come from raw AST names.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::names::{Name, NameKind};
 use crate::parser::ast::{Stmt, StmtKind, UseKind};
@@ -22,12 +22,18 @@ pub(super) struct ResolveState {
     pub(super) namespace: Option<String>,
     /// `use const X as Y` imports. Maps alias to canonical constant name.
     pub(super) const_imports: HashMap<String, String>,
-    /// When true, an unresolvable runtime-dynamic include/require path is lowered to a
-    /// diverging runtime-fatal stub instead of a hard compile error. Set only for files
-    /// pulled transitively by the autoloader (vendor/library code), never for the main
-    /// program, so the closed-world compile is not blocked by lazy dynamic includes that
-    /// may never execute. See `resolve_lenient_includes`.
-    pub(super) lenient_dynamic_includes: bool,
+    /// Invocation-level symbols used to select `ifdef` branches in every physical file.
+    pub(super) conditional_defines: HashSet<String>,
+}
+
+impl ResolveState {
+    /// Creates resolver state carrying the conditional symbols for subsequently loaded files.
+    pub(super) fn with_conditional_defines(defines: &HashSet<String>) -> Self {
+        Self {
+            conditional_defines: defines.clone(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Looks up a constant reference by name, applying PHP's namespace and import rules.

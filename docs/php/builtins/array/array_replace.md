@@ -8,16 +8,16 @@ sidebar:
 ## array_replace()
 
 ```php
-function array_replace(array $array, ...$replacements): array
+function array_replace(array $array, array $replacements): mixed
 ```
 
 Replaces elements from passed arrays into the first array.
 
 **Parameters**:
 - `$array` (`array`)
-- `...$replacements` — variadic: collects excess arguments into `$replacements`.
+- `$replacements` (`array`)
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -25,12 +25,6 @@ Replaces elements from passed arrays into the first array.
 - **`eval()` (magician interpreter)**: not available inside eval'd code.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

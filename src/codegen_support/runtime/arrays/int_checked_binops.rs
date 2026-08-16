@@ -13,7 +13,7 @@
 //! - Each entry point is fully self-contained (no cross-function local-label branches)
 //!   to survive macOS `.subsections_via_symbols` dead-stripping.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 
 /// Emits the checked integer add/sub/mul helpers for both AArch64 and x86_64.

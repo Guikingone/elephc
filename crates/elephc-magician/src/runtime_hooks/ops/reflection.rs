@@ -49,7 +49,6 @@ macro_rules! impl_reflection_ops {
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
         constructor: RuntimeCellHandle,
-        parameter_count: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe {
             __elephc_eval_reflection_owner_new(
@@ -70,7 +69,6 @@ macro_rules! impl_reflection_ops {
                 constant_value.as_ptr(),
                 backing_value.as_ptr(),
                 constructor.as_ptr(),
-                parameter_count,
             )
         })
     }

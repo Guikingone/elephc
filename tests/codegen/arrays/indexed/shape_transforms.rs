@@ -65,43 +65,6 @@ echo count($removed) . " " . count($a);
     assert_eq!(out, "2 3");
 }
 
-/// Tests `array_splice(&$array, offset)` — the 2-argument form removes everything from
-/// offset 1 onward. Fixture: [1,2,3,4] → keeps [1], removes 3 elements.
-///
-/// Currently ignored: the 2-arg form type-checks and lowers, but the runtime
-/// `__rt_array_splice` with the until-end length sentinel does not yet produce the
-/// expected removal for the no-length call shape. Tracked as a deferred runtime
-/// follow-up (see the deliverable report).
-#[test]
-#[ignore = "array_splice 2-arg to-end runtime semantics not yet correct"]
-fn test_array_splice_two_args() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [1, 2, 3, 4];
-$removed = array_splice($a, 1);
-echo count($removed) . " " . count($a);
-"#,
-    );
-    assert_eq!(out, "3 1");
-}
-
-/// Tests `array_splice(&$array, offset, length, replacement)` — the 4-argument form
-/// type-checks and lowers. The `$replacement` operand is accepted positionally; its
-/// runtime insertion semantics is deferred, so the array loses one element without the
-/// replacement being inserted yet. Fixture: [1,2,3,4] with offset 1, length 1,
-/// replacement ["x"] → removed count 1, array count 3 (replacement insertion deferred).
-#[test]
-fn test_array_splice_four_args_with_replacement() {
-    let out = compile_and_run(
-        r#"<?php
-$a = [1, 2, 3, 4];
-$removed = array_splice($a, 1, 1, ["x"]);
-echo count($removed) . " " . count($a);
-"#,
-    );
-    assert_eq!(out, "1 3");
-}
-
 /// Tests `array_combine($keys, $values)` — combines `["a", "b"]` keys with `[1, 2]` values
 /// into an associative array, then verifies the resulting array has exactly 2 elements.
 #[test]
@@ -220,4 +183,86 @@ echo $f, "|", $c, "|", $p, "|", implode(",", $b);
 "#,
     );
     assert_eq!(out, "7,7,7|5|1,2,0,0,0|1,2");
+}
+
+/// Tests `array_count_values()` over a string-valued indexed array — each distinct value
+/// becomes a key mapped to its occurrence tally, in first-seen order.
+#[test]
+fn test_array_count_values_strings() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_count_values(["a", "b", "a"]);
+foreach ($r as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "a=2;b=1;");
+}
+
+/// Tests `array_count_values()` over an integer-valued indexed array.
+#[test]
+fn test_array_count_values_integers() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_count_values([1, 1, 2, 3, 3, 3]);
+foreach ($r as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "1=2;2=1;3=3;");
+}
+
+/// Verifies `array_count_values()` resolves case-insensitively, namespaced, and by named argument.
+#[test]
+fn test_array_count_values_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+$r = ARRAY_COUNT_VALUES(["z", "z"]);
+$s = \array_count_values(array: [5, 5, 6]);
+foreach ($r as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+foreach ($s as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "z=2;|5=2;6=1;");
+}
+
+/// Tests `array_count_values()` over an ASSOCIATIVE source: the source KEYS are discarded and
+/// the source VALUES become the tally keys.
+#[test]
+fn test_array_count_values_assoc_source() {
+    let out = compile_and_run(
+        r#"<?php
+$src = ["k1" => "x", "k2" => "y", "k3" => "x"];
+$r = array_count_values($src);
+foreach ($r as $k => $v) { echo $k, "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "x=2;y=1;");
+}
+
+/// Verifies PHP's numeric-string key collapsing: `"10"` and `10` share one tally while the
+/// non-canonical `"010"` stays a distinct string key.
+#[test]
+fn test_array_count_values_numeric_string_keys_collapse() {
+    let out = compile_and_run(
+        r#"<?php
+$r = array_count_values(["10", 10, "010"]);
+foreach ($r as $k => $v) { echo var_export($k, true), "=", $v, ";"; }
+"#,
+    );
+    assert_eq!(out, "10=2;'010'=1;");
+}
+
+/// Verifies `array_count_values()` tallies runtime-built strings, so the call cannot be folded
+/// into a literal and the `__rt_array_count_values` lowering is exercised.
+#[test]
+fn test_array_count_values_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$n = "n" . ($argc - 1);
+$r = array_count_values([$n, "n0", "z"]);
+foreach ($r as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|", count($r);
+"#,
+    );
+    assert_eq!(out, "n0=2;z=1;|2");
 }

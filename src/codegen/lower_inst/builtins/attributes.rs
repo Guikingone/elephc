@@ -245,6 +245,7 @@ fn emit_reflection_attribute_object(
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
             ctx.emitter.instruction("mov x9, #4");                              // heap kind 4 marks ReflectionAttribute as an object
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the object heap header before the payload
+            ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             ctx.emitter
                 .instruction(&format!("mov x10, #{}", layout.class_id));        // materialize the ReflectionAttribute class id
             ctx.emitter.instruction("str x10, [x0]");                           // store the class id at object payload offset zero
@@ -258,6 +259,7 @@ fn emit_reflection_attribute_object(
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
             ));                                                                 // materialize the x86_64 object heap kind word
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the object heap header before the payload
+            ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter
                 .instruction(&format!("mov r10, {}", layout.class_id));         // materialize the ReflectionAttribute class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the class id at object payload offset zero
@@ -388,14 +390,8 @@ fn emit_append_reflection_attribute_object(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Allocates and fills an indexed array of attribute-name strings. Also
-/// reused by `crate::codegen::lower_inst::objects::reflection` to bake
-/// plain `array<string>` reflection metadata slots (e.g. `getInterfaceNames()`,
-/// `hasMethod()`'s lowercased method-name set).
-pub(in crate::codegen::lower_inst) fn emit_string_array(
-    ctx: &mut FunctionContext<'_>,
-    names: &[String],
-) -> Result<()> {
+/// Allocates and fills an indexed array of attribute-name strings.
+fn emit_string_array(ctx: &mut FunctionContext<'_>, names: &[String]) -> Result<()> {
     allocate_indexed_array(ctx, names.len().max(1), 16);
     match ctx.emitter.target.arch {
         Arch::AArch64 => emit_string_array_fill_aarch64(ctx, names),

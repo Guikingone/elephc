@@ -14,7 +14,7 @@
 //!   string, array, iterable, and object references use raw ABI storage that is
 //!   boxed again during writeback.
 
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::emit::Emitter;
 use crate::codegen::{abi, emit_box_current_value_as_mixed, runtime_value_tag};
 use crate::types::{FunctionSig, PhpType};
 

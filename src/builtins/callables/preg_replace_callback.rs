@@ -17,10 +17,7 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "preg_replace_callback",
-    area: Callables,
-    params: [pattern: Str, callback: Mixed, subject: Str, limit: Int = crate::builtins::spec::DefaultSpec::Int(-1), ref count: Mixed = crate::builtins::spec::DefaultSpec::Null, flags: Int = crate::builtins::spec::DefaultSpec::Int(0)],
-    returns: Str,
+    contract: "preg_replace_callback",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
@@ -29,8 +26,6 @@ builtin! {
         ),
         crate::builtins::semantics::BuiltinArgumentLowering::PregReplaceCallback,
     ),
-    summary: "Performs a regular expression search and replace using a callback.",
-    php_manual: "function.preg-replace-callback",
 }
 
 /// Delegates to `check_preg_replace_callback_first_class_call`, which controls closure

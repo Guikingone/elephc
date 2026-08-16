@@ -11,123 +11,6 @@ use crate::support::*;
 
 // --- Anonymous functions (closures) and arrow functions ---
 
-/// Verifies a declared `Closure` return accepts the descriptor-equivalent type produced by
-/// `instanceof Closure` narrowing while the other branch converts a generic callable.
-#[test]
-fn test_closure_return_accepts_instanceof_narrowed_callable() {
-    let out = compile_and_run(
-        r#"<?php
-function normalize_closure_return(callable $code): Closure {
-    if (!$code instanceof Closure) {
-        return $code(...);
-    }
-    return $code;
-}
-
-function closure_return_target(int $value): int {
-    return $value + 1;
-}
-
-$literal = normalize_closure_return(fn (int $value): int => $value + 2);
-$firstClass = normalize_closure_return(closure_return_target(...));
-echo $literal(3) . ":" . $firstClass(4);
-"#,
-    );
-    assert_eq!(out, "5:5");
-}
-
-/// Verifies a nullable object rebound to a callable converges to `Closure` after a negated
-/// `instanceof Closure` branch normalizes the possible non-closure object with first-class syntax.
-#[test]
-fn test_negated_closure_guard_converges_nullable_object_to_callable() {
-    let out = compile_and_run(
-        r#"<?php
-class CallableApplication {
-    public function __invoke(): int {
-        return 7;
-    }
-}
-
-function normalize_application(?object $application): Closure {
-    $application ??= static fn (): int => 5;
-
-    if (!$application instanceof Closure) {
-        if (!is_callable($application)) {
-            throw new LogicException("not callable");
-        }
-
-        $application = $application(...);
-    }
-
-    return $application;
-}
-
-$default = normalize_application(null);
-$object = normalize_application(new CallableApplication());
-echo $default() . ":" . $object();
-"#,
-    );
-    assert_eq!(out, "5:7");
-}
-
-/// Verifies a method's early object return is checked with its branch-local type even when the
-/// same parameter is normalized to a callable later in the body.
-#[test]
-fn test_method_early_object_return_keeps_flow_type_before_callable_reassignment() {
-    let out = compile_and_run(
-        r#"<?php
-interface RunnerContract {
-    public function run(): int;
-}
-
-class ConcreteRunner implements RunnerContract {
-    public function run(): int {
-        return 9;
-    }
-}
-
-class InvokableApplication {
-    public function __invoke(): int {
-        return 7;
-    }
-}
-
-class ClosureRunnerAdapter implements RunnerContract {
-    public function __construct(Closure $closure) {}
-
-    public function run(): int {
-        return 1;
-    }
-}
-
-class RunnerFactory {
-    public function getRunner(?object $application): RunnerContract {
-        $application ??= static fn (): int => 5;
-
-        if ($application instanceof RunnerContract) {
-            return $application;
-        }
-
-        if (!$application instanceof Closure) {
-            if (!is_callable($application)) {
-                throw new LogicException("not callable");
-            }
-            $application = $application(...);
-        }
-
-        return new ClosureRunnerAdapter($application);
-    }
-}
-
-$factory = new RunnerFactory();
-echo $factory->getRunner(new ConcreteRunner())->run();
-echo ":";
-echo $factory->getRunner(new InvokableApplication())->run();
-"#,
-    );
-    assert_eq!(out, "9:1");
-}
-
 /// Verifies basic anonymous function creation, assignment to variable, and invocation with one argument.
 #[test]
 fn test_closure_basic() {
@@ -174,34 +57,6 @@ echo $calc(5);
 "#,
     );
     assert_eq!(out, "26");
-}
-
-/// Verifies a variable ASSIGNED inside an arrow-function body is treated as a body-local, not a
-/// mis-detected outer capture: `fn($x) => ($y = $x + 1) + $y` assigns `$y` then reads it, and must
-/// compile (not report "Undefined variable in use(): $y"). `f(2)`: `$y = 3`, `3 + 3` = 6.
-#[test]
-fn test_arrow_function_body_local_assignment_is_not_captured() {
-    let out = compile_and_run(
-        r#"<?php
-$f = fn($x) => ($y = $x + 1) + $y;
-echo $f(2);
-"#,
-    );
-    assert_eq!(out, "6");
-}
-
-/// Verifies the assignment-target seeding does not swallow a genuine outer capture: `$outer` is
-/// only ever read inside the arrow body, so it is still captured by value at definition time.
-#[test]
-fn test_arrow_function_genuine_capture_still_captured_with_body_assignment() {
-    let out = compile_and_run(
-        r#"<?php
-$outer = 10;
-$g = fn($x) => ($y = $x + 1) + $y + $outer;
-echo $g(2);
-"#,
-    );
-    assert_eq!(out, "16");
 }
 
 /// Regression for #300: arrow functions capture outer locals by value at definition time.
@@ -1382,33 +1237,6 @@ echo $bound();
     assert_eq!(out, "50");
 }
 
-/// Verifies a non-static closure declared inside a static method may reference `$this` and receive
-/// its runtime receiver later through `Closure::bind`, while the static method itself has no
-/// implicit receiver.
-#[test]
-fn test_closure_from_static_method_can_bind_this_later() {
-    let out = compile_and_run(
-        r#"<?php
-class StaticClosureFactory {
-    public static function make(): Closure {
-        return function (): string { return $this->value; };
-    }
-}
-class StaticClosureTarget {
-    public string $value = "bound";
-}
-
-$closure = Closure::bind(
-    StaticClosureFactory::make(),
-    new StaticClosureTarget(),
-    StaticClosureTarget::class,
-);
-echo $closure();
-"#,
-    );
-    assert_eq!(out, "bound");
-}
-
 /// Verifies the optional `$scope` argument is accepted by both bind spellings.
 #[test]
 fn test_closure_bind_accepts_scope_argument() {
@@ -1475,71 +1303,6 @@ echo $bound();
     assert_eq!(out, "42");
 }
 
-/// Verifies `$this` is rebound from `$newThis` (argument two) and NOT from `$scope` (argument
-/// three), which governs visibility only. `A` and the unrelated scope class `D` declare
-/// different properties, and the enclosing class `K` declares neither, so reading the bound
-/// object's property proves all three candidate classes apart.
-#[test]
-fn test_closure_bind_this_comes_from_receiver_not_scope() {
-    let out = compile_and_run(
-        r#"<?php
-class A { public string $tag = 'A'; }
-class D { public string $other = 'D'; }
-class K {
-    public function run(): void {
-        $a = new A();
-        echo \Closure::bind(fn () => $this->tag, $a, D::class)();
-    }
-}
-(new K())->run();
-"#,
-    );
-    assert_eq!(out, "A");
-}
-
-/// Verifies the two-argument `Closure::bind($closure, $newThis)` form rebinds `$this` from
-/// inside a method. PHP keeps the closure's existing scope when `$scope` is omitted, so a
-/// public property on the new receiver stays readable.
-#[test]
-fn test_closure_bind_two_argument_form_rebinds_this_in_method() {
-    let out = compile_and_run(
-        r#"<?php
-class Loader { public string $tag = 'LOADER'; }
-class Kernel {
-    public function run(): void {
-        $x = new Loader();
-        echo \Closure::bind(fn () => $this->tag, $x)();
-    }
-}
-(new Kernel())->run();
-"#,
-    );
-    assert_eq!(out, "LOADER");
-}
-
-/// Verifies an early-exit `instanceof` guard proves the rebind target's class for the code that
-/// follows it. Both classes declare `$tag`, so an unnarrowed receiver does not fail loudly — it
-/// silently reads the enclosing `Kernel`'s value. The differing values make that legible.
-#[test]
-fn test_closure_bind_receiver_narrowed_by_early_exit_guard() {
-    let out = compile_and_run(
-        r#"<?php
-class Loader { public string $tag = 'LOADER'; }
-class Kernel {
-    public string $tag = 'KERNEL';
-    public function run(object $x): void {
-        if (!$x instanceof Loader) {
-            throw new \LogicException('nope');
-        }
-        echo \Closure::bind(fn () => $this->tag, $x, $x)();
-    }
-}
-(new Kernel())->run(new Loader());
-"#,
-    );
-    assert_eq!(out, "LOADER");
-}
-
 /// Verifies the canonical scope-stealing pattern: a standalone closure bound to
 /// an object reads a private property (visibility is permissive once bound).
 #[test]
@@ -1575,712 +1338,6 @@ echo $f->call(new Greeter(), "?");
 "#,
     );
     assert_eq!(out, "Hi Ada!|Hi Ada?");
-}
-
-// --- __rt_closure_bind generalization: captureless, N captures, static-closure divergence ---
-
-/// Regression test for the `__rt_closure_bind` generalization
-/// (`crate::codegen::runtime::callables::closure_bind`): binding a CAPTURELESS closure (no
-/// `use(...)`, no implicit `$this`) must succeed and return a working copy, not fatal. The
-/// pre-generalization runtime hard-required exactly one `$this` capture.
-#[test]
-fn test_closure_bind_captureless_closure() {
-    let out = compile_and_run(
-        r#"<?php
-$f = function () { return 42; };
-$bound = \Closure::bind($f, null);
-echo $bound();
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Regression test: binding a captureless `static` closure with a `null` new `$this` must
-/// succeed (php-verified: PHP only rejects a NON-null `$this` on a static closure).
-#[test]
-fn test_closure_bind_captureless_static_closure_null_this_succeeds() {
-    let out = compile_and_run(
-        r#"<?php
-$f = \Closure::bind(static function () { return 7; }, null);
-echo $f();
-"#,
-    );
-    assert_eq!(out, "7");
-}
-
-/// Regression test: binding a closure with several by-value captures (int, string) must copy
-/// every capture into the new descriptor, not just a single `$this` slot. The pre-generalization
-/// runtime fataled on any capture shape other than exactly one `$this`.
-#[test]
-fn test_closure_bind_multiple_by_value_captures() {
-    let out = compile_and_run(
-        r#"<?php
-function make($a, $b, $c) {
-    return function () use ($a, $b, $c) { return "$a-$b-$c"; };
-}
-$f = make(1, "hi", "z");
-$bound = \Closure::bind($f, null);
-echo $f(), "|", $bound();
-"#,
-    );
-    assert_eq!(out, "1-hi-z|1-hi-z");
-}
-
-/// Regression test: rebinding `$this` on a closure that ALSO has other by-value captures must
-/// only touch the `$this` slot, leaving the other captures intact on the bound copy.
-#[test]
-fn test_closure_bind_this_capture_alongside_other_captures() {
-    let out = compile_and_run(
-        r#"<?php
-class C {
-    public int $v;
-    public function __construct(int $v) { $this->v = $v; }
-    public function adder($n) {
-        return function () use ($n) { return $this->v + $n; };
-    }
-}
-$c1 = new C(1);
-$c2 = new C(100);
-$f = $c1->adder(5);
-$bound = \Closure::bind($f, $c2);
-echo $f(), " ", $bound();
-"#,
-    );
-    assert_eq!(out, "6 105");
-}
-
-/// Regression test (JURY ADDENDUM #4): a by-value capture must NOT alias mutably between the
-/// source and bound closures — binding a closure creates an independent copy whose captured
-/// (by-value) locals are its OWN, not a pointer shared with the source. Proven with TWO
-/// independently-created closures (each holding a different captured string): binding one
-/// must not disturb the other's capture. Each closure is invoked exactly once — a pre-existing,
-/// unrelated gap where calling the SAME closure a second time to read a captured string returns
-/// an empty string instead of the capture (reproduced without any `Closure::bind` involvement:
-/// `$f = make("orig"); echo $f(); echo $f();` — the second call already returns "" on `main`)
-/// means a second-call assertion on either closure would fail for a reason unrelated to bind.
-#[test]
-fn test_closure_bind_by_value_capture_independent_across_bound_copies() {
-    let out = compile_and_run(
-        r#"<?php
-function make($label) {
-    return function () use ($label) { return $label; };
-}
-$f = make("orig");
-$other = make("other");
-$bound = \Closure::bind($f, null);
-echo $bound();
-echo $other();
-"#,
-    );
-    assert_eq!(out, "origother");
-}
-
-/// Regression test (JURY ADDENDUM #4): a by-reference capture (`use (&$x)`) SHARES the same
-/// storage between the source and bound closures — mutating through either is visible through
-/// both (php-verified: interleaved calls each advance the SAME shared counter).
-#[test]
-fn test_closure_bind_by_ref_capture_shares_storage() {
-    let out = compile_and_run(
-        r#"<?php
-function counter() {
-    $n = 0;
-    $inc = function () use (&$n) { return ++$n; };
-    $bound = \Closure::bind($inc, null);
-    return $inc() . " " . $bound() . " " . $inc() . " " . $bound();
-}
-echo counter();
-"#,
-    );
-    assert_eq!(out, "1 2 3 4");
-}
-
-/// Regression test (JURY ADDENDUM #5): binding a NON-null `$this` onto a `static` closure must
-/// not fatal or crash the process; PHP itself only warns and returns `?Closure`'s `null` arm.
-/// elephc's `__rt_closure_bind` returns a null descriptor for this case (documented divergence:
-/// the result stays statically typed `Callable`, so `=== null` cannot observe it at the language
-/// level yet — see the runtime-return-value assertion below, which observes the divergence the
-/// way that IS currently reachable: the process does not crash and execution continues normally
-/// past the rejected bind).
-#[test]
-fn test_closure_bind_static_closure_non_null_this_does_not_crash() {
-    let out = compile_and_run(
-        r#"<?php
-class C { public int $v = 5; }
-$sc = \Closure::bind(static function () { return 1; }, new C());
-echo "reached";
-"#,
-    );
-    assert_eq!(out, "reached");
-}
-
-/// Regression test: omitting `$scope` (or passing `null`) keeps the closure's original scope —
-/// a private property the closure's OWN declaring class can already see remains readable after
-/// a `$this`-only rebind with no scope argument.
-#[test]
-fn test_closure_bind_omitted_scope_keeps_original_scope() {
-    let out = compile_and_run(
-        r#"<?php
-class Account {
-    private int $balance;
-    public function __construct(int $balance) { $this->balance = $balance; }
-    public function peeker() {
-        return function () { return $this->balance; };
-    }
-}
-$a1 = new Account(10);
-$a2 = new Account(20);
-$f = $a1->peeker();
-$bound = \Closure::bind($f, $a2);
-echo $bound();
-"#,
-    );
-    assert_eq!(out, "20");
-}
-
-// --- Closure::bind scope rebind (checker relax, JURY-gated) ---
-
-/// Regression test for the checker scope-rebind relaxation
-/// (`crate::types::checker::inference::expr::static_closure::check_closure_bind_call_args`):
-/// `Closure::bind($closure, null, Scope::class)` with a literal `$scope` lets a STATIC closure
-/// literal read/write a PROTECTED property through a PARAMETER typed as (or a subclass of) the
-/// rebound scope — the `ContractsTrait::doGet()` idiom this campaign targets. Before this
-/// relaxation, `$item->secret` here was rejected: `$item`'s protected property is inaccessible
-/// from the closure's lexically enclosing (top-level) scope.
-#[test]
-fn test_closure_bind_scope_rebind_allows_protected_property_access_on_param() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    protected int $secret;
-    public function __construct(int $secret) { $this->secret = $secret; }
-}
-$reader = \Closure::bind(
-    static function (Box $item) {
-        return $item->secret;
-    },
-    null,
-    Box::class
-);
-echo $reader(new Box(42));
-"#,
-    );
-    assert_eq!(out, "42");
-}
-
-/// Regression test: the scope rebind also authorizes WRITES to a protected property through an
-/// eligible parameter, not just reads.
-#[test]
-fn test_closure_bind_scope_rebind_allows_protected_property_write_on_param() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    protected int $secret = 0;
-}
-$writer = \Closure::bind(
-    static function (Box $item, int $value) {
-        $item->secret = $value;
-    },
-    null,
-    Box::class
-);
-$box = new Box();
-$writer($box, 99);
-$reader = \Closure::bind(static function (Box $item) { return $item->secret; }, null, Box::class);
-echo $reader($box);
-"#,
-    );
-    assert_eq!(out, "99");
-}
-
-/// Regression test for Symfony Cache's bound factory closures: a local constructed inside a
-/// closure rebound to the constructed class may write that class's protected properties.
-#[test]
-fn test_closure_bind_scope_rebind_allows_protected_property_write_on_constructed_local() {
-    let out = compile_and_run(
-        r#"<?php
-class BoundCacheItem {
-    protected string $key = "";
-    public function getKey(): string { return $this->key; }
-}
-$factory = \Closure::bind(
-    static function (string $key): BoundCacheItem {
-        $item = new BoundCacheItem();
-        $item->key = $key;
-        return $item;
-    },
-    null,
-    BoundCacheItem::class
-);
-echo $factory("cache-key")->getKey();
-"#,
-    );
-    assert_eq!(out, "cache-key");
-}
-
-/// Regression test for Symfony Cache's proxy factory: an untyped closure parameter narrowed
-/// with `instanceof` to the rebound scope may expose a protected property to a local item.
-#[test]
-fn test_closure_bind_scope_rebind_allows_protected_property_read_on_narrowed_param() {
-    let out = compile_and_run(
-        r#"<?php
-class BoundProxyItem {
-    protected string $secret;
-    public function __construct(string $secret) { $this->secret = $secret; }
-    public function getSecret(): string { return $this->secret; }
-}
-$copy = \Closure::bind(
-    static function ($source): BoundProxyItem {
-        $item = new BoundProxyItem("");
-        if ($source instanceof BoundProxyItem) {
-            $item->secret = $source->secret;
-        }
-        return $item;
-    },
-    null,
-    BoundProxyItem::class
-);
-echo $copy(new BoundProxyItem("metadata"))->getSecret();
-"#,
-    );
-    assert_eq!(out, "metadata");
-}
-
-/// Regression test: an OMITTED `$scope` argument keeps the closure's ORIGINAL (lexical) scope —
-/// no inference from `$newThis`, matching J2's established rule. A top-level closure without a
-/// scope rebind still cannot read a protected property through a typed parameter.
-#[test]
-fn test_closure_bind_omitted_scope_does_not_relax_protected_access() {
-    let out = compile_expect_check_error(
-        r#"<?php
-class Box {
-    protected int $secret = 5;
-}
-$reader = \Closure::bind(static function (Box $item) {
-    return $item->secret;
-}, null);
-echo $reader(new Box());
-"#,
-    );
-    assert!(
-        out.contains("Cannot access protected property"),
-        "expected a protected-access error without a scope rebind, got: {}",
-        out
-    );
-}
-
-/// Regression test (JURY ADDENDUM #1): a closure body that references `$this` ANYWHERE stays
-/// loud even with a literal `$scope` argument — the lexical gate rejects the rebind because
-/// `self::`/`static::`/`$this` resolve LEXICALLY at codegen time, not against the rebound scope.
-/// This closure is a NON-static closure (so it captures `$this` automatically) whose body reads
-/// `$this->outer` — the gate must reject the relaxation and the checker must still reject the
-/// otherwise-inaccessible property read.
-#[test]
-fn test_closure_bind_this_usage_keeps_gate_loud() {
-    let out = compile_expect_check_error(
-        r#"<?php
-class Outer {
-    public int $outer = 1;
-    public function make() {
-        return function (Box $item) {
-            return $this->outer + $item->secret;
-        };
-    }
-}
-class Box {
-    protected int $secret = 5;
-}
-$outer = new Outer();
-$reader = \Closure::bind($outer->make(), $outer, Box::class);
-echo $reader(new Box());
-"#,
-    );
-    assert!(
-        out.contains("Cannot access protected property"),
-        "expected the gate to keep the protected-access error loud when the body uses $this, got: {}",
-        out
-    );
-}
-
-/// Regression test (JURY ADDENDUM #2): the relaxation applies ONLY to the closure's OWN declared
-/// PARAMETERS typed as the rebound scope — a captured (`use`) variable of the SAME class does NOT
-/// become eligible just because the scope was rebound to its class.
-#[test]
-fn test_closure_bind_scope_rebind_does_not_extend_to_captured_variables() {
-    let out = compile_expect_check_error(
-        r#"<?php
-class Box {
-    protected int $secret = 5;
-}
-$captured = new Box();
-$reader = \Closure::bind(static function () use ($captured) {
-    return $captured->secret;
-}, null, Box::class);
-echo $reader();
-"#,
-    );
-    assert!(
-        out.contains("Cannot access protected property"),
-        "expected a captured variable to stay outside the relaxed eligibility set, got: {}",
-        out
-    );
-}
-
-/// Regression test (Symfony `MicroKernelTrait::getBuildDir`): the single-`return $this->prop`
-/// shape `Closure::bind(fn () => $this->warmupDir, $this, Kernel::class)()` reads a PRIVATE
-/// property authorized by the rebound scope. `crate::ir_lower` lowers exactly this shape by
-/// boxing `$newThis` as the closure's `$this`; the checker authorizes the `$this` receiver
-/// against the literal scope only for this form. php-verified: `/warm` then `/build`.
-#[test]
-fn test_closure_bind_this_single_property_read_private() {
-    let out = compile_and_run(
-        r#"<?php
-class Kernel {
-    private ?string $warmupDir = null;
-    public function __construct(?string $w) { $this->warmupDir = $w; }
-    public function getBuildDir(): string { return "/build"; }
-}
-class AppKernel extends Kernel {
-    public function probe(): string {
-        return \Closure::bind(fn () => $this->warmupDir, $this, Kernel::class)() ?? $this->getBuildDir();
-    }
-}
-echo (new AppKernel("/warm"))->probe(), (new AppKernel(null))->probe();
-"#,
-    );
-    assert_eq!(out, "/warm/build");
-}
-
-/// A `$this`-using `Closure::bind` body that is not the single-`return $this->prop` shape — here
-/// an ARRAY of private property reads, Symfony's `TraceableCommand` idiom — rebinds `$this` to
-/// `$newThis` and reads the receiver's own values.
-///
-/// `$this` is `$newThis` (the `Command` argument), not the lexically enclosing `TraceableCommand`,
-/// so the private `$code` read yields the argument's `"x"` and not the enclosing object's `null`.
-/// The explicit `Command::class` scope authorizes the private access even though the enclosing
-/// class is a subclass. Matches `php -n`.
-#[test]
-fn test_closure_bind_this_array_body_reads_bound_receiver() {
-    let out = compile_and_run(
-        r#"<?php
-class Command {
-    private ?string $code = null;
-    public function __construct(?string $c) { $this->code = $c; }
-}
-class TraceableCommand extends Command {
-    public function probe(Command $command): void {
-        [$code] = \Closure::bind(fn () => [$this->code], $command, Command::class)();
-        echo $code ?? "null";
-    }
-}
-(new TraceableCommand(null))->probe(new Command("x"));
-"#,
-    );
-    assert_eq!(out, "x");
-}
-
-/// The rebound `$this` of a non-single-property bind body reaches a receiver whose class the
-/// enclosing scope is unrelated to: `Reader` declares neither `$a` nor `$b`, so resolving them
-/// against the enclosing class would not compile at all. Guards the `$newThis`-class typing
-/// (`set_bound_closure_this_class` on the generic bind path) that makes them resolve.
-#[test]
-fn test_closure_bind_this_array_body_from_unrelated_class() {
-    let out = compile_and_run(
-        r#"<?php
-class Holder { private $a = 'A1'; private $b = 'B2'; }
-class Reader {
-    public function read(Holder $h): string {
-        [$x, $y] = \Closure::bind(fn () => [$this->a, $this->b], $h, Holder::class)();
-        return $x . $y;
-    }
-}
-echo (new Reader())->read(new Holder());
-"#,
-    );
-    assert_eq!(out, "A1B2");
-}
-
-/// Regression test (keep-loud boundary): the `$this` single-property bind authorizes the receiver
-/// ONLY against the literal `$scope`. A wrong scope (unrelated to the property's declaring class)
-/// must stay loud, so the relaxation never blanket-authorizes a private access.
-#[test]
-fn test_closure_bind_this_single_property_wrong_scope_stays_loud() {
-    let out = compile_expect_check_error(
-        r#"<?php
-class A { private int $secret = 7; public function __construct(int $x) { $this->secret = $x; } }
-class Unrelated {}
-class Probe extends A {
-    public function go(): int {
-        return \Closure::bind(fn () => $this->secret, $this, Unrelated::class)();
-    }
-}
-echo (new Probe(9))->go();
-"#,
-    );
-    assert!(
-        out.contains("Cannot access private property"),
-        "expected a wrong bind scope to keep the private access loud, got: {}",
-        out
-    );
-}
-
-/// Regression test (F3 — Symfony `ViewEvent`/`TraceableCommand` bound-closure shape): the
-/// immediate-invoke `Closure::bind(fn () => $this->prop, $newThis, Scope::class)()` shape where
-/// `$newThis` is an instance of a class OTHER than the closure's lexically-enclosing method's
-/// class. The rebound `$this` must resolve `$this->prop`'s offset against `$newThis`'s layout —
-/// here a subclass that inherits a PRIVATE property declared on the rebind scope — not against the
-/// enclosing class, which does not declare the property at all. `crate::ir_lower` types the
-/// closure body's `$this` as the bound receiver's class (see
-/// `crate::ir_lower::expr::build_bound_closure_binding`) and the checker redirects the property
-/// resolution to the rebind scope (see
-/// `crate::types::checker::inference::objects::access::Checker::infer_property_on_class_type`),
-/// keeping the two in lock-step. Mirrors `ViewEvent:41` (private prop inherited by the bound
-/// receiver). php-verified oracle: 13.
-#[test]
-fn test_closure_bind_scope_rebind_reads_inherited_private_on_foreign_receiver() {
-    let out = compile_and_run(
-        r#"<?php
-class Base { public function __construct(private int $hidden = 0) {} }
-class Derived extends Base {}
-class Outer {
-    public function peek(Derived $d): int {
-        return \Closure::bind(fn () => $this->hidden, $d, Base::class)();
-    }
-}
-echo (new Outer())->peek(new Derived(13));
-"#,
-    );
-    assert_eq!(out, "13");
-}
-
-/// Symfony's `RequestStack::resetRequestFormats()` idiom: `self::` inside a bound closure resolves
-/// to the BIND SCOPE, not the lexically enclosing class. Measured against `php -n`: the write
-/// lands on `Scoped::$formats` while the enclosing class's same-named static is untouched — so
-/// resolving `self::` lexically both reported `Lexical::$formats` undefined and would have written
-/// the wrong class. Covers the checker gate (`rebinds_relative_static`) and the matching ir_lower
-/// swap of the closure body's `current_class`.
-#[test]
-fn test_closure_bind_self_static_property_resolves_to_bind_scope() {
-    let out = compile_and_run(
-        r#"<?php
-class Scoped { public static $formats = 'INIT'; }
-class Lexical {
-    public static $formats = 'LEXICAL-UNTOUCHED';
-    public function reset(): void {
-        static $r;
-        $r ??= \Closure::bind(static fn () => self::$formats = 'REBOUND', null, Scoped::class);
-        $r();
-    }
-}
-(new Lexical())->reset();
-echo Scoped::$formats, '|', Lexical::$formats;
-"#,
-    );
-    assert_eq!(out, "REBOUND|LEXICAL-UNTOUCHED");
-}
-
-/// A `self::` STATIC METHOD CALL in a bound closure body dispatches against the bind scope too.
-/// Without the matching emitter change the checker accepted this while codegen rejected it with
-/// `lexical static method receiver outside class method`, so the two had to move together.
-#[test]
-fn test_closure_bind_self_static_method_resolves_to_bind_scope() {
-    let out = compile_and_run(
-        r#"<?php
-class Maker { public static function make(): string { return 'FROM-MAKER'; } }
-class Caller {
-    public static function make(): string { return 'FROM-CALLER'; }
-    public function go(): string {
-        return \Closure::bind(static fn () => self::make(), null, Maker::class)();
-    }
-}
-echo (new Caller())->go();
-"#,
-    );
-    assert_eq!(out, "FROM-MAKER");
-}
-
-/// `parent::` in a bound closure resolves to the parent of the SCOPE, not the parent of the
-/// lexically enclosing class — `php -n` yields `Base`'s value here even though `Host` has its own
-/// `$tag` and an unrelated ancestry.
-#[test]
-fn test_closure_bind_parent_resolves_to_bind_scope_parent() {
-    let out = compile_and_run(
-        r#"<?php
-class Base { public static $tag = 'BASE-TAG'; }
-class Child extends Base { public static $tag = 'CHILD-TAG'; }
-class Host {
-    public static $tag = 'HOST-TAG';
-    public function go(): string {
-        return \Closure::bind(static fn () => parent::$tag, null, Child::class)();
-    }
-}
-echo (new Host())->go();
-"#,
-    );
-    assert_eq!(out, "BASE-TAG");
-}
-
-// --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
-
-/// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so
-/// indexing it (`$x[0]`) type-checks through the gradual Mixed-index path instead of being
-/// rejected as a non-array `Int`. The indexed values flow through a string concat at runtime.
-#[test]
-fn test_untyped_arrow_param_index_is_mixed() {
-    let out = compile_and_run(
-        r#"<?php
-$idx = fn($x) => $x[0] . $x[1];
-echo $idx(['a', 'b', 'c']);
-"#,
-    );
-    assert_eq!(out, "ab");
-}
-
-/// The Symfony YAML Unescaper pattern: an untyped arrow-fn callback indexing `$m[0]` is accepted
-/// by `preg_replace_callback` (its callback parameter is `Mixed`), and the match group flows into
-/// a string builtin. Previously the untyped parameter defaulted to `Int`, so `$m[0]` was rejected
-/// and the callback had no statically known signature.
-#[test]
-fn test_untyped_callback_param_index_preg_replace_callback() {
-    let out = compile_and_run(
-        r#"<?php
-$cb = fn($m) => strtoupper($m[0]);
-echo preg_replace_callback('/[a-z]/', $cb, "abc");
-"#,
-    );
-    assert_eq!(out, "ABC");
-}
-
-/// Verifies `preg_replace_callback()` accepts the optional fourth `$limit` argument
-/// (PHP 3–6 arity). The subject has a single match so the observable output is
-/// identical whether or not the runtime honors `$limit` (limit semantics deferred).
-/// Cross-check: `php -r 'echo preg_replace_callback('/\d/', fn($m)=>$m[0]*2, "a1b", 1);'`
-/// yields "a2b".
-#[test]
-fn test_preg_replace_callback_four_args_with_limit() {
-    let out = compile_and_run(
-        r#"<?php
-echo preg_replace_callback('/\d/', fn($m) => $m[0] * 2, "a1b", 1);
-"#,
-    );
-    assert_eq!(out, "a2b");
-}
-
-/// An untyped-parameter arithmetic closure passed to `array_map` keeps working: `array_map`
-/// exposes the element type so the parameter is typed precisely (the contextual-hint path is
-/// unaffected by the no-hint Mixed fallback), and the multiplication lowers correctly.
-#[test]
-fn test_untyped_arrow_param_arithmetic_array_map_unaffected() {
-    let out = compile_and_run(
-        r#"<?php
-$r = array_map(fn($n) => $n * 2, [1, 2, 3]);
-echo $r[0], $r[1], $r[2];
-"#,
-    );
-    assert_eq!(out, "246");
-}
-
-// -- callable-sig registry cross-contamination fix (cycle-4 I3 / PART B2) --
-//
-// Regression coverage for the confirmed collision: `Checker::callable_sigs`/
-// `closure_return_types`/`callable_param_names` (keyed only by LOCAL VARIABLE NAME, e.g.
-// `$callback`) previously leaked across every function/method body check — methods had NO
-// scoping at all (unlike free functions, which only scoped their OWN declared callable params),
-// so a closure assigned to a same-named local in one method/function silently contaminated the
-// next one checked. See `Checker::enter_callable_var_scope`/`exit_callable_var_scope` in
-// `src/types/checker/mod.rs`.
-
-/// Verifies the exact reproduced collision shape: two UNRELATED classes each declare a
-/// `run(callable $callback)` method (same method name, same parameter name), invoked with
-/// DIFFERENTLY-shaped closures. Before the fix, checking `Beta::run` (or a later, unrelated
-/// function/method reusing the name `$callback`) could silently validate its closure invocation
-/// against `Alpha::run`'s closure signature instead of its own, either rejecting a valid call or
-/// accepting/miscompiling an invalid one.
-#[test]
-fn test_callable_param_sig_no_cross_class_same_method_name_collision() {
-    let out = compile_and_run(
-        r#"<?php
-class Alpha {
-    public function run(callable $callback): string {
-        return $callback("hello");
-    }
-}
-class Beta {
-    public function run(callable $callback): int {
-        return $callback(5);
-    }
-}
-$a = new Alpha();
-echo $a->run(function (string $s): string { return strtoupper($s); });
-echo "|";
-$b = new Beta();
-echo $b->run(function (int $n): int { return $n * 2; });
-"#,
-    );
-    assert_eq!(out, "HELLO|10");
-}
-
-/// Same collision shape as `test_callable_param_sig_no_cross_class_same_method_name_collision`,
-/// but through a TRAIT method flattened into two unrelated classes (`class.name` — the
-/// declaring/flattened-owner class — is the cross-call cache key qualifier for a trait-flattened
-/// method, per the JURY ADDENDUM). Each class's flattened copy of `run` must specialize its OWN
-/// `$callback` parameter independently.
-#[test]
-fn test_callable_param_sig_no_cross_trait_flattened_method_collision() {
-    let out = compile_and_run(
-        r#"<?php
-trait RunnerTrait {
-    public function run(callable $callback): int {
-        return $callback(3);
-    }
-}
-class First {
-    use RunnerTrait;
-}
-class Second {
-    use RunnerTrait;
-}
-$f = new First();
-echo $f->run(function (int $n): int { return $n + 100; });
-echo "|";
-$s = new Second();
-echo $s->run(function (int $n): int { return $n * 10; });
-"#,
-    );
-    assert_eq!(out, "103|30");
-}
-
-/// Verifies a closure assigned to an ORDINARY (non-parameter) local variable inside one method
-/// does not leak into a different method that happens to declare a local of the same name —
-/// the actual mechanism behind the confirmed `--web` collision (a `Symfony\Component\Yaml\
-/// Unescaper`-shaped closure-in-a-local leaking into an unrelated `PhpFileLoader`-shaped
-/// `callable $callback` parameter). `Gamma::pick` assigns `$callback` to a `string`-returning
-/// closure with an untyped param; `Delta::pick` independently assigns `$callback` to an
-/// `int`-returning closure. Checking them in sequence must not let either specialization bleed
-/// into the other.
-#[test]
-fn test_callable_local_variable_sig_no_cross_method_collision() {
-    let out = compile_and_run(
-        r#"<?php
-class Gamma {
-    public function pick(): string {
-        $callback = function ($match) { return strtoupper($match); };
-        return $callback("hi");
-    }
-}
-class Delta {
-    public function pick(): int {
-        $callback = function ($match) { return $match + 1; };
-        return $callback(41);
-    }
-}
-$g = new Gamma();
-echo $g->pick();
-echo "|";
-$d = new Delta();
-echo $d->pick();
-"#,
-    );
-    assert_eq!(out, "HI|42");
 }
 
 /// Verifies that `isset($this)` inside a `static` closure evaluates to `false`
@@ -2376,132 +1433,104 @@ echo $fib(10);
     assert_eq!(out, "55");
 }
 
-/// Verifies an inferred closure array return remains available through a local callable invocation.
-#[test]
-fn test_local_closure_infers_array_return_after_loop_mutation() {
-    let out = compile_and_run(
-        r#"<?php
-function segmentCount(string $path): int {
-    $splitPath = static function ($path) {
-        $result = [];
-
-        foreach (explode("/", trim($path, "/")) as $segment) {
-            if (".." === $segment) {
-                array_pop($result);
-            } elseif ("." !== $segment && "" !== $segment) {
-                $result[] = $segment;
-            }
-        }
-
-        return $result;
-    };
-
-    $segments = $splitPath($path);
-    return count($segments);
-}
-
-echo segmentCount("/a/b/../c");
-"#,
-    );
-    assert_eq!(out, "2");
-}
-
-/// Verifies the dynamic-method first-class-callable forms `$obj->$name(...)` (instance),
-/// `Class::$name(...)` (named-class static) and `$cls::$name(...)` (runtime class-name static) —
-/// where the method name is a runtime value — each build a genuine `Closure` that dispatches by the
-/// runtime-resolved method name. Exercises two static-method closures in one scope that share the
-/// method-name capture with distinct receivers (a class-constant one and a runtime-string one): the
-/// shapes that regress when the desugar collapses its synthesized nodes onto one span key.
-#[test]
-fn test_dynamic_method_first_class_callable() {
-    let out = compile_and_run(
-        r#"<?php
-class Greeter {
-    public function greet(string $x): string { return "hi $x"; }
-    public static function shout(string $x): string { return "HI $x"; }
-}
-class Other {
-    public static function shout(string $x): string { return "YO $x"; }
-}
-
-$obj = new Greeter();
-$m = "greet";
-$instance = $obj->$m(...);
-
-$sm = "shout";
-$viaClassConst = Greeter::$sm(...);
-$cls = "Other";
-$viaVar = $cls::$sm(...);
-
-echo ($instance instanceof Closure ? "C" : "?"), ":",
-     $instance("bob"), ":",
-     $viaClassConst("a"), ":",
-     $viaVar("b");
-"#,
-    );
-    assert_eq!(out, "C:hi bob:HI a:YO b");
-}
-
-/// `Closure::bind()` on a closure that takes PARAMETERS and reads a private property of the
-/// REBOUND `$this`, with an explicit `$scope`.
+/// A PHP reference has no type: whatever a closure stores through a `use (&$x)` capture is what
+/// the caller reads back, whether or not it matches what `$x` held when the closure was built.
 ///
-/// The checker used to require an empty parameter list before it would type `$this` from
-/// `$newThis`, which left this whole shape with no bound-scope context at all — a body using
-/// `$this` can never fall through to the parameter-based relaxation, which excludes `$this`
-/// bodies by construction. Parameters are ordinary locals and say nothing about where `$this`
-/// comes from; `crate::ir_lower` already rebound the receiver whatever shape the body had.
+/// The reference cell used to carry the captured variable's type, so a write of any other type
+/// was reinterpreted through it — silently, with the wrong value rather than an error:
 ///
-/// Symfony's `ReverseContainer::__construct` is exactly this: it binds
-/// `fn (object $service): ?string => … $this->services …` to the container it was handed.
+/// | program | php | before |
+/// |---|---|---|
+/// | `$b = 5;` then the closure writes `null` | `NULL` | `9223372036854775806` (the raw null sentinel read as an int) |
+/// | `$c = null;` then the closure writes `7` | `7` | `NULL` — the write never landed |
+/// | `$d = "s";` then the closure writes `null` | `NULL` | garbage bytes |
+///
+/// Only the same-type case worked, which is why this went unnoticed: it is the shape every
+/// existing by-ref test used. The int-to-int row below is kept as the control — it must stay
+/// correct through any future narrowing of the widening rule.
+///
+/// An int-to-STRING row is deliberately absent. `$e = 1; $e = "grown";` is refused by the
+/// checker in ordinary straight-line code too (`cannot reassign $e from int to string`), so it
+/// would pin an unrelated gradual-typing over-rejection rather than anything about references.
+/// Reassigning to `null` is allowed, which is what makes these four rows reachable.
 #[test]
-fn test_closure_bind_with_parameters_reads_rebound_private_property() {
+fn test_by_ref_capture_writes_back_a_different_type() {
     let out = compile_and_run(
         r#"<?php
-class Container {
-    private array $services = ['a' => 1, 'b' => 2];
-    private array $privates = ['p' => 9];
-}
-final class Reverse {
-    private \Closure $getServiceId;
-    public function __construct(Container $c) {
-        $this->getServiceId = \Closure::bind(
-            fn (string $k): int => $this->services[$k] ?? $this->privates[$k] ?? -1,
-            $c,
-            Container::class
-        );
-    }
-    public function get(string $k): int { return ($this->getServiceId)($k); }
-}
-$r = new Reverse(new Container());
-echo $r->get('a'), $r->get('b'), $r->get('p'), $r->get('zz');
+$a = 5;
+(function () use (&$a) { $a = 9; })();
+var_dump($a);
+$b = 5;
+(function () use (&$b) { $b = null; })();
+var_dump($b);
+$c = null;
+(function () use (&$c) { $c = 7; })();
+var_dump($c);
+$d = "s";
+$f = function () use (&$d) { $d = null; };
+$f();
+var_dump($d);
 "#,
     );
-    assert_eq!(out, "129-1");
+    assert_eq!(out, "int(9)\nNULL\nint(7)\nNULL\n");
 }
 
-/// The same rebind reached through a MULTI-statement body with several parameters, so the
-/// relaxation is not tied to the single-expression arrow-function shape.
+/// The accumulator is the overwhelmingly common by-ref capture, and it must keep answering
+/// correctly whatever the cell's representation is. Pinned separately from the type-change
+/// matrix above so a narrowing that spares this shape from widening has a witness of its own.
 #[test]
-fn test_closure_bind_with_parameters_multi_statement_body() {
+fn test_by_ref_capture_accumulates_across_calls() {
     let out = compile_and_run(
         r#"<?php
-class Store {
-    private array $rows = ['x' => 10, 'y' => 20];
-    private int $bonus = 3;
-}
-function make(Store $s): \Closure {
-    return \Closure::bind(
-        function (string $key, int $mul): int {
-            $base = $this->rows[$key] ?? 0;
-            return $base * $mul + $this->bonus;
-        },
-        $s,
-        Store::class
-    );
-}
-$f = make(new Store());
-echo $f('x', 2), ",", $f('y', 1), ",", $f('nope', 5);
+$total = 0;
+$add = function (int $n) use (&$total): void { $total += $n; };
+for ($i = 0; $i < 500; $i++) { $add($i); }
+echo $total;
 "#,
     );
-    assert_eq!(out, "23,23,3");
+    assert_eq!(out, "124750");
+}
+
+/// The accumulator crossing `PHP_INT_MAX` is the SAME defect as the null write above, reached
+/// by a different pair of types — and the one that shows the widening is not a tax on a working
+/// program but the price of representing what PHP stores.
+///
+/// PHP promotes an overflowing sum to float, so `$total += $n` stores `int|float`, not `int`.
+/// A cell typed from the captured `int` cannot hold that, and the sum wrapped around instead:
+///
+/// | call | php | before |
+/// |---|---|---|
+/// | first | `int(9223372036854775807)` | `int(9223372036854775807)` |
+/// | second | `float(9.2233720368548E+18)` | `int(-9223372036854775808)` |
+/// | third | `float(9.2233720368548E+18)` | `int(-9223372036854775798)` |
+///
+/// Silent, and it needs no `null` and no string anywhere — just arithmetic that leaves the
+/// integer range, which is why an accumulator is exactly the shape most likely to meet it.
+///
+/// The CONTROL is what makes the cause unambiguous, so it is part of the same fixture: the
+/// identical `+= 1` outside any closure promoted to float correctly even before the fix. The
+/// arithmetic was never wrong — only the trip through a reference cell typed from the captured
+/// `int` was, which is the same defect as the null row above reached by another pair of types.
+#[test]
+fn test_by_ref_capture_accumulator_promotes_to_float_on_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$total = PHP_INT_MAX - 1;
+$add = function (int $n) use (&$total): void { $total += $n; };
+$add(1);
+var_dump($total);
+$add(1);
+var_dump($total);
+$plain = PHP_INT_MAX - 1;
+$plain += 1;
+var_dump($plain);
+$plain += 1;
+var_dump($plain);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
+         int(9223372036854775807)\nfloat(9.223372036854776E+18)\n"
+    );
 }

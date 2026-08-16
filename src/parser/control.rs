@@ -7,16 +7,27 @@
 //!
 //! Key details:
 //! - Control parsers must preserve PHP statement nesting and spans for later flow and diagnostic passes.
+//! - Brace and alternative (`:` … `endX;`) bodies produce identical `StmtKind` shapes, so the
+//!   distinction never escapes this module.
 
 use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
+use crate::parser::alt_syntax::{
+    close_alternative_block, parse_alternative_stmts, parse_control_body,
+    reject_mixed_branch_body, starts_alternative_body, IF_SEGMENT_STOPS,
+};
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
-use crate::parser::foreach_target::{lower_foreach_binding, parse_foreach_binding, ForeachBinding};
-use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
+use crate::parser::stmt::{
+    expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
+    parse_destructuring_pattern_unpack, parse_name, starts_destructuring_pattern,
+};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
+///
+/// Also accepts PHP's alternative form `if (expr): … elseif (expr): … else: … endif;`,
+/// which is delegated to `parse_alternative_if` and yields the same `StmtKind::If`.
 pub fn parse_if(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -27,6 +38,11 @@ pub fn parse_if(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'if'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after if condition")?;
+
+    if starts_alternative_body(tokens, *pos) {
+        return parse_alternative_if(tokens, pos, span, condition);
+    }
+
     let then_body = parse_body(tokens, pos)?;
 
     let mut elseif_clauses = Vec::new();
@@ -41,16 +57,79 @@ pub fn parse_if(
             expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'elseif'")?;
             let cond = parse_expr(tokens, pos)?;
             expect_token(tokens, pos, &Token::RParen, "Expected ')' after elseif condition")?;
+            reject_mixed_branch_body(tokens, *pos, "elseif")?;
             let body = parse_body(tokens, pos)?;
             elseif_clauses.push((cond, body));
         } else if tokens[*pos].0 == Token::Else {
             *pos += 1;
+            reject_mixed_branch_body(tokens, *pos, "else")?;
             else_body = Some(parse_body(tokens, pos)?);
             break;
         } else {
             break;
         }
     }
+
+    Ok(Stmt::new(
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        },
+        span,
+    ))
+}
+
+/// Parse the alternative `if` form: `: stmts (elseif (expr): stmts)* (else: stmts)? endif;`.
+///
+/// `pos` points at the `:` that opened the `then` segment and `condition` is the already-parsed
+/// `if` condition. PHP requires every branch of an alternative `if` to use the colon form and the
+/// whole chain to be closed by `endif;`, so a brace body or a bare `else if` is rejected here.
+fn parse_alternative_if(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    condition: Expr,
+) -> Result<Stmt, CompileError> {
+    *pos += 1;
+    let then_body = parse_alternative_stmts(tokens, pos, IF_SEGMENT_STOPS)?;
+
+    let mut elseif_clauses = Vec::new();
+    let mut else_body = None;
+
+    loop {
+        match tokens.get(*pos).map(|(token, _)| token) {
+            Some(Token::ElseIf) => {
+                *pos += 1;
+                expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'elseif'")?;
+                let cond = parse_expr(tokens, pos)?;
+                expect_token(tokens, pos, &Token::RParen, "Expected ')' after elseif condition")?;
+                expect_token(
+                    tokens,
+                    pos,
+                    &Token::Colon,
+                    "Expected ':' after elseif condition in an alternative-syntax if block",
+                )?;
+                let body = parse_alternative_stmts(tokens, pos, IF_SEGMENT_STOPS)?;
+                elseif_clauses.push((cond, body));
+            }
+            Some(Token::Else) => {
+                *pos += 1;
+                expect_token(
+                    tokens,
+                    pos,
+                    &Token::Colon,
+                    "Expected ':' after 'else' in an alternative-syntax if block",
+                )?;
+                else_body = Some(parse_alternative_stmts(tokens, pos, &[Token::EndIf])?);
+                break;
+            }
+            _ => break,
+        }
+    }
+
+    close_alternative_block(tokens, pos, &Token::EndIf, "endif")?;
 
     Ok(Stmt::new(
         StmtKind::If {
@@ -95,7 +174,7 @@ pub fn parse_ifdef(
     ))
 }
 
-/// Parse: while (expr) { stmts }
+/// Parse: while (expr) { stmts }, or the alternative form `while (expr): stmts endwhile;`.
 pub fn parse_while(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -105,25 +184,12 @@ pub fn parse_while(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'while'")?;
     let condition = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after while condition")?;
-    let body = parse_body(tokens, pos)?;
+    let body = parse_control_body(tokens, pos, &Token::EndWhile, "endwhile")?;
     Ok(Stmt::new(StmtKind::While { condition, body }, span))
 }
 
 /// Parses a foreach loop: `foreach ($array as $value)` or `foreach ($array as $key => $value)`.
 /// Supports by-reference values via `&` prefix and by-reference loop variables.
-///
-/// Also supports PHP 7.1+ array-destructuring value patterns: `foreach ($arr as [$a, $b])`
-/// and `foreach ($arr as $k => ['key' => $v])`. The bracket pattern is parsed and lowered
-/// (via the standalone list-destructuring lowering) against a synthetic per-iteration
-/// element variable, and the resulting destructure statement is prepended to the body so
-/// the rest of the `Foreach` node — and every pass that reads its `value_var` — is unchanged.
-///
-/// Non-plain writable lvalue targets (`foreach ($defs as $this->id => $d)`,
-/// `foreach ($rows as $out["k"])`, `foreach ($m as R::$k => $v)`) desugar the same way:
-/// the `Foreach` node binds a hidden loop variable and a `<lvalue> = $hidden;` statement is
-/// prepended to the body (value store before key store, matching PHP's per-iteration
-/// assignment order). By-ref bindings stay plain-variable-only: `as &$this->v` remains a
-/// loud error until foreach by-ref write-through is implemented.
 pub fn parse_foreach(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -133,14 +199,6 @@ pub fn parse_foreach(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'foreach'")?;
     let array = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::As, "Expected 'as' in foreach")?;
-
-    // Destructure value pattern: `foreach ($arr as [pattern])`.
-    if matches!(
-        tokens.get(*pos).map(|(token, _)| token),
-        Some(Token::LBracket)
-    ) {
-        return finish_foreach_destructure(tokens, pos, span, array, None);
-    }
 
     let first_by_ref = if matches!(
         tokens.get(*pos).map(|(token, _)| token),
@@ -152,23 +210,39 @@ pub fn parse_foreach(
         false
     };
 
-    let first = if first_by_ref {
-        // A by-ref binding must be a plain variable: `as &$this->v` (by-ref write-through
-        // into a complex lvalue) is intentionally unsupported and stays a loud error.
-        match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => {
-                let name = n.clone();
-                *pos += 1;
-                ForeachBinding::Plain(name)
-            }
-            _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
+    // `foreach ($pairs as [$a, $b])`: the value target is a destructuring pattern, so the
+    // loop binds a hidden temporary and the body starts by unpacking it.
+    if starts_destructuring_pattern(tokens, *pos) {
+        if first_by_ref {
+            return Err(CompileError::new(
+                span,
+                "Cannot take a reference to a destructuring pattern in foreach",
+            ));
         }
-    } else {
-        parse_foreach_binding(tokens, pos, span, "Expected variable after 'as'")?
+        let (value_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+        let loop_body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
+        let body = prepend_stmt(unpack, loop_body);
+        return Ok(Stmt::new(
+            StmtKind::Foreach {
+                array,
+                key_var: None,
+                value_var,
+                value_by_ref: false,
+                body,
+            },
+            span,
+        ));
+    }
+
+    let first_var = match tokens.get(*pos).map(|(t, _)| t) {
+        Some(Token::Variable(n)) => n.clone(),
+        _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
     };
+    *pos += 1;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_binding, value_binding, value_by_ref) =
+    let (key_var, value_var, value_by_ref, unpack) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -177,22 +251,6 @@ pub fn parse_foreach(
             ));
         }
         *pos += 1;
-        // Destructure value pattern: `foreach ($arr as $k => [pattern])`.
-        if matches!(
-            tokens.get(*pos).map(|(token, _)| token),
-            Some(Token::LBracket)
-        ) {
-            let (key_name, key_store) = lower_foreach_binding(first, "key", span)?;
-            let mut stmt = finish_foreach_destructure(tokens, pos, span, array, Some(key_name))?;
-            // A desugared key store runs after the destructure statement (PHP assigns the
-            // value binding before the key binding each iteration).
-            if let Some(store) = key_store {
-                if let StmtKind::Foreach { body, .. } = &mut stmt.kind {
-                    body.insert(1, store);
-                }
-            }
-            return Ok(stmt);
-        }
         let value_by_ref = if matches!(
             tokens.get(*pos).map(|(token, _)| token),
             Some(Token::Ampersand)
@@ -202,44 +260,34 @@ pub fn parse_foreach(
         } else {
             false
         };
-        let value = if value_by_ref {
-            // Same plain-variable-only rule for by-ref value bindings as after 'as'.
-            match tokens.get(*pos).map(|(t, _)| t) {
-                Some(Token::Variable(n)) => {
-                    let name = n.clone();
-                    *pos += 1;
-                    ForeachBinding::Plain(name)
-                }
-                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+        // `foreach ($m as $k => [$a, $b])` destructures the value the same way.
+        if starts_destructuring_pattern(tokens, *pos) {
+            if value_by_ref {
+                return Err(CompileError::new(
+                    span,
+                    "Cannot take a reference to a destructuring pattern in foreach",
+                ));
             }
+            let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
+            (Some(first_var), val_var, false, Some(unpack))
         } else {
-            parse_foreach_binding(tokens, pos, span, "Expected variable after '=>'")?
-        };
-        (Some(first), value, value_by_ref)
+            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => n.clone(),
+                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+            };
+            *pos += 1;
+            (Some(first_var), val_var, value_by_ref, None)
+        }
     } else {
-        (None, first, first_by_ref)
+        (None, first_var, first_by_ref, None)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let mut body = parse_body(tokens, pos)?;
-
-    let (value_var, value_store) = lower_foreach_binding(value_binding, "val", span)?;
-    let (key_var, key_store) = match key_binding {
-        Some(binding) => {
-            let (name, store) = lower_foreach_binding(binding, "key", span)?;
-            (Some(name), store)
-        }
-        None => (None, None),
+    let body = parse_control_body(tokens, pos, &Token::EndForeach, "endforeach")?;
+    let body = match unpack {
+        Some(unpack) => prepend_stmt(unpack, body),
+        None => body,
     };
-    // PHP assigns the value binding first and the key binding second each iteration
-    // (`foreach ([7 => 9] as $x => $x)` leaves $x == 7), so the desugared stores are
-    // prepended in value-then-key order ahead of the user body.
-    let mut desugared_stores = Vec::new();
-    desugared_stores.extend(value_store);
-    desugared_stores.extend(key_store);
-    if !desugared_stores.is_empty() {
-        body.splice(0..0, desugared_stores);
-    }
 
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -253,41 +301,36 @@ pub fn parse_foreach(
     ))
 }
 
-/// Builds a `Foreach` whose value is destructured by a bracket pattern.
+/// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
+/// statement that unpacks it.
 ///
-/// `key_var` is `Some(name)` for the `$k => [pattern]` form, `None` for the `as [pattern]`
-/// form. The bracket pattern at `*pos` is parsed and lowered against a fresh synthetic
-/// element variable (`__elephc_foreach_destructure_{line}_{col}`, unique per foreach by
-/// its starting span) and the resulting destructure statement is prepended to the parsed
-/// body. The `Foreach` node itself uses the synthetic variable as `value_var`, so every
-/// downstream pass that reads `value_var` continues to work unchanged.
-fn finish_foreach_destructure(
+/// The loop still binds one value per iteration, so the pattern becomes
+/// `foreach (… as $tmp) { [pattern] = $tmp; … }`. The temporary is named from the pattern's
+/// source position so nested loops in one function never collide.
+fn parse_foreach_pattern_target(
     tokens: &[SpannedToken],
     pos: &mut usize,
     span: Span,
-    array: Expr,
-    key_var: Option<String>,
-) -> Result<Stmt, CompileError> {
-    let temp = format!("__elephc_foreach_destructure_{}_{}", span.line, span.col);
-    let destructure_stmt = crate::parser::stmt::parse_and_lower_bracket_destructure(
-        tokens,
-        pos,
-        span,
-        Expr::new(ExprKind::Variable(temp.clone()), span),
-    )?;
-    expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
-    let mut body = parse_body(tokens, pos)?;
-    body.insert(0, destructure_stmt);
-    Ok(Stmt::new(
-        StmtKind::Foreach {
-            array,
-            key_var,
-            value_var: temp,
-            value_by_ref: false,
-            body,
-        },
-        span,
-    ))
+) -> Result<(String, Stmt), CompileError> {
+    let pattern_span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
+    let value_var = format!(
+        "__elephc_foreach_{}_{}",
+        pattern_span.line, pattern_span.col
+    );
+    let source = Expr::new(ExprKind::Variable(value_var.clone()), pattern_span);
+    let unpack = parse_destructuring_pattern_unpack(tokens, pos, pattern_span, source)?;
+    Ok((value_var, unpack))
+}
+
+/// Returns `body` with `first` inserted as its first statement.
+fn prepend_stmt(first: Stmt, body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut stmts = Vec::with_capacity(body.len() + 1);
+    stmts.push(first);
+    stmts.extend(body);
+    stmts
 }
 
 /// Parse: do { stmts } while (expr);
@@ -306,7 +349,7 @@ pub fn parse_do_while(
     Ok(Stmt::new(StmtKind::DoWhile { body, condition }, span))
 }
 
-/// Parse: for (init; condition; update) { stmts }
+/// Parse: for (init; condition; update) { stmts }, or `for (…): stmts endfor;`.
 pub fn parse_for(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -315,7 +358,13 @@ pub fn parse_for(
     *pos += 1;
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'for'")?;
 
-    let init = parse_for_clause_list(tokens, pos, &Token::Semicolon)?;
+    let init = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
+        let init_span = tokens[*pos].1.span;
+        let s = parse_assign_inline(tokens, pos, init_span)?;
+        Some(Box::new(s))
+    } else {
+        None
+    };
     expect_semicolon(tokens, pos)?;
 
     let condition = if *pos < tokens.len() && tokens[*pos].0 != Token::Semicolon {
@@ -325,10 +374,16 @@ pub fn parse_for(
     };
     expect_semicolon(tokens, pos)?;
 
-    let update = parse_for_clause_list(tokens, pos, &Token::RParen)?;
+    let update = if *pos < tokens.len() && tokens[*pos].0 != Token::RParen {
+        let update_span = tokens[*pos].1.span;
+        let s = parse_assign_inline(tokens, pos, update_span)?;
+        Some(Box::new(s))
+    } else {
+        None
+    };
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after for clauses")?;
 
-    let body = parse_body(tokens, pos)?;
+    let body = parse_control_body(tokens, pos, &Token::EndFor, "endfor")?;
 
     Ok(Stmt::new(
         StmtKind::For {
@@ -428,108 +483,7 @@ pub fn parse_try(
     ))
 }
 
-/// Parses a `for` init or update clause, which may be a comma-separated list of arbitrary
-/// expressions and inline assignments (PHP's `expr_list` grammar for these clauses).
-///
-/// Stops at `terminator` (a `;` for the init clause, a `)` for the update clause). An empty clause
-/// yields `None`; a single item is returned directly; several comma-separated items are wrapped in
-/// a `Synthetic` block so the `for` lowering runs them in order (the init list once, the update
-/// list after each iteration), matching PHP's `for ($i = 0, $j = 10; ...; $i++, $j--)` and
-/// `for (next($paths); ...; next($paths))`.
-fn parse_for_clause_list(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    terminator: &Token,
-) -> Result<Option<Box<Stmt>>, CompileError> {
-    if *pos >= tokens.len() || tokens[*pos].0 == *terminator {
-        return Ok(None);
-    }
-    let list_span = tokens[*pos].1.span;
-    let mut stmts = Vec::new();
-    loop {
-        stmts.push(parse_for_clause_item(tokens, pos)?);
-        if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
-            *pos += 1; // consume ','
-            continue;
-        }
-        break;
-    }
-    if stmts.len() == 1 {
-        Ok(Some(Box::new(stmts.pop().expect("one statement present"))))
-    } else {
-        Ok(Some(Box::new(Stmt::new(StmtKind::Synthetic(stmts), list_span))))
-    }
-}
-
-/// Parses one item of a `for` init/update clause list.
-///
-/// Historical inline-assignment shapes (`$v = expr`, compound assigns, `$v ??= expr`, and
-/// whole-item `++$v` / `--$v` / `$v++` / `$v--`) keep their dedicated statement AST via
-/// `parse_assign_inline` so existing programs parse byte-identically. Every other item is a
-/// full expression (a call like `next($paths)`, a method call, a complex-lvalue assignment,
-/// ...) parsed with `parse_expr` and wrapped in an effect-only `ExprStmt`, matching PHP's
-/// arbitrary-expression `for` clauses.
-fn parse_for_clause_item(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-) -> Result<Stmt, CompileError> {
-    let span = tokens[*pos].1.span;
-    if for_clause_fast_path_applies(tokens, *pos) {
-        return parse_assign_inline(tokens, pos, span);
-    }
-    let expr = parse_expr(tokens, pos)?;
-    Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
-}
-
-/// Reports whether the for-clause item starting at `pos` matches one of the shapes the
-/// historical inline-assignment parser accepted: a whole-item `++$v` / `--$v` / `$v++` /
-/// `$v--` (the inc/dec must end the item so longer expressions like `$i++ + 1` fall back
-/// to the full-expression path), or a `$v` head directly followed by `=`, a compound
-/// assignment, or `??=`. Only these shapes take `parse_assign_inline`, keeping their AST
-/// byte-identical to the pre-expression-list parser.
-fn for_clause_fast_path_applies(tokens: &[SpannedToken], pos: usize) -> bool {
-    match tokens.get(pos).map(|(t, _)| t) {
-        Some(Token::PlusPlus | Token::MinusMinus) => {
-            matches!(tokens.get(pos + 1).map(|(t, _)| t), Some(Token::Variable(_)))
-                && for_clause_item_boundary(tokens.get(pos + 2).map(|(t, _)| t))
-        }
-        Some(Token::Variable(_)) => match tokens.get(pos + 1).map(|(t, _)| t) {
-            Some(Token::PlusPlus | Token::MinusMinus) => {
-                for_clause_item_boundary(tokens.get(pos + 2).map(|(t, _)| t))
-            }
-            Some(
-                Token::Assign
-                | Token::PlusAssign
-                | Token::MinusAssign
-                | Token::StarAssign
-                | Token::StarStarAssign
-                | Token::SlashAssign
-                | Token::PercentAssign
-                | Token::DotAssign
-                | Token::AmpAssign
-                | Token::PipeAssign
-                | Token::CaretAssign
-                | Token::LessLessAssign
-                | Token::GreaterGreaterAssign
-                | Token::QuestionQuestionAssign,
-            ) => true,
-            _ => false,
-        },
-        _ => false,
-    }
-}
-
-/// Reports whether `token` ends a for-clause item: a list `,`, the init-clause `;`, the
-/// update-clause `)`, or end of input (which the clause parsers report as a loud error).
-fn for_clause_item_boundary(token: Option<&Token>) -> bool {
-    matches!(token, Some(Token::Comma | Token::Semicolon | Token::RParen) | None)
-}
-
-/// Parses one inline assignment or increment/decrement statement without a trailing
-/// semicolon, for use inside `for` clauses: `++$v` / `--$v` / `$v++` / `$v--` become
-/// inc/dec `ExprStmt`s, and `$v = expr` / compound assigns / `$v ??= expr` become
-/// `StmtKind::Assign`. Callers gate entry through `for_clause_fast_path_applies`; other
-/// shapes error loudly here.
+/// Parse a simple statement without trailing semicolon (for use inside for-loops).
 pub fn parse_assign_inline(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -634,6 +588,9 @@ pub fn parse_assign_inline(
 }
 
 /// Parse: switch (expr) { case expr: stmts... case expr: stmts... default: stmts... }
+///
+/// Also accepts PHP's alternative form `switch (expr): case …: … endswitch;`. Both forms
+/// produce the same `StmtKind::Switch`; only the case-list terminator differs.
 pub fn parse_switch(
     tokens: &[SpannedToken],
     pos: &mut usize,
@@ -643,37 +600,51 @@ pub fn parse_switch(
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'switch'")?;
     let subject = parse_expr(tokens, pos)?;
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after switch expression")?;
-    expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+
+    let alternative = starts_alternative_body(tokens, *pos);
+    if alternative {
+        *pos += 1;
+    } else {
+        expect_token(tokens, pos, &Token::LBrace, "Expected '{' after switch")?;
+    }
+    // The case list ends at `}` in the brace form and at `endswitch` in the alternative form.
+    let close = if alternative {
+        Token::EndSwitch
+    } else {
+        Token::RBrace
+    };
 
     let mut cases: Vec<(Vec<Expr>, Vec<Stmt>)> = Vec::new();
     let mut default: Option<Vec<Stmt>> = None;
 
-    while *pos < tokens.len() && tokens[*pos].0 != Token::RBrace {
+    while *pos < tokens.len() && tokens[*pos].0 != close && tokens[*pos].0 != Token::Eof {
         if tokens[*pos].0 == Token::Case {
             // Parse one or more case values
             let mut values = Vec::new();
             while *pos < tokens.len() && tokens[*pos].0 == Token::Case {
                 *pos += 1;
                 values.push(parse_expr(tokens, pos)?);
-                expect_token(tokens, pos, &Token::Colon, "Expected ':' after case value")?;
+                expect_case_separator(tokens, pos, "Expected ':' after case value")?;
             }
-            // Parse case body (statements until next case/default/})
+            // Parse case body (statements until the next case/default or the case-list end)
             let mut body = Vec::new();
             while *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
                 && tokens[*pos].0 != Token::Default
-                && tokens[*pos].0 != Token::RBrace
+                && tokens[*pos].0 != close
+                && tokens[*pos].0 != Token::Eof
             {
                 body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
             }
             cases.push((values, body));
         } else if tokens[*pos].0 == Token::Default {
             *pos += 1;
-            expect_token(tokens, pos, &Token::Colon, "Expected ':' after 'default'")?;
+            expect_case_separator(tokens, pos, "Expected ':' after 'default'")?;
             let mut body = Vec::new();
             while *pos < tokens.len()
                 && tokens[*pos].0 != Token::Case
-                && tokens[*pos].0 != Token::RBrace
+                && tokens[*pos].0 != close
+                && tokens[*pos].0 != Token::Eof
             {
                 body.push(crate::parser::stmt::parse_stmt(tokens, pos)?);
             }
@@ -686,7 +657,11 @@ pub fn parse_switch(
         }
     }
 
-    expect_token(tokens, pos, &Token::RBrace, "Expected '}' to close switch")?;
+    if alternative {
+        close_alternative_block(tokens, pos, &Token::EndSwitch, "endswitch")?;
+    } else {
+        expect_token(tokens, pos, &Token::RBrace, "Expected '}' to close switch")?;
+    }
 
     Ok(Stmt::new(
         StmtKind::Switch {
@@ -696,4 +671,22 @@ pub fn parse_switch(
         },
         span,
     ))
+}
+
+/// Consumes the separator that terminates a `case`/`default` label.
+///
+/// PHP accepts either `:` or `;` there, so both are allowed with the same meaning.
+fn expect_case_separator(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    message: &str,
+) -> Result<(), CompileError> {
+    if matches!(
+        tokens.get(*pos).map(|(token, _)| token),
+        Some(Token::Semicolon)
+    ) {
+        *pos += 1;
+        return Ok(());
+    }
+    expect_token(tokens, pos, &Token::Colon, message)
 }

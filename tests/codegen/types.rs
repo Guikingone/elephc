@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for return type inference, enums, type annotations, named arguments, examples, and related suites.
+//! - Submodules group focused fixtures for return type inference, enums, type annotations, named arguments, parameter coercion, examples, and related suites.
 
 use crate::support::*;
 
@@ -18,13 +18,15 @@ mod enums;
 mod type_annotations;
 #[path = "types/narrowing.rs"]
 mod narrowing;
+#[path = "types/param_coercion.rs"]
+mod param_coercion;
+#[path = "types/strict_types.rs"]
+mod strict_types;
 #[path = "types/named_arguments/mod.rs"]
 mod named_arguments;
 #[path = "types/examples.rs"]
 mod examples;
 #[path = "types/never.rs"]
 mod never;
-#[path = "types/gradual_typing.rs"]
-mod gradual_typing;
 #[path = "types/iterable/mod.rs"]
 mod iterable;

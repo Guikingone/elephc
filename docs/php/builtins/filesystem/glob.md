@@ -2,22 +2,21 @@
 title: "glob()"
 description: "Finds pathnames matching a pattern."
 sidebar:
-  order: 127
+  order: 134
 ---
 
 ## glob()
 
 ```php
-function glob(string $pattern, int $flags = 0): array
+function glob(string $pattern): mixed
 ```
 
 Finds pathnames matching a pattern.
 
 **Parameters**:
 - `$pattern` (`string`)
-- `$flags` (`int`), default `0`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -25,12 +24,6 @@ Finds pathnames matching a pattern.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/glob.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

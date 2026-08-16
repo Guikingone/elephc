@@ -9,18 +9,84 @@
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
 
 mod arrays;
-mod locals;
+pub(crate) mod locals;
 mod properties;
 mod properties_null_coalesce;
 mod static_properties;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
-use crate::types::TypeEnv;
+use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind, NESTED_APPEND_TEMP_PREFIX};
+use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
 
 use super::super::Checker;
 
 impl Checker {
+    /// Type-checks the parser-generated `$array[$index][] = $value` sequence when
+    /// an empty indexed base needs its element type auto-vivified to an array.
+    ///
+    /// Returns `true` only after consuming a recognized synthetic suffix. All
+    /// other synthetic groups, associative keys, and already-typed bases remain
+    /// on the ordinary statement-by-statement path.
+    pub(crate) fn check_empty_indexed_nested_append(
+        &mut self,
+        body: &[Stmt],
+        env: &mut TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if body.len() < 3 {
+            return Ok(false);
+        }
+        let split = body.len() - 3;
+        let (prefix, triple) = body.split_at(split);
+        let (temp, base, index) = match &triple[0].kind {
+            StmtKind::Assign { name, value }
+                if name.starts_with(NESTED_APPEND_TEMP_PREFIX) =>
+            {
+                match &value.kind {
+                    ExprKind::ArrayAccess { array, index } => match &array.kind {
+                        ExprKind::Variable(base) => (name.as_str(), base.as_str(), index.as_ref()),
+                        _ => return Ok(false),
+                    },
+                    _ => return Ok(false),
+                }
+            }
+            _ => return Ok(false),
+        };
+        if !matches!(
+            &triple[1].kind,
+            StmtKind::ArrayPush { array, .. } if array == temp
+        ) || !matches!(
+            &triple[2].kind,
+            StmtKind::ArrayAssign { array, value, .. }
+                if array == base
+                    && matches!(&value.kind, ExprKind::Variable(name) if name == temp)
+        ) {
+            return Ok(false);
+        }
+        if !matches!(env.get(base), Some(PhpType::Array(element)) if **element == PhpType::Never) {
+            return Ok(false);
+        }
+
+        for stmt in prefix {
+            self.check_stmt(stmt, env)?;
+        }
+        let index_type = self.infer_type_with_assignment_effects(index, env)?;
+        if normalized_array_key_type(index, index_type) != PhpType::Int {
+            return Ok(false);
+        }
+
+        // PHP auto-vivifies the missing bucket as an empty indexed array. Seeding
+        // the parser's hidden read temporary with that shape lets the ordinary
+        // push checker infer `Array(T)` and the ordinary write-back checker infer
+        // the outer `Array(Array(T))` without weakening user-visible assignments.
+        env.insert(
+            temp.to_string(),
+            PhpType::Array(Box::new(PhpType::Never)),
+        );
+        self.check_stmt(&triple[1], env)?;
+        self.check_stmt(&triple[2], env)?;
+        Ok(true)
+    }
+
     /// Returns true when `name` is bound as a `foreach` loop key in the current
     /// scope. A foreach key is a boxed `Mixed` cell at runtime even when the
     /// checker types it as `Int`/`Str` from the source array, so an array write
@@ -56,27 +122,8 @@ impl Checker {
             StmtKind::Assign { name, value } => {
                 locals::check_assign(self, name, value, stmt.span, env)
             }
-            // The by-reference array-literal desugar emits `unset($tmp[key]);` duplicate-key
-            // guards into an `ExprKind::Assignment` prelude, which is checked through this
-            // dispatcher; route expression statements to ordinary expression inference.
-            StmtKind::ExprStmt(expr) => {
-                self.infer_type_with_assignment_effects(expr, env)?;
-                Ok(())
-            }
-            // Expression-position destructuring (`if ([, , , $x] = RHS)`) desugars the
-            // statement-form pattern into a `Synthetic` chain of ordinary assignments inside
-            // an `ExprKind::Assignment` prelude; check each child through this dispatcher.
-            StmtKind::Synthetic(stmts) => {
-                for stmt in stmts {
-                    self.check_assignment_like_stmt(stmt, env)?;
-                }
-                Ok(())
-            }
             StmtKind::RefAssign { target, source } => {
                 locals::check_ref_assign(self, target, source, stmt.span, env)
-            }
-            StmtKind::RefAssignToTarget { target, source, append } => {
-                locals::check_ref_assign_to_target(self, target, source, *append, stmt.span, env)
             }
             StmtKind::ArrayAssign {
                 array,
@@ -180,21 +227,6 @@ impl Checker {
                 stmt.span,
                 env,
             ),
-            StmtKind::DynamicStaticPropertyWrite {
-                receiver,
-                property,
-                index,
-                value,
-                ..
-            } => static_properties::check_dynamic_static_property_write(
-                self,
-                receiver,
-                property,
-                index.as_ref(),
-                value,
-                stmt.span,
-                env,
-            ),
             _ => unreachable!("non-assignment statement routed to assignment checker"),
         };
         if result.is_ok() {
@@ -203,20 +235,26 @@ impl Checker {
         result
     }
 
-    /// Invalidates synthetic property facts affected by a completed statement assignment.
+    /// Invalidates synthetic property facts affected by a completed statement assignment, then
+    /// re-establishes the fact for the storage the statement itself wrote.
+    ///
     /// Property writes can mutate an aliased object and therefore clear every fact; local
-    /// rebindings clear only facts rooted at the rebound local.
-    fn invalidate_property_narrowings_after_assignment(&self, stmt: &Stmt, env: &mut TypeEnv) {
+    /// rebindings clear only facts rooted at the rebound local. A plain
+    /// `$this->p = <non-null>` / `self::$p = <non-null>` write is the one case where the
+    /// post-write type of a place is known, so `record_property_assignment_narrowing` puts that
+    /// single fact back — this is what lets `if (self::$p === null) { self::$p = new S(); }`
+    /// leave `self::$p` non-null on both paths.
+    fn invalidate_property_narrowings_after_assignment(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
         match &stmt.kind {
-            // A direct `$obj->prop = …` only rebinds that receiver's own slot, so scope the purge
-            // to the exact `<root>->prop` fact — a write to `$clone->prop` keeps `$this->prop`.
-            StmtKind::PropertyAssign { object, property, .. } => {
-                Self::purge_property_narrowings_for_property_write(env, object, property)
+            StmtKind::PropertyAssign { .. } | StmtKind::StaticPropertyAssign { .. } => {
+                Self::purge_property_narrowings(env);
+                self.record_property_assignment_narrowing(stmt, env);
             }
-            // Array pushes / element writes mutate the value the property *points to*, which may be
-            // aliased by another receiver, so they still invalidate every property fact.
-            StmtKind::PropertyArrayPush { .. }
-            | StmtKind::PropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
+            StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. } => {
+                Self::purge_property_narrowings(env)
+            }
+            StmtKind::StaticPropertyArrayPush { .. }
+            | StmtKind::StaticPropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
             StmtKind::NestedArrayAssign { target, .. }
                 if assignment_target_may_write_property(target) =>
             {

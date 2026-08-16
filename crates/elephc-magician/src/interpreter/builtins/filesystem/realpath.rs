@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the canonical path helper.
 
 eval_builtin! {
-    name: "realpath",
+    contract: "realpath",
     area: Filesystem,
-    params: [path],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -21,7 +21,6 @@ use crate::parser::stmt::{
 use crate::span::Span;
 
 use super::calls::parse_first_class_callable_parens;
-use super::pratt::{parse_object_member, ObjectMember};
 use super::{parse_args, parse_expr};
 
 /// Consumes a single leading `&` token if present, returning whether one was seen.
@@ -77,11 +76,10 @@ pub(super) fn parse_match_expr(
             loop {
                 patterns.push(parse_expr(tokens, pos)?);
                 if *pos < tokens.len() && tokens[*pos].0 == Token::Comma {
+                    let saved = *pos;
                     *pos += 1;
                     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
-                        // Trailing comma before `=>`: it's a separator, not a
-                        // pattern delimiter. Leave `*pos` at the `=>` (comma
-                        // already consumed) instead of restoring to the comma.
+                        *pos = saved;
                         break;
                     }
                 } else {
@@ -298,202 +296,11 @@ fn infer_arrow_captures(
     if let Some(name) = variadic {
         bound.insert(name.clone());
     }
-    // A variable ASSIGNED inside the arrow body (e.g. `fn($x) => ($y = f($x)) + $y`, or a
-    // list-destructure `fn() => [$k, $v] = pair()`) is a body-local, not an outer capture.
-    // Seed `bound` with every simple-`$variable` assignment target before collecting reads so a
-    // later read of that same local is not mis-detected as a free variable and reported
-    // "Undefined variable in use()". Genuine outer captures (variables only ever read) are
-    // unaffected.
-    collect_arrow_assignment_targets(body_expr, &mut bound);
 
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
     collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
-    // A `$GLOBALS['name']` alias is not a capture: it resolves to program-global storage in
-    // EVERY scope, so the arrow body reaches it directly the way it reaches `$_SERVER`.
-    // Capturing it would both demand an enclosing-scope binding that need not exist and copy
-    // the value at closure-creation time instead of reading the global live.
-    captures.retain(|name| !crate::globals_array::is_alias(name));
     captures
-}
-
-/// Builds the arrow-function closure that a dynamic-name method first-class callable desugars to.
-///
-/// PHP's `$obj->$name(...)`, `$obj::$name(...)`, and `Class::$name(...)` each produce a genuine
-/// `Closure` that dispatches a *runtime-named* method on a receiver. elephc models this as
-/// `fn (...$args) => call_user_func([receiver, method], ...$args)`: the arrow function captures
-/// `receiver` and `method` by value at creation (matching PHP's bind-once semantics), and its body
-/// reuses the exact runtime dynamic-dispatch path already used by the call form
-/// `$obj->$name(args)`. Wrapping it in an arrow closure yields a real `Closure`-typed value through
-/// the existing closure machinery, so no new AST variant, checker case, or runtime is required.
-///
-/// `receiver` is the first `call_user_func` array element: the object expression for the `->`/`::`
-/// object forms, or a `Class::class` / `self::class` constant for the named/scoped static forms.
-/// `method` is the expression naming the method (e.g. the `$name` variable, or a bareword's string).
-pub(super) fn build_dynamic_method_first_class_callable(
-    receiver: Expr,
-    method: Expr,
-    span: Span,
-) -> Expr {
-    // A distinctive synthetic parameter name a real receiver/method expression will not shadow, so
-    // the arrow-capture inference never mistakes it for an outer variable that needs capturing.
-    const FCC_ARGS: &str = "__elephc_fcc_args";
-    // Downstream lowering/codegen passes key some per-call-site metadata by span — notably the
-    // static-callable-array descriptor selection, which folds a `[C::class, $m]` literal by the
-    // ArrayLiteral's span. A hand-written `fn (...$a) => call_user_func([C::class, $m], ...$a)`
-    // gives every node a distinct span, and in particular the `[...]` literal spans a *range*
-    // distinct from either element. Reusing one point span across the array and its own
-    // `ClassConstant` element collides that key and mis-selects a descriptor when two such closures
-    // share a scope. Mirror the hand-written shape: span the callable array across both elements
-    // (distinct from either) and give the `call_user_func` call the method's span.
-    let callable_span = Span::with_end(
-        receiver.span.line,
-        receiver.span.col,
-        method.span.end_line,
-        method.span.end_col,
-    );
-    let call_span = method.span;
-    let forwarded = Expr::new(
-        ExprKind::Spread(Box::new(Expr::new(
-            ExprKind::Variable(FCC_ARGS.to_string()),
-            span,
-        ))),
-        span,
-    );
-    let callable = Expr::new(ExprKind::ArrayLiteral(vec![receiver, method]), callable_span);
-    let body_expr = Expr::new(
-        ExprKind::FunctionCall {
-            name: crate::names::Name::unqualified("call_user_func"),
-            args: vec![callable, forwarded],
-        },
-        call_span,
-    );
-    let params: Vec<(String, Option<crate::parser::ast::TypeExpr>, Option<Expr>, bool)> = Vec::new();
-    let variadic = Some(FCC_ARGS.to_string());
-    let captures = infer_arrow_captures(&body_expr, &params, variadic.as_ref());
-    let body = vec![Stmt::new(StmtKind::Return(Some(body_expr)), span)];
-    Expr::new(
-        ExprKind::Closure {
-            params,
-            variadic,
-            variadic_by_ref: false,
-            variadic_type: None,
-            return_type: None,
-            body,
-            is_arrow: true,
-            is_static: false,
-            by_ref_return: false,
-            captures,
-            capture_refs: vec![],
-        },
-        span,
-    )
-}
-
-/// Records every simple-`$variable` assignment target inside an arrow-function body into `bound`.
-///
-/// Walks the body expression looking for `Assignment` targets that are a plain `Variable(name)`
-/// and `ListUnpack` destructure targets, descending through the operator/container nodes an arrow
-/// expression can nest an assignment inside (binary ops, ternaries, coalesce/short-ternary, pipe,
-/// match arms, call arguments, array literals, casts, and the common unary wrappers). Compound and
-/// element/property targets are intentionally NOT treated as locals: `$a[$k] = v` or `$o->p = v`
-/// read their base variable from the enclosing scope, so those bases must still be captured.
-fn collect_arrow_assignment_targets(expr: &Expr, bound: &mut HashSet<String>) {
-    match &expr.kind {
-        ExprKind::Assignment { target, value, .. } => {
-            if let ExprKind::Variable(name) = &target.kind {
-                bound.insert(name.clone());
-            } else {
-                collect_arrow_assignment_targets(target, bound);
-            }
-            collect_arrow_assignment_targets(value, bound);
-        }
-        ExprKind::ListUnpack { vars, value } => {
-            for var in vars {
-                bound.insert(var.clone());
-            }
-            collect_arrow_assignment_targets(value, bound);
-        }
-        ExprKind::BinaryOp { left, right, .. } => {
-            collect_arrow_assignment_targets(left, bound);
-            collect_arrow_assignment_targets(right, bound);
-        }
-        ExprKind::Ternary {
-            condition,
-            then_expr,
-            else_expr,
-        } => {
-            collect_arrow_assignment_targets(condition, bound);
-            collect_arrow_assignment_targets(then_expr, bound);
-            collect_arrow_assignment_targets(else_expr, bound);
-        }
-        ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
-            collect_arrow_assignment_targets(value, bound);
-            collect_arrow_assignment_targets(default, bound);
-        }
-        ExprKind::Pipe { value, callable } => {
-            collect_arrow_assignment_targets(value, bound);
-            collect_arrow_assignment_targets(callable, bound);
-        }
-        ExprKind::Match {
-            subject,
-            arms,
-            default,
-        } => {
-            collect_arrow_assignment_targets(subject, bound);
-            for (patterns, result) in arms {
-                for pattern in patterns {
-                    collect_arrow_assignment_targets(pattern, bound);
-                }
-                collect_arrow_assignment_targets(result, bound);
-            }
-            if let Some(default) = default {
-                collect_arrow_assignment_targets(default, bound);
-            }
-        }
-        ExprKind::FunctionCall { args, .. }
-        | ExprKind::NewObject { args, .. }
-        | ExprKind::NewScopedObject { args, .. }
-        | ExprKind::StaticMethodCall { args, .. } => {
-            for arg in args {
-                collect_arrow_assignment_targets(arg, bound);
-            }
-        }
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            collect_arrow_assignment_targets(object, bound);
-            for arg in args {
-                collect_arrow_assignment_targets(arg, bound);
-            }
-        }
-        ExprKind::ArrayLiteral(items) => {
-            for item in items {
-                collect_arrow_assignment_targets(item, bound);
-            }
-        }
-        ExprKind::ArrayLiteralAssoc(items) => {
-            for (key, value) in items {
-                collect_arrow_assignment_targets(key, bound);
-                collect_arrow_assignment_targets(value, bound);
-            }
-        }
-        ExprKind::ArrayAccess { array, index } => {
-            collect_arrow_assignment_targets(array, bound);
-            collect_arrow_assignment_targets(index, bound);
-        }
-        ExprKind::NamedArg { value, .. } => {
-            collect_arrow_assignment_targets(value, bound);
-        }
-        ExprKind::Negate(inner)
-        | ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::Cast { expr: inner, .. }
-        | ExprKind::PtrCast { expr: inner, .. }
-        | ExprKind::ErrorSuppress(inner)
-        | ExprKind::Print(inner)
-        | ExprKind::Spread(inner) => collect_arrow_assignment_targets(inner, bound),
-        _ => {}
-    }
 }
 
 /// Records `name` as an arrow capture unless it is bound locally or already recorded.
@@ -556,9 +363,6 @@ fn collect_arrow_expr_captures(
         ExprKind::Pipe { value, callable } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
             collect_arrow_expr_captures(callable, bound, seen, captures);
-        }
-        ExprKind::ListUnpack { value, .. } => {
-            collect_arrow_expr_captures(value, bound, seen, captures);
         }
         ExprKind::Assignment { target, value, .. } => {
             if !matches!(target.kind, ExprKind::Variable(_)) {
@@ -701,14 +505,6 @@ fn collect_arrow_expr_captures(
         | ExprKind::FirstClassCallable(_)
         | ExprKind::This
         | ExprKind::MagicConstant(_) => {}
-        // `$obj::CONST` — the object sub-expression may reference captured variables.
-        ExprKind::DynamicClassConstantAccess { object, .. } => {
-            collect_arrow_expr_captures(object, bound, seen, captures);
-        }
-        // `self::${$expr}` — the property-name expression may reference captured variables.
-        ExprKind::DynamicStaticPropertyAccess { property, .. } => {
-            collect_arrow_expr_captures(property, bound, seen, captures);
-        }
     }
 }
 
@@ -835,6 +631,17 @@ pub(super) fn parse_named_expr(
     {
         return super::prefix::parse_legacy_array_literal(tokens, pos, span);
     }
+    // `buffer_new<>` lexes as the single `<>` token (PHP's `!=` alias).
+    if name.parts.len() == 1
+        && name.parts[0] == "buffer_new"
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LessGreater
+    {
+        return Err(CompileError::new(
+            span,
+            "Expected buffer element type after 'buffer_new<'",
+        ));
+    }
     if name.parts.len() == 1
         && name.parts[0] == "buffer_new"
         && *pos < tokens.len()
@@ -864,6 +671,18 @@ pub(super) fn parse_named_expr(
                 len: Box::new(len),
             },
             span,
+        ));
+    }
+    // `ptr_cast<>` lexes as the single `<>` token (PHP's `!=` alias), so the empty
+    // type list is recognized here to keep reporting the missing type name.
+    if name.parts.len() == 1
+        && name.parts[0] == "ptr_cast"
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LessGreater
+    {
+        return Err(CompileError::new(
+            span,
+            "Expected type name after 'ptr_cast<'",
         ));
     }
     if name.parts.len() == 1
@@ -912,46 +731,15 @@ pub(super) fn parse_named_expr(
         }
     } else if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
-        if matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Dollar)) {
-            // `C::${$expr}` / `C::$$var` — a static property named at runtime on a named class.
-            let property =
-                super::calls::parse_dynamic_static_property_name(tokens, pos, span)?;
-            return Ok(Expr::new(
-                ExprKind::DynamicStaticPropertyAccess {
-                    receiver: StaticReceiver::Named(name),
-                    property: Box::new(property),
-                },
-                span,
-            ));
-        }
         let member = match tokens.get(*pos).map(|(token, _)| token) {
             Some(Token::Variable(property)) => {
                 let property = property.clone();
-                let property_span = tokens[*pos].1.span;
                 *pos += 1;
                 if *pos < tokens.len() && tokens[*pos].0 == Token::LParen {
                     // `C::$method(args)` is a dynamic static method call. Desugar to
                     // `call_user_func([C::class, $method], ...args)` so it reuses the runtime
                     // dynamic-dispatch path, exactly like the variable-receiver form `$c::$m()`.
                     *pos += 1; // consume '('
-                    if parse_first_class_callable_parens(tokens, pos)? {
-                        // `C::$method(...)` — a first-class callable bound to a runtime-named static
-                        // method. Reuse the same `[C::class, $method]` callable as the call form,
-                        // wrapped in a Closure. Keep the method name's own span so no two
-                        // synthesized nodes collapse onto one span key (see the helper's note).
-                        let class_const = Expr::new(
-                            ExprKind::ClassConstant {
-                                receiver: StaticReceiver::Named(name.clone()),
-                            },
-                            span,
-                        );
-                        let method_expr = Expr::new(ExprKind::Variable(property), property_span);
-                        return Ok(build_dynamic_method_first_class_callable(
-                            class_const,
-                            method_expr,
-                            span,
-                        ));
-                    }
                     let dynamic_args = parse_args(tokens, pos, span)?;
                     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
                     crate::parser::expr::pratt::reject_named_args_in_dynamic_call(
@@ -1094,24 +882,16 @@ pub(super) fn parse_new_object(
         ));
     }
 
-    // `new $variable(args)`, `new $arr['k'](args)`, `new $obj->prop(args)` — the class
-    // name is held by a variable, optionally dereferenced through a `new_variable` chain
-    // (array offsets and property reads). The resulting class-name expression is resolved
-    // through the runtime class table at codegen time.
-    if let Some((Token::Variable(name), var_span)) =
-        tokens.get(*pos).map(|(token, s)| (token.clone(), s.span))
-    {
+    // `new $variable(args)` — the class name is held in a variable; we'll
+    // resolve it through the runtime class table at codegen time.
+    if let Some((Token::Variable(name), _)) = tokens.get(*pos) {
+        let var_name = name.clone();
         *pos += 1;
-        let name_expr = parse_new_variable_chain(
-            tokens,
-            pos,
-            Expr::new(ExprKind::Variable(name), var_span),
-        )?;
         if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
             reject_dynamic_new_class_reference(tokens, *pos)?;
             return Ok(Expr::new(
                 ExprKind::NewDynamic {
-                    name_expr: Box::new(name_expr),
+                    name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
                     args: Vec::new(),
                 },
                 span,
@@ -1122,38 +902,7 @@ pub(super) fn parse_new_object(
         let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
         return Ok(Expr::new(
             ExprKind::NewDynamic {
-                name_expr: Box::new(name_expr),
-                args,
-            },
-            span,
-        ));
-    }
-
-    // `new (expr)(args)` — PHP 8.0 lets an arbitrary parenthesized expression name the class.
-    // The inner expression evaluates to a class-string (or object) and is resolved through the
-    // same runtime class table as `new $var(args)`.
-    if matches!(tokens.get(*pos).map(|(t, _)| t), Some(Token::LParen)) {
-        let paren_span = tokens[*pos].1.span;
-        *pos += 1;
-        let name_expr = parse_expr(tokens, pos)?;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
-            return Err(CompileError::new(
-                paren_span,
-                "Expected ')' after class-name expression in 'new'",
-            ));
-        }
-        *pos += 1;
-        if *pos >= tokens.len() || tokens[*pos].0 != Token::LParen {
-            return Err(CompileError::new(
-                span,
-                "Expected '(' after class-name expression in 'new'",
-            ));
-        }
-        *pos += 1;
-        let args = parse_args(tokens, pos, span)?;
-        return Ok(Expr::new(
-            ExprKind::NewDynamic {
-                name_expr: Box::new(name_expr),
+                name_expr: Box::new(Expr::new(ExprKind::Variable(var_name), span)),
                 args,
             },
             span,
@@ -1169,67 +918,6 @@ pub(super) fn parse_new_object(
     let args = parse_args(tokens, pos, span)?;
     let span = crate::parser::expr::span_through_prev_token(tokens, *pos, span);
     Ok(Expr::new(ExprKind::NewObject { class_name, args }, span))
-}
-
-/// Parses the PHP `new_variable` dereference chain that can follow `new $var` before the
-/// constructor argument list: array offsets (`['k']`) and property reads (`->prop`,
-/// `->{$expr}`, `->$v`), in any combination (e.g. `new $factories['k']->builder(...)`).
-///
-/// PHP's grammar allows the class-name reference in a `new` to be a chained dereference of a
-/// variable, not just a bare `$var`. This consumes those postfix operators starting from the
-/// already-parsed `base` expression, building the matching `ArrayAccess` / `PropertyAccess` /
-/// `DynamicPropertyAccess` nodes, and stops at the first token that is not part of the chain —
-/// in particular `(`, which begins the constructor arguments rather than a method call.
-/// The result is the class-name expression for a `NewDynamic`. Variable-variable bases
-/// (`$$name`) are intentionally unsupported, matching the rest of the compiler.
-fn parse_new_variable_chain(
-    tokens: &[SpannedToken],
-    pos: &mut usize,
-    base: Expr,
-) -> Result<Expr, CompileError> {
-    let mut lhs = base;
-    loop {
-        match tokens.get(*pos).map(|(token, _)| token) {
-            Some(Token::LBracket) => {
-                let bracket_span = tokens[*pos].1.span;
-                *pos += 1;
-                let index = parse_expr(tokens, pos)?;
-                if *pos >= tokens.len() || tokens[*pos].0 != Token::RBracket {
-                    return Err(CompileError::new(bracket_span, "Expected ']'"));
-                }
-                *pos += 1;
-                lhs = Expr::new(
-                    ExprKind::ArrayAccess {
-                        array: Box::new(lhs),
-                        index: Box::new(index),
-                    },
-                    bracket_span,
-                );
-            }
-            Some(Token::Arrow) => {
-                let arrow_span = tokens[*pos].1.span;
-                *pos += 1;
-                lhs = match parse_object_member(tokens, pos, arrow_span, false)? {
-                    ObjectMember::Named(property) => Expr::new(
-                        ExprKind::PropertyAccess {
-                            object: Box::new(lhs),
-                            property,
-                        },
-                        arrow_span,
-                    ),
-                    ObjectMember::Dynamic(property) => Expr::new(
-                        ExprKind::DynamicPropertyAccess {
-                            object: Box::new(lhs),
-                            property: Box::new(property),
-                        },
-                        arrow_span,
-                    ),
-                };
-            }
-            _ => break,
-        }
-    }
-    Ok(lhs)
 }
 
 /// Rejects postfix access that would otherwise bind to `new Foo` without constructor parentheses.

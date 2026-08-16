@@ -1,17 +1,14 @@
 //! Purpose:
-//! Walks class properties, methods, and constants during magic-constant substitution.
-//! Applies expression and statement walkers to defaults, bodies, promoted-property assignments,
-//! and class-constant initializers.
+//! Walks class properties and methods during magic-constant substitution.
+//! Applies expression and statement walkers to defaults, bodies, and promoted-property assignments.
 //!
 //! Called from:
 //! - `crate::magic_constants::walker::stmts` and trait binding passes.
 //!
 //! Key details:
 //! - Member traversal preserves declaration metadata while updating only magic-constant-bearing children.
-//! - Class-constant initializers must be walked with the enclosing class/trait scope active so
-//!   `__CLASS__`, `__TRAIT__`, `__FUNCTION__`, and `__METHOD__` lower before type inference.
 
-use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
+use crate::parser::ast::{ClassMethod, ClassProperty};
 
 use super::exprs::walk_expr;
 use super::stmts::walk_program;
@@ -31,28 +28,6 @@ pub(in crate::magic_constants) fn walk_class_property<P: Pass>(
     ClassProperty {
         default: prop.default.map(|e| walk_expr(e, pass)),
         ..prop
-    }
-}
-
-/// Walks a class constant, applying `pass` to its initializer expression.
-///
-/// Class-constant initializers are otherwise skipped by the statement walker, so magic
-/// constants inside `const X = <expr>;` would reach type inference un-lowered and panic.
-/// This routes the initializer through the active pass with whatever class/trait/namespace
-/// scope the caller has entered, matching the method-body substitution.
-///
-/// - `constant`: The class constant to walk.
-/// - `pass`: The pass (visitor) to apply to the initializer expression.
-///
-/// Returns a new `ClassConst` with only its `value` replaced by the walked expression;
-/// name, visibility, `is_final`, span, and attributes are preserved unchanged.
-pub(in crate::magic_constants) fn walk_class_constant<P: Pass>(
-    constant: ClassConst,
-    pass: &mut P,
-) -> ClassConst {
-    ClassConst {
-        value: walk_expr(constant.value, pass),
-        ..constant
     }
 }
 

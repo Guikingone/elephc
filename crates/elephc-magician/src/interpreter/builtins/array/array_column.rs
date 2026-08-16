@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_column",
+    contract: "array_column",
     area: Array,
-    params: [array, column_key],
     direct: Array,
     values: Array,
 }
@@ -48,6 +47,7 @@ pub(in crate::interpreter) fn eval_builtin_array_column(
     };
     let array = eval_expr(array, context, scope, values)?;
     let column_key = eval_expr(column_key, context, scope, values)?;
+    super::array_arg_check::eval_check_array_args("array_column", &[array], context, values)?;
     eval_array_column_result(array, column_key, values)
 }
 

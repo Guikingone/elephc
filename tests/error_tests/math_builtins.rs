@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration or regression tests for diagnostic coverage of math builtins, including floor wrong args, ceil wrong args, and round wrong args.
+//! Integration or regression tests for diagnostic coverage of math builtins, including BCMath,
+//! floor, ceil, and round argument-count failures.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -8,6 +9,27 @@
 //! - Invalid PHP snippets are checked through shared diagnostic helpers for messages, spans, and recovery behavior.
 
 use super::*;
+
+/// Verifies `bcadd()` rejects a call missing its second required operand.
+#[test]
+fn test_error_bcadd_too_few_args() {
+    expect_error("<?php bcadd('1');", "bcadd() takes 2 or 3 arguments");
+}
+
+/// Verifies `bcpowmod()` rejects a call missing its modulus operand.
+#[test]
+fn test_error_bcpowmod_too_few_args() {
+    expect_error(
+        "<?php bcpowmod('2', '3');",
+        "bcpowmod() takes 3 or 4 arguments",
+    );
+}
+
+/// Verifies `bcscale()` rejects more than its single optional scale argument.
+#[test]
+fn test_error_bcscale_too_many_args() {
+    expect_error("<?php bcscale(1, 2);", "bcscale() takes at most 1 argument");
+}
 
 /// Verifies floor() rejects excess positional arguments. Input: `floor(1, 2)`.
 #[test]
@@ -22,9 +44,18 @@ fn test_error_ceil_wrong_args() {
 }
 
 /// Verifies round() rejects missing argument. Input: `round()` with no args.
+///
+/// `round()` gained PHP 8.4's third `$mode` parameter, so the arity diagnostic now spans
+/// `1 to 3` arguments.
 #[test]
 fn test_error_round_wrong_args() {
-    expect_error("<?php round();", "round() takes 1 or 2 arguments");
+    expect_error("<?php round();", "round() takes 1 to 3 arguments");
+}
+
+/// Verifies round() rejects a fourth argument. Input: `round(1.0, 2, 3, 4)`.
+#[test]
+fn test_error_round_too_many_args() {
+    expect_error("<?php echo round(1.0, 2, 3, 4);", "round() takes 1 to 3 arguments");
 }
 
 /// Verifies sqrt() rejects excess positional arguments. Input: `sqrt(1, 2)`.
@@ -39,37 +70,35 @@ fn test_error_pow_wrong_args() {
     expect_error("<?php pow(1);", "pow() takes exactly 2 arguments");
 }
 
-/// Verifies min() rejects a lone scalar argument. PHP's single-argument form is
-/// `min(array $value_array)`, so `min(1)` is a TypeError. Input: `min(1)`.
+/// Verifies min() rejects a lone non-array argument with php-src's TypeError wording.
+/// PHP's single-argument form takes an array; `min(1)` is a TypeError there too.
 #[test]
-fn test_error_min_single_scalar_arg() {
-    expect_error("<?php min(1);", "min() single argument must be array");
+fn test_error_min_wrong_args() {
+    expect_error(
+        "<?php min(1);",
+        "min(): Argument #1 ($value) must be of type array, int given",
+    );
 }
 
-/// Verifies max() rejects a lone scalar argument (single-argument form must be an
-/// array). Input: `max(1)`.
+/// Verifies max() rejects a lone non-array argument with php-src's TypeError wording.
 #[test]
-fn test_error_max_single_scalar_arg() {
-    expect_error("<?php max(1);", "max() single argument must be array");
+fn test_error_max_wrong_args() {
+    expect_error(
+        "<?php max(1);",
+        "max(): Argument #1 ($value) must be of type array, int given",
+    );
 }
 
-/// Verifies max() rejects a zero-argument call (at least one argument required).
-/// Input: `max()`.
+/// Verifies min() with no argument at all still reports PHP's ArgumentCountError text.
+#[test]
+fn test_error_min_no_args() {
+    expect_error("<?php min();", "min() expects at least 1 argument, 0 given");
+}
+
+/// Verifies max() with no argument at all still reports PHP's ArgumentCountError text.
 #[test]
 fn test_error_max_no_args() {
-    expect_error("<?php max();", "max() requires at least 1 argument");
-}
-
-/// Verifies the single-argument array form `max([1, 2, 3])` type-checks cleanly.
-#[test]
-fn test_max_single_array_type_checks() {
-    expect_ok("<?php $m = max([1, 2, 3]);");
-}
-
-/// Verifies the single-argument array form `min([1, 2, 3])` type-checks cleanly.
-#[test]
-fn test_min_single_array_type_checks() {
-    expect_ok("<?php $m = min([1, 2, 3]);");
+    expect_error("<?php max();", "max() expects at least 1 argument, 0 given");
 }
 
 /// Verifies clamp() rejects missing bound arguments. Input: `clamp(1, 2)`.
@@ -156,3 +185,57 @@ fn test_error_number_format_wrong_args() {
 }
 
 // --- String function errors ---
+
+/// Verifies that `dechex()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_dechex_wrong_args() {
+    expect_error("<?php dechex();", "dechex() takes exactly 1 argument");
+}
+
+/// Verifies that `decbin()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_decbin_too_many_args() {
+    expect_error("<?php decbin(1, 2);", "decbin() takes exactly 1 argument");
+}
+
+/// Verifies that `decoct()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_decoct_wrong_args() {
+    expect_error("<?php decoct();", "decoct() takes exactly 1 argument");
+}
+
+/// Verifies that `hexdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_hexdec_wrong_args() {
+    expect_error("<?php hexdec();", "hexdec() takes exactly 1 argument");
+}
+
+/// Verifies that `bindec()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_bindec_too_many_args() {
+    expect_error("<?php bindec(\"1\", 2);", "bindec() takes exactly 1 argument");
+}
+
+/// Verifies that `octdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_octdec_wrong_args() {
+    expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
+}
+
+/// Verifies that `base_convert()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_wrong_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that `base_convert()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_too_many_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16, 10, 2);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}

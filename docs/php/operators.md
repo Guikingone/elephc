@@ -12,17 +12,18 @@ sidebar:
 | `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays. Integer overflow promotes to `double`. |
 | `-` | `$a - $b` | Subtraction. Integer overflow promotes to `double`. |
 | `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
-| `/` | `$a / $b` | Division (always returns float) |
-| `%` | `$a % $b` | Modulo |
-| `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
+| `/` | `$a / $b` | Division (always returns float). A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
+| `%` | `$a % $b` | Modulo. A zero divisor raises a catchable `DivisionByZeroError` ("Modulo by zero"); `PHP_INT_MIN % -1` is `0`. |
+| `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
 
 ## Comparison
 
 | Operator | Example | Notes |
 |---|---|---|
-| `==` | `$a == $b` | Loose equality using PHP-style scalar coercions for bool, null, numeric `int`/`float` comparison, numeric strings, and non-numeric strings |
-| `!=` | `$a != $b` | Loose inequality using the same scalar coercions as `==` |
+| `==` | `$a == $b` | Loose equality using PHP-style coercions for bool, null, numeric `int`/`float` comparison, numeric strings, non-numeric strings, arrays, and objects |
+| `!=` | `$a != $b` | Loose inequality using the same coercions as `==` |
+| `<>` | `$a <> $b` | PHP's alias for `!=`: identical semantics, identical precedence and associativity |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality |
 | `<` | `$a < $b` | Less than |
@@ -32,47 +33,74 @@ sidebar:
 | `<=>` | `$a <=> $b` | Spaceship: returns -1, 0, or 1 |
 | `instanceof` | `$obj instanceof User` | Runtime class/interface check; returns bool |
 
-The relational operators (`<`, `>`, `<=`, `>=`) and the spaceship operator (`<=>`) accept numeric and string operands and follow PHP 8 ordering: two numbers (or numeric strings) compare numerically, while a non-numeric string compares lexicographically against the other operand's string form (e.g. `"10" < "9"` is `false`, but `"abc" < 5` is `false` because `"abc"` is compared with `"5"`). Ordered comparison of arrays or objects is rejected at compile time.
-
-`instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, property and array-element chains like `$obj instanceof $this->prototype` or `$obj instanceof $arr[0]`, static-property targets like `$obj instanceof D::$proto` (also `self::$p`, `static::$p`, `parent::$p`, and fully-qualified `\App\D::$p`), and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`. A class constant is not a valid target (`$obj instanceof D::CONST` is a parse error, as in PHP).
+`instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`.
 
 Direct object values and boxed `mixed` / nullable / union values are checked at runtime; scalar, array, and null payloads return `false` after the dynamic target has been validated. Dynamic string targets are matched case-insensitively against class/interface names; unknown class strings return `false`. Dynamic object targets use the target object's runtime class. If a dynamic target is neither a string nor an object, the program exits with a fatal runtime diagnostic.
+
+### Loose equality for arrays and objects
+
+`==` follows PHP 8's comparison table for non-scalar operands as well.
+
+**Arrays.** An array converts to `bool` only against `null` and `bool`; against
+anything else it is simply not equal.
+
+```php
+<?php
+var_dump([] == null);      // true  — both convert to false
+var_dump([] == false);     // true
+var_dump([0] == true);     // true  — a non-empty array is truthy
+var_dump([] == 0);         // false — an array is never equal to a number
+var_dump([1] == "1");      // false
+var_dump([] == new stdClass()); // false
+```
+
+Two arrays are loosely equal when they hold the same number of entries and every
+key of the left array exists in the right one with a loosely equal value. Order
+does **not** matter (unlike `===`), and a missing key never matches a stored
+`null`:
+
+```php
+<?php
+var_dump(["a" => 1, "b" => 2] == ["b" => 2, "a" => 1]); // true
+var_dump([1, 2] == [2 => 1, 3 => 2]);                   // false — different keys
+var_dump([1] == ["1"]);                                 // true  — values compare loosely
+var_dump(["a" => null] == ["b" => null]);               // false — different keys
+```
+
+**Objects.** Two objects are loosely equal when they are the same instance, or
+when they share a class and every property compares loosely. `===` keeps meaning
+instance identity. Enum cases are singletons, so they compare by identity in both
+forms.
+
+```php
+<?php
+class Point { public int $x = 1; }
+$a = new Point();
+$b = new Point();
+var_dump($a == $b);   // true
+var_dump($a === $b);  // false
+$b->x = 2;
+var_dump($a == $b);   // false
+```
+
+Known divergence: PHP raises `Fatal error: Nesting level too deep - recursive
+dependency?` when `==` meets a cyclic array/object graph. elephc's comparison
+walker stops at a fixed nesting depth and reports "not equal" instead of failing,
+so a cyclic comparison terminates normally rather than aborting the program.
+
+`===` on two arrays is not yet supported by the backend and reports an
+unsupported-feature diagnostic at compile time.
 
 ## Bitwise
 
 | Operator | Example | Notes |
 |---|---|---|
-| `&` | `$a & $b` | Bitwise AND (integers), or bytewise AND when both operands are strings |
-| `\|` | `$a \| $b` | Bitwise OR (integers), or bytewise OR when both operands are strings |
-| `^` | `$a ^ $b` | Bitwise XOR (integers), or bytewise XOR when both operands are strings |
+| `&` | `$a & $b` | Bitwise AND |
+| `\|` | `$a \| $b` | Bitwise OR |
+| `^` | `$a ^ $b` | Bitwise XOR |
 | `~` | `~$a` | Bitwise NOT |
-| `<<` | `$a << $b` | Left shift |
-| `>>` | `$a >> $b` | Arithmetic right shift |
-
-### String bitwise operators
-
-When **both** operands of `&`, `|`, or `^` are strings, the operator works
-**bytewise** on the raw bytes and produces a string (exactly like PHP). The
-operation is binary-safe: it uses the full byte length and never stops at a NUL
-byte, and it never interprets the bytes as UTF-8.
-
-- `&` and `^` produce a result whose length is the **shorter** of the two
-  operands (`min(strlen($a), strlen($b))`); each output byte is `$a[i] & $b[i]`
-  / `$a[i] ^ $b[i]`.
-- `|` produces a result whose length is the **longer** of the two operands
-  (`max(strlen($a), strlen($b))`): overlapping bytes are OR-ed, then the tail of
-  the longer operand is copied verbatim.
-
-```php
-echo bin2hex("ABCD" & "\xff\x00\xff\x00"); // "41004300" (min length 4)
-echo bin2hex("AB"   | "\x00\x00\x01\x02"); // "41420102" (max length 4, tail copied)
-echo bin2hex("ABCD" ^ "\x01\x01");         // "4043"     (min length 2)
-echo "AB" & "";                            // ""         (min length 0)
-```
-
-Only `&`, `|`, and `^` have string forms. `<<` and `>>` are never string
-operators, and a string opposed to an integer takes the integer path (the string
-is coerced to an integer) rather than the bytewise path.
+| `<<` | `$a << $b` | Left shift. A shift count of 64 or more yields `0`; a negative count raises a catchable `ArithmeticError` ("Bit shift by negative number"). |
+| `>>` | `$a >> $b` | Arithmetic right shift. A shift count of 64 or more yields `0` for a non-negative value and `-1` for a negative one; a negative count raises a catchable `ArithmeticError`. |
 
 ## Logical
 
@@ -197,42 +225,6 @@ Non-local assignment expression targets stabilize receiver and index subexpressi
 
 For `??=` expression form, elephc preserves the PHP short-circuit rule and the conditional write order for non-local targets. If the current target value is non-null, the right-hand side is not evaluated. If it is null, the right-hand side runs before the final write target is evaluated, so forms such as `$items[$i] ??= ($i = 1)` write through the updated simple index while computed/effectful index parts remain stabilized.
 
-### Assignment binds to the adjacent lvalue
-
-As in PHP, an assignment `=` binds to the lvalue immediately to its left even when it appears as the operand of a higher-precedence operator. The assignment is performed first and its value is fed to the surrounding operator:
-
-```php
-<?php
-// `false !== $pos = strrpos(...)` parses as `false !== ($pos = strrpos(...))`.
-$path = "App\\Service\\Mailer";
-if (false !== $pos = strrpos($path, "\\")) {
-    echo substr($path, $pos + 1); // Mailer
-}
-
-$b = 0;
-echo 1 + $b = 5;   // 6   (parsed as 1 + ($b = 5)); $b is now 5
-echo !$b = 0;      // 1   (parsed as !($b = 0)); $b is now 0
-```
-
-This applies to any preceding operator (`+`, `*`, `&&`, `!==`, prefix `!`, the short ternary `?:`, …) and to any assignment target, including complex lvalues such as object properties and array elements. The assignment becomes the operator's adjacent operand:
-
-```php
-<?php
-class Text { public string $value = "hello"; }
-$t = new Text();
-
-// `cond ?: $t->value = X` parses as `cond ?: ($t->value = X)` — the property assignment is the
-// else-branch, run only when the condition is falsy.
-strlen($t->value) > 100 ?: $t->value = strtoupper($t->value);
-echo $t->value; // HELLO
-
-$a = [1, 2];
-true && $a[0] = 99;   // parsed as `true && ($a[0] = 99)`
-echo $a[0];           // 99
-```
-
-It only kicks in when the left operand of `=` is a real assignment target; `($a + $b) = 5` and `cond ?: f() = 5` are still "Invalid assignment target" errors.
-
 ## List Unpacking
 
 ```php
@@ -297,25 +289,71 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
 
-Increment and decrement work on simple variables, object properties (including
-`$this->prop`), and array elements, in both statement and expression position:
+In statement position the target can be a local variable, an object property
+(including `$this->prop`), an array element, or a static property, in either the
+prefix or the postfix spelling:
 
 ```php
-++$obj->count;            // like $obj->count += 1;
---$arr["k"];
-$arr[0]++;
-
-$next = ++$obj->count;    // prefix: store, then read the NEW value
-$old  = $obj->count++;    // postfix: read the OLD value, then store
-$token = $tokens[$pos++]; // postfix in expression position
+$this->count++;
+++$this->count;
+$this->items[0]++;
+$obj->count--;
+--$obj->items[2];
+$totals["a"]++;
 ```
 
-As in PHP, a prefix `++`/`--` yields the new value and a postfix `++`/`--` yields
-the old value. In statement position the produced value is discarded, so the two
-forms are interchangeable there. The target's receiver or index is evaluated
-exactly once, so `$a[next_index()]++` calls `next_index()` a single time. The
-PHP string-increment behavior (`"a"++` → `"b"`) applies only to plain variables;
-on a property or array element the operation is numeric.
+Statement position discards the operator's result, so `++$x;` and `$x++;` compile to
+the same read-modify-write. Reading the result of an increment on a property or array
+element — `echo $obj->n++;` — is not supported yet; assign through the statement form
+first.
+
+`int`, `float`, `bool`, and `null` values all increment like PHP. Floats add or
+subtract exactly `1.0` and stay floats:
+
+```php
+$f = 1.5;
+$f++;         // float(2.5)
+var_dump($f--); // float(2.5) — the post-form returns the old value
+var_dump($f);   // float(1.5)
+```
+
+`string` values increment with PHP's full rules, including the perl-style alphanumeric
+carry:
+
+```php
+$s = "az"; $s++;   // string(2) "ba"
+$s = "Zz"; $s++;   // string(3) "AAa"
+$s = "a9"; $s++;   // string(2) "b0"
+$s = "zz"; $s++;   // string(3) "aaa"
+$s = "a-"; $s++;   // string(2) "a-"  — the carry stops at the first non-alphanumeric byte
+$s = "-a"; $s++;   // string(2) "-b"
+$s = "";   $s++;   // string(1) "1"
+```
+
+The carry runs over raw bytes from the end of the string: `a`–`y`, `A`–`Y` and `0`–`8`
+advance in place, `z`/`Z`/`9` wrap to `a`/`A`/`0` and carry into the previous byte, and
+a carry out of the front prepends `a`, `A` or `1`. Any other byte (including the bytes
+of a multi-byte character) stops the carry and leaves the rest of the string alone.
+
+A *numeric* string increments as a number instead, so the operator can change the
+value's type — which is why a `string` local that is a `++`/`--` target is given boxed
+`mixed` storage for its whole lifetime:
+
+```php
+$n = "9";    $n++;  // int(10)
+$n = "1.5";  $n++;  // float(2.5)
+$n = "1e3";  $n++;  // float(1001)
+$n = "0x1A"; $n++;  // string(4) "0x1B" — "0x1A" is not a PHP numeric string
+```
+
+`--` follows PHP's asymmetric rule: a numeric string decrements numerically, the empty
+string becomes `int(-1)`, and any other string is left **unchanged** (`"az"--` is still
+`"az"`). PHP additionally raises `E_DEPRECATED` for `++` on a non-alphanumeric string
+and for `--` on a non-numeric string; elephc has no runtime deprecation channel, so it
+reproduces the resulting value but not the notice.
+
+`++`/`--` on an array, object, buffer, or pointer local stays a compile-time error, as
+in PHP where it is a `TypeError`.
 
 ## Ternary
 

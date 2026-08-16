@@ -248,30 +248,6 @@ fn test_parse_interface_decl() {
     }
 }
 
-/// Verifies that `<?php interface I { public static function make(): static; }` parses a
-/// static interface method (PHP 8: interfaces may declare abstract static methods) with
-/// `is_static` set alongside the existing `is_abstract`/`has_body` flags, and that a sibling
-/// non-static method in the same interface is unaffected.
-#[test]
-fn test_parse_interface_static_method_decl() {
-    let stmts = parse_source(
-        "<?php interface I { public static function make(): static; public function name(): string; }",
-    );
-    match &stmts[0].kind {
-        StmtKind::InterfaceDecl { name, methods, .. } => {
-            assert_eq!(name, "I");
-            assert_eq!(methods.len(), 2);
-            assert_eq!(methods[0].name, "make");
-            assert!(methods[0].is_static);
-            assert!(methods[0].is_abstract);
-            assert!(!methods[0].has_body);
-            assert_eq!(methods[1].name, "name");
-            assert!(!methods[1].is_static);
-        }
-        _ => panic!("Expected InterfaceDecl"),
-    }
-}
-
 /// Verifies that `<?php interface HasName { public string $name { get; set; } }` parses an
 /// interface property with explicit getter/setter hooks into `InterfaceDecl` with the hooks
 /// flags set on the property entry.

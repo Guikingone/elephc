@@ -2,20 +2,19 @@
 title: "rsort()"
 description: "Sorts an array in descending order."
 sidebar:
-  order: 59
+  order: 65
 ---
 
 ## rsort()
 
 ```php
-function rsort(array $array, int $flags = 0): bool
+function rsort(array $array): bool
 ```
 
 Sorts an array in descending order.
 
 **Parameters**:
 - `$array` (`array`), passed by reference
-- `$flags` (`int`), default `0`, optional
 
 **Returns**: `bool`
 
@@ -25,12 +24,6 @@ Sorts an array in descending order.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/rsort.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/rsort.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

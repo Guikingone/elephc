@@ -377,9 +377,14 @@ fn execute_context_function_propagates_throw_as_uncaught_outcome() {
     }
 }
 /// Verifies nested eval preserves the thrown cell while returning an uncaught status.
+///
+/// The inner fragment is SINGLE-quoted because PHP interpolates a double-quoted eval
+/// argument first: measured on PHP 8.5.6, `eval("throw $e;")` stringifies the exception
+/// into the source and dies with `ParseError: syntax error, unexpected token ":"`. Only
+/// the single-quoted form reaches the interpreter as `throw $e;`.
 #[test]
 fn execute_program_nested_eval_propagates_throw_as_uncaught_outcome() {
-    let program = parse_fragment(br#"eval("throw $e;");"#).expect("parse eval fragment");
+    let program = parse_fragment(br#"eval('throw $e;');"#).expect("parse eval fragment");
     let mut context = ElephcEvalContext::new();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();

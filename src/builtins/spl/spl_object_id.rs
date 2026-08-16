@@ -12,24 +12,17 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_object_id",
-    area: Spl,
-    params: [object: Mixed],
-    returns: Int,
+    contract: "spl_object_id",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplObjectId,
     ),
-    summary: "Return the integer object handle for given object.",
-    php_manual: "https://www.php.net/manual/en/function.spl-object-id.php",
 }
 
 /// Validates that the argument is an object and returns `Int`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Accepted under the gradual object family (concrete object, `Mixed`, or a union
-    // containing an object/`Mixed` member); the real object check happens at runtime.
-    if !crate::types::checker::type_compat::type_is_gradual_object_family(&ty) {
+    if !matches!(ty, PhpType::Object(_)) {
         return Err(CompileError::new(
             cx.span,
             "spl_object_id() argument must be an object",

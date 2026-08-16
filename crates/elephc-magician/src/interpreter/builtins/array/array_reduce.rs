@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_reduce",
+    contract: "array_reduce",
     area: Array,
-    params: [array, callback, initial = EvalBuiltinDefaultValue::Null],
     direct: Array,
     values: Array,
 }
@@ -65,6 +62,9 @@ pub(in crate::interpreter) fn eval_builtin_array_reduce(
         }
         _ => return Err(EvalStatus::RuntimeFatal),
     };
+    // php reports a non-array argument #1 BEFORE it looks at the callable, measured: a
+    // nonexistent callback name still answers the array's TypeError.
+    super::array_arg_check::eval_check_array_args("array_reduce", &[array], context, values)?;
     eval_array_reduce_result_from_scope(array, callback, initial, Some(scope), context, values)
 }
 

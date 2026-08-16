@@ -8,9 +8,8 @@
 //! - Shared member-existence logic for `property_exists()` lives here.
 
 eval_builtin! {
-    name: "method_exists",
+    contract: "method_exists",
     area: Symbols,
-    params: [object_or_class, method],
     direct: Symbols,
     values: Symbols,
 }

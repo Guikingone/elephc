@@ -82,11 +82,21 @@ pub(super) fn resolve_expr(
             .into_iter()
             .map(|arg| resolve_expr(&arg, current_namespace, imports, symbols))
             .collect();
+            // `var_export($v, true)` / `var_export($v)` desugar to the prelude helper that
+            // matches the mode's PHP return type exactly. This arm runs BEFORE the
+            // `declares_function` guard below because the elephc prelude declares
+            // `var_export` itself, so that guard would always block it; the rewrite carries
+            // its own, stricter guard instead (see `rewrite_var_export_return_flag`).
+            if let Some(rewritten) =
+                rewrite_var_export_return_flag(&function_name, &resolved_args, symbols)
+            {
+                rewritten
+            }
             // Procedural date/time aliases desugar to the equivalent OOP construction or method
             // call (e.g. date_create($s) -> new DateTime($s), date_diff($a, $b) -> $a->diff($b)).
             // Skip the rewrite when the resolved name is a user-declared function, so a
             // user-defined (e.g. namespaced `App\date_diff`) call is never hijacked.
-            if symbols.declares_function(&function_name) {
+            else if symbols.declares_function(&function_name) {
                 ExprKind::FunctionCall {
                     name: resolved_name(function_name),
                     args: resolved_args,
@@ -387,53 +397,6 @@ pub(super) fn resolve_expr(
             element_type: resolve_type_expr(element_type, current_namespace, imports, symbols),
             len: Box::new(resolve_expr(len, current_namespace, imports, symbols)),
         },
-        // Expression-position assignments (`$x ??= new Foo()`, `$a = bar()`) must
-        // recurse into both the target and value so namespaced names nested in the
-        // RHS — `new`, `::CONST`, calls, static calls — are rewritten to their
-        // fully-qualified form. Without this, the fallthrough below cloned the
-        // assignment verbatim and a class like `new ParserState()` inside a
-        // namespace stayed unqualified and was reported as an undefined class.
-        // `prelude` is populated at PARSE time (hidden-temp binds from target
-        // stabilization and the expression-position append desugar) and its
-        // statements can carry the same namespaced names, so it goes through the
-        // statement resolver like a closure body does.
-        ExprKind::Assignment {
-            target,
-            value,
-            result_target,
-            prelude,
-            conditional_value_temp,
-        } => ExprKind::Assignment {
-            target: Box::new(resolve_expr(target, current_namespace, imports, symbols)),
-            value: Box::new(resolve_expr(value, current_namespace, imports, symbols)),
-            result_target: result_target
-                .as_ref()
-                .map(|t| Box::new(resolve_expr(t, current_namespace, imports, symbols))),
-            prelude: resolve_stmt_list(prelude, current_namespace, imports, symbols)
-                .expect("name resolver bug: assignment prelude resolution failed"),
-            conditional_value_temp: conditional_value_temp.clone(),
-        },
-        // `$obj::CONST` — resolve names inside the evaluated object sub-expression; the
-        // constant name is a runtime-class member and is not namespace-rewritten.
-        ExprKind::DynamicClassConstantAccess { object, name } => {
-            ExprKind::DynamicClassConstantAccess {
-                object: Box::new(resolve_expr(object, current_namespace, imports, symbols)),
-                name: name.clone(),
-            }
-        }
-        // `self::${$expr}` — namespace-rewrite a named receiver (like `StaticPropertyAccess`)
-        // and resolve names inside the dynamic property-name expression.
-        ExprKind::DynamicStaticPropertyAccess { receiver, property } => {
-            ExprKind::DynamicStaticPropertyAccess {
-                receiver: match receiver {
-                    StaticReceiver::Named(name) => StaticReceiver::Named(resolved_name(
-                        resolve_special_or_class_name(name, current_namespace, imports, symbols),
-                    )),
-                    _ => receiver.clone(),
-                },
-                property: Box::new(resolve_expr(property, current_namespace, imports, symbols)),
-            }
-        }
         // A named argument wraps its value expression — without this arm the value escaped
         // resolution entirely, so e.g. `new self(url: new Url('/'))` left the imported `Url`
         // alias unresolved ("Undefined class: Url").
@@ -469,12 +432,114 @@ fn resolve_instanceof_target(
     }
 }
 
+/// Splits a `var_export` argument list into its `$value` and `$return` expressions, accepting
+/// both the positional and the PHP 8 named-argument spellings.
+///
+/// Returns `None` for anything that is not a well-formed, STATICALLY COUNTABLE `var_export`
+/// argument list (an unknown parameter name, a missing `$value`, more than two arguments, or a
+/// `...$args` spread whose element count and `$return` value are unknown here), so the caller
+/// leaves such a call untouched and the ordinary arity/type diagnostics still fire on the real
+/// function.
+fn var_export_call_arguments<'a>(args: &'a [Expr]) -> Option<(&'a Expr, Option<&'a Expr>)> {
+    let mut value: Option<&Expr> = None;
+    let mut flag: Option<&Expr> = None;
+    let mut positional = 0usize;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { name, value: inner } => match name.as_str() {
+                "value" if value.is_none() => value = Some(inner),
+                "return" if flag.is_none() => flag = Some(inner),
+                _ => return None,
+            },
+            // A spread contributes an unknown number of arguments, so neither the `$value`
+            // position nor the `$return` flag can be read off the call site.
+            ExprKind::Spread(_) => return None,
+            _ => {
+                match positional {
+                    0 if value.is_none() => value = Some(arg),
+                    1 if flag.is_none() => flag = Some(arg),
+                    _ => return None,
+                }
+                positional += 1;
+            }
+        }
+    }
+    value.map(|value| (value, flag))
+}
+
+/// Rewrites a `var_export()` call whose `$return` flag is a literal onto the prelude helper whose
+/// inferred return type matches that mode exactly, or returns `None` to leave the call alone.
+///
+/// WHY THIS EXISTS. `var_export` is injected as elephc-PHP (`crate::var_export_prelude`), and its
+/// single body has to serve both PHP modes: `return $rendered;` in return mode and `return null;`
+/// in echo mode. Since `wider_type` stopped resolving `Void` away (so an unhinted function that
+/// can return null infers `Union([T, Void])`, which `?string` and ternary/match joins already
+/// produced), the inferred type of EVERY `var_export` call became `string|null`. That is honest
+/// for a runtime flag but wrong for a literal one, and it broke the common
+/// `function f(): string { return var_export($x, true); }` with
+/// "return type expects Str, got Union([Str, Void])".
+///
+/// This is the same flag-aware treatment `print_r` gets from
+/// `crate::builtins::io::print_r::check`, applied one layer up because `var_export` is a PHP
+/// function rather than a registry builtin: rather than *asserting* a narrower type at the call
+/// site (which would contradict the boxed `Mixed` the callee actually returns), the call is
+/// retargeted at a helper that genuinely returns that type.
+///
+/// - `var_export($v, true)` → `__elephc_var_export_str($v, 0)`, declared `: string`.
+/// - `var_export($v)` / `var_export($v, false)` → `__elephc_var_export_echo($v)`, which prints and
+///   returns `null` (elephc `Void`), matching reference PHP 8.5.6.
+/// - A runtime `$return` flag keeps the real `var_export`, whose `Union([Str, Void])` IS the
+///   honest `string|null` PHP documents; the mode is then selected at run time by the `if` in the
+///   prelude body rather than guessed here.
+///
+/// GUARD, in two halves — the caller cannot use its usual `symbols.declares_function` check here,
+/// because the prelude declares `var_export` itself.
+///
+/// 1. The name must have resolved to the GLOBAL `var_export`, i.e. carry no namespace qualifier.
+///    Matching the last segment the way `rewrite_date_procedural_alias` does would hijack a
+///    user's `App\var_export`, which resolves to `App\var_export` and is a different function.
+/// 2. The prelude's internal helper must be declared. `inject_if_used` skips injection entirely
+///    when the program declares its own global `var_export`, so a declared
+///    `__elephc_var_export_str` means "the elephc prelude owns this name" and its absence means a
+///    user definition (or no definition at all) must be left alone.
+fn rewrite_var_export_return_flag(
+    name: &str,
+    args: &[Expr],
+    symbols: &Symbols,
+) -> Option<ExprKind> {
+    let global = name.trim_start_matches('\\');
+    if global.contains('\\')
+        || !global.eq_ignore_ascii_case("var_export")
+        || !symbols.declares_function(crate::var_export_prelude::RENDER_HELPER)
+    {
+        return None;
+    }
+    let (value, flag) = var_export_call_arguments(args)?;
+    match flag.map(|flag| &flag.kind) {
+        None | Some(ExprKind::BoolLiteral(false)) => Some(ExprKind::FunctionCall {
+            name: resolved_name(crate::var_export_prelude::ECHO_HELPER.to_string()),
+            args: vec![value.clone()],
+        }),
+        Some(ExprKind::BoolLiteral(true)) => Some(ExprKind::FunctionCall {
+            name: resolved_name(crate::var_export_prelude::RENDER_HELPER.to_string()),
+            args: vec![
+                value.clone(),
+                Expr::new(ExprKind::IntLiteral(0), value.span),
+            ],
+        }),
+        Some(_) => None,
+    }
+}
+
 /// Rewrites a procedural date/time alias call into the equivalent OOP expression, or returns `None`
 /// when the function name (matched case-insensitively on its last segment) or its arity does not
 /// correspond to a known alias. This maps PHP's procedural date API onto elephc's OOP classes
 /// before type checking, so `date_create($s)` becomes `new DateTime($s)`, `date_diff($a, $b)`
 /// becomes `$a->diff($b)`, and so on.
-fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> {
+fn rewrite_date_procedural_alias(
+    name: &str,
+    args: &[Expr],
+) -> Option<ExprKind> {
     let bare = name
         .rsplit('\\')
         .next()
@@ -689,7 +754,10 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
                 args[1].clone()
             } else {
                 Expr::new(
-                    ExprKind::FunctionCall { name: resolved_name("time".to_string()), args: vec![] },
+                    ExprKind::FunctionCall {
+                        name: resolved_name("time".to_string()),
+                        args: vec![],
+                    },
                     span,
                 )
             };
@@ -750,80 +818,88 @@ fn rewrite_date_procedural_alias(name: &str, args: &[Expr]) -> Option<ExprKind> 
     }
 }
 
-/// Reports whether `name` matches one of PHP's procedural date/time aliases, regardless of arity.
+/// The lowercase names of PHP's procedural date/time aliases, in one enumerable place.
 ///
 /// Mirrors the name set in `rewrite_date_procedural_alias` (the alias arms there minus their
-/// arity guards) so `function_exists()` and other introspection builtins can recognize the
-/// same procedural surface that the resolver rewrites. Comparison is case-insensitive on the
-/// last namespace segment, matching the resolver's behavior.
+/// arity guards). This is the single source of truth behind both
+/// [`is_date_procedural_alias`] (the predicate) and [`date_procedural_alias_names`] (the
+/// enumeration): the dynamic `function_exists($name)` lowering bakes the enumeration into the
+/// binary while the literal `function_exists('name')` fold calls the predicate, so keeping one
+/// list makes it structurally impossible for the two paths to disagree about these names.
+pub(crate) const DATE_PROCEDURAL_ALIASES: &[&str] = &[
+    "idate",
+    "mktime",
+    "gmmktime",
+    "date_create",
+    "date_create_immutable",
+    "date_create_from_format",
+    "date_create_immutable_from_format",
+    "date_parse_from_format",
+    "date_parse",
+    "date_sun_info",
+    "date_sunrise",
+    "date_sunset",
+    "strptime",
+    "timezone_name_from_abbr",
+    "cal_to_jd",
+    "cal_from_jd",
+    "cal_days_in_month",
+    "cal_info",
+    "gregoriantojd",
+    "jdtogregorian",
+    "juliantojd",
+    "jdtojulian",
+    "frenchtojd",
+    "jdtofrench",
+    "jewishtojd",
+    "jdtojewish",
+    "jddayofweek",
+    "jdmonthname",
+    "jdtounix",
+    "unixtojd",
+    "easter_days",
+    "easter_date",
+    "gettimeofday",
+    "date_get_last_errors",
+    "strftime",
+    "gmstrftime",
+    "timezone_open",
+    "timezone_identifiers_list",
+    "timezone_location_get",
+    "timezone_transitions_get",
+    "timezone_abbreviations_list",
+    "timezone_version_get",
+    "date_interval_create_from_date_string",
+    "date_diff",
+    "date_format",
+    "date_add",
+    "date_sub",
+    "date_modify",
+    "date_timestamp_get",
+    "date_timestamp_set",
+    "date_timezone_get",
+    "date_timezone_set",
+    "date_offset_get",
+    "date_date_set",
+    "date_isodate_set",
+    "date_time_set",
+    "date_interval_format",
+    "timezone_name_get",
+    "timezone_offset_get",
+];
+
+/// Reports whether `name` matches one of PHP's procedural date/time aliases, regardless of arity.
+///
+/// Consults [`DATE_PROCEDURAL_ALIASES`] so `function_exists()` and other introspection builtins
+/// recognize the same procedural surface that the resolver rewrites. Comparison is
+/// case-insensitive on the last namespace segment, matching the resolver's behavior.
 pub(crate) fn is_date_procedural_alias(name: &str) -> bool {
     let bare = name
         .rsplit('\\')
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(
-        bare.as_str(),
-        "idate"
-            | "mktime"
-            | "gmmktime"
-            | "date_create"
-            | "date_create_immutable"
-            | "date_create_from_format"
-            | "date_create_immutable_from_format"
-            | "date_parse_from_format"
-            | "date_parse"
-            | "date_sun_info"
-            | "date_sunrise"
-            | "date_sunset"
-            | "strptime"
-            | "timezone_name_from_abbr"
-            | "cal_to_jd"
-            | "cal_from_jd"
-            | "cal_days_in_month"
-            | "cal_info"
-            | "gregoriantojd"
-            | "jdtogregorian"
-            | "juliantojd"
-            | "jdtojulian"
-            | "frenchtojd"
-            | "jdtofrench"
-            | "jewishtojd"
-            | "jdtojewish"
-            | "jddayofweek"
-            | "jdmonthname"
-            | "jdtounix"
-            | "unixtojd"
-            | "easter_days"
-            | "easter_date"
-            | "gettimeofday"
-            | "date_get_last_errors"
-            | "strftime"
-            | "gmstrftime"
-            | "timezone_open"
-            | "timezone_identifiers_list"
-            | "timezone_location_get"
-            | "timezone_transitions_get"
-            | "timezone_abbreviations_list"
-            | "timezone_version_get"
-            | "date_interval_create_from_date_string"
-            | "date_diff"
-            | "date_format"
-            | "date_add"
-            | "date_sub"
-            | "date_modify"
-            | "date_timestamp_get"
-            | "date_timestamp_set"
-            | "date_timezone_get"
-            | "date_timezone_set"
-            | "date_offset_get"
-            | "date_date_set"
-            | "date_isodate_set"
-            | "date_time_set"
-            | "date_interval_format"
-            | "timezone_name_get"
-            | "timezone_offset_get"
-    )
+    DATE_PROCEDURAL_ALIASES.contains(&bare.as_str())
 }
 
 /// Returns the inclusive `(min, max)` argument-count range that

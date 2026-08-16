@@ -27,12 +27,6 @@ Filters elements of an array using a callback function.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_filter` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_filter.md).

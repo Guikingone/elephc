@@ -85,13 +85,95 @@ fn wait_until_ready(addr: &str) {
     panic!("server did not start listening on {}", addr);
 }
 
-/// Spawns the server binary on `addr`, waits until it accepts connections.
-fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
-    let child = Command::new(bin)
-        .arg("--listen").arg(addr)
-        .arg("--workers").arg(workers)
-        .spawn()
-        .expect("failed to spawn web server");
+/// RAII guard around a spawned web-server child process.
+///
+/// `std::process::Child` does *not* kill the process when its handle is
+/// dropped, so any test that panics before its manual `child.kill()` — a failed
+/// assertion, or an `unwrap` in `http_get`/`http_request`/`wait_until_ready` —
+/// leaks a resident server (plus its prefork workers, which stay alive while the
+/// master does). Under load that accumulation exhausts memory and triggers the
+/// OS OOM killer. Wrapping the child in this guard makes `Drop` reap it
+/// unconditionally, even while unwinding, so a failing test can never leak a
+/// server. Killing the master reaps its workers (verified: they exit on parent
+/// death), so the guard only needs to kill the master.
+struct ServerGuard {
+    child: std::process::Child,
+}
+
+impl ServerGuard {
+    /// Wraps an already-spawned server child so it is reaped on scope exit.
+    fn new(child: std::process::Child) -> Self {
+        Self { child }
+    }
+
+    /// Terminates the server gracefully so its prefork workers are reaped too.
+    ///
+    /// `std::process::Child::kill` sends `SIGKILL`, which the master cannot
+    /// trap — so its worker children are reparented to `launchd`/`init` and
+    /// survive as orphans (verified: `SIGKILL` on the master leaves the workers
+    /// running). Across a suite that spawns dozens of servers those orphans
+    /// accumulate and exhaust memory. Sending `SIGTERM` first lets the master
+    /// run its shutdown path and reap its own workers; a `SIGKILL` fallback
+    /// covers a wedged master after a short grace period. This inherent method
+    /// shadows `Child::kill` through the `Deref`, so every existing
+    /// `child.kill()` call site becomes graceful with no change. Idempotent: an
+    /// already-exited child returns `Ok` immediately.
+    fn kill(&mut self) -> std::io::Result<()> {
+        if matches!(self.child.try_wait(), Ok(Some(_))) {
+            return Ok(());
+        }
+        let pid = self.child.id().to_string();
+        let _ = Command::new("kill").arg("-TERM").arg(&pid).status();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if matches!(self.child.try_wait(), Ok(Some(_))) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Wedged master: force-kill. Its workers may briefly orphan, but this
+        // path is the rare exception, not the steady-state teardown.
+        self.child.kill()
+    }
+}
+
+impl std::ops::Deref for ServerGuard {
+    type Target = std::process::Child;
+    /// Exposes the wrapped child for read-only access (`id`, `stdout`).
+    fn deref(&self) -> &std::process::Child {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for ServerGuard {
+    /// Exposes the wrapped child for `kill`/`wait`/`try_wait`/`stdout.take()`.
+    fn deref_mut(&mut self) -> &mut std::process::Child {
+        &mut self.child
+    }
+}
+
+impl Drop for ServerGuard {
+    /// Gracefully terminates and reaps the server unconditionally, even during a
+    /// panic unwind, so neither the master nor its workers leak. Best-effort: an
+    /// already-reaped child is a no-op.
+    fn drop(&mut self) {
+        let _ = self.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Spawns the server binary on `addr`, waits until it accepts connections, and
+/// returns an RAII [`ServerGuard`] that reaps it on scope exit. The child is
+/// wrapped in the guard *before* `wait_until_ready`, so a readiness-timeout
+/// panic still reaps the process instead of orphaning it.
+fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerGuard {
+    let child = ServerGuard::new(
+        Command::new(bin)
+            .arg("--listen").arg(addr)
+            .arg("--workers").arg(workers)
+            .spawn()
+            .expect("failed to spawn web server"),
+    );
     wait_until_ready(addr);
     child
 }
@@ -188,6 +270,178 @@ fn web_reset_clears_static_property() {
     let _ = child.wait();
     assert!(r1.ends_with("1"), "first response body: {:?}", r1);
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
+}
+
+/// Verifies an output buffer left open at request end is flushed, and does not swallow
+/// the responses that follow.
+///
+/// PHP flushes whatever `ob_start()` left open at request shutdown. The `--web`
+/// epilogue skipped that drain, so the request itself returned nothing and the leaked
+/// nesting level captured every later response served by the same worker.
+#[test]
+fn web_unbalanced_output_buffer_is_flushed_and_not_inherited() {
+    let dir = make_test_dir("web_ob_leak");
+    let src = r#"<?php
+if (isset($_GET["leak"])) {
+    ob_start();
+    echo "buffered";
+} else {
+    echo "plain-ok";
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?leak=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("buffered"),
+        "an output buffer left open was not flushed at request end: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("plain-ok"),
+        "a leaked output-buffer level swallowed the next response: {:?}",
+        second
+    );
+    assert!(third.ends_with("plain-ok"), "third response body: {:?}", third);
+}
+
+/// Verifies a worker survives reading the wrapper registry after an earlier request
+/// registered one.
+///
+/// `stream_wrapper_register()` keeps its tables in the PHP arena, which the per-request
+/// reset wipes, but reaches them through process-lifetime pointers. Left dangling, the
+/// next `stream_get_wrappers()` read a garbage slot count and allocated until the heap
+/// was exhausted, killing the worker — the response simply never arrived.
+#[test]
+fn web_wrapper_registry_does_not_outlive_the_request_arena() {
+    let dir = make_test_dir("web_wrapper_registry_arena");
+    let src = r#"<?php
+class ArenaWrapper {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_close(): void {}
+}
+
+if (isset($_GET["register"])) {
+    stream_wrapper_register("arena.probe", "ArenaWrapper");
+    echo "registered";
+} else {
+    echo "wrappers=", (int) in_array("php", stream_get_wrappers(), true);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?register=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("wrappers=1"),
+        "reading the wrapper registry after a registration killed the worker: {:?}",
+        second
+    );
+    assert!(third.ends_with("wrappers=1"), "third response body: {:?}", third);
+}
+
+/// Verifies a worker survives a request that grows the resource registry past its
+/// static slots, and the one after it.
+///
+/// The registry starts in a static eight-slot block and grows onto the PHP arena. That
+/// block hid the defect for small requests; past eight resources the next request
+/// walked slots the arena reset had already reclaimed.
+#[test]
+fn web_resource_registry_growth_survives_the_request_arena() {
+    let dir = make_test_dir("web_resource_registry_growth");
+    let src = r#"<?php
+$streams = [];
+for ($i = 0; $i < 40; $i++) {
+    $streams[] = fopen("php://memory", "r+");
+}
+echo "opened=", count($streams);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("opened=40"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("opened=40"),
+        "a grown resource registry did not survive the request arena reset: {:?}",
+        second
+    );
+    assert!(third.ends_with("opened=40"), "third response body: {:?}", third);
+}
+
+/// Verifies request reset closes an abandoned user-wrapper resource exactly
+/// once before the next request runs in the same worker process.
+#[test]
+fn web_stream_registry_request_reset_closes_abandoned_resource_once() {
+    let dir = make_test_dir("web_stream_registry_reset");
+    let count_file = dir
+        .join("close-count.txt")
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"");
+    let src = r#"<?php
+class RequestCloseWrapper {
+    public $context;
+
+    public function stream_open($path, $mode, $options, &$openedPath): bool {
+        return true;
+    }
+
+    public function stream_close(): void {
+        $count = file_exists("__COUNT_FILE__")
+            ? (int) file_get_contents("__COUNT_FILE__")
+            : 0;
+        file_put_contents("__COUNT_FILE__", (string) ($count + 1));
+    }
+}
+
+if (!in_array("reqclose", stream_get_wrappers(), true)) {
+    stream_wrapper_register("reqclose", "RequestCloseWrapper");
+}
+
+if (isset($_GET["hold"])) {
+    $heldStream = fopen("reqclose://request", "r");
+    echo is_resource($heldStream) ? "held" : "open-failed";
+} else {
+    echo "closed=";
+    echo file_exists("__COUNT_FILE__")
+        ? file_get_contents("__COUNT_FILE__")
+        : "0";
+}
+"#
+    .replace("__COUNT_FILE__", &count_file);
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?hold=1");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("held"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("closed=1"),
+        "second response did not observe exact-once stream cleanup: {:?}",
+        second
+    );
 }
 
 /// Verifies that "Hello World" is served as the response body.
@@ -646,10 +900,12 @@ fn web_body_size_limit_returns_413() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-body-size", "64"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     let small = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(10));
     let big = http_request(&addr, "POST", "/", &[("Content-Type", "text/plain")], &"x".repeat(1000));
@@ -844,11 +1100,13 @@ fn web_env_superglobal_populated() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1"])
-        .env("ELEPHC_WEB_TEST_ENV", "present")
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1"])
+            .env("ELEPHC_WEB_TEST_ENV", "present")
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     let resp = http_request(&addr, "GET", "/", &[], "");
     let _ = child.kill();
@@ -886,10 +1144,12 @@ fn web_max_requests_recycles_and_keeps_serving() {
     let bin = compile_web(&dir, "<?php echo 'ok';", "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-requests", "2"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     // More requests than the cap: the server must keep serving across recycles.
     // A single-worker recycle has a brief no-listener window, so tolerate transient
@@ -980,10 +1240,12 @@ fn web_max_execution_time_kills_runaway_handler() {
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--max-execution-time", "1"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--max-execution-time", "1"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     assert!(http_request(&addr, "GET", "/", &[], "").ends_with("fast"));
     // The runaway request is killed by the watchdog (dropped connection); tolerate it.
@@ -1010,10 +1272,12 @@ fn web_gzip_compresses_when_accepted() {
     let bin = compile_web(&dir, "<?php echo str_repeat('ABCD', 500);", "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
-    let mut child = Command::new(&bin)
-        .args(["--listen", &addr, "--workers", "1", "--gzip"])
-        .spawn()
-        .expect("spawn");
+    let mut child = ServerGuard::new(
+        Command::new(&bin)
+            .args(["--listen", &addr, "--workers", "1", "--gzip"])
+            .spawn()
+            .expect("spawn"),
+    );
     wait_until_ready(&addr);
     // The gzipped body is binary, so read raw bytes and inspect the (ASCII) header
     // block rather than http_request's read_to_string.
@@ -1109,91 +1373,192 @@ fn web_namespaced_program_serves() {
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
 }
 
-/// Verifies the rfc1867 upload registry: a multipart temp file created by the web prelude is
-/// recognized by `is_uploaded_file()`, an unrelated path is not, `move_uploaded_file()` moves
-/// the payload, and the moved path stops being an upload so a second move fails — exactly
-/// PHP's semantics. The registry (`crate::upload_prelude`) is fed only by the multipart parser,
-/// the single producer of upload temp files in a compiled program.
+/// Verifies the OPcache `opcache_get_status()` prelude function under `--web`, where the
+/// cache is enabled (`opcache.enable` default). Spot-checks the enabled status array:
+/// `opcache_enabled` true; the class-B memory invariant (used + free + wasted ==
+/// `opcache.memory_consumption` = 134217728) and the interned-strings invariant
+/// (used + free == buffer_size); `opcache_statistics.max_cached_keys` == 16229 (derived
+/// from the default `max_accelerated_files`); `opcache_hit_rate` == 0.0; `jit.enabled`
+/// false (default `opcache.jit = disable`); the `scripts` key present for the default
+/// call but ABSENT for `opcache_get_status(false)`; and `start_time` a live `time()`.
+/// The expected string matches reference PHP `opcache_get_status()` run with the cache
+/// enabled.
 #[test]
-fn web_upload_predicates_track_multipart_temp_files() {
-    let dir = make_test_dir("web_upload_registry");
+fn web_opcache_get_status_reports_enabled_array() {
+    let dir = make_test_dir("web_opcache_status");
     let src = "<?php \
-        $t = $_FILES['doc']['tmp_name'] ?? ''; \
-        $o = []; \
-        $o[] = 'isup=' . (is_uploaded_file($t) ? 'yes' : 'no'); \
-        $o[] = 'other=' . (is_uploaded_file('/etc/hosts') ? 'yes' : 'no'); \
-        $dst = sys_get_temp_dir() . '/elephc_web_upload_moved.txt'; \
-        @unlink($dst); \
-        $o[] = 'move=' . (move_uploaded_file($t, $dst) ? 'yes' : 'no'); \
-        $o[] = 'content=' . (is_file($dst) ? file_get_contents($dst) : 'MISSING'); \
-        $o[] = 'after=' . (is_uploaded_file($t) ? 'yes' : 'no'); \
-        $o[] = 'again=' . (move_uploaded_file($t, $dst) ? 'yes' : 'no'); \
-        @unlink($dst); \
-        echo implode('|', $o);";
+$s = opcache_get_status(); \
+$ns = opcache_get_status(false); \
+echo ($s['opcache_enabled'] ? 'EN1' : 'EN0'), ':'; \
+echo (($s['memory_usage']['used_memory'] + $s['memory_usage']['free_memory'] + $s['memory_usage']['wasted_memory']) == 134217728 ? 'MEMOK' : 'MEMBAD'), ':'; \
+echo (($s['interned_strings_usage']['used_memory'] + $s['interned_strings_usage']['free_memory']) == $s['interned_strings_usage']['buffer_size'] ? 'INTOK' : 'INTBAD'), ':'; \
+echo ($s['opcache_statistics']['max_cached_keys'] == 16229 ? 'MCK1' : 'MCK0'), ':'; \
+echo ($s['opcache_statistics']['opcache_hit_rate'] == 0 ? 'HR1' : 'HR0'), ':'; \
+echo ($s['jit']['enabled'] ? 'JIT0' : 'JIT1'), ':'; \
+echo (isset($s['scripts']) ? 'SCR1' : 'SCR0'), ':'; \
+echo (isset($ns['scripts']) ? 'NSCR1' : 'NSCR0'), ':'; \
+echo ($s['opcache_statistics']['start_time'] > 1000000000 ? 'ST1' : 'ST0');";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
     let mut child = spawn_server(&bin, &addr, "1");
-    let boundary = "Upbnd";
-    let body = format!(
-        "--{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"d.txt\"\r\n\
-         Content-Type: text/plain\r\n\r\nUPLOAD-OK\r\n--{b}--\r\n",
-        b = boundary
-    );
-    let ct = format!("multipart/form-data; boundary={}", boundary);
-    let resp = http_request(&addr, "POST", "/", &[("Content-Type", &ct)], &body);
+    let resp = http_get(&addr, "/");
     let _ = child.kill();
     let _ = child.wait();
     assert!(
-        resp.ends_with("isup=yes|other=no|move=yes|content=UPLOAD-OK|after=no|again=no"),
-        "upload registry: {:?}",
+        resp.ends_with("EN1:MEMOK:INTOK:MCK1:HR1:JIT1:SCR1:NSCR0:ST1"),
+        "opcache_get_status --web array mismatch: {:?}",
         resp
     );
 }
 
-/// Verifies `request_parse_body()` (PHP 8.4): it returns `[$post, $files]` parsed from the
-/// current request body when the Content-Type is supported. Symfony's
-/// `Request::createFromGlobals()` calls it for PUT/DELETE/PATCH/QUERY requests.
+/// Verifies the OPcache surface keeps the SAME SHAPE on every request of a long-lived worker.
+///
+/// This is the `--web` half of OPcache verification, and it deliberately uses NO reference PHP.
+/// FPM would be the only oracle for cross-request behaviour, and it is out of scope on purpose
+/// (see `docs/php/opcache.md`): elephc replaces FPM rather than plugging into it, and the
+/// cross-request numbers FPM would expose — accumulating `hits`, a growing `scripts` map,
+/// `opcache_reset()`'s deferred restart — are class-B synthetic values under AOT, because there
+/// is no cache to accumulate into. Comparing them to FPM would measure the fidelity of a number
+/// the model deliberately invents.
+///
+/// What IS a real defect, and what this pins, is the surface changing shape between requests of
+/// one worker: a key appearing or vanishing, or iteration order drifting. Nothing in a
+/// single-request CLI test can observe that.
+///
+/// The fingerprint is built with `foreach` and no sorting on purpose — elephc's checker refuses
+/// `ksort()`/`sort()` on the `Mixed` arrays these functions return, and comparing raw iteration
+/// order across requests is a STRICTER check than comparing sorted sets anyway.
 #[test]
-fn web_request_parse_body_returns_post_and_files() {
-    let dir = make_test_dir("web_request_parse_body");
+fn web_opcache_surface_keeps_one_shape_across_requests() {
+    let dir = make_test_dir("web_opcache_shape");
     let src = "<?php \
-        try { [$p, $f] = request_parse_body(); \
-              echo 'ok|' . ($p['greeting'] ?? '?') . '|' . ($f['doc']['name'] ?? '?'); } \
-        catch (\\RequestParseBodyException $e) { echo 'threw'; }";
+$s = opcache_get_status(); \
+foreach ($s as $k => $v) { echo 'S', $k, '|'; } \
+foreach ($s['opcache_statistics'] as $k => $v) { echo 'T', $k, '|'; } \
+foreach ($s['scripts'] as $p => $e) { foreach ($e as $k => $v) { echo 'E', $k, '|'; } } \
+$c = opcache_get_configuration(); \
+foreach ($c['directives'] as $k => $v) { echo 'D', $k, '|'; }";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
     let mut child = spawn_server(&bin, &addr, "1");
-    let boundary = "Rpbbnd";
-    let body = format!(
-        "--{b}\r\nContent-Disposition: form-data; name=\"greeting\"\r\n\r\nhello\r\n\
-         --{b}\r\nContent-Disposition: form-data; name=\"doc\"; filename=\"d.txt\"\r\n\
-         Content-Type: text/plain\r\n\r\nDATA\r\n--{b}--\r\n",
-        b = boundary
-    );
-    let ct = format!("multipart/form-data; boundary={}", boundary);
-    let resp = http_request(&addr, "PUT", "/", &[("Content-Type", &ct)], &body);
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
     let _ = child.kill();
     let _ = child.wait();
-    assert!(resp.ends_with("ok|hello|d.txt"), "request_parse_body: {:?}", resp);
+
+    let body = |r: &str| r.rsplit("\r\n\r\n").next().unwrap_or("").to_string();
+    assert!(!body(&first).is_empty(), "the first request produced no body: {first:?}");
+    assert_eq!(
+        body(&first),
+        body(&second),
+        "the OPcache surface changed shape between request 1 and 2"
+    );
+    assert_eq!(
+        body(&second),
+        body(&third),
+        "the OPcache surface changed shape between request 2 and 3"
+    );
 }
 
-/// Verifies `request_parse_body()` throws the real `\RequestParseBodyException` when the
-/// request carries no supported Content-Type — the branch Symfony relies on to fall back to
-/// `$_POST`/`$_FILES`. The exception must be catchable by name, not a fatal.
+/// Verifies the reporting-only counters stay COHERENT across requests of one worker.
+///
+/// `start_time` must not move — it identifies the worker's cache generation, and a value that
+/// drifted per request would make every rate derived from it meaningless. `num_cached_scripts`
+/// must not shrink: the AOT manifest is fixed at link time, so an entry disappearing would mean
+/// the model lost track of code that is still in the binary.
+///
+/// Both are class-B invariants: the NUMBERS are synthetic, their COHERENCE is not.
 #[test]
-fn web_request_parse_body_throws_without_supported_content_type() {
-    let dir = make_test_dir("web_request_parse_body_throws");
+fn web_opcache_counters_stay_coherent_across_requests() {
+    let dir = make_test_dir("web_opcache_counters");
     let src = "<?php \
-        try { [$p, $f] = request_parse_body(); echo 'ok'; } \
-        catch (\\RequestParseBodyException $e) { echo 'threw'; }";
+$s = opcache_get_status(); \
+echo $s['opcache_statistics']['start_time'], ':', \
+     $s['opcache_statistics']['num_cached_scripts'], ':', \
+     ($s['opcache_statistics']['opcache_hit_rate'] >= 0 ? 'HR_OK' : 'HR_NEG');";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
     let mut child = spawn_server(&bin, &addr, "1");
-    let resp = http_request(&addr, "GET", "/", &[], "");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
     let _ = child.kill();
     let _ = child.wait();
-    assert!(resp.ends_with("threw"), "request_parse_body without content type: {:?}", resp);
+
+    let body = |r: &str| r.rsplit("\r\n\r\n").next().unwrap_or("").to_string();
+    let (a, b) = (body(&first), body(&second));
+    assert!(a.ends_with("HR_OK"), "hit rate must never be negative: {a:?}");
+    assert_eq!(
+        a, b,
+        "start_time / num_cached_scripts must not drift between requests"
+    );
+}
+
+/// Verifies the request-global default stream context is recreated as a live
+/// resource after each request reset rather than reusing a stale registry handle.
+#[test]
+fn web_default_stream_context_is_live_on_every_request() {
+    let dir = make_test_dir("web_default_stream_context_reset");
+    let src = "<?php $context = stream_context_get_default(); \
+        echo is_resource($context) ? get_resource_type($context) : 'dead';";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("stream-context"),
+        "first request returned a non-live default context: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("stream-context"),
+        "request reset left a stale default-context handle: {:?}",
+        second
+    );
+}
+
+/// Verifies `opcache.enable_cli` has NO effect under `--web`, where only `opcache.enable` governs.
+///
+/// php-src consults `enable_cli` solely on the CLI SAPI; a web request reads `opcache.enable`
+/// alone. elephc resolves that gate at COMPILE time from the target SAPI, so a `--web` build with
+/// `enable_cli=0` must still report an enabled cache — and a `--web` build with `enable=0` must
+/// report it disabled even if `enable_cli=1`. Getting this backwards would produce a binary that
+/// contradicts its own `opcache_get_configuration()`.
+///
+/// This is a class-A contract check and needs no reference process, which is exactly why it
+/// belongs here rather than in an FPM comparison.
+#[test]
+fn web_opcache_gate_ignores_enable_cli() {
+    let src = "<?php $s = opcache_get_status(); echo is_array($s) ? 'ON' : 'OFF';";
+
+    for (flags, expected, why) in [
+        (
+            vec!["--ini", "opcache.enable=1", "--ini", "opcache.enable_cli=0"],
+            "ON",
+            "enable_cli=0 must not disable a web build",
+        ),
+        (
+            vec!["--ini", "opcache.enable=0", "--ini", "opcache.enable_cli=1"],
+            "OFF",
+            "enable_cli=1 must not enable a web build whose opcache.enable is 0",
+        ),
+    ] {
+        let dir = make_test_dir("web_opcache_gate");
+        let bin = compile_web_with_flags(&dir, src, "app", &flags);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let mut child = spawn_server(&bin, &addr, "1");
+        let resp = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
+    }
 }

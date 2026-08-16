@@ -10,6 +10,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::platform::Target;
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -18,83 +20,6 @@ use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, EnumInfo, FunctionSig, InterfaceInfo, PhpType};
 
 use super::instanceof::{escaped_ascii, escaped_bytes};
-
-/// `_class_gc_desc_N` tag for an object-owned reference-property cell whose payload is a
-/// REFCOUNTED value (`Str`/`Array`/`AssocArray`/`Object`/`Mixed`/`Union`/`Iterable`).
-/// `__rt_object_free_deep` derefs the 16-byte cell, `__rt_decref_any`s the payload at `[cell+0]`,
-/// then frees the cell. Must stay in sync with the tag-8 branch in
-/// `crate::codegen_support::runtime::arrays::object_free_deep`.
-pub(crate) const GC_TAG_OWNED_REF_CELL_REFCOUNTED: u8 = 8;
-
-/// `_class_gc_desc_N` tag for an object-owned reference-property cell whose payload is a SCALAR
-/// (`Int`/`Float`/`Bool`/`Resource`/other non-refcounted). `__rt_object_free_deep` frees the cell
-/// only (no payload decref). Value 9 is reserved for `Resource` and 10 for `Callable`, so scalar
-/// owned cells use 11. Must stay in sync with the tag-11 branch in
-/// `crate::codegen_support::runtime::arrays::object_free_deep`.
-pub(crate) const GC_TAG_OWNED_REF_CELL_SCALAR: u8 = 11;
-
-/// Returns the `_class_gc_desc_N` byte for one property, honoring object-owned reference cells.
-///
-/// An owned reference property (`owned_reference_properties`) that is NOT a whole-program `=&`
-/// rebind target (`rebound_reference_properties`) is safe to free from the destructor: its cell is
-/// uniquely owned by this object, so it is tagged 8 (refcounted payload → decref payload + free
-/// cell) or 11 (scalar payload → free cell only) by declared type. A borrowed/aliased reference
-/// slot falls back to tag 0 (no cleanup, leaks as before, never double-frees). Non-reference
-/// properties keep their declared-type tag.
-fn gc_desc_tag(
-    class_info: &ClassInfo,
-    slot_index: usize,
-    prop_name: &str,
-    prop_ty: &PhpType,
-) -> u8 {
-    if class_info.owned_reference_properties.contains(prop_name)
-        && !class_info.rebound_reference_properties.contains(prop_name)
-    {
-        return if is_refcounted_payload(prop_ty) {
-            GC_TAG_OWNED_REF_CELL_REFCOUNTED
-        } else {
-            GC_TAG_OWNED_REF_CELL_SCALAR
-        };
-    }
-    if class_info.property_slot_is_reference(slot_index, prop_name) {
-        return 0;
-    }
-    match prop_ty {
-        PhpType::Int => 0,
-        PhpType::Str => 1,
-        PhpType::Float => 2,
-        PhpType::Bool | PhpType::False => 3,
-        PhpType::Array(_) => 4,
-        PhpType::AssocArray { .. } => 5,
-        PhpType::Object(_) => 6,
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
-        PhpType::Resource(_) => 9,
-        PhpType::TaggedScalar => {
-            unreachable!("nullable scalar properties use the boxed Mixed representation")
-        }
-        PhpType::Callable => 10,
-        PhpType::Pointer(_)
-        | PhpType::Buffer(_)
-        | PhpType::Packed(_)
-        | PhpType::Never
-        | PhpType::Void => 0,
-    }
-}
-
-/// Returns true when a property's declared type is heap-backed and refcounted, so an owned
-/// reference cell holding it must decref the payload before the cell is freed.
-fn is_refcounted_payload(prop_ty: &PhpType) -> bool {
-    matches!(
-        prop_ty,
-        PhpType::Str
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-            | PhpType::Mixed
-            | PhpType::Union(_)
-            | PhpType::Iterable
-    )
-}
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
 const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
@@ -140,27 +65,28 @@ pub(crate) fn emit_runtime_data_user(
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
+    target: Target,
 ) -> String {
     let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
     sorted_globals.sort();
     for name in sorted_globals {
-        out.push_str(&format!(".comm _gvar_{}, 16, 3\n", name));
+        out.push_str(&comm_directive(&format!("_gvar_{}", name), 16, target));
     }
 
     let mut sorted_statics: Vec<&(String, String)> = static_vars.keys().collect();
     sorted_statics.sort();
     for (func_name, var_name) in sorted_statics {
-        out.push_str(&format!(
-            ".comm _static_{}_{}, 16, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}", mangle_fqn(func_name), var_name),
+            16,
+            target,
         ));
-        out.push_str(&format!(
-            ".comm _static_{}_{}_init, 8, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}_init", mangle_fqn(func_name), var_name),
+            8,
+            target,
         ));
     }
 
@@ -181,7 +107,7 @@ pub(crate) fn emit_runtime_data_user(
     let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
     static_property_symbols.sort();
     for symbol in static_property_symbols {
-        out.push_str(&format!(".comm {}, 16, 3\n", symbol));
+        out.push_str(&comm_directive(&symbol, 16, target));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
@@ -191,9 +117,10 @@ pub(crate) fn emit_runtime_data_user(
             continue;
         };
         for case in &enum_info.cases {
-            out.push_str(&format!(
-                ".comm {}, 8, 3\n",
-                enum_case_symbol(*enum_name, &case.name)
+            out.push_str(&comm_directive(
+                &enum_case_symbol(*enum_name, &case.name),
+                8,
+                target,
             ));
         }
     }
@@ -291,8 +218,11 @@ pub(crate) fn emit_runtime_data_user(
         ("_spl_invalid_argument_exception_class_id", "InvalidArgumentException"),
         ("_spl_type_error_class_id", "TypeError"),
         ("_spl_value_error_class_id", "ValueError"),
-        ("_reflection_exception_class_id", "ReflectionException"),
         ("_spl_arithmetic_error_class_id", "ArithmeticError"),
+        // Emitted for the `intdiv($a, 0)` / `$a % 0` zero-divisor guards, which
+        // raise reference PHP's catchable DivisionByZeroError from codegen with
+        // no EIR class reference to hang the id off.
+        ("_spl_division_by_zero_error_class_id", "DivisionByZeroError"),
     ] {
         let class_id = all_class_id_by_name
             .get(class_name)
@@ -333,6 +263,75 @@ pub(crate) fn emit_runtime_data_user(
             } else {
                 out.push_str("    .quad _class_json_desc_missing\n");
             }
+        }
+    }
+
+    // Per-class var_dump descriptor pointer table — used by
+    // `__rt_var_dump_object` to walk EVERY declared property, not just the
+    // public subset the JSON descriptor carries, and with PHP's rendered
+    // `["p":protected]` key text instead of serialize's NUL-mangled key.
+    out.push_str(".globl _class_vd_desc_ptrs\n_class_vd_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_vd_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_vd_desc_missing\n");
+            }
+        }
+    }
+
+    // Per-class print_r / var_export descriptor pointer table — read by
+    // `__rt_print_r_object` and by the `__elephc_object_prop_*` prelude helpers.
+    // Same rows as `_class_vd_desc_ptrs`, different key spellings.
+    out.push_str(".globl _class_prop_desc_ptrs\n_class_prop_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_prop_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_prop_desc_missing\n");
+            }
+        }
+    }
+
+    // Per-class enum tables. `_class_enum_kinds` is 0 for an ordinary class and
+    // 1/2/3 for a pure / int-backed / string-backed enum — `print_r` prints
+    // `E Enum`, `E Enum:int` and `E Enum:string` respectively, and `var_dump` /
+    // `var_export` only need the non-zero test. `_class_enum_name_offsets` is the
+    // byte offset of the enum's `name` property slot inside the instance (`-1`
+    // for a non-enum), which is where the case name every renderer prints lives.
+    // Both are indexed by the same class id as every other per-class table, so an
+    // enum instance is recognized from its object header alone.
+    out.push_str(".globl _class_enum_kinds\n_class_enum_kinds:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let kind = class_name_by_id
+                .get(&class_id)
+                .and_then(|class_name| enums.get(*class_name))
+                .map(|enum_info| match &enum_info.backing_type {
+                    Some(PhpType::Int) => 2u64,
+                    Some(PhpType::Str) => 3u64,
+                    _ => 1u64,
+                })
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", kind));
+        }
+    }
+
+    out.push_str(".globl _class_enum_name_offsets\n_class_enum_name_offsets:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let offset = match (
+                class_name_by_id.get(&class_id),
+                class_info_by_id.get(&class_id),
+            ) {
+                (Some(class_name), Some(class_info)) if enums.contains_key(*class_name) => {
+                    enum_case_name_property_offset(class_info)
+                }
+                _ => -1,
+            };
+            out.push_str(&format!("    .quad {}\n", offset));
         }
     }
 
@@ -434,30 +433,6 @@ pub(crate) fn emit_runtime_data_user(
                 .get(&class_id)
                 .and_then(|class_info| class_info.method_impl_classes.get(&destruct_key))
                 .map(|impl_class| method_symbol(impl_class, &destruct_key))
-                .unwrap_or_else(|| "0".to_string());
-            out.push_str(&format!("    .quad {}\n", entry));
-        }
-    }
-
-    // Per-class __clone symbol table — consulted by __rt_call_object_clone_method
-    // (invoked by __rt_object_clone after the payload is shallow-copied) to run a
-    // class's PHP __clone on the freshly allocated instance. Each entry resolves
-    // through the implementing class so an inherited __clone dispatches to the
-    // ancestor's emitted method symbol; `0` means the class and its ancestors
-    // declare no __clone, so no clone-method call is made.
-    out.push_str(".globl _class_clone_count\n_class_clone_count:\n");
-    out.push_str(&format!(
-        "    .quad {}\n",
-        max_class_id.map_or(0, |class_id| class_id + 1)
-    ));
-    out.push_str(".globl _class_clone_ptrs\n_class_clone_ptrs:\n");
-    if let Some(max_class_id) = max_class_id {
-        let clone_key = php_symbol_key("__clone");
-        for class_id in 0..=max_class_id {
-            let entry = class_info_by_id
-                .get(&class_id)
-                .and_then(|class_info| class_info.method_impl_classes.get(&clone_key))
-                .map(|impl_class| method_symbol(impl_class, &clone_key))
                 .unwrap_or_else(|| "0".to_string());
             out.push_str(&format!("    .quad {}\n", entry));
         }
@@ -588,6 +563,16 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n"); // flags
     out.push_str("    .quad 0\n"); // jsonSerialize target
     out.push_str("    .quad 0\n"); // public property count
+    // _class_vd_desc_missing: zero properties (a class id with no var_dump metadata).
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_vd_desc_missing\n_class_vd_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
+    // _class_prop_desc_missing: zero properties (a class id with no print_r /
+    // var_export metadata), so an unknown class renders an empty body instead of
+    // reading past the table.
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_prop_desc_missing\n_class_prop_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
     out.push_str("    .quad 0\n");
@@ -601,7 +586,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS {
+    for _ in 0..USER_WRAPPER_VTABLE_TOTAL_SLOTS {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -611,6 +596,8 @@ pub(crate) fn emit_runtime_data_user(
     }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_script_source_file_data(&mut out, source_path);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_source_file_data(&mut out, source_path);
@@ -934,7 +921,32 @@ pub(crate) fn emit_runtime_data_user(
                     out.push_str(", ");
                 }
                 let prop_name = &class_info.properties[i].0;
-                let tag = gc_desc_tag(class_info, i, prop_name, prop_ty);
+                let tag = if class_info.property_slot_is_reference(i, prop_name) {
+                    0
+                } else {
+                    match prop_ty {
+                        PhpType::Int => 0,
+                        PhpType::Str => 1,
+                        PhpType::Float => 2,
+                        PhpType::Bool | PhpType::False => 3,
+                        PhpType::Array(_) => 4,
+                        PhpType::AssocArray { .. } => 5,
+                        PhpType::Object(_) => 6,
+                        PhpType::Mixed => 7,
+                        PhpType::Union(_) => 7,
+                        PhpType::Iterable => 7,
+                        PhpType::Resource(_) => 9,
+                        PhpType::TaggedScalar => {
+                            unreachable!("nullable scalar properties use the boxed Mixed representation")
+                        }
+                        PhpType::Callable => 10,
+                        PhpType::Pointer(_)
+                        | PhpType::Buffer(_)
+                        | PhpType::Packed(_)
+                        | PhpType::Never
+                        | PhpType::Void => 0,
+                    }
+                };
                 out.push_str(&tag.to_string());
             }
             out.push('\n');
@@ -980,6 +992,94 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
             out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
             out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
+        }
+
+        // var_dump property-info table: one row per RENDERED property, carrying the
+        // text PHP renders BETWEEN the `[` and `]` of the key line (`"p"`,
+        // `"p":protected`, `"p":"C":private`), the property's byte offset within the
+        // object, its runtime value tag, and the declared type name
+        // `uninitialized(...)` needs. `__rt_var_dump_object` walks this by class id.
+        // Kept separate from `_class_serprop_*` because serialize's key is NUL-mangled
+        // and separate from `_class_json_desc_*` because JSON only carries public
+        // properties — and, unlike both of those, this table honours `__debugInfo()`
+        // (see `var_dump_debug_info_projection`), because `var_dump` is the only PHP
+        // renderer that consults `__debugInfo` AND the only elephc renderer that
+        // enumerates object properties at all.
+        let mut vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        if enums.contains_key(class_name.as_str()) {
+            hoist_enum_name_row(&mut vd_rows);
+        }
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_vd_pkey_{}_{}\n_class_vd_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.key),
+            ));
+            out.push_str(&format!(
+                ".globl _class_vd_ptype_{}_{}\n_class_vd_ptype_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.type_name),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_vd_desc_{}\n_class_vd_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", vd_rows.len()));
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_vd_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.key.len())); // rendered key byte length
+            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
+            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
+            out.push_str(&format!(
+                "    .quad _class_vd_ptype_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
+        }
+
+        // print_r / var_export property table: the SAME rows (and therefore the
+        // same `__debugInfo()` projection, offsets and value tags) as the
+        // var_dump descriptor above, but carrying the two other key spellings PHP
+        // uses for the same property — `print_r`'s unquoted `x` / `y:protected` /
+        // `z:C:private`, and `var_export`'s bare `x`. Sharing one row list is what
+        // keeps the three renderers from ever disagreeing about which properties
+        // an object has or where they live.
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_prop_pkey_{}_{}\n_class_prop_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.print_r_key),
+            ));
+            out.push_str(&format!(
+                ".globl _class_prop_nkey_{}_{}\n_class_prop_nkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.plain_key),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_prop_desc_{}\n_class_prop_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", vd_rows.len()));
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_prop_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.print_r_key.len())); // print_r key byte length
+            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
+            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
+            out.push_str(&format!(
+                "    .quad _class_prop_nkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.plain_key.len())); // bare property-name byte length
         }
 
         out.push_str("    .p2align 3\n");
@@ -1097,6 +1197,24 @@ fn emit_name_lookup_data(
         out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
         out.push_str(&format!("    .quad {}\n", name.len()));
     }
+}
+
+/// Emits the compiled script's canonical path, read by `Throwable::getFile()` and by the
+/// ` in <file>:<line>` suffix of `__rt_report_uncaught_exception`.
+///
+/// Emitted UNCONDITIONALLY, unlike [`emit_eval_reflection_source_file_data`], because an
+/// uncaught exception can end any program whether or not it uses eval. The bytes are the same
+/// canonicalized string `crate::magic_constants::file_pass` bakes for `__FILE__`, so a program
+/// that mentions `__FILE__` already carries them; a length of zero means the module had no source
+/// path (a synthesized or in-memory module) and the readers fall back to omitting the location
+/// rather than printing an empty filename.
+fn emit_script_source_file_data(out: &mut String, source_path: Option<&str>) {
+    let source_path = source_path.unwrap_or("");
+    out.push_str(".globl _script_source_file\n_script_source_file:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(source_path)));
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _script_source_file_len\n_script_source_file_len:\n");
+    out.push_str(&format!("    .quad {}\n", source_path.len()));
 }
 
 /// Emits the source filename used by eval Reflection source-location hooks.
@@ -2072,12 +2190,17 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// 21 dir_closedir, 22 dir_rewinddir. Slots whose dispatch is not yet wired are
 /// still emitted (zero when the class does not declare the method); the runtime
 /// only reaches a slot when the corresponding builtin routes to it.
-/// Each slot is either a method-symbol pointer (when the class declares the
-/// method publicly) or zero. The stat methods must be declared WITHOUT a
-/// return type (or `: mixed`) so their associative stat array round-trips as a
-/// boxed Mixed cell — a `: array` return is integer-keyed and rejects the
-/// string keys (`size`, `mode`, ...) PHP stat arrays use.
+/// Each method slot is either a method-symbol pointer (when the class declares
+/// the method publicly) or zero. Slot 23 stores the byte offset of a `mixed`
+/// `context` property for PHP's user-wrapper context injection. The stat
+/// methods must be declared WITHOUT a return type (or `: mixed`) so their
+/// associative stat array round-trips as a boxed Mixed cell — a `: array`
+/// return is integer-keyed and rejects the string keys (`size`, `mode`, ...)
+/// PHP stat arrays use.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
+
+/// Wrapper method slots plus the `context` property-offset metadata slot.
+const USER_WRAPPER_VTABLE_TOTAL_SLOTS: usize = USER_WRAPPER_VTABLE_SLOTS + 1;
 
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
@@ -2102,6 +2225,43 @@ pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
 pub(crate) fn is_user_filter_contract_method(method_key: &str) -> bool {
     USER_FILTER_METHOD_NAMES.contains(&method_key)
 }
+
+/// Returns true when declaring `method_key` is by itself enough to identify a class as a wrapper.
+///
+/// This is the marker deciding whether the fixed raw-argument ABI applies to a class at all, and
+/// every gate asking "is this a wrapper?" must ask it here — the checker's contract seeding and the
+/// EIR normalizer have to agree, or one hands the body a boxed Mixed while the other hands the
+/// dispatcher a (ptr,len) pair.
+///
+/// The split follows how php-src can REACH each hook:
+///
+/// - PATH hooks (below) are dispatched straight off a `scheme://` URL — `chmod()`/`touch()` reach
+///   `stream_metadata()`, `stat()` reaches `url_stat()`, `opendir()` reaches `dir_opendir()` — with
+///   no stream ever opened. A class declaring one is a wrapper on that evidence alone, and must be,
+///   because nothing else about it says so.
+/// - STREAM-INSTANCE hooks (`stream_read`, `stream_write`, `stream_eof`, …) are reachable only
+///   through an OPEN stream, and `php_stream_open_wrapper` refuses a wrapper without `stream_open`
+///   (measured: `fopen()` on such a class returns false without calling anything). So they mark a
+///   wrapper only alongside `stream_open` — otherwise an unrelated `Codec::stream_write($d)` would
+///   be forced onto an ABI PHP could never invoke.
+/// - GENERIC names (`unlink`/`rename`/`mkdir`/`rmdir`) are ordinary method names on ordinary
+///   classes (`Filesystem::mkdir($path, $mode)`), so they never mark; they take the wrapper
+///   contract only when the class also declares `stream_open` or a path hook.
+pub(crate) fn is_user_wrapper_marker_method(method_key: &str) -> bool {
+    method_key == "stream_open" || USER_WRAPPER_PATH_METHOD_NAMES.contains(&method_key)
+}
+
+/// The wrapper hooks php-src dispatches from a URL alone, with no stream opened.
+///
+/// Their names are reserved by the protocol, so declaring one identifies a wrapper by itself.
+const USER_WRAPPER_PATH_METHOD_NAMES: [&str; 6] = [
+    "stream_metadata",
+    "url_stat",
+    "dir_opendir",
+    "dir_readdir",
+    "dir_closedir",
+    "dir_rewinddir",
+];
 
 const USER_FILTER_METHOD_NAMES: [&str; 3] = [
     "filter",
@@ -2233,6 +2393,21 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
+    // Stored as offset + 1. Zero is a perfectly valid property offset — the first one a class
+    // declares — so a bare offset cannot say "this wrapper declares no $context". It used to,
+    // and a wrapper that declared `$context` first was read as declaring none: it never received
+    // its context, and later collected the dynamic-property deprecation meant for classes that
+    // really had not declared it.
+    let context_slot = class_info
+        .properties
+        .iter()
+        .find(|(property, php_type)| {
+            property == "context" && matches!(php_type, PhpType::Mixed | PhpType::Void)
+        })
+        .and_then(|(property, _)| class_info.property_offsets.get(property))
+        .map(|offset| offset + 1)
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", context_slot));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.
@@ -2401,6 +2576,279 @@ fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &s
     }
 }
 
+/// Renders the text PHP's `var_dump` places BETWEEN the `[` and `]` of a
+/// property key line.
+///
+/// PHP annotates the key with the property's visibility: `"p"` for public,
+/// `"p":protected`, and `"p":"C":private` where `C` is the DECLARING class (a
+/// private property inherited into a subclass keeps the parent's name). The
+/// declaring class comes from `property_declaring_classes`, the same source
+/// serialize's NUL-mangling uses, so the two renderings can never disagree.
+/// One rendered row of a `_class_vd_desc_*` table: everything
+/// `__rt_var_dump_object` needs to print a single `["key"]=> value` pair.
+///
+/// A row is NOT necessarily a declared property — when the class declares a
+/// foldable `__debugInfo()`, rows come from that projection instead (different
+/// key text, different order, possibly fewer rows), but each row still points at
+/// a real property slot so the walker reads a real value.
+struct VarDumpRow {
+    /// Text PHP renders between the `[` and `]`, quotes included.
+    key: String,
+    /// Text PHP's `print_r` renders between the `[` and `]`: the same visibility
+    /// annotation as `key` but WITHOUT the double quotes (`x`, `y:protected`,
+    /// `z:C:private`). Consumed by `__rt_print_r_object`.
+    print_r_key: String,
+    /// Bare property name, which `var_export` prints with no visibility suffix
+    /// at all. Consumed by `__elephc_object_prop_name`.
+    plain_key: String,
+    /// Byte offset of the backing property within the object.
+    offset: usize,
+    /// Runtime value tag of the backing property.
+    tag: u64,
+    /// Declared type name `uninitialized(...)` prints.
+    type_name: String,
+}
+
+/// Builds the `var_dump` rows for a class: the `__debugInfo()` projection when the
+/// class declares a foldable one, otherwise every declared property in layout order.
+fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<VarDumpRow> {
+    if let Some(projection) = var_dump_debug_info_projection(class_info) {
+        return projection
+            .into_iter()
+            .filter_map(|(key, prop_name)| {
+                let (layout_index, (_, prop_ty)) = class_info
+                    .properties
+                    .iter()
+                    .enumerate()
+                    .find(|(_, (name, _))| *name == prop_name)?;
+                Some(VarDumpRow {
+                    key: format!("\"{}\"", key),
+                    // A `__debugInfo()` projection key is a plain array key, so PHP
+                    // never annotates it with a visibility: print_r and var_export
+                    // both print the projected key verbatim.
+                    print_r_key: key.clone(),
+                    plain_key: key,
+                    offset: class_info
+                        .property_offsets
+                        .get(&prop_name)
+                        .copied()
+                        .unwrap_or(8 + layout_index * 16),
+                    tag: prop_value_tag(class_info, &prop_name, prop_ty),
+                    type_name: var_dump_property_type_name(prop_ty),
+                })
+            })
+            .collect();
+    }
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
+            key: var_dump_property_key(class_info, class_name, prop_name),
+            print_r_key: print_r_property_key(class_info, class_name, prop_name),
+            plain_key: prop_name.clone(),
+            offset: class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + layout_index * 16),
+            tag: prop_value_tag(class_info, prop_name, prop_ty),
+            type_name: var_dump_property_type_name(prop_ty),
+        })
+        .collect()
+}
+
+/// Folds a class's `__debugInfo()` into the `(array key, property name)` pairs
+/// `var_dump` should print, or `None` when the method is absent or its body is not
+/// a shape this compiler can resolve statically.
+///
+/// WHY STATICALLY. PHP calls `__debugInfo()` at dump time and prints the returned
+/// array in place of the declared properties. elephc's `var_dump` object walker is
+/// hand-written assembly driven entirely by `_class_vd_desc_*`, so honouring
+/// `__debugInfo` dynamically would mean emitting a PHP method call, an array walk,
+/// and the matching refcount handling inside that walker on every architecture.
+/// The overwhelmingly common body — PHP's own `HashContext::__debugInfo()` included
+/// — is a pure projection of properties, which the descriptor can express exactly:
+/// a row already names a key and points at a property slot, so a projection is just
+/// a different row list. That keeps the change to this table and costs no assembly.
+///
+/// SUPPORTED SHAPE (must match completely, else `None`):
+/// `public function __debugInfo() { return ['k1' => $this->p1, 'k2' => $this->p2]; }`
+/// — a single `return` of an associative array literal whose every key is a string
+/// literal and whose every value is `$this-><declared property>`. `return [];` is
+/// supported and yields zero rows. Reordering and renaming come free.
+///
+/// DELIBERATELY UNSUPPORTED, and why `None` means "fall back" rather than "error":
+/// bodies that compute values (`'n' => count($this->items)`), read another object,
+/// use non-string or NUL-mangled keys (the synthetic SPL container bodies do), or
+/// span several statements cannot be reduced to a property slot. Before this
+/// function existed elephc ignored `__debugInfo()` for every class, so falling back
+/// to the declared-property list preserves that behaviour exactly and turns no
+/// currently-compiling program into an error. It is a KNOWN DIVERGENCE from PHP,
+/// not parity — `tests/var_dump_object_tests.rs` pins it as such.
+fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String, String)>> {
+    use crate::parser::ast::{ExprKind, StmtKind};
+
+    let method = class_info
+        .method_decls
+        .iter()
+        .find(|m| m.name.eq_ignore_ascii_case("__debugInfo"))?;
+    if method.is_static || !method.has_body {
+        return None;
+    }
+    let [only_stmt] = method.body.as_slice() else {
+        return None;
+    };
+    let StmtKind::Return(Some(returned)) = &only_stmt.kind else {
+        return None;
+    };
+    let pairs = match &returned.kind {
+        ExprKind::ArrayLiteralAssoc(pairs) => pairs,
+        // `return [];` parses as a positional literal; an empty one is a valid
+        // (and exact) zero-row projection. A non-empty positional literal has
+        // integer keys pointing at non-property values, so it is not foldable.
+        ExprKind::ArrayLiteral(items) if items.is_empty() => return Some(Vec::new()),
+        _ => return None,
+    };
+
+    let mut projection = Vec::with_capacity(pairs.len());
+    for (key_expr, value_expr) in pairs {
+        let ExprKind::StringLiteral(key) = &key_expr.kind else {
+            return None;
+        };
+        // A NUL byte marks php-src's visibility mangling, which this projection
+        // does not reproduce; leave such classes on the declared-property path.
+        if key.contains('\0') {
+            return None;
+        }
+        let ExprKind::PropertyAccess { object, property } = &value_expr.kind else {
+            return None;
+        };
+        // `$this` normally parses to `ExprKind::This`; the `Variable("this")`
+        // spelling is accepted too because synthetic method bodies build it that way.
+        let reads_this = match &object.kind {
+            ExprKind::This => true,
+            ExprKind::Variable(receiver) => receiver == "this",
+            _ => false,
+        };
+        if !reads_this {
+            return None;
+        }
+        if !class_info
+            .properties
+            .iter()
+            .any(|(name, _)| name == property)
+        {
+            return None;
+        }
+        projection.push((key.clone(), property.clone()));
+    }
+    Some(projection)
+}
+
+/// Renders the text PHP prints between the `[` and `]` of a declared property's
+/// `var_dump` key line, including its visibility suffix.
+fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
+    match class_info.property_visibilities.get(prop_name) {
+        Some(Visibility::Protected) => format!("\"{}\":protected", prop_name),
+        Some(Visibility::Private) => {
+            let declaring = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            format!("\"{}\":\"{}\":private", prop_name, declaring)
+        }
+        _ => format!("\"{}\"", prop_name),
+    }
+}
+
+/// Moves an enum's `name` row to the front of its rendered property list.
+///
+/// PHP prints a backed enum case as `[name] => Hearts` then `[value] => H`
+/// (`print_r`), and `var_export` follows the same order. elephc lays a backed
+/// enum's storage out with `value` first, so the two disagree unless the DISPLAY
+/// order is fixed here. Rows carry an explicit byte offset, so reordering them is
+/// purely cosmetic — every row still points at the same slot. Applied only to
+/// enum classes, and a no-op when `name` is already first or absent.
+fn hoist_enum_name_row(rows: &mut Vec<VarDumpRow>) {
+    if let Some(index) = rows.iter().position(|row| row.plain_key == "name") {
+        let row = rows.remove(index);
+        rows.insert(0, row);
+    }
+}
+
+/// Returns the byte offset of an enum class's `name` property slot, or `-1` when
+/// the class does not declare one.
+///
+/// Every PHP enum case exposes a readonly `name` holding the case identifier, and
+/// elephc materializes it as an ordinary declared string property — so the case
+/// name `enum(E::C)`, `E Enum` bodies and `\E::C` all print is just that slot's
+/// 16-byte `(ptr, len)` pair. A `-1` result makes the runtime treat the class as a
+/// plain object rather than reading a slot that may not exist.
+fn enum_case_name_property_offset(class_info: &ClassInfo) -> i64 {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .find(|(_, (prop_name, _))| prop_name == "name")
+        .map(|(layout_index, (prop_name, _))| {
+            class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + layout_index * 16) as i64
+        })
+        .unwrap_or(-1)
+}
+
+/// Renders the text PHP prints between the `[` and `]` of a declared property's
+/// `print_r` key line.
+///
+/// `print_r` annotates visibility like `var_dump` does but WITHOUT quoting either
+/// the property name or the declaring class: `x`, `y:protected`, `z:C:private`
+/// (verified against PHP 8.4). The declaring class comes from the same
+/// `property_declaring_classes` map `var_dump_property_key` reads, so the two
+/// renderings can never name a different class for one property.
+fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
+    match class_info.property_visibilities.get(prop_name) {
+        Some(Visibility::Protected) => format!("{}:protected", prop_name),
+        Some(Visibility::Private) => {
+            let declaring = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            format!("{}:{}:private", prop_name, declaring)
+        }
+        _ => prop_name.to_string(),
+    }
+}
+
+/// Renders the declared type name PHP prints inside `uninitialized(...)` for a
+/// typed property read before its first write.
+///
+/// PHP echoes the SOURCE type text; `ClassInfo` only retains the resolved
+/// `PhpType`, so this reconstructs the canonical spelling for the shapes a
+/// property declaration can actually take. Unions and intersections collapse to
+/// `mixed` — a property can only be uninitialized when it is typed and
+/// default-less, and the walker's `uninitialized(...)` line is the only consumer.
+fn var_dump_property_type_name(prop_ty: &PhpType) -> String {
+    match prop_ty {
+        PhpType::Int => "int".to_string(),
+        PhpType::Float => "float".to_string(),
+        PhpType::Str => "string".to_string(),
+        PhpType::Bool => "bool".to_string(),
+        PhpType::False => "false".to_string(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
+        PhpType::Iterable => "iterable".to_string(),
+        PhpType::Callable => "callable".to_string(),
+        PhpType::Object(class_name) if !class_name.is_empty() => class_name.clone(),
+        PhpType::Object(_) => "object".to_string(),
+        _ => "mixed".to_string(),
+    }
+}
+
 /// Maps a declared property's static type to the runtime value tag consumed by
 /// `__rt_serialize_value` when serializing that property's 16-byte object slot.
 /// Mirrors the gc-descriptor tag mapping; reference and untyped/nullable
@@ -2425,6 +2873,8 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
 
@@ -2447,10 +2897,10 @@ mod tests {
             is_readonly_class: false,
             allow_dynamic_properties: false,
             constants: HashMap::new(),
-            constant_types: HashMap::new(),
-            constant_order: Vec::new(),
-            constant_visibilities: HashMap::new(),
-            final_constants: HashSet::new(),
+    constant_deprecations: HashMap::new(),
+    constant_types: HashMap::new(),
+    constant_visibilities: HashMap::new(),
+    final_constants: HashSet::new(),
             attribute_names: Vec::new(),
             attribute_args: Vec::new(),
             method_attribute_names: HashMap::new(),
@@ -2462,7 +2912,6 @@ mod tests {
             used_traits: Vec::new(),
             trait_aliases: Vec::new(),
             properties: Vec::new(),
-            own_property_decl_order: Vec::new(),
             property_offsets: HashMap::new(),
             property_declaring_classes: HashMap::new(),
             defaults: Vec::new(),
@@ -2474,7 +2923,6 @@ mod tests {
             readonly_properties: HashSet::new(),
             reference_properties: HashSet::new(),
             owned_reference_properties: HashSet::new(),
-            rebound_reference_properties: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots: Vec::new(),
             abstract_properties: HashSet::new(),
@@ -2486,7 +2934,6 @@ mod tests {
             declared_static_properties: HashSet::new(),
             final_static_properties: HashSet::new(),
             method_decls: Vec::new(),
-            method_decls_unfolded: Vec::new(),
             methods: HashMap::new(),
             static_methods: HashMap::new(),
             late_static_method_returns: HashMap::new(),
@@ -2541,6 +2988,10 @@ mod tests {
             Some(&allowed_class_names),
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -2572,6 +3023,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
@@ -2610,6 +3065,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));

@@ -6,7 +6,8 @@
 //! - `crate::codegen::lower_inst::builtins::arrays::lower_array_shift()`.
 //!
 //! Key details:
-//! - Mutates the caller-visible array after copy-on-write splitting.
+//! - Mutates the caller-visible array after copy-on-write splitting, publishing the split
+//!   pointer through `ReceiverPlace` so a by-reference parameter observes it as well.
 //! - Returns PHP `mixed`, including boxed null for empty arrays.
 //! - Supports pointer-sized, float, string, Mixed, and refcounted indexed payloads.
 
@@ -17,6 +18,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
+use super::super::super::receiver_place::ReceiverPlace;
 use super::super::super::{expect_operand, store_if_result};
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
@@ -25,14 +27,9 @@ pub(super) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let array = expect_operand(inst, 0)?;
     let elem_ty = array_shift_element_type(ctx.value_php_type(array)?)?;
     require_array_shift_result_type(&inst.result_php_type.codegen_repr())?;
-    let source_local = super::source_load_local_slot(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.release_mutated_source_local_owner(slot, array)?;
-    }
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_shift_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_shift_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_shift_x86_64(ctx, array, &elem_ty)?,

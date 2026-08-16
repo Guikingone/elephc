@@ -2,13 +2,13 @@
 title: "htmlentities()"
 description: "Converts all applicable characters in a string into their HTML entities."
 sidebar:
-  order: 383
+  order: 426
 ---
 
 ## htmlentities()
 
 ```php
-function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8', bool $double_encode = true): string
+function htmlentities(string $string, int $flags = 11, string $encoding = 'UTF-8'): string
 ```
 
 Converts all applicable characters in a string into their HTML entities.
@@ -17,7 +17,6 @@ Converts all applicable characters in a string into their HTML entities.
 - `$string` (`string`)
 - `$flags` (`int`), default `11`, optional
 - `$encoding` (`string`), default `'UTF-8'`, optional
-- `$double_encode` (`bool`), default `true`, optional
 
 **Returns**: `string`
 
@@ -27,12 +26,6 @@ Converts all applicable characters in a string into their HTML entities.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/htmlentities.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

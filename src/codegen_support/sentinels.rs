@@ -19,6 +19,10 @@
 //! - x86_64 heap headers carry `X86_64_HEAP_MAGIC_HI32` ("ELPH") in the high 32 bits. Every
 //!   stamp must go through `x86_64_heap_kind_word`; every magic check must compare against
 //!   `X86_64_HEAP_MAGIC_HI32`. Local copies of either constant are forbidden.
+//! - The compact Throwable payload's creation-line slot lives here for the same reason as the
+//!   heap-header word: it is written by a dozen emitters across `codegen` and read by the runtime
+//!   emitters in `codegen_support::runtime`, which cannot see `codegen`. Every allocator of that
+//!   payload must write the slot, since `__rt_heap_alloc` recycles blocks without zeroing them.
 
 use std::cell::Cell;
 
@@ -94,13 +98,11 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             super::abi::emit_load_int_immediate(emitter, "x0", NULL_SENTINEL);
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
         Arch::X86_64 => {
             super::abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
     }
 }
@@ -110,12 +112,10 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
 pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
     }
 }
@@ -204,6 +204,46 @@ pub(crate) fn emit_tagged_scalar_to_int_null_as_zero(emitter: &mut Emitter) {
 }
 
 
+/// Materializes the float-slot null marker in the float result register: the canonical
+/// [`NULL_SENTINEL`] word reinterpreted as an IEEE-754 double.
+///
+/// `0x7fff_ffff_ffff_fffe` has an all-ones exponent, its mantissa MSB set, and a non-zero
+/// remaining payload, so as a double it is a *quiet NaN* — no ordinary float arithmetic
+/// produces it, and it differs from PHP's own `NAN` constant (`0x7ff8_0000_0000_0000`), so an
+/// array element that genuinely stores `NAN` still reads back as a hit and never as a miss.
+/// Reusing `NULL_SENTINEL` keeps float slots on the same in-band marker word that every other
+/// unboxed scalar slot already uses instead of inventing a third null mechanism.
+///
+/// Only *silent* element reads (the ones behind `??`, `isset()` and `empty()`) may emit this;
+/// a warned read keeps materializing `0.0` so a plain `$a[$missing]` does not start rendering
+/// as `NAN` in value position. Clobbers the secondary scratch register.
+pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
+    let scratch = super::abi::secondary_scratch_reg(emitter);
+    super::abi::emit_load_int_immediate(emitter, scratch, NULL_SENTINEL);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("fmov d0, {}", scratch));              // reinterpret the in-band null sentinel word as the float miss marker
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("movq xmm0, {}", scratch));            // reinterpret the in-band null sentinel word as the float miss marker
+        }
+    }
+}
+
+/// Copies the raw bits of the float result register into the integer result register so a
+/// caller can compare them against [`NULL_SENTINEL`] exactly. A bit comparison is required
+/// here: float compare instructions report the sentinel NaN as *unordered*, not equal.
+pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("fmov x0, d0");                                 // move the float payload bits where the sentinel comparison can see them
+        }
+        Arch::X86_64 => {
+            emitter.instruction("movq rax, xmm0");                              // move the float payload bits where the sentinel comparison can see them
+        }
+    }
+}
+
 /// High 32 bits of the x86_64 uniform heap-header kind word (`"ELPH"` in ASCII bytes
 /// `0x45 0x4C 0x50 0x48`). Every x86_64 allocation is stamped with this marker; the
 /// refcount and free helpers ignore pointers whose header does not carry it, so an
@@ -224,6 +264,40 @@ pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
     (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
 }
 
+/// Byte offset of the creation line inside the 56-byte compact Throwable payload.
+///
+/// The payload is `class_id@0`, `message ptr@8`, `message len@16`, `code@24`, `previous@40`;
+/// offset 32 was the one word never written, so the line fits without growing the allocation or
+/// disturbing any existing reader.
+///
+/// PHP records the line where a Throwable is CONSTRUCTED, so every emitter that allocates this
+/// payload must write the slot — `__rt_heap_alloc` recycles blocks without zeroing them, and an
+/// unwritten slot hands `Throwable::getLine()` the previous owner's bytes. Emitters that cannot
+/// know the line write `0`, which the readers treat as "origin unknown" and omit.
+///
+/// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
+pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+
+/// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
+///
+/// For the emitters that synthesize a Throwable with no user `new` behind it — an
+/// `ArithmeticError` from a division, a `ValueError` from a clamp, a `TypeError` from an argument
+/// check — there is no source line to record, and PHP would report the internal call site rather
+/// than anything these emitters know. Writing zero says "unknown" explicitly; leaving the slot
+/// untouched would let recycled heap bytes read back as a plausible-looking line number.
+pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "str xzr, [{}, #{}]",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )), // no user `new` behind this Throwable: the creation line is unknown
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov QWORD PTR [{} + {}], 0",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )), // no user `new` behind this Throwable: the creation line is unknown
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +307,22 @@ mod tests {
     fn null_sentinel_constant_value() {
         assert_eq!(NULL_SENTINEL, 0x7fff_ffff_ffff_fffe_u64 as i64);
         assert_eq!(NULL_SENTINEL, i64::MAX - 1);
+    }
+
+    /// Locks the float reading of the null sentinel: it must be a quiet NaN (so no ordinary
+    /// arithmetic result collides with it) and it must differ from PHP's `NAN` constant (so a
+    /// genuinely stored `NAN` element is never mistaken for a missing key).
+    #[test]
+    fn null_sentinel_reads_as_a_distinct_quiet_nan() {
+        let sentinel = f64::from_bits(NULL_SENTINEL as u64);
+        assert!(sentinel.is_nan(), "float miss marker must be a NaN");
+        // Quiet NaN: mantissa MSB set.
+        assert_ne!(NULL_SENTINEL as u64 & (1 << 51), 0, "must be a quiet NaN");
+        assert_ne!(
+            NULL_SENTINEL as u64,
+            f64::NAN.to_bits(),
+            "must not collide with the canonical NAN a PHP program can store"
+        );
     }
 
     /// Locks the uninitialized-typed-property sentinel bit pattern used in property metadata.

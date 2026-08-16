@@ -18,8 +18,83 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::super::context::FunctionContext;
-use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+
+/// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
+///
+/// Reference PHP honors `$base` only when `$value` is a string, so the subject's checker type
+/// picks the path: a known string goes straight to `__rt_str_to_int_base`, a boxed `Mixed`
+/// goes to `__rt_mixed_intval_base` (which repeats that test at run time against the cell's
+/// tag), and every other scalar keeps the ordinary integer cast with the base discarded —
+/// `intval(42.9, 8) === 42`, not `34`.
+pub(crate) fn lower_intval_base(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "intval", 2)?;
+    let value = expect_operand(inst, 0)?;
+    let base = expect_operand(inst, 1)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Str => lower_intval_base_from_string(ctx, value, base)?,
+        PhpType::Mixed => lower_intval_base_from_mixed(ctx, value, base)?,
+        _ => super::strings::load_as_int(ctx, value, "intval")?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes a known-string `intval()` subject and parses it in the requested base.
+///
+/// The subject is staged first because materializing `$base` may itself need the result
+/// register, and the string pair is restored only after the base has reached its own
+/// argument register.
+fn lower_intval_base_from_string(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject string while the base is materialized
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the parser's third argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the parser's string argument pair
+        }
+        Arch::X86_64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov r8, rax");                             // park the requested base while the subject is restored
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the subject into the parser's SysV string arguments
+            ctx.emitter.instruction("mov rdx, r8");                             // pass the requested base as the parser's third argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int_base");
+    Ok(())
+}
+
+/// Materializes a boxed `Mixed` `intval()` subject and defers the string test to run time.
+///
+/// The cell pointer stays in the canonical integer result register, which is exactly where
+/// `__rt_mixed_intval_base` and the `__rt_mixed_cast_int` it falls back to expect it.
+fn lower_intval_base_from_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    let cell_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, cell_reg);
+    super::strings::load_as_int(ctx, base, "intval base")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the helper's second argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the requested base as the helper's second argument
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_intval_base");
+    Ok(())
+}
 
 /// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
 pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -45,12 +120,31 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Rejects `unset()` calls that were not converted into direct EIR unbind operations.
+///
+/// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
+/// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
+/// call or a dynamic-property removal, so the message lists the shapes that do lower
+/// directly and then names the one shape users hit most.
+///
+/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
+/// warns `Undefined property` and answers `null`, and a later write recreates it.
+/// elephc gives each declared property a fixed, monomorphically typed slot, so a
+/// property the checker typed `Int` has no encoding for "removed and reading as null"
+/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
+/// error beats a wrong value, so the shape is refused here. Untyped properties whose
+/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
+/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     Err(CodegenIrError::unsupported(format!(
-        "unset target shape with {} lowered operands",
+        "unset target shape with {} lowered operands (supported: variables, \
+         array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
+         declared typed object properties, and dynamic object properties). \
+         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
+         slot has no representation for PHP's removed-then-null read",
         inst.operands.len()
     )))
 }
@@ -299,7 +393,13 @@ fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Converts the loaded float result register into a canonical bool.
+///
+/// This is `settype($x, "bool")`'s own copy of float truthiness; it must agree with
+/// `predicates::emit_float_result_nonzero_bool` on every value, NAN included — PHP settypes a
+/// NAN to `true`. See that function for why the x86_64 arm needs a parity fixup and the
+/// AArch64 arm does not.
 fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    super::super::predicates::emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fmov d1, #0.0");                           // materialize 0.0 for PHP float truthiness
@@ -309,22 +409,21 @@ fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize 0.0 for PHP float truthiness
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the float payload against zero
-            ctx.emitter.instruction("setne al");                                // normalize non-zero floats to true
+            ctx.emitter.instruction("setne al");                                // normalize ordered non-zero floats to true
+            ctx.emitter.instruction("setp r10b");                               // materialize whether the comparison was unordered (a NAN)
+            ctx.emitter.instruction("or al, r10b");                             // PHP settypes a NAN to true, so merge the unordered case in
             ctx.emitter.instruction("movzx rax, al");                           // widen the normalized boolean byte
         }
     }
 }
 
-/// Converts the loaded resource payload into PHP's one-based integer id.
+/// Converts the loaded resource payload into PHP's resource id.
+///
+/// Answers from the resource-id registry (`runtime::resource_ids`) rather than
+/// from the payload itself; see the twin helper in `lower_inst::conversions` for
+/// why `payload + 1` was not a numbering scheme.
 fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("add x0, x0, #1");                          // convert native resource payload to PHP's one-based display id
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rax, 1");                              // convert native resource payload to PHP's one-based display id
-        }
-    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
 }
 
 /// Lowers `get_class()` and `get_parent_class()` through static or dynamic class metadata.
@@ -365,100 +464,6 @@ pub(crate) fn lower_class_name_lookup(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `$value::class`, resolving raw objects directly and enforcing PHP's object-only
-/// runtime guard for boxed `Mixed`/union operands.
-pub(crate) fn lower_object_class_name(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "object_class_name", 1)?;
-    let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
-        PhpType::Object(_) => {
-            ctx.load_value_to_result(value)?;
-            emit_dynamic_object_class_name(ctx, "get_class");
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            emit_mixed_object_class_name_or_type_error(ctx, value)?;
-        }
-        other => {
-            return Err(CodegenIrError::invalid_module(format!(
-                "object_class_name received statically non-object operand {:?}",
-                other
-            )));
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Unboxes a gradual value for `$value::class`, returning the runtime object name for tag 6 and
-/// throwing a catchable `TypeError` with the concrete PHP type name for every other tag.
-fn emit_mixed_object_class_name_or_type_error(
-    ctx: &mut FunctionContext<'_>,
-    value: ValueId,
-) -> Result<()> {
-    let object_label = ctx.next_label("object_class_name_object");
-    let int_label = ctx.next_label("object_class_name_int");
-    let string_label = ctx.next_label("object_class_name_string");
-    let float_label = ctx.next_label("object_class_name_float");
-    let bool_label = ctx.next_label("object_class_name_bool");
-    let array_label = ctx.next_label("object_class_name_array");
-    let null_label = ctx.next_label("object_class_name_null");
-    let resource_label = ctx.next_label("object_class_name_resource");
-    let other_label = ctx.next_label("object_class_name_other");
-    let done_label = ctx.next_label("object_class_name_done");
-
-    ctx.load_value_to_result(value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 0, &int_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 1, &string_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 2, &float_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 4, &array_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 5, &array_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 8, &null_label);
-    super::emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_label);
-    abi::emit_jump(ctx.emitter, &other_label);
-
-    ctx.emitter.label(&object_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to class-name lookup
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to class-name lookup
-        }
-    }
-    emit_dynamic_object_class_name(ctx, "get_class");
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    emit_object_class_name_type_error_case(ctx, &int_label, "int");
-    emit_object_class_name_type_error_case(ctx, &string_label, "string");
-    emit_object_class_name_type_error_case(ctx, &float_label, "float");
-    emit_object_class_name_type_error_case(ctx, &bool_label, "bool");
-    emit_object_class_name_type_error_case(ctx, &array_label, "array");
-    emit_object_class_name_type_error_case(ctx, &null_label, "null");
-    emit_object_class_name_type_error_case(ctx, &resource_label, "resource");
-    emit_object_class_name_type_error_case(ctx, &other_label, "non-object");
-
-    ctx.emitter.label(&done_label);
-    Ok(())
-}
-
-/// Emits one wrong-runtime-tag branch for `$value::class` as a catchable PHP `TypeError`.
-fn emit_object_class_name_type_error_case(
-    ctx: &mut FunctionContext<'_>,
-    label: &str,
-    type_name: &str,
-) {
-    ctx.emitter.label(label);
-    super::super::exceptions::emit_type_error(
-        ctx,
-        &format!("Cannot use \"::class\" on {}", type_name),
-    );
-}
-
 /// Lowers `is_a()` and `is_subclass_of()` for object operands and literal targets.
 pub(crate) fn lower_is_a_relation(
     ctx: &mut FunctionContext<'_>,
@@ -497,38 +502,356 @@ pub(crate) fn lower_get_declared_names(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
-pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "is_resource", 1)?;
-    let value = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(value)? {
-        PhpType::Resource(_) => emit_bool_result(ctx, true),
-        PhpType::Mixed | PhpType::Union(_) => predicates::emit_mixed_tag_eq(ctx, value, 9)?,
-        _ => emit_bool_result(ctx, false),
+/// Lowers `get_loaded_extensions($zend_extensions)` as a string array.
+///
+/// The optional flag selects between the regular extension list (default / `false`) and the Zend
+/// extension list (`true`). BOTH lists are known at compile time, so a literal flag bakes exactly
+/// one of them into the emitted array; a dynamic flag emits both behind a runtime branch (see
+/// [`lower_dynamic_get_loaded_extensions`]) rather than failing the compile.
+///
+/// The regular (non-Zend) list is the always-present core set followed by the canonical names of
+/// the bridges actually linked into this compilation (`crate::codegen::linked_extensions()`, e.g.
+/// `PDO`/`hash`), de-duplicated case-insensitively. The Zend list is unaffected: bridges are
+/// ordinary (non-Zend) extensions.
+pub(crate) fn lower_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "get_loaded_extensions", 0, 1)?;
+    let flag = inst.operands.first().copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(false),
+    };
+    match (constant_flag, flag) {
+        (Some(zend_extensions), _) => {
+            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+        }
+        (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
+        (None, None) => unreachable!("a missing flag always folds to false"),
     }
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_resource_type(resource)` to elephc's current resource type label.
+/// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
+///
+/// Single source of truth for the const-folded and the runtime-selected forms, so they can never
+/// report different sets.
+fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+    if zend_extensions {
+        return super::ZEND_LOADED_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
+    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
+            names.push(extension);
+        }
+    }
+    names
+}
+
+/// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
+///
+/// Both candidate lists are compile-time constants, so the emitted code just picks between two
+/// fully baked arrays with a PHP-truthiness test on the flag. Each branch runs the same
+/// [`emit_string_array`] sequence and leaves an `Array<Str>` pointer in the integer result
+/// register, so the two arms agree in shape as well as in type — nothing observes a different
+/// representation depending on which branch ran.
+fn lower_dynamic_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let flag_type = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(flag_type, PhpType::Bool | PhpType::False | PhpType::Int) {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_loaded_extensions with a {:?} flag argument",
+            flag_type
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    let zend_label = ctx.next_label("get_loaded_extensions_zend");
+    let done_label = ctx.next_label("get_loaded_extensions_done");
+    let flag_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", flag_reg));          // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("b.ne {}", zend_label));           // a truthy flag selects the Zend list
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flag_reg, flag_reg));      // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
+        }
+    }
+    emit_string_array(ctx, &loaded_extension_names(false))?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&zend_label);
+    emit_string_array(ctx, &loaded_extension_names(true))?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, null, and string const instructions using PHP truthiness so
+/// any literal the frontend folds into the flag operand resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        (Op::ConstStr, Some(Immediate::Data(data))) => {
+            let value = ctx
+                .module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+            Ok(Some(!value.is_empty() && value != "0"))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
+pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "is_resource", 1)?;
+    let value = expect_operand(inst, 0)?;
+    emit_resource_is_open(ctx, value)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `get_resource_type(resource)` from the live registry kind.
 pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
-    ctx.load_value_to_result(value)?;
+    emit_resource_kind_if_open(ctx, value)?;
+    let context_label = ctx.next_label("resource_type_context");
+    let filter_label = ctx.next_label("resource_type_filter");
+    let unknown_label = ctx.next_label("resource_type_unknown");
+    let done_label = ctx.next_label("resource_type_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", unknown_label));     // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp x0, #2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("b.eq {}", context_label));        // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp x0, #3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("b.eq {}", filter_label));         // filters use PHP's "stream filter" resource label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the handle resolve to a live registry entry?
+            ctx.emitter.instruction(&format!("jz {}", unknown_label));          // stale or closed resources have PHP type Unknown
+            ctx.emitter.instruction("cmp rax, 2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("je {}", context_label));          // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp rax, 3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("je {}", filter_label));           // filters use PHP's "stream filter" resource label
+        }
+    }
     emit_string_result(ctx, b"stream");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the context and unknown labels for live streams
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the context and unknown labels for live streams
+        }
+    }
+    ctx.emitter.label(&filter_label);
+    emit_string_result(ctx, b"stream filter");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+    ctx.emitter.label(&context_label);
+    emit_string_result(ctx, b"stream-context");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip Unknown after materializing the context label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip Unknown after materializing the context label
+        }
+    }
+    ctx.emitter.label(&unknown_label);
+    emit_string_result(ctx, b"Unknown");
+    ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
 
-/// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
+/// Leaves a live registry kind in the result register, using kind one for legacy resources.
+fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed opaque handle to registry kind lookup
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_kind_tag_ok");
+            let registry_label = ctx.next_label("resource_kind_registry");
+            let legacy_label = ctx.next_label("resource_kind_legacy");
+            let done_label = ctx.next_label("resource_kind_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    // Marker 0 is what `emit_box_current_value_as_mixed` writes when a
+                    // statically Resource-typed value is boxed at a value boundary, and on
+                    // this branch such a value IS a registry handle — a stream context taken
+                    // through an untyped parameter reported "stream" while a filter (boxed by
+                    // the legacy fd path with marker 3) reported correctly. Legacy raw
+                    // descriptors never reach here with 0: they are boxed by
+                    // `box_stream_fd_or_false_result_kind`, which writes 1, 3 or 4.
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("b {}", legacy_label));    // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to kind lookup
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // legacy live resources use the transitional stream kind
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require a boxed resource before reading its ownership marker
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values have no resource kind
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare a registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry resources resolve their authoritative kind
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", legacy_label));  // unmigrated tagged resources retain the legacy stream label
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry kind result
+                    ctx.emitter.label(&legacy_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // legacy live resources use the transitional stream kind
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
+    }
+    Ok(())
+}
+
+/// Leaves whether a value is a currently open PHP resource in the integer result register.
+///
+/// Registry-owned stream markers (`high=1/3/4`) validate the opaque handle and
+/// its Live state. Legacy resource kinds stay tag-based until their dedicated
+/// ContextState and FilterState migrations move them into the same registry.
+fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let raw_type = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_type {
+        PhpType::Resource(_) => {
+            if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the statically typed resource handle to the registry
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_ok_label = ctx.next_label("resource_tag_ok");
+            let registry_label = ctx.next_label("resource_registry_check");
+            let true_label = ctx.next_label("resource_legacy_live");
+            let done_label = ctx.next_label("resource_live_done");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("b.eq {}", tag_ok_label)); // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("b {}", true_label));      // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // pass the opaque registry handle to the liveness helper
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("b {}", done_label));      // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov x0, #1");                      // an unmigrated resource tag remains a live resource
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 9");                      // require the Mixed resource tag before inspecting its payload
+                    ctx.emitter.instruction(&format!("je {}", tag_ok_label));   // continue only for a boxed PHP resource
+                    ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values answer false
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
+                    ctx.emitter.label(&tag_ok_label);
+                    for marker in [0_u64, 1, 3, 4, 9] {
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare the transitional registry ownership marker
+                        ctx.emitter.instruction(&format!("je {}", registry_label)); // registry-owned streams validate their generation
+                    }
+                    ctx.emitter.instruction(&format!("jmp {}", true_label));    // legacy tagged resources remain live by tag for now
+                    ctx.emitter.label(&registry_label);
+                    abi::emit_call_label(ctx.emitter, "__rt_resource_is_open");
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));    // preserve the registry liveness result
+                    ctx.emitter.label(&true_label);
+                    ctx.emitter.instruction("mov eax, 1");                      // an unmigrated resource tag remains a live resource
+                }
+            }
+            ctx.emitter.label(&done_label);
+        }
+        _ => emit_bool_result(ctx, false),
+    }
+    Ok(())
+}
+
+/// Lowers `get_resource_id(resource)` from the opaque registry handle.
 pub(crate) fn lower_get_resource_id(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "get_resource_id", 1)?;
     let value = expect_operand(inst, 0)?;
-    super::io::load_stream_fd_to_result(ctx, value, "get_resource_id")?;
+    super::io::load_stream_handle_to_result(ctx, value, "get_resource_id")?;
     emit_resource_display_id_to_int(ctx);
     store_if_result(ctx, inst)
 }
@@ -545,12 +868,7 @@ fn emit_no_arg_class_name_lookup(ctx: &mut FunctionContext<'_>, name: &str) {
 }
 
 /// Emits dynamic class-name lookup for an object pointer already loaded in the result register.
-///
-/// `pub(in crate::codegen::lower_inst)` rather than `pub(super)`: reused by
-/// `crate::codegen::lower_inst::objects::reflection` to resolve the runtime class of an
-/// `object`-typed `new ReflectionClass($obj)` argument (PHP's `object|string` constructor
-/// signature), mirroring the SAME dynamic-object-class-name lookup `get_class()` uses.
-pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+fn emit_dynamic_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_empty");
     let done_label = ctx.next_label("get_class_done");
     match ctx.emitter.target.arch {
@@ -560,7 +878,7 @@ pub(in crate::codegen::lower_inst) fn emit_dynamic_object_class_name(ctx: &mut F
 }
 
 /// Emits class-name lookup for a boxed Mixed value that may contain an object.
-pub(crate) fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
+fn emit_mixed_object_class_name(ctx: &mut FunctionContext<'_>, name: &str) {
     let empty_label = ctx.next_label("get_class_mixed_empty");
     let done_label = ctx.next_label("get_class_mixed_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -827,185 +1145,6 @@ fn emit_string_array_fill_x86_64(ctx: &mut FunctionContext<'_>, names: &[String]
     ctx.emitter.instruction("pop rax");                                         // restore the final declared-name array as the result
 }
 
-/// Lowers `get_defined_functions()` into `['internal' => [...], 'user' => [...]]`.
-///
-/// Mirrors the `get_declared_classes` string-array path one level nested: two indexed
-/// string arrays (compile-time-known builtin and user-defined function names) boxed
-/// into a two-entry assoc hash.
-pub(crate) fn lower_get_defined_functions(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-) -> Result<()> {
-    super::ensure_arg_count(inst, "get_defined_functions", 0)?;
-    let internal = defined_internal_function_names();
-    let user = defined_user_function_names(ctx);
-    emit_defined_functions_array(ctx, &internal, &user)?;
-    store_if_result(ctx, inst)
-}
-
-/// Returns the lowercased, sorted, de-duplicated set of PHP-visible builtin function names.
-///
-/// This is elephc's supported builtin catalog (registry + compiler-resident names, minus
-/// `--strict-php` extension hides), which stands in for PHP's `['internal']` list. The exact
-/// membership differs from stock PHP, but the structure and common names (e.g. `strlen`) match.
-fn defined_internal_function_names() -> Vec<String> {
-    let mut names: Vec<String> =
-        crate::types::checker::builtins::supported_builtin_function_names()
-            .into_iter()
-            .map(|name| name.to_ascii_lowercase())
-            .collect();
-    names.sort();
-    names.dedup();
-    names
-}
-
-/// Returns the lowercased user-defined free-function names in module declaration order.
-///
-/// Filters out compiler-synthesized bodies, methods, closures, invoker/wrapper trampolines,
-/// the top-level `main`, elephc prelude internals (`__`-prefixed), and elephc's own
-/// always-available prelude globals, so only PHP-visible user functions remain.
-fn defined_user_function_names(ctx: &FunctionContext<'_>) -> Vec<String> {
-    let mut names = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for func in &ctx.module.functions {
-        let flags = &func.flags;
-        if flags.is_main
-            || flags.is_method
-            || flags.is_closure
-            || flags.is_synthetic
-            || flags.is_fiber_wrapper
-            || flags.is_callback_wrapper
-            || flags.is_runtime_callable_invoker
-        {
-            continue;
-        }
-        let bare = func.name.trim_start_matches('\\');
-        if bare.contains("::") || bare.starts_with("__") {
-            continue;
-        }
-        if crate::name_resolver::canonical_prelude_global_function_name(bare).is_some() {
-            continue;
-        }
-        let lower = bare.to_ascii_lowercase();
-        if seen.insert(lower.clone()) {
-            names.push(lower);
-        }
-    }
-    names
-}
-
-/// Builds the `['internal' => [...], 'user' => [...]]` assoc hash into the result register.
-///
-/// Each inner list is an indexed string array built by `emit_string_array`; both are boxed
-/// into a freshly allocated hash under the `'internal'`/`'user'` keys with the array runtime
-/// value tag (4). `__rt_hash_set` stores the inner array pointer without retaining, so the
-/// outer hash takes ownership of each inner array's single reference and frees it on release.
-fn emit_defined_functions_array(
-    ctx: &mut FunctionContext<'_>,
-    internal: &[String],
-    user: &[String],
-) -> Result<()> {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => emit_defined_functions_array_aarch64(ctx, internal, user)?,
-        Arch::X86_64 => emit_defined_functions_array_x86_64(ctx, internal, user)?,
-    }
-    Ok(())
-}
-
-/// Emits the AArch64 `get_defined_functions()` assoc-hash construction.
-///
-/// Scratch frame (sp-relative, 48 bytes): #0 internal array, #8 user array, #16 hash pointer.
-/// No frame-pointer/return-address save is needed: the enclosing function preserved them and
-/// nothing here needs a live `x30` across the helper calls.
-fn emit_defined_functions_array_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    internal: &[String],
-    user: &[String],
-) -> Result<()> {
-    ctx.emitter.instruction("sub sp, sp, #48");                                 // reserve scratch slots for the two inner arrays and the hash
-    emit_string_array(ctx, internal)?;
-    ctx.emitter.instruction("str x0, [sp, #0]");                                // save the built 'internal' name array
-    emit_string_array(ctx, user)?;
-    ctx.emitter.instruction("str x0, [sp, #8]");                                // save the built 'user' name array
-    abi::emit_load_int_immediate(ctx.emitter, "x0", 16);                        // outer hash capacity hint
-    abi::emit_load_int_immediate(ctx.emitter, "x1", 4);                         // outer hash value tag = array
-    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-    ctx.emitter.instruction("str x0, [sp, #16]");                               // save the freshly allocated outer hash
-    emit_defined_functions_hash_entry_aarch64(ctx, b"internal", 0);
-    emit_defined_functions_hash_entry_aarch64(ctx, b"user", 8);
-    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // load the finished hash as the result
-    ctx.emitter.instruction("add sp, sp, #48");                                 // release the scratch slots
-    Ok(())
-}
-
-/// Inserts one `key => inner_array` entry into the outer hash on AArch64.
-///
-/// `value_slot` is the sp-relative byte offset of the saved inner array pointer. The
-/// normalized key survives in `x1`/`x2` because no call intervenes before `__rt_hash_set`.
-fn emit_defined_functions_hash_entry_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    key: &[u8],
-    value_slot: i64,
-) {
-    let (label, len) = ctx.data.add_string(key);
-    abi::emit_symbol_address(ctx.emitter, "x1", &label);                        // key pointer for normalization
-    abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);                // key length for normalization
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");               // x1/x2 = normalized key ptr/len
-    ctx.emitter.instruction("ldr x0, [sp, #16]");                               // reload the outer hash pointer
-    ctx.emitter.instruction(&format!("ldr x3, [sp, #{}]", value_slot));         // value_lo = the inner array pointer
-    ctx.emitter.instruction("mov x4, xzr");                                     // value_hi is unused for an array payload
-    abi::emit_load_int_immediate(ctx.emitter, "x5", 4);                         // value tag = array
-    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                         // x0 = the possibly-grown hash
-    ctx.emitter.instruction("str x0, [sp, #16]");                               // save the updated hash pointer
-}
-
-/// Emits the x86_64 `get_defined_functions()` assoc-hash construction.
-///
-/// Scratch frame (rsp-relative, 48 bytes): +0 internal array, +8 user array, +16 hash pointer.
-fn emit_defined_functions_array_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    internal: &[String],
-    user: &[String],
-) -> Result<()> {
-    ctx.emitter.instruction("sub rsp, 48");                                     // reserve scratch slots for the two inner arrays and the hash
-    emit_string_array(ctx, internal)?;
-    ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                        // save the built 'internal' name array
-    emit_string_array(ctx, user)?;
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // save the built 'user' name array
-    abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);                       // outer hash capacity hint
-    abi::emit_load_int_immediate(ctx.emitter, "rsi", 4);                        // outer hash value tag = array
-    abi::emit_call_label(ctx.emitter, "__rt_hash_new");
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // save the freshly allocated outer hash
-    emit_defined_functions_hash_entry_x86_64(ctx, b"internal", 0);
-    emit_defined_functions_hash_entry_x86_64(ctx, b"user", 8);
-    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");                   // load the finished hash as the result
-    ctx.emitter.instruction("add rsp, 48");                                     // release the scratch slots
-    Ok(())
-}
-
-/// Inserts one `key => inner_array` entry into the outer hash on x86_64.
-///
-/// `value_slot` is the rsp-relative byte offset of the saved inner array pointer. The
-/// normalized key length survives in `rdx` because no call intervenes before `__rt_hash_set`.
-fn emit_defined_functions_hash_entry_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    key: &[u8],
-    value_slot: i64,
-) {
-    let (label, len) = ctx.data.add_string(key);
-    abi::emit_symbol_address(ctx.emitter, "rax", &label);                       // key pointer for normalization
-    abi::emit_load_int_immediate(ctx.emitter, "rdx", len as i64);               // key length for normalization
-    abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");               // rax/rdx = normalized key ptr/len
-    ctx.emitter.instruction("mov rsi, rax");                                    // hash_set key pointer = normalized key ptr
-    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");                   // hash_set hash pointer
-    let value_load = format!("mov rcx, QWORD PTR [rsp + {}]", value_slot);
-    ctx.emitter.instruction(&value_load);                                       // value_lo = the inner array pointer
-    ctx.emitter.instruction("xor r8, r8");                                      // value_hi is unused for an array payload
-    abi::emit_load_int_immediate(ctx.emitter, "r9", 4);                         // value tag = array
-    abi::emit_call_label(ctx.emitter, "__rt_hash_set");                         // rax = the possibly-grown hash
-    ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");                   // save the updated hash pointer
-}
-
 /// Looks up a class by PHP-style case-insensitive name.
 fn lookup_class<'a>(ctx: &'a FunctionContext<'_>, name: &str) -> Option<&'a ClassInfo> {
     let clean = name.trim_start_matches('\\');
@@ -1075,40 +1214,4 @@ fn optional_const_string_operand(
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
-}
-
-/// Emits `get_class()`/`get_parent_class()` for a boxed Mixed/Union value: unbox it, and when it
-/// holds an object (runtime tag 6) read the class name from the object's class id; otherwise yield
-/// an empty class name (matching the result on a non-object). `__rt_mixed_unbox` returns the tag in
-/// `x0`/`rax` and the payload (the object pointer for tag 6) in `x1` (AArch64) / `rdi` (x86_64).
-pub(super) fn emit_mixed_object_class_name_from_value(
-    ctx: &mut FunctionContext<'_>,
-    value: crate::ir::ValueId,
-    name: &str,
-) -> Result<()> {
-    let object_label = ctx.next_label("get_class_mixed_obj");
-    let done_label = ctx.next_label("get_class_mixed_done");
-    ctx.load_value_to_result(value)?;
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label);
-
-    // -- non-object payloads have no class name --
-    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_class_name_missing");
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
-    abi::emit_jump(ctx.emitter, &done_label);
-
-    // -- object payload: move the unboxed object pointer into the class-name lookup input --
-    ctx.emitter.label(&object_label);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed object pointer into the class-name lookup register
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rax, rdi");                           // move the unboxed object pointer into the class-name lookup register
-        }
-    }
-    emit_dynamic_object_class_name(ctx, name);
-    ctx.emitter.label(&done_label);
-    Ok(())
 }

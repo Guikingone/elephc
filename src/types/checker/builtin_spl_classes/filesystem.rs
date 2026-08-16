@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr, Visibility,
+    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr,
+    Visibility,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -162,7 +163,7 @@ pub(super) fn insert_classes(class_map: &mut HashMap<String, FlattenedClass>) {
             is_abstract: false,
             is_final: false,
             is_readonly_class: false,
-            properties: recursive_directory_iterator_properties(),
+            properties: Vec::new(),
             methods: recursive_directory_iterator_methods(),
             attributes: Vec::new(),
             constants: filesystem_iterator_constants(),
@@ -239,6 +240,22 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         protected_storage_property("enclosure", TypeExpr::Str),
         protected_storage_property("escape", TypeExpr::Str),
         protected_storage_property("maxLineLen", TypeExpr::Int),
+        // READ_CSV records, and whether they still describe `lines` under the current controls.
+        // A RECORD is not a line: a quoted field may hold newlines, so one record can span
+        // several entries of `lines`, and the mapping has to be built once rather than guessed
+        // per `current()` call.
+        protected_storage_property("csvRecords", array_type()),
+        // 1 for a record that came from a line holding nothing but its terminator. SKIP_EMPTY
+        // (with DROP_NEW_LINE) steps OVER those without renumbering the rest, so the flag is
+        // recorded per record rather than the record being dropped.
+        protected_storage_property("csvBlank", array_type()),
+        // Whether any line has been consumed through `fgets()`/`fscanf()` yet. It exists for
+        // `fscanf()` alone: measured on `php -n` 8.5.6, the FIRST `fscanf()` of a fresh object
+        // leaves `key()` at 0 while every later one advances it, so on a three-line file the
+        // keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the two confirms it is the
+        // first READ that is special and not the method: `fgets()` then `fscanf()` gives 1
+        // then 2.
+        protected_storage_property("hasReadLine", TypeExpr::Bool),
     ]
 }
 
@@ -266,24 +283,6 @@ fn directory_iterator_properties() -> Vec<ClassProperty> {
 /// Builds GlobIterator storage properties.
 fn glob_iterator_properties() -> Vec<ClassProperty> {
     vec![protected_storage_property("pattern", TypeExpr::Str)]
-}
-
-/// Builds RecursiveDirectoryIterator storage properties.
-///
-/// `__elephcSubPath` holds the directory path of the CURRENT iterator relative to the root the
-/// traversal started at, with no trailing separator (`''` for the root iterator itself).
-/// `getChildren()` seeds each child with the parent's `getSubPathname()`, which is how PHP's own
-/// sub-path chain is built.
-///
-/// The `__elephc` prefix is load-bearing, not cosmetic. PHP's real `RecursiveDirectoryIterator`
-/// keeps its sub path in C-internal state and exposes NO userland property for it, so subclasses
-/// are free to declare their own — Symfony's `Finder\Iterator\RecursiveDirectoryIterator` declares
-/// `private string $subPath`. A builtin storage slot literally named `subPath` collides with it and
-/// (being `protected` here) raises "Cannot reduce visibility when overriding property" on code PHP
-/// accepts. Any synthetic slot standing in for C-internal state must use a name userland cannot
-/// plausibly pick.
-fn recursive_directory_iterator_properties() -> Vec<ClassProperty> {
-    vec![protected_storage_property("__elephcSubPath", TypeExpr::Str)]
 }
 
 /// Builds RecursiveCachingIterator storage properties.
@@ -412,7 +411,18 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
         method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),
+        method_with_body(
+            "fscanf",
+            vec![param("format", TypeExpr::Str)],
+            Some(mixed_type()),
+            spl_file_object_fscanf_body(),
+        ),
+        // php documents `getCurrentLine()` as an ALIAS of `fgets()`, and it behaves like one:
+        // measured on `php -n` 8.5.6 over `"aa\nbb\n"`, it CONSUMES the line, advances
+        // `key()`, and throws once `feof()` holds. Answering the cached current line instead
+        // left the stream where it was, so `getCurrentLine()` then `fgetc()` read `a` where
+        // php reads `b`.
+        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
         method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
@@ -437,7 +447,15 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         ),
         method_with_body("seek", vec![param("line", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "lineNumber", var_expr("line"))]),
         method_with_body("getFlags", Vec::new(), Some(TypeExpr::Int), return_body(file_object_flags_expr())),
-        method_with_body("setFlags", vec![param("flags", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "flags", var_expr("flags"))]),
+        method_with_body(
+            "setFlags",
+            vec![param("flags", TypeExpr::Int)],
+            Some(TypeExpr::Void),
+            vec![
+                property_assign_stmt(this_expr(), "flags", var_expr("flags")),
+                spl_file_object_csv_refresh_stmt(),
+            ],
+        ),
         method_with_body("getMaxLineLen", Vec::new(), Some(TypeExpr::Int), return_body(property_access(this_expr(), "maxLineLen"))),
         method_with_body("setMaxLineLen", vec![param("maxLength", TypeExpr::Int)], Some(TypeExpr::Void), vec![property_assign_stmt(this_expr(), "maxLineLen", var_expr("maxLength"))]),
         method_with_body(
@@ -451,12 +469,28 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             spl_file_object_set_csv_control_body(),
         ),
         method_with_body("getCsvControl", Vec::new(), Some(array_type()), spl_file_object_get_csv_control_body()),
+        // Compiler-synthesized READ_CSV helpers; not part of php's SplFileObject surface.
+        protected_method_with_body(
+            "__elephcCsvBuild",
+            Vec::new(),
+            Some(TypeExpr::Void),
+            spl_file_object_csv_build_body(),
+        ),
+        protected_method_with_body(
+            "__elephcCsvSkipBlank",
+            Vec::new(),
+            Some(TypeExpr::Void),
+            spl_file_object_csv_skip_blank_body(),
+        ),
+        // The three controls default to NULL rather than to `","` / `'"'` / `"\\"`, because
+        // php resolves an omitted one against the object's own `setCsvControl()` state, not
+        // against a literal: `$f->setCsvControl(";"); $f->fgetcsv()` splits on `;`.
         method_with_body(
             "fgetcsv",
             vec![
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", nullable_string_type(), null_expr()),
+                param_default("enclosure", nullable_string_type(), null_expr()),
+                param_default("escape", nullable_string_type(), null_expr()),
             ],
             Some(mixed_type()),
             spl_file_object_fgetcsv_body(),
@@ -465,9 +499,9 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
             "fputcsv",
             vec![
                 param("fields", string_array_type()),
-                param_default("separator", TypeExpr::Str, string_expr(",")),
-                param_default("enclosure", TypeExpr::Str, string_expr("\"")),
-                param_default("escape", TypeExpr::Str, string_expr("\\")),
+                param_default("separator", nullable_string_type(), null_expr()),
+                param_default("enclosure", nullable_string_type(), null_expr()),
+                param_default("escape", nullable_string_type(), null_expr()),
                 param_default("eol", TypeExpr::Str, string_expr("\n")),
             ],
             Some(TypeExpr::Int),
@@ -597,39 +631,9 @@ fn recursive_directory_iterator_methods() -> Vec<ClassMethod> {
                 param_default("flags", TypeExpr::Int, int_expr(FS_CURRENT_AS_FILEINFO)),
             ],
             Some(TypeExpr::Void),
-            recursive_directory_construct_body(),
+            directory_construct_body(var_expr("directory"), var_expr("flags"), true, false),
         ),
-        method_with_body(
-            "getSubPath",
-            Vec::new(),
-            Some(TypeExpr::Str),
-            return_body(recursive_directory_sub_path_expr()),
-        ),
-        method_with_body(
-            "getSubPathname",
-            Vec::new(),
-            Some(TypeExpr::Str),
-            recursive_directory_get_sub_pathname_body(),
-        ),
-        method_with_body(
-            "__elephcSetSubPath",
-            vec![param("subPath", TypeExpr::Str)],
-            Some(TypeExpr::Void),
-            vec![property_assign_stmt(
-                this_expr(),
-                "__elephcSubPath",
-                string_copy_expr(var_expr("subPath")),
-            )],
-        ),
-        method_with_body(
-            "hasChildren",
-            // PHP's real signature is `hasChildren(bool $allowLinks = false): bool`; the optional
-            // parameter lets `parent::hasChildren($allowLinks)` type-check without relaxing
-            // internal-method arity. (RecursiveCachingIterator::hasChildren really takes 0.)
-            vec![param_default("allowLinks", TypeExpr::Bool, bool_expr(false))],
-            Some(TypeExpr::Bool),
-            recursive_directory_has_children_body(),
-        ),
+        method_with_body("hasChildren", Vec::new(), Some(TypeExpr::Bool), recursive_directory_has_children_body()),
         method_with_body(
             "getChildren",
             Vec::new(),
@@ -702,6 +706,14 @@ fn file_backing_path_arg_expr() -> Expr {
 /// Builds a string copy expression by concatenating an empty string.
 fn string_copy_expr(value: Expr) -> Expr {
     binary_expr(value, BinOp::Concat, string_expr(""))
+}
+
+/// Returns the `?string` type the CSV control parameters declare.
+///
+/// The null is not a value a caller passes for its own sake: it is how an OMITTED control is
+/// told apart from a spelled one, so the body can fall back on `setCsvControl()` state.
+fn nullable_string_type() -> TypeExpr {
+    TypeExpr::Nullable(Box::new(TypeExpr::Str))
 }
 
 /// Returns `$this->lines`.
@@ -862,11 +874,13 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
         property_assign_stmt(this_expr(), "flags", int_expr(0)),
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
         property_assign_stmt(this_expr(), "escape", string_expr("\\")),
         property_assign_stmt(this_expr(), "maxLineLen", int_expr(0)),
+        property_assign_stmt(this_expr(), "csvRecords", empty_array_expr()),
     ];
     body.extend(file_object_load_lines_body(string_copy_expr(backing_path)));
     body
@@ -882,6 +896,7 @@ fn file_object_load_lines_body(path: Expr) -> Vec<Stmt> {
             "line",
             vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
         ),
+        spl_file_object_csv_refresh_stmt(),
     ]
 }
 
@@ -903,6 +918,7 @@ fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
         property_assign_stmt(this_expr(), "flags", int_expr(0)),
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
@@ -1311,34 +1327,283 @@ fn spl_temp_file_object_reload_lines_from_buffer_body() -> Vec<Stmt> {
                 vec![property_array_push_stmt(this_expr(), "lines", var_expr("line"))],
             )]),
         ),
+        spl_file_object_csv_refresh_stmt(),
     ]
 }
 
-/// Builds SplFileObject current() with lightweight READ_CSV support.
+/// Builds SplFileObject current(), reading a CSV RECORD under READ_CSV.
+///
+/// It used to `explode()` the raw line on the delimiter, which is not CSV at all: an enclosure
+/// was ordinary text, so `a,"b,c",d` came back as four fields with quotes attached; the line's
+/// own `"\n"` stayed glued to the last one; a blank line answered `[""]` where php answers
+/// `[null]`; and a quoted field containing a newline was cut in half. The record list is built
+/// from the same line storage the rest of the class uses, but a RECORD may span several lines.
 fn spl_file_object_current_body() -> Vec<Stmt> {
     vec![
         if_stmt(
             flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
-            return_body(function_call(
-                "explode",
-                vec![
-                    string_copy_expr(property_access(this_expr(), "delimiter")),
-                    string_copy_expr(file_current_line_expr()),
-                ],
-            )),
+            vec![
+                return_stmt(array_access(
+                    property_access(this_expr(), "csvRecords"),
+                    file_line_number_expr(),
+                )),
+            ],
             None,
         ),
         return_stmt(file_current_line_expr()),
     ]
 }
 
+/// Builds the READ_CSV record cache, one record per `fgetcsv()` php would perform.
+///
+/// Lines are accumulated until the enclosures balance, so a quoted field holding newlines
+/// stays one field of one record; `str_getcsv()` then applies the very rules the compiled
+/// `fgetcsv()` applies, including php's `[null]` for a line that was nothing but its
+/// terminator. The cache is rebuilt only when the controls or the line storage changed.
+fn spl_file_object_csv_build_body() -> Vec<Stmt> {
+    vec![
+        property_assign_stmt(this_expr(), "csvRecords", empty_array_expr()),
+        property_assign_stmt(this_expr(), "csvBlank", empty_array_expr()),
+        assign_stmt("pending", string_expr("")),
+        assign_stmt("inside", bool_expr(false)),
+        foreach_stmt(
+            file_lines_expr(),
+            None,
+            "line",
+            {
+                let mut body = vec![assign_stmt(
+                    "pending",
+                    binary_expr(var_expr("pending"), BinOp::Concat, var_expr("line")),
+                )];
+                body.extend(spl_file_object_csv_scan_line_body());
+                body.push(if_stmt(
+                    not_expr(var_expr("inside")),
+                    vec![
+                        property_array_push_stmt(
+                            this_expr(),
+                            "csvRecords",
+                            spl_file_object_csv_parse_expr(var_expr("pending")),
+                        ),
+                        property_array_push_stmt(
+                            this_expr(),
+                            "csvBlank",
+                            spl_file_object_csv_blank_expr(var_expr("pending")),
+                        ),
+                        assign_stmt("pending", string_expr("")),
+                    ],
+                    None,
+                ));
+                body
+            },
+        ),
+        // A file that ends inside an enclosure still yields what it has: php's reader stops at
+        // end of input rather than discarding the half-record it accumulated.
+        if_stmt(
+            binary_expr(var_expr("pending"), BinOp::StrictNotEq, string_expr("")),
+            vec![
+                property_array_push_stmt(
+                    this_expr(),
+                    "csvRecords",
+                    spl_file_object_csv_parse_expr(var_expr("pending")),
+                ),
+                property_array_push_stmt(this_expr(), "csvBlank", int_expr(0)),
+            ],
+            // Otherwise there is ONE more record than there are terminated lines. php reads
+            // until a read fails, so a file whose last byte is a newline — and an EMPTY file —
+            // yield a final `[null]`. SKIP_EMPTY turns that last one into `false` instead.
+            Some(vec![
+                assign_stmt("tail", string_expr("")),
+                foreach_stmt(
+                    file_lines_expr(),
+                    None,
+                    "line",
+                    vec![assign_stmt("tail", string_copy_expr(var_expr("line")))],
+                ),
+                if_stmt(
+                    binary_expr(
+                        binary_expr(var_expr("tail"), BinOp::StrictEq, string_expr("")),
+                        BinOp::Or,
+                        binary_expr(
+                            function_call(
+                                "substr",
+                                vec![
+                                    string_copy_expr(var_expr("tail")),
+                                    int_expr(-1),
+                                    int_expr(1),
+                                ],
+                            ),
+                            BinOp::StrictEq,
+                            string_expr("\n"),
+                        ),
+                    ),
+                    vec![
+                        // The trailing record is never SKIPPED, only reshaped: php answers
+                        // `false` there under SKIP_EMPTY and `[null]` without it.
+                        property_array_push_stmt(this_expr(), "csvBlank", int_expr(0)),
+                        if_stmt(
+                        flag_enabled_expr(file_object_flags_expr(), SPL_FILE_SKIP_EMPTY),
+                        vec![property_array_push_stmt(
+                            this_expr(),
+                            "csvRecords",
+                            bool_expr(false),
+                        )],
+                        // The controls are spelled out even though an empty subject cannot use
+                        // them: omitting `$escape` is what raises the 8.4 deprecation, and a
+                        // notice the user's program never asked for would come out of it.
+                        Some(vec![property_array_push_stmt(
+                            this_expr(),
+                            "csvRecords",
+                            function_call(
+                                "str_getcsv",
+                                vec![
+                                    string_expr(""),
+                                    string_expr(","),
+                                    string_expr("\""),
+                                    string_expr("\\"),
+                                ],
+                            ),
+                        )]),
+                    ),
+                    ],
+                    None,
+                ),
+            ]),
+        ),
+    ]
+}
+
+/// Builds the byte scan that updates `$inside` across one more line of `$pending`.
+///
+/// A record ends at a line terminator only when no enclosure is open. The scan mirrors the
+/// parser's own states: inside an enclosure the escape character shields the byte after it,
+/// so `"a\"b"` reads as closed, and a doubled `""` closes and reopens for a net zero.
+///
+/// It is INLINED into the caller rather than living behind a method, because `current()` — the
+/// only reader — cannot call one: a method call from inside `SplFileObject::current()` faults
+/// at run time whatever the callee does, `getCsvControl()` included. See the module note.
+fn spl_file_object_csv_scan_line_body() -> Vec<Stmt> {
+    vec![
+        assign_stmt("index", int_expr(0)),
+        assign_stmt("length", function_call("strlen", vec![string_copy_expr(var_expr("line"))])),
+        while_stmt(
+            binary_expr(var_expr("index"), BinOp::Lt, var_expr("length")),
+            vec![
+                assign_stmt(
+                    "byte",
+                    function_call(
+                        "substr",
+                        vec![
+                            string_copy_expr(var_expr("line")),
+                            var_expr("index"),
+                            int_expr(1),
+                        ],
+                    ),
+                ),
+                if_stmt(
+                    binary_expr(
+                        binary_expr(
+                            var_expr("inside"),
+                            BinOp::And,
+                            binary_expr(
+                                string_copy_expr(property_access(this_expr(), "escape")),
+                                BinOp::StrictNotEq,
+                                string_expr(""),
+                            ),
+                        ),
+                        BinOp::And,
+                        binary_expr(
+                            var_expr("byte"),
+                            BinOp::StrictEq,
+                            string_copy_expr(property_access(this_expr(), "escape")),
+                        ),
+                    ),
+                    // The escape shields whatever follows, so step over it as data.
+                    vec![assign_stmt(
+                        "index",
+                        binary_expr(var_expr("index"), BinOp::Add, int_expr(1)),
+                    )],
+                    Some(vec![if_stmt(
+                        binary_expr(
+                            var_expr("byte"),
+                            BinOp::StrictEq,
+                            string_copy_expr(property_access(this_expr(), "enclosure")),
+                        ),
+                        vec![assign_stmt("inside", not_expr(var_expr("inside")))],
+                        None,
+                    )]),
+                ),
+                assign_stmt(
+                    "index",
+                    binary_expr(var_expr("index"), BinOp::Add, int_expr(1)),
+                ),
+            ],
+        ),
+    ]
+}
+
+/// Returns 1 when the accumulated buffer was nothing but a line terminator.
+///
+/// That is php's BLANK line — the one `fgetcsv()` answers `[null]` for — and the only thing
+/// SKIP_EMPTY steps over. A line of spaces is NOT blank: `" \n"` is a one-field record.
+fn spl_file_object_csv_blank_expr(buffer: Expr) -> Expr {
+    let is = |terminator: &str| {
+        binary_expr(
+            string_copy_expr(buffer.clone()),
+            BinOp::StrictEq,
+            string_expr(terminator),
+        )
+    };
+    expr(crate::parser::ast::ExprKind::Ternary {
+        condition: Box::new(binary_expr(
+            binary_expr(is(""), BinOp::Or, is("\n")),
+            BinOp::Or,
+            binary_expr(is("\r"), BinOp::Or, is("\r\n")),
+        )),
+        then_expr: Box::new(int_expr(1)),
+        else_expr: Box::new(int_expr(0)),
+    })
+}
+
+/// Returns `str_getcsv($buffer, $this->delimiter, $this->enclosure, $this->escape)`.
+fn spl_file_object_csv_parse_expr(buffer: Expr) -> Expr {
+    function_call(
+        "str_getcsv",
+        vec![
+            string_copy_expr(buffer),
+            string_copy_expr(property_access(this_expr(), "delimiter")),
+            string_copy_expr(property_access(this_expr(), "enclosure")),
+            string_copy_expr(property_access(this_expr(), "escape")),
+        ],
+    )
+}
+
+/// Builds the statement that rebuilds the READ_CSV record list, if the flag is on.
+///
+/// The rebuild is EAGER, at every point that moves the line storage or the control characters,
+/// rather than lazy inside `current()`: the records were parsed with those bytes and cannot
+/// survive a change to either, and `current()` is the one method that cannot call another.
+fn spl_file_object_csv_refresh_stmt() -> Stmt {
+    if_stmt(
+        flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
+        vec![expr_stmt(method_call(
+            this_expr(),
+            "__elephcCsvBuild",
+            Vec::new(),
+        ))],
+        None,
+    )
+}
+
 /// Builds SplFileObject next().
 fn spl_file_object_next_body() -> Vec<Stmt> {
-    vec![property_assign_stmt(
-        this_expr(),
-        "lineNumber",
-        binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
-    )]
+    vec![
+        property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        ),
+        spl_file_object_csv_skip_blank_stmt(),
+    ]
 }
 
 /// Builds SplFileObject rewind().
@@ -1346,29 +1611,151 @@ fn spl_file_object_rewind_body() -> Vec<Stmt> {
     vec![
         expr_stmt(function_call("rewind", vec![file_stream_expr()])),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        spl_file_object_csv_skip_blank_stmt(),
     ]
 }
 
-/// Builds SplFileObject valid().
-fn spl_file_object_valid_body() -> Vec<Stmt> {
-    return_body(file_object_valid_expr())
+/// Builds the call that steps the cursor over blank CSV records.
+fn spl_file_object_csv_skip_blank_stmt() -> Stmt {
+    expr_stmt(method_call(this_expr(), "__elephcCsvSkipBlank", Vec::new()))
 }
 
-/// Builds SplFileObject fgets().
-fn spl_file_object_fgets_body() -> Vec<Stmt> {
+/// Builds the cursor advance that SKIP_EMPTY performs over blank records.
+///
+/// php only honors SKIP_EMPTY together with DROP_NEW_LINE, and it steps OVER the blank record
+/// rather than removing it: the keys of the records that follow are unchanged, so a file whose
+/// second line is empty iterates 0, 2, 3. Nothing happens without READ_CSV — the plain line
+/// path keeps its own behaviour.
+fn spl_file_object_csv_skip_blank_body() -> Vec<Stmt> {
+    let mask = SPL_FILE_READ_CSV | SPL_FILE_SKIP_EMPTY | SPL_FILE_DROP_NEW_LINE;
     vec![
-        assign_stmt("line", function_call("fgets", vec![file_stream_expr()])),
         if_stmt(
-            binary_expr(function_call("gettype", vec![var_expr("line")]), BinOp::StrictEq, string_expr("string")),
+            not_expr(flag_mode_is_expr(file_object_flags_expr(), mask, mask)),
+            vec![return_void_stmt()],
+            None,
+        ),
+        while_stmt(
+            binary_expr(
+                binary_expr(
+                    file_line_number_expr(),
+                    BinOp::Lt,
+                    count_expr(property_access(this_expr(), "csvBlank")),
+                ),
+                BinOp::And,
+                binary_expr(
+                    array_access(property_access(this_expr(), "csvBlank"), file_line_number_expr()),
+                    BinOp::StrictEq,
+                    int_expr(1),
+                ),
+            ),
             vec![property_assign_stmt(
                 this_expr(),
                 "lineNumber",
                 binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
             )],
+        ),
+    ]
+}
+
+/// Builds SplFileObject valid().
+///
+/// Under READ_CSV the bound is the RECORD count, not the line count: a quoted field holding
+/// newlines makes one record out of several lines, so iterating to `count($this->lines)` walked
+/// off the end of the record list and answered null for the tail.
+fn spl_file_object_valid_body() -> Vec<Stmt> {
+    vec![
+        if_stmt(
+            flag_enabled_expr(file_object_flags_expr(), SPL_FILE_READ_CSV),
+            vec![return_stmt(binary_expr(
+                file_line_number_expr(),
+                BinOp::Lt,
+                count_expr(property_access(this_expr(), "csvRecords")),
+            ))],
             None,
         ),
-        return_stmt(var_expr("line")),
+        return_stmt(file_object_valid_expr()),
     ]
+}
+
+/// Builds SplFileObject fgets().
+fn spl_file_object_fgets_body() -> Vec<Stmt> {
+    let mut body = vec![spl_file_object_read_guard_stmt()];
+    body.extend(spl_file_object_read_line_stmts());
+    body.push(property_assign_stmt(
+        this_expr(),
+        "lineNumber",
+        binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+    ));
+    body.push(property_assign_stmt(this_expr(), "hasReadLine", bool_expr(true)));
+    body.push(return_stmt(var_expr("line")));
+    body
+}
+
+/// Builds the read that both `fgets()` and `fscanf()` perform, into `$line`.
+///
+/// A read that comes back `false` becomes `""`. php's own reader answers the EMPTY STRING for
+/// the read that first reaches end of file — measured on `php -n` 8.5.6, `fgets()` on
+/// `"a\nbb\n"` gives `'a\n'`, `'bb\n'`, then `''`, and only the call AFTER that one fails. The
+/// `false` this backend used to return is not a value php ever produces here.
+///
+/// The `(string)` cast carries that rule AND the representation: it makes `$line` a STRING
+/// rather than `string|false`, and `(string) false` is `""` — php's own answer. Keeping the
+/// union instead left `fscanf()` handing a boxed Mixed to `sscanf()`'s declared `string`
+/// parameter.
+fn spl_file_object_read_line_stmts() -> Vec<Stmt> {
+    vec![assign_stmt(
+        "line",
+        cast_expr(
+            CastType::String,
+            function_call("fgets", vec![file_stream_expr()]),
+        ),
+    )]
+}
+
+/// Builds php's refusal to read a file object already positioned at end of file.
+///
+/// `php -n` 8.5.6 throws `RuntimeException: Cannot read from file <path>` — the path as the
+/// constructor received it — from `fgets()` and `fscanf()` once `feof()` holds. `feof()` only
+/// becomes true after a read has hit the end, which is why the empty-string read above happens
+/// FIRST and this guard fires on the call after it.
+fn spl_file_object_read_guard_stmt() -> Stmt {
+    if_stmt(
+        function_call("feof", vec![file_stream_expr()]),
+        vec![throw_stmt(new_object_expr(
+            "RuntimeException",
+            vec![binary_expr(
+                string_expr("Cannot read from file "),
+                BinOp::Concat,
+                file_path_expr(),
+            )],
+        ))],
+        None,
+    )
+}
+
+/// Builds SplFileObject fscanf().
+///
+/// One line through the shared scanf engine, so the method and the free function cannot drift.
+/// The line-number rule is php's, and it is not `fgets()`'s: the FIRST read of a fresh object
+/// leaves `key()` where it was, and only later reads advance it.
+fn spl_file_object_fscanf_body() -> Vec<Stmt> {
+    let mut body = vec![spl_file_object_read_guard_stmt()];
+    body.extend(spl_file_object_read_line_stmts());
+    body.push(if_stmt(
+        property_access(this_expr(), "hasReadLine"),
+        vec![property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        )],
+        None,
+    ));
+    body.push(property_assign_stmt(this_expr(), "hasReadLine", bool_expr(true)));
+    body.push(return_stmt(function_call(
+        "sscanf",
+        vec![var_expr("line"), var_expr("format")],
+    )));
+    body
 }
 
 /// Builds SplFileObject fwrite().
@@ -1406,6 +1793,7 @@ fn spl_file_object_set_csv_control_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "delimiter", var_expr("separator")),
         property_assign_stmt(this_expr(), "enclosure", var_expr("enclosure")),
         property_assign_stmt(this_expr(), "escape", var_expr("escape")),
+        spl_file_object_csv_refresh_stmt(),
     ]
 }
 
@@ -1418,6 +1806,18 @@ fn spl_file_object_get_csv_control_body() -> Vec<Stmt> {
     ])))
 }
 
+/// Returns `$<name> ?? $this-><property>`, the fallback php applies to an omitted CSV control.
+///
+/// php-src reads the object's `setCsvControl()` state for anything the call left out, so the
+/// parameter defaults are null and the STATE supplies the byte. Spelling `","` in the signature
+/// instead made `$f->setCsvControl(";"); $f->fgetcsv()` split on a comma.
+fn csv_control_or_state_expr(name: &str, property: &str) -> Expr {
+    null_coalesce_expr(
+        var_expr(name),
+        string_copy_expr(property_access(this_expr(), property)),
+    )
+}
+
 /// Builds SplFileObject fgetcsv().
 fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
     vec![
@@ -1427,8 +1827,10 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
                 "fgetcsv",
                 vec![
                     file_stream_expr(),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
+                    int_expr(0),
+                    csv_control_or_state_expr("separator", "delimiter"),
+                    csv_control_or_state_expr("enclosure", "enclosure"),
+                    csv_control_or_state_expr("escape", "escape"),
                 ],
             ),
         ),
@@ -1442,6 +1844,11 @@ fn spl_file_object_fgetcsv_body() -> Vec<Stmt> {
 }
 
 /// Builds SplFileObject fputcsv().
+///
+/// `$eol` is FORWARDED. The method declared it and then called the function with five
+/// arguments, so `$f->fputcsv(["a", "b"], ",", '"', "\\", "")` — php's "write no terminator",
+/// which answers 3 — still wrote a newline and answered 4, and a custom terminator was
+/// silently discarded.
 fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
     let mut body = vec![
         assign_stmt(
@@ -1451,8 +1858,10 @@ fn spl_file_object_fputcsv_body() -> Vec<Stmt> {
                 vec![
                     file_stream_expr(),
                     var_expr("fields"),
-                    var_expr("separator"),
-                    var_expr("enclosure"),
+                    csv_control_or_state_expr("separator", "delimiter"),
+                    csv_control_or_state_expr("enclosure", "enclosure"),
+                    csv_control_or_state_expr("escape", "escape"),
+                    string_copy_expr(var_expr("eol")),
                 ],
             ),
         ),
@@ -1655,52 +2064,7 @@ fn recursive_directory_has_children_body() -> Vec<Stmt> {
     ))
 }
 
-/// Returns `$this->__elephcSubPath` — the current iterator's directory path relative to the
-/// traversal root, with no trailing separator (`''` for the root iterator). See
-/// `recursive_directory_iterator_properties` for why the slot is name-mangled.
-fn recursive_directory_sub_path_expr() -> Expr {
-    property_access(this_expr(), "__elephcSubPath")
-}
-
-/// Builds RecursiveDirectoryIterator's constructor: the shared directory setup plus an empty
-/// `subPath`. A directly-constructed iterator IS the traversal root, so its sub path is `''`;
-/// `getChildren()` overwrites the child's copy with the parent's `getSubPathname()`.
-fn recursive_directory_construct_body() -> Vec<Stmt> {
-    let mut body = directory_construct_body(var_expr("directory"), var_expr("flags"), true, false);
-    body.push(property_assign_stmt(this_expr(), "__elephcSubPath", string_expr("")));
-    body
-}
-
-/// Builds RecursiveDirectoryIterator getSubPathname().
-///
-/// PHP returns the current entry's path relative to the traversal root: the entry's file name when
-/// the sub path is empty, otherwise `<subPath>/<filename>`. Verified against php 8.5.6 on a nested
-/// tree: `a` → `subPath=''`/`subPathname='a'`, and `a/b/b.txt` → `subPath='a/b'`/
-/// `subPathname='a/b/b.txt'`.
-fn recursive_directory_get_sub_pathname_body() -> Vec<Stmt> {
-    vec![
-        assign_stmt("name", function_call("basename", vec![file_path_arg_expr()])),
-        if_stmt(
-            binary_expr(
-                recursive_directory_sub_path_expr(),
-                BinOp::StrictEq,
-                string_expr(""),
-            ),
-            return_body(var_expr("name")),
-            None,
-        ),
-        return_stmt(path_join_expr(
-            recursive_directory_sub_path_expr(),
-            var_expr("name"),
-        )),
-    ]
-}
-
 /// Builds RecursiveDirectoryIterator getChildren().
-///
-/// The child's `subPath` is seeded with the PARENT's `getSubPathname()` — the parent's own sub path
-/// extended by the directory entry being descended into — which is exactly how PHP chains sub paths
-/// down a recursive traversal.
 fn recursive_directory_get_children_body() -> Vec<Stmt> {
     vec![
         if_stmt(
@@ -1708,19 +2072,10 @@ fn recursive_directory_get_children_body() -> Vec<Stmt> {
             return_body(null_expr()),
             None,
         ),
-        assign_stmt(
-            "child",
-            new_object_expr(
-                "RecursiveDirectoryIterator",
-                vec![file_path_arg_expr(), filesystem_flags_expr()],
-            ),
-        ),
-        expr_stmt(method_call(
-            var_expr("child"),
-            "__elephcSetSubPath",
-            vec![method_call(this_expr(), "getSubPathname", Vec::new())],
+        return_stmt(new_object_expr(
+            "RecursiveDirectoryIterator",
+            vec![file_path_arg_expr(), filesystem_flags_expr()],
         )),
-        return_stmt(var_expr("child")),
     ]
 }
 

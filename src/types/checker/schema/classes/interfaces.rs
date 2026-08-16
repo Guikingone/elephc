@@ -19,7 +19,8 @@ use crate::types::{PhpType, PropertyHookContract};
 
 use super::super::super::Checker;
 use super::super::validation::{
-    declared_return_type_compatible, late_static_return_compatible,
+    declared_return_type_compatible, is_pdo_exception_get_code_contract,
+    late_static_return_compatible,
     validate_signature_compatibility,
 };
 use super::state::ClassBuildState;
@@ -37,7 +38,7 @@ pub(super) fn collect_interfaces(
 ) -> Result<(), CompileError> {
     let mut seen_interfaces: HashSet<String> = state.interfaces.iter().cloned().collect();
     let mut queue = Vec::new();
-    for interface_name in class.implements.iter() {
+    for interface_name in class.implements.iter().rev() {
         if interface_is_throwable_contract(checker, interface_name)
             && !class_can_implement_throwable_contract(state, class)
         {
@@ -66,14 +67,7 @@ pub(super) fn collect_interfaces(
         }
         queue.push(interface_name.clone());
     }
-    // Drain the queue FIFO (via a head cursor) so the result is breadth-first: all directly
-    // declared interfaces in declaration order first, then their inherited parents. This matches
-    // PHP's class_implements() ordering (e.g. Iterator, Countable, ArrayAccess, then the inherited
-    // Traversable) — a LIFO pop would splice each interface's parents in immediately (depth-first).
-    let mut head = 0;
-    while head < queue.len() {
-        let interface_name = queue[head].clone();
-        head += 1;
+    while let Some(interface_name) = queue.pop() {
         if !seen_interfaces.insert(interface_name.clone()) {
             continue;
         }
@@ -83,7 +77,7 @@ pub(super) fn collect_interfaces(
                 &format!("Unknown interface: {}", interface_name),
             )
         })?;
-        for parent_name in interface_info.parents.iter() {
+        for parent_name in interface_info.parents.iter().rev() {
             queue.push(parent_name.clone());
         }
         state.interfaces.push(interface_name);
@@ -115,8 +109,7 @@ fn class_can_implement_throwable_contract(
 ///
 /// Class metadata is not registered yet while interface contracts are validated, so
 /// this derives the subtype relationship from the interface currently being checked
-/// and the interfaces declared directly on the class. A nullable/union interface return accepts
-/// the same concrete self subtype through any compatible object member.
+/// and the interfaces declared directly on the class.
 fn interface_self_return_conforms(
     checker: &Checker,
     class: &FlattenedClass,
@@ -134,17 +127,6 @@ fn interface_self_return_conforms(
                             || checker.interface_extends_interface(declared, expected_name)
                     }))
         }
-        (PhpType::Union(required_members), PhpType::Object(_)) => required_members.iter().any(
-            |required_member| {
-                interface_self_return_conforms(
-                    checker,
-                    class,
-                    interface_name,
-                    required_member,
-                    actual_return,
-                )
-            },
-        ),
         _ => false,
     }
 }
@@ -231,13 +213,11 @@ fn validate_static_interface_method(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     if state.method_sigs.contains_key(method_name) {
-        // PHP-exact fatal (`php -n` verified): satisfying a STATIC interface contract with
-        // an instance method is "Cannot make static method I::f() non static in class C".
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(
-                "Cannot make static method {}::{}() non static in class {}",
-                interface_name, method_name, class.name
+                "Cannot use instance method to satisfy static interface contract: {}::{}",
+                class.name, method_name
             ),
         ));
     }
@@ -284,7 +264,7 @@ fn validate_static_interface_method(
             return Err(CompileError::new(
                 crate::span::Span::dummy(),
                 &format!(
-                    "Class {} must implement interface method {}::{}",
+                    "Class {} must implement interface static method {}::{}",
                     class.name, interface_name, method_name
                 ),
             ))
@@ -342,7 +322,16 @@ fn validate_static_interface_method(
             .map(|method| method.span)
             .unwrap_or_else(crate::span::Span::dummy),
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let contract_owner = state
+        .method_declaring_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let return_compatible = is_pdo_exception_get_code_contract(
+        contract_owner,
+        method_name,
+        &actual_sig.return_type,
+    ) || late_static_compatible.unwrap_or_else(|| {
         interface_self_return_conforms(
             checker,
             class,
@@ -455,13 +444,11 @@ fn validate_interface_method(
     building: &mut HashSet<String>,
 ) -> Result<(), CompileError> {
     if state.static_sigs.contains_key(method_name) {
-        // PHP-exact fatal (`php -n` verified): satisfying a NON-static interface contract
-        // with a static method is "Cannot make non static method I::f() static in class C".
         return Err(CompileError::new(
             crate::span::Span::dummy(),
             &format!(
-                "Cannot make non static method {}::{}() static in class {}",
-                interface_name, method_name, class.name
+                "Cannot use static method to satisfy interface contract: {}::{}",
+                class.name, method_name
             ),
         ));
     }
@@ -557,7 +544,20 @@ fn validate_interface_method(
             .map(|method| method.span)
             .unwrap_or_else(crate::span::Span::dummy),
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let contract_owner = state
+        .method_declaring_classes
+        .get(method_name)
+        .map(String::as_str)
+        .unwrap_or(&class.name);
+    let return_compatible = (is_pdo_exception_get_code_contract(
+        contract_owner,
+        method_name,
+        &actual_sig.return_type,
+    ) || is_pdo_exception_get_code_contract(
+        &class.name,
+        method_name,
+        &actual_sig.return_type,
+    )) || late_static_compatible.unwrap_or_else(|| {
         interface_self_return_conforms(
             checker,
             class,

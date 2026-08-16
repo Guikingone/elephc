@@ -49,6 +49,72 @@ fn test_comparison_lower_than_arithmetic() {
     assert_eq!(stmts, vec![expected]);
 }
 
+/// Verifies that `<>` parses to the same `BinOp::NotEq` node as `!=`, so the alias is
+/// indistinguishable from `!=` after parsing.
+#[test]
+fn test_angle_not_equal_is_alias_of_not_equal() {
+    let angle = parse_source("<?php echo 1 <> 2;");
+    let bang = parse_source("<?php echo 1 != 2;");
+    assert_eq!(angle, bang);
+    assert_eq!(
+        angle,
+        vec![Stmt::echo(Expr::binop(
+            Expr::int_lit(1),
+            BinOp::NotEq,
+            Expr::int_lit(2),
+        ))]
+    );
+}
+
+/// Verifies the Pratt binding power of `<>` matches `!=` exactly: it binds looser than
+/// `+` and looser than `<`, and it is left-associative like the other equality operators.
+#[test]
+fn test_angle_not_equal_binding_power_matches_not_equal() {
+    // Arithmetic (bp 29) binds tighter than `<>` (bp 21): 1 + 2 <> 3 is (1 + 2) <> 3.
+    let stmts = parse_source("<?php echo 1 + 2 <> 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::Add, Expr::int_lit(2)),
+            BinOp::NotEq,
+            Expr::int_lit(3),
+        ))]
+    );
+
+    // Relational (bp 23) binds tighter than `<>` (bp 21): 1 <> 2 < 3 is 1 <> (2 < 3).
+    let stmts = parse_source("<?php echo 1 <> 2 < 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::int_lit(1),
+            BinOp::NotEq,
+            Expr::binop(Expr::int_lit(2), BinOp::Lt, Expr::int_lit(3)),
+        ))]
+    );
+
+    // `<>` is left-associative and shares its level with `==`: 1 <> 2 == 3 is (1 <> 2) == 3.
+    let stmts = parse_source("<?php echo 1 <> 2 == 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::NotEq, Expr::int_lit(2)),
+            BinOp::Eq,
+            Expr::int_lit(3),
+        ))]
+    );
+
+    // `&&` (bp 13) binds looser than `<>`: 1 <> 2 && 3 is (1 <> 2) && 3.
+    let stmts = parse_source("<?php echo 1 <> 2 && 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::NotEq, Expr::int_lit(2)),
+            BinOp::And,
+            Expr::int_lit(3),
+        ))]
+    );
+}
+
 /// Verifies that `<?php echo "x" . 1 < 2;` parses as `("x" . 1) < 2` — concatenation has higher
 /// precedence than comparison, matching PHP precedence.
 #[test]
@@ -231,209 +297,4 @@ fn test_expr_call_parses() {
     }
 }
 
-// --- clone expression precedence ---
-
-/// Verifies `clone` parses as a unary prefix expression wrapping its operand.
-#[test]
-fn test_clone_parses_unary() {
-    let stmts = parse_source("<?php echo clone $a;");
-    assert_eq!(echoed_expr(&stmts), &ExprKind::Clone(Box::new(Expr::var("a"))));
-}
-
-/// Verifies `clone` binds tighter than `**` (pow), matching PHP: `clone $a ** 2`
-/// parses as `(clone $a) ** 2`, so the cloned object is the pow left operand.
-#[test]
-fn test_clone_binds_tighter_than_pow() {
-    let stmts = parse_source("<?php echo clone $a ** 2;");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::BinaryOp { op: BinOp::Pow, left, right }
-            if matches!(left.kind, ExprKind::Clone(_))
-                && matches!(right.kind, ExprKind::IntLiteral(2))
-    ));
-}
-
-/// Verifies postfix property access binds tighter than `clone`, matching PHP:
-/// `clone $a->n` parses as `clone ($a->n)`, so the cloned value is the property.
-#[test]
-fn test_clone_operand_takes_postfix_property() {
-    let stmts = parse_source("<?php echo clone $a->n;");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::PropertyAccess { .. })
-    ));
-}
-
-/// Verifies `clone new P()` parses as `clone (new P())` — the `new` expression is
-/// the cloned operand, matching PHP's evaluation order.
-#[test]
-fn test_clone_new_object() {
-    let stmts = parse_source("<?php echo clone new P();");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::Clone(inner) if matches!(inner.kind, ExprKind::NewObject { .. })
-    ));
-}
-
-/// Verifies `new $arr['k']()` parses as a dynamic `new` whose class-name expression is the
-/// array access, with the trailing `()` consumed as the (empty) constructor argument list
-/// rather than as a call on the array element.
-#[test]
-fn test_new_dynamic_array_access_class_name() {
-    let stmts = parse_source("<?php echo new $arr['k']();");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::NewDynamic { name_expr, args }
-            if args.is_empty()
-                && matches!(name_expr.kind, ExprKind::ArrayAccess { .. })
-    ));
-}
-
-/// Verifies `new $obj->kind(7)` parses as a dynamic `new` whose class-name expression is the
-/// property access, with `7` forwarded as a constructor argument — the `(7)` is the ctor
-/// argument list, not a method call on the property.
-#[test]
-fn test_new_dynamic_property_class_name() {
-    let stmts = parse_source("<?php echo new $obj->kind(7);");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::NewDynamic { name_expr, args }
-            if args.len() == 1
-                && matches!(name_expr.kind, ExprKind::PropertyAccess { ref property, .. } if property == "kind")
-    ));
-}
-
-/// Verifies `new $cfg['cars']['sport']()` parses the full nested array-access chain as the
-/// class-name expression (an `ArrayAccess` whose `array` is itself an `ArrayAccess`).
-#[test]
-fn test_new_dynamic_nested_array_access_class_name() {
-    let stmts = parse_source("<?php echo new $cfg['cars']['sport']();");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::NewDynamic { name_expr, .. }
-            if matches!(&name_expr.kind, ExprKind::ArrayAccess { array, .. }
-                if matches!(array.kind, ExprKind::ArrayAccess { .. }))
-    ));
-}
-
-/// Verifies the PHP 8.0 `new (expr)(args)` form parses the parenthesized expression as the
-/// class-name expression of a dynamic `new`, with the following `()` as the ctor arguments.
-#[test]
-fn test_new_dynamic_parenthesized_expr_class_name() {
-    let stmts = parse_source("<?php echo new (pick())(7);");
-    assert!(matches!(
-        echoed_expr(&stmts),
-        ExprKind::NewDynamic { name_expr, args }
-            if args.len() == 1
-                && matches!(name_expr.kind, ExprKind::FunctionCall { .. })
-    ));
-}
-
 // --- Null coalescing precedence ---
-
-// --- instanceof RHS target forms ---
-
-/// Verifies `$v instanceof $this->p` parses the RHS as an `InstanceOfTarget::Expr` holding a
-/// `PropertyAccess` on `$this` — the dynamic-arm form used by e.g. Symfony's AutowirePass
-/// (`$value instanceof $this->defaultArgument`).
-#[test]
-fn test_instanceof_this_property_target_is_expr() {
-    let stmts = parse_source("<?php echo $v instanceof $this->p;");
-    match echoed_expr(&stmts) {
-        ExprKind::InstanceOf {
-            target: InstanceOfTarget::Expr(target),
-            ..
-        } => assert!(matches!(
-            &target.kind,
-            ExprKind::PropertyAccess { object, property }
-                if property == "p" && matches!(object.kind, ExprKind::This)
-        )),
-        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
-    }
-}
-
-/// Verifies `$v instanceof D::$proto` parses the RHS as an `InstanceOfTarget::Expr` holding a
-/// `StaticPropertyAccess` on the named class — a static property is a runtime value, not a
-/// class name, so it must not go through the Name arm.
-#[test]
-fn test_instanceof_named_static_property_target_is_expr() {
-    let stmts = parse_source("<?php echo $v instanceof D::$proto;");
-    match echoed_expr(&stmts) {
-        ExprKind::InstanceOf {
-            target: InstanceOfTarget::Expr(target),
-            ..
-        } => assert!(matches!(
-            &target.kind,
-            ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Named(name), property }
-                if property == "proto" && name.as_str() == "D"
-        )),
-        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
-    }
-}
-
-/// Verifies `$v instanceof self::$p` parses the RHS as an `InstanceOfTarget::Expr` holding a
-/// `StaticPropertyAccess` with the `self` receiver — the `::$` lookahead must win over the
-/// bare-`self` keyword arm.
-#[test]
-fn test_instanceof_self_static_property_target_is_expr() {
-    let stmts = parse_source("<?php echo $v instanceof self::$p;");
-    match echoed_expr(&stmts) {
-        ExprKind::InstanceOf {
-            target: InstanceOfTarget::Expr(target),
-            ..
-        } => assert!(matches!(
-            &target.kind,
-            ExprKind::StaticPropertyAccess { receiver: StaticReceiver::Self_, property }
-                if property == "p"
-        )),
-        other => panic!("Expected InstanceOf with Expr target, got {:?}", other),
-    }
-}
-
-/// Regression guard: bare `$v instanceof self` (and `static`/`parent`) must keep the
-/// `InstanceOfTarget::Name` form — the checker's instanceof narrowing to the concrete
-/// class depends on the Name shape, not an Expr.
-#[test]
-fn test_instanceof_bare_self_static_parent_remain_name_targets() {
-    for keyword in ["self", "static", "parent"] {
-        let stmts = parse_source(&format!("<?php echo $v instanceof {};", keyword));
-        match echoed_expr(&stmts) {
-            ExprKind::InstanceOf {
-                target: InstanceOfTarget::Name(name),
-                ..
-            } => assert_eq!(name.as_str(), keyword),
-            other => panic!("Expected InstanceOf with Name target, got {:?}", other),
-        }
-    }
-}
-
-/// Regression guard: a bare class name RHS (`$v instanceof Foo`) must keep the
-/// `InstanceOfTarget::Name` form — the static-property lookahead must not consume it.
-#[test]
-fn test_instanceof_bare_class_name_remains_name_target() {
-    let stmts = parse_source("<?php echo $v instanceof Foo;");
-    match echoed_expr(&stmts) {
-        ExprKind::InstanceOf {
-            target: InstanceOfTarget::Name(name),
-            ..
-        } => assert_eq!(name.as_str(), "Foo"),
-        other => panic!("Expected InstanceOf with Name target, got {:?}", other),
-    }
-}
-
-/// Verifies PHP precedence for `!$v instanceof RHS`: `instanceof` binds tighter than `!`,
-/// so the whole expression parses as `!($v instanceof $this->p)`.
-#[test]
-fn test_not_instanceof_dynamic_target_precedence() {
-    let stmts = parse_source("<?php echo !$v instanceof $this->p;");
-    match echoed_expr(&stmts) {
-        ExprKind::Not(inner) => assert!(matches!(
-            &inner.kind,
-            ExprKind::InstanceOf {
-                target: InstanceOfTarget::Expr(_),
-                ..
-            }
-        )),
-        other => panic!("Expected Not(InstanceOf), got {:?}", other),
-    }
-}

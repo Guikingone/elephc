@@ -71,13 +71,15 @@ pub(super) fn lower_static_defined_call(
     ))
 }
 
-/// Folds a literal `constant("NAME")` to its value when the name resolves at
-/// compile time, returning `None` for non-literal or unresolved names.
+/// Lowers `constant("NAME")` to exactly the EIR a bare `NAME` reference produces.
 ///
-/// A bare global-constant name is resolved through the prescanned constant table;
-/// a `Class::CONST` form is resolved through PHP class/interface constant lookup.
-/// Returning `None` defers the call to the generic builtin path, which lowers to
-/// the `__rt_constant` runtime registry lookup (a runtime miss throws `\Error`).
+/// PHP's `constant()` performs a GLOBAL constant lookup: the name is already fully qualified,
+/// so no namespace/`use` resolution applies and a leading `\` is stripped. Reusing
+/// [`lower_const_ref`] means the call inherits the constant's real type and value — including
+/// the prescanned `define()` metadata recorded earlier in source order — instead of an opaque
+/// `mixed`. The checker (`crate::builtins::system::constant`) has already refused a dynamic
+/// name, a `Foo::BAR` class constant, and an unknown constant, so this hook only ever sees a
+/// resolvable global name.
 pub(super) fn lower_static_constant_call(
     ctx: &mut LoweringContext<'_, '_>,
     name: &Name,
@@ -87,16 +89,25 @@ pub(super) fn lower_static_constant_call(
     if php_symbol_key(name.as_str().trim_start_matches('\\')) != "constant" || args.len() != 1 {
         return None;
     }
-    let ExprKind::StringLiteral(const_name) = &args[0].kind else {
-        return None;
-    };
-    let canonical = const_name.trim_start_matches('\\');
-    if let Some((class_name, member)) = canonical.split_once("::") {
-        let value = ctx.scoped_constant_value(class_name, member)?;
-        return Some(super::lower_expr(ctx, &value));
+    let constant_name = static_constant_name_arg(&args[0])?;
+    let referenced = Name::unqualified(constant_name.trim_start_matches('\\'));
+    Some(lower_const_ref(ctx, &referenced, expr))
+}
+
+/// Returns the literal constant name from `constant()`'s single argument.
+///
+/// Accepts the positional form and the `name:` named-argument form; every other shape (a
+/// runtime string, a spread) yields `None` so the caller falls back to the registry path,
+/// which the checker has already rejected.
+fn static_constant_name_arg(arg: &Expr) -> Option<&str> {
+    match &arg.kind {
+        ExprKind::StringLiteral(value) => Some(value.as_str()),
+        ExprKind::NamedArg { name, value } if name == "name" => match &value.kind {
+            ExprKind::StringLiteral(value) => Some(value.as_str()),
+            _ => None,
+        },
+        _ => None,
     }
-    let (value, php_type) = ctx.constant_value(canonical)?;
-    Some(lower_constant_value(ctx, value, php_type, expr))
 }
 
 /// Lowers a constant reference through prescanned metadata or global storage fallback.
@@ -107,32 +118,6 @@ pub(super) fn lower_const_ref(
 ) -> LoweredValue {
     if let Some((value, php_type)) = ctx.constant_value(name.as_str()) {
         return lower_constant_value(ctx, value, php_type, expr);
-    }
-    // A curated platform-conditional constant (e.g. the Windows-only `PHP_WINDOWS_VERSION_*`
-    // family) has no prescanned metadata and no runtime `define()` global slot on this target, so
-    // the `LoadGlobal` fallback below would reference a nonexistent global. The checker already
-    // tolerated the reference as `Mixed` (see `is_platform_conditional_constant`); lower it to the
-    // same `constant("NAME")` runtime lookup PHP performs, which resolves through `__rt_constant`
-    // and throws a catchable `\Error` on a miss — byte-faithful whether the (dead) branch is ever
-    // reached. The bare global name is used so the thrown message matches PHP's namespace fallback.
-    if crate::types::checker::builtins::is_platform_conditional_constant(name.as_str()) {
-        let bare = name
-            .as_str()
-            .trim_start_matches('\\')
-            .rsplit('\\')
-            .next()
-            .unwrap_or_else(|| name.as_str());
-        let lookup = Expr::new(
-            ExprKind::FunctionCall {
-                name: Name::unqualified("constant"),
-                args: vec![Expr::new(
-                    ExprKind::StringLiteral(bare.to_string()),
-                    expr.span,
-                )],
-            },
-            expr.span,
-        );
-        return super::lower_expr(ctx, &lookup);
     }
     if ctx.has_eval_barrier() || ctx.eval_executed() {
         // Barrier-free AOT evals can still define constants dynamically; the
@@ -149,16 +134,11 @@ pub(super) fn lower_const_ref(
         );
     }
     let data = ctx.intern_global_name(name.as_str());
-    // A constant that reaches this fallback was defined at RUNTIME (`define()` in a
-    // function body the prescan does not fold). `lower_define` stores the raw value
-    // by its own static type, so the read must NOT be typed `Mixed` (the general
-    // syntactic fallback) — a Mixed-typed load would dereference the raw scalar as a
-    // boxed cell. Mirror the raw-store convention with the historical `Int` view.
     ctx.emit_value(
         Op::LoadGlobal,
         Vec::new(),
         Some(Immediate::GlobalName(data)),
-        PhpType::Int,
+        super::fallback_expr_type(expr),
         Op::LoadGlobal.default_effects(),
         Some(expr.span),
     )
@@ -214,6 +194,11 @@ fn emit_typed_constant(
     expr: &Expr,
 ) -> LoweredValue {
     let ir_type = value_ir_type(&php_type);
+    let ownership = if matches!(php_type, PhpType::Resource(_)) {
+        Ownership::Persistent
+    } else {
+        Ownership::for_php_type(&php_type)
+    };
     let value = ctx
         .builder
         .emit_with_effects(
@@ -222,7 +207,7 @@ fn emit_typed_constant(
             immediate,
             ir_type,
             php_type.clone(),
-            Ownership::for_php_type(&php_type),
+            ownership,
             op.default_effects(),
             Some(expr.span),
         )

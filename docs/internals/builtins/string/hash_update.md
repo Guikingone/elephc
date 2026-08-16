@@ -2,44 +2,34 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 423
 ---
 
 ## `hash_update()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_update.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:433](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L433) (`lower_registry_call`)
-- **Function symbol**: `lower_registry_call()`
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
+- **Lowering**: [`src/hash_prelude.rs`:93](https://github.com/illegalstudio/elephc/blob/main/src/hash_prelude.rs#L93) (`hash_update`)
+- **Function symbol**: `hash_update()`
 
 
 ### Lowering notes
 
-- Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.hash_update` through `BuiltinLoweringContext`.
-- The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
+- Implemented by a compiler-injected PHP prelude.
 
 ## Semantic descriptor
 
-- **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
-- **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (16 declared effects)`
-- **Requirements**: `static (1 requirements)`
-- **Callable policy**: `static_only`
-- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+Shared contract implemented by an injected elephc-PHP prelude.
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.hash_update`
-- **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
+_Implemented by an injected elephc-PHP prelude._
 
 ## Signature summary
 
 ```php
-function hash_update(resource $context, string $data): bool
+function hash_update(HashContext $context, string $data): bool
 ```
 
 ## What the type checker enforces
@@ -49,6 +39,8 @@ function hash_update(resource $context, string $data): bool
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

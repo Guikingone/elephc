@@ -2,13 +2,13 @@
 title: "fwrite()"
 description: "Binary-safe file write."
 sidebar:
-  order: 182
+  order: 192
 ---
 
 ## fwrite()
 
 ```php
-function fwrite(resource $stream, string $data): int
+function fwrite(resource $stream, string $data): mixed
 ```
 
 Binary-safe file write.
@@ -17,7 +17,7 @@ Binary-safe file write.
 - `$stream` (`resource`)
 - `$data` (`string`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -25,12 +25,6 @@ Binary-safe file write.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fwrite.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fwrite.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

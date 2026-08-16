@@ -16,12 +16,12 @@ fn test_error_null_coalesce_assignment_missing_rhs() {
     expect_error("<?php $x ??=;", "Unexpected token");
 }
 
-/// Verifies that `??=` rejects a type-changing initializer on an explicitly typed local.
-/// Input: `int $x = 5; $x ??= 2.5;` — the declared int contract rejects the float RHS.
+/// Verifies that `??=` rejects a type-changing initializer on an existing typed variable.
+/// Input: `$x = 5; $x ??= 2.5;` — `$x` is int, RHS is float, which widens and is rejected.
 #[test]
 fn test_error_null_coalesce_assignment_type_change() {
     expect_error(
-        "<?php int $x = 5; $x ??= 2.5;",
+        "<?php $x = 5; $x ??= 2.5;",
         "null coalescing assignment for $x must keep int, got float",
     );
 }
@@ -36,74 +36,13 @@ fn test_error_string_index_requires_integer() {
     );
 }
 
-/// Verifies that an object index into a string offset stays rejected under gradual typing.
-/// Input: `$s = "hi"; $o = new stdClass(); echo $s[$o];` — an object is not a coercible offset,
-/// so the safety boundary still reports a type error rather than accepting/miscompiling it.
+/// Verifies that assigning to a string offset (character replacement) is rejected.
+/// Input: `$s = "hello"; $s[0] = "H";` — offset assignment on a string is unsupported.
 #[test]
-fn test_error_object_string_offset_is_rejected() {
+fn test_error_string_offset_assignment_is_not_supported() {
     expect_error(
-        "<?php $s = \"hi\"; $o = new stdClass(); echo $s[$o];",
-        "String index must be integer",
-    );
-}
-
-/// Verifies that an object key into an array inferred packed/int-keyed stays rejected under
-/// gradual typing. Input: `$a = [1, 2, 3]; $o = new stdClass(); echo $a[$o];` — an object is not
-/// a coercible array key, so the safety boundary still reports a type error.
-#[test]
-fn test_error_object_array_key_is_rejected() {
-    expect_error(
-        "<?php $a = [1, 2, 3]; $o = new stdClass(); echo $a[$o];",
-        "Array index must be integer",
-    );
-}
-
-/// Verifies that a NON-coercible key (an array-typed expression) used to index a
-/// property-array WRITE still fires "Array index must be integer" after the
-/// write-path key check was widened to mirror the read path. Guards the genuine-error
-/// boundary: only PHP-coercible key types (int/string/mixed/bool/float/null-like and
-/// unions thereof) are accepted; heap container types remain rejected.
-#[test]
-fn test_error_property_array_write_array_key_is_rejected() {
-    expect_error(
-        "<?php class C { public array $p = []; } $c = new C(); $k = [1, 2]; $c->p[$k] = 1;",
-        "Array index must be integer",
-    );
-}
-
-/// Verifies that string offset assignment with a NON-string-coercible replacement stays loud.
-/// Input: `$s = "hello"; $a = [1, 2]; $s[0] = $a;` — the plain-local string case now accepts every
-/// replacement PHP weakly converts to a string (`Str`/`Int`/`Float`/`Bool`/`Mixed`, coerced by
-/// `lower_string_offset_set`), but an array is not one of those: PHP raises
-/// `Array to string conversion` and writes the byte `A`, which elephc does not emulate, so the
-/// site must remain a compile-time error instead of silently miscompiling.
-#[test]
-fn test_error_string_offset_assignment_array_value_is_not_supported() {
-    expect_error(
-        "<?php $s = \"hello\"; $a = [1, 2]; $s[0] = $a;",
+        "<?php $s = \"hello\"; $s[0] = \"H\";",
         "String offset assignment is not supported",
-    );
-}
-
-/// Verifies that string offset assignment through a by-reference-bound local stays loud.
-/// Input: `function f(string &$s) { $s[0] = "X"; }` — the write would have to travel back
-/// through the alias cell, and `lower_string_offset_set` only persists into a plain local, so the
-/// reference-bound form must remain a compile-time error rather than dropping the write.
-#[test]
-fn test_error_string_offset_assignment_on_reference_param_is_not_supported() {
-    expect_error(
-        "<?php function f(string &$s) { $s[0] = \"X\"; } $q = \"ab\"; f($q); echo $q;",
-        "String offset assignment is not supported",
-    );
-}
-
-/// Verifies gradual `mixed` support for `yield from` does not admit a statically concrete scalar
-/// operand, which remains a compile-time type error instead of reaching iterator lowering.
-#[test]
-fn test_error_yield_from_rejects_concrete_integer() {
-    expect_error(
-        "<?php function invalidDelegate(): iterable { yield from 42; }",
-        "yield from expects an array or Generator",
     );
 }
 
@@ -177,22 +116,22 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
-/// Verifies a boxed `mixed` value is gradually accepted at an object parameter boundary.
-/// The campaign's gradual-typing rule (`Mixed` is call-compatible with every parameter
-/// type) defers the object check to runtime, matching how framework code passes `mixed`
-/// containers into typed APIs.
+/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
 #[test]
 fn test_error_mixed_rejected_at_object_parameter_boundary() {
-    expect_ok(
+    expect_error(
         "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
+        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
     );
 }
 
-/// Verifies a boxed `mixed` value is gradually accepted through an array return boundary
-/// under the same gradual-typing rule as parameter boundaries.
+/// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
 #[test]
 fn test_error_mixed_rejected_at_array_return_boundary() {
-    expect_ok("<?php function relay(mixed $value): array { return $value; }");
+    expect_error(
+        "<?php function relay(mixed $value): array { return $value; }",
+        "Function 'relay' return type expects Array(Mixed), got Mixed",
+    );
 }
 
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
@@ -201,76 +140,6 @@ fn test_error_undefined_variable() {
     expect_error("<?php echo $x;", "Undefined variable: $x");
 }
 
-/// Verifies that walking an `isset()` operand's always-evaluated index expression for
-/// assignment effects (so `isset($a[$h = f()])` defines `$h`) does not broaden definite
-/// assignment beyond that index: a genuinely undefined, unrelated variable read after the
-/// `isset()` call must still error loudly.
-#[test]
-fn test_error_isset_index_assignment_does_not_define_unrelated_variable() {
-    expect_error(
-        r#"<?php
-$a = [];
-if (isset($a[$k = 1])) {}
-echo $other;
-"#,
-        "Undefined variable: $other",
-    );
-}
-
-/// Verifies the same scoping restriction for `unset()`: an assignment inside the index defines
-/// only that variable, not an unrelated genuinely-undefined one read afterward.
-#[test]
-fn test_error_unset_index_assignment_does_not_define_unrelated_variable() {
-    expect_error(
-        r#"<?php
-$a = [1, 2, 3];
-unset($a[$k = 1]);
-echo $other;
-"#,
-        "Undefined variable: $other",
-    );
-}
-
-/// Regression for the JURY ADDENDUM #2 finding: `PDOStatement::bindParam()`'s second parameter
-/// is intentionally NOT declared by-reference (see `pdo_prelude.rs`), because `PDO::prepare()`
-/// returns `PDOStatement|bool` and the codegen by-reference argument materializer for a
-/// union/register-held receiver either loudly rejects the scalar-to-Mixed promotion or silently
-/// miscompiles an already-auto-vivified variable into a runtime crash. A previously-undefined
-/// variable passed to `bindParam()` must therefore still be reported loudly at compile time
-/// instead of auto-vivifying into an unsound codegen path.
-#[test]
-fn test_error_pdo_statement_bind_param_does_not_autovivify_undefined_variable() {
-    expect_error(
-        r#"<?php
-$pdo = new PDO('sqlite::memory:');
-$stmt = $pdo->prepare('SELECT :id');
-$stmt->bindParam(':id', $id);
-"#,
-        "Undefined variable: $id",
-    );
-}
-
-/// Verifies that a variable assigned in one `match` arm's body is not visible in a sibling
-/// arm's body: only one arm body ever runs, so the assignment is not definitely-assigned in
-/// the other arms. Reading it in a sibling arm must still error.
-#[test]
-fn test_error_match_arm_body_assignment_not_visible_in_sibling_arm() {
-    expect_error(
-        r#"<?php
-function g(int $n): string {
-    return match ($n) {
-        1 => ($x = 'a'),
-        2 => $x,
-        default => 'd',
-    };
-}"#,
-        "Undefined variable: $x",
-    );
-}
-
-/// Verifies that reassigning an *inferred* local to an incompatible type is accepted under the
-/// gradual-typing model: the local widens to a boxed union instead of erroring.
-/// Input: `$x = 42; $x = "hello";` — `$x` widens from `Int` to `Union([Int, Str])`.
 /// Verifies that a plain self-referential assignment is not mistaken for `+=`.
 #[test]
 fn test_error_plain_self_read_assignment_remains_undefined() {
@@ -280,11 +149,8 @@ fn test_error_plain_self_read_assignment_remains_undefined() {
 /// Verifies that reassigning a typed variable to a different type is rejected.
 /// Input: `$x = 42; $x = "hello";` — `$x` is int, reassignment to string fails.
 #[test]
-fn test_inferred_local_reassign_widens_instead_of_error() {
-    assert!(
-        check_source("<?php $x = 42; $x = \"hello\"; echo $x;").is_ok(),
-        "reassigning an inferred local to an incompatible type should widen, not reject",
-    );
+fn test_error_type_mismatch_reassign() {
+    expect_error("<?php $x = 42; $x = \"hello\";", "cannot reassign $x");
 }
 
 /// Verifies that arithmetic on a string operand produces an error.
@@ -297,17 +163,10 @@ fn test_error_arithmetic_on_string() {
     );
 }
 
-/// Verifies a name beginning with `with` does not imply a late-static fluent return: `withdraw()`
-/// is declared `: Account`, so its result stays `Account` (NOT refined to `Savings`/`SavingsAccount`
-/// — that ancestor-return intent is preserved). The chained `->interestRate()` on the `Account`-typed
-/// result is then accepted via PHP-faithful lenient dispatch, because a concrete implementor
-/// (`SavingsAccount`, which IS-A `Account`) declares `interestRate` and PHP dispatches on the runtime
-/// class rather than checking method existence at compile time. Here `withdraw()` returns `$this` (a
-/// `SavingsAccount`), which HAS `interestRate`, so it RUNS and prints `4` — `php` verified — instead
-/// of the previous over-strict compile-time rejection. Now type-checks (compile + run).
+/// Verifies a name beginning with `with` does not imply a late-static fluent return.
 #[test]
-fn test_with_prefix_ancestor_return_dispatches_at_runtime() {
-    expect_ok(
+fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
+    expect_error(
         r#"<?php
 interface Account {
     public function withdraw(int $amount): Account;
@@ -324,16 +183,14 @@ function rate(Savings $account): int {
 }
 echo rate(new SavingsAccount());
 "#,
+        "Undefined method: Account::interestRate",
     );
 }
 
 /// Verifies that binding `static` preserves distinct explicit union members.
 ///
-/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`. Union-receiver
-/// method dispatch is PHP-faithfully lenient (a call resolves as long as at least one member
-/// declares the method), so a subclass-only method is accepted; the union's preservation is
-/// instead observable in the no-member diagnostic, which must name BOTH members. A collapse
-/// to a single member would report `SpecialChoice::missing` instead.
+/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
+/// subclass-only method is not safe on the result even though one branch is late-bound.
 #[test]
 fn test_error_late_static_union_keeps_explicit_ancestor_member() {
     expect_error(
@@ -347,10 +204,10 @@ class SpecialChoice extends Choice {
     public function special(): string { return "special"; }
 }
 function render(SpecialChoice $choice): string {
-    return $choice->choose(false)->missing();
+    return $choice->choose(false)->special();
 }
 "#,
-        "Undefined method: SpecialChoice|Choice::missing",
+        "Undefined method",
     );
 }
 
@@ -412,14 +269,13 @@ fn test_error_negate_string() {
     );
 }
 
-/// Verifies that ordered comparison operators on an array operand produce an error.
-/// PHP 8 allows string/numeric ordered comparison (lowered through `__rt_php_compare`),
-/// but array/object ordering stays rejected. Input: `$x = [1, 2]; echo $x < 1;`.
+/// Verifies that comparison operators on strings produce an error.
+/// Input: `$x = "a"; echo $x < 1;` — string vs int comparison is invalid.
 #[test]
-fn test_error_comparison_on_array() {
+fn test_error_comparison_on_string() {
     expect_error(
-        "<?php $x = [1, 2]; echo $x < 1;",
-        "Comparison operators require numeric or string operands",
+        "<?php $x = \"a\"; echo $x < 1;",
+        "Comparison operators require numeric operands",
     );
 }
 
@@ -434,6 +290,17 @@ fn test_error_word_logical_missing_rhs() {
 #[test]
 fn test_error_assignment_expression_rejects_non_lvalue() {
     expect_error("<?php echo 1 = 2;", "Invalid assignment target");
+}
+
+/// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
+/// when referenced after the `&&` expression that did not execute.
+/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
+#[test]
+fn test_error_short_circuit_assignment_effect_is_not_definite() {
+    expect_error(
+        "<?php echo false && ($x = 1); echo $x;",
+        "Undefined variable: $x",
+    );
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
@@ -505,10 +372,34 @@ fn test_error_wrong_arg_count() {
     );
 }
 
-/// Verifies that increment/decrement on a string is rejected.
+/// Verifies the two `string` storage shapes that cannot take the boxed `mixed` contract
+/// PHP's string increment needs: a by-reference parameter aliases a caller slot whose
+/// declared `string` type must not change, and a `static` local's initializer writes its
+/// symbol with the declared `string` representation. Both must be source-level errors.
 #[test]
-fn test_error_increment_string() {
-    expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
+fn test_error_increment_string_in_unboxable_storage() {
+    expect_error(
+        "<?php function f(string &$r): void { $r++; } $v = \"az\"; f($v);",
+        "it is a by-reference parameter",
+    );
+    expect_error(
+        "<?php function g(): string { static $s = \"aa\"; $s++; return $s; } g();",
+        "it is a static local",
+    );
+}
+
+/// Verifies that increment/decrement is still rejected on the local types PHP has no
+/// increment rule for, now that `string` locals have one (`"az"++` is `"ba"`).
+#[test]
+fn test_error_increment_unsupported_type() {
+    expect_error(
+        "<?php $x = [1, 2]; $x++;",
+        "Cannot increment/decrement $x of type",
+    );
+    expect_error(
+        "<?php $x = [1, 2]; --$x;",
+        "Cannot increment/decrement $x of type",
+    );
 }
 
 /// Verifies the kind predicates `is_array`/`is_object`/`is_scalar` reject a wrong argument
@@ -528,11 +419,21 @@ fn test_error_is_kind_predicates_arity() {
 
 // --- Error positions ---
 
-/// Verifies that the null coalesce operator widens the inferred return type to float
-/// when one branch is int and the other is a float literal.
+/// Verifies that `??` merges two DIFFERENT arm types to `mixed` rather than letting one arm
+/// absorb the other.
+///
+/// This test previously asserted `Float`, on the theory that `??` widens like an arithmetic
+/// operator. It does not: `??` is `isset($a) ? $a : $b` and performs no coercion at all, so
+/// `fallback_pi("hi")` must return the string `"hi"`. Under the old `Float` inference the
+/// value branch was lowered as a float coercion and the caller silently received `float(0)`
+/// for a string argument, `float(2)` for `2` and `float(1)` for `true` (reference PHP 8.5.6:
+/// `string(2) "hi"`, `int(2)`, `bool(true)`). `Mixed` is the only merge that keeps every arm
+/// intact; `null_coalesce_merge_type` in `src/types/checker/inference/syntactic.rs` computes
+/// it, and it agrees with the IR-level `wider_type_for_merge` that already emitted a Mixed
+/// merge slot for this shape.
 /// Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
 #[test]
-fn test_null_coalesce_widens_function_return_type_in_checker() {
+fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
     let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
@@ -543,7 +444,7 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
         .functions
         .get("fallback_pi")
         .expect("missing function signature for fallback_pi");
-    assert_eq!(sig.return_type, PhpType::Float);
+    assert_eq!(sig.return_type, PhpType::Mixed);
 
     // Verifies that `array` return hints preserve the element type through property storage
     // and method return inference, using a `Wad` class with `Entry` objects.
@@ -993,39 +894,6 @@ fn test_error_variable_variables_unsupported() {
     );
 }
 
-/// Verifies the local variable-variable expression form `${$name}` still reports the preserved
-/// unsupported-variable-variable diagnostic, now that the lexer emits a bare `$` token and the
-/// parser (not the lexer) owns the rejection outside a static-receiver `::` context.
-#[test]
-fn test_error_variable_variable_brace_form_unsupported() {
-    expect_error(
-        "<?php $x = \"y\"; echo ${$x};",
-        "Variable variables (`$$name`) are not supported",
-    );
-}
-
-/// Verifies a dynamic static property read on a class that is not statically known
-/// (`Nonexistent::${$n}`) is a loud error, since codegen cannot enumerate candidate static
-/// properties without a resolvable class.
-#[test]
-fn test_error_dynamic_static_property_unknown_class() {
-    expect_error(
-        "<?php $n = 'x'; echo Nonexistent::${$n};",
-        "Dynamic static property access requires a statically-known class",
-    );
-}
-
-/// Verifies a WRITE through a dynamic-named static property on a class that is not statically
-/// known is a loud deferred error (the receiver class must be resolvable so codegen can enumerate
-/// candidate static properties), mirroring the read-side rejection.
-#[test]
-fn test_error_dynamic_static_property_write_unknown_class() {
-    expect_error(
-        "<?php $n = 'x'; Nonexistent::${$n} = 5;",
-        "Dynamic static property access requires a statically-known class",
-    );
-}
-
 /// Verifies that the nullable shorthand cannot be combined with an intersection type (`?A&B`),
 /// which is a syntax error in PHP. Previously this silently parsed and dropped a member.
 #[test]
@@ -1037,724 +905,12 @@ fn test_error_nullable_intersection_type_rejected() {
     );
 }
 
-/// Verifies PHP weak-mode coercion of a concrete `int` argument into a `string` parameter is
-/// accepted (`weak_boundary_coercion_accepts`): PHP coerces `5` to `"5"` at the boundary, and the
-/// call codegen emits the same `IToStr` cast. A concrete `array` or non-Stringable object into a
-/// `string` parameter stays a real type error (covered by the sibling tests below).
-#[test]
-fn test_concrete_int_into_string_param_weak_coerces() {
-    assert!(
-        check_source("<?php function f(string $s): string { return $s; } echo f(5);").is_ok(),
-        "a concrete int argument should weak-coerce into a string parameter, matching PHP",
-    );
-}
-
-/// Verifies a concrete `array` argument flowing into an unrelated class parameter is still a real
-/// type error under the gradual model (array is not Mixed and the target is not in any union).
-#[test]
-fn test_error_concrete_array_into_class_param_still_rejected() {
-    expect_error(
-        "<?php class C {} function f(C $c) {} f([1, 2]);",
-        "parameter $c expects",
-    );
-}
-
-/// Verifies a concrete `bool` argument flowing into a class parameter is still a real type error;
-/// the gradual loosening only applies to Mixed sources and union-containing-target shapes.
-#[test]
-fn test_error_concrete_bool_into_class_param_still_rejected() {
-    expect_error(
-        "<?php class C {} function f(C $c) {} f(true);",
-        "parameter $c expects",
-    );
-}
-
-/// Verifies the gradual model accepts a `Mixed` source (associative-array read) flowing into a
-/// `string` parameter — the boundary the type checker previously rejected. This is the positive
-/// counterpart to the concrete-disjoint rejections above.
-#[test]
-fn test_gradual_mixed_into_string_param_accepted() {
-    assert!(
-        check_source(
-            "<?php function f(string $s): string { return $s; } \
-             $m = []; $m[\"k\"] = \"hi\"; $v = $m[\"k\"]; echo f($v);"
-        )
-        .is_ok(),
-        "Mixed value should be accepted into a string parameter under gradual typing",
-    );
-}
-
-/// Verifies the gradual model accepts a local reassigned to an incompatible type (`int` then
-/// `string`) instead of reporting "cannot reassign"; the local widens to a boxed union.
-#[test]
-fn test_gradual_reassign_widening_accepted() {
-    assert!(
-        check_source("<?php $x = 1; $x = \"a\"; echo $x;").is_ok(),
-        "reassigning a local to an incompatible type should widen, not reject",
-    );
-}
-
-/// Verifies the gradual-typing safety property for `end()`: a concretely non-array argument
-/// (`int`) is still rejected rather than accepted, so genuine type errors keep being reported.
-#[test]
-fn test_error_end_on_non_array_is_rejected() {
-    expect_error("<?php end(5);", "end() argument must be array");
-}
-
-/// Verifies the gradual-typing safety property for `in_array()`: a concretely non-array haystack
-/// (`int`) is still rejected. Only `Mixed`/union-containing-array haystacks are accepted.
-#[test]
-fn test_error_in_array_non_array_haystack_is_rejected() {
-    expect_error("<?php in_array(1, 5);", "in_array() second argument must be array");
-}
-
-/// Verifies the gradual-typing safety property for `array_key_exists()`: a concretely non-array
-/// second argument (`int`) is still rejected.
-#[test]
-fn test_error_array_key_exists_non_array_is_rejected() {
-    expect_error(
-        "<?php array_key_exists(\"k\", 5);",
-        "array_key_exists() second argument must be array",
-    );
-}
-
-/// Verifies the gradual-typing safety property for increment/decrement: a concrete object operand
-/// stays a compile error ("Cannot increment/decrement"), so `$obj++` is not silently accepted.
-#[test]
-fn test_error_increment_on_object_is_rejected() {
-    expect_error(
-        "<?php $o = new stdClass(); $o++;",
-        "Cannot increment/decrement",
-    );
-}
-
-/// Verifies that a reference INTO an INSTANCE-property array element (`$o->arr[$k] = &$src`) still
-/// hard-errors: the local-array-element form (`$a[$k] = &$src`) is implemented, but a
-/// property-base element target is a follow-up slice and must loud-error rather than miscompile.
-#[test]
-fn test_error_ref_assign_into_property_array_element_unsupported() {
-    expect_error(
-        "<?php class C { public array $arr = []; } \
-         $o = new C(); $s = 5; $o->arr[\"k\"] = &$s;",
-        "Reference assignment into an array element is not supported",
-    );
-}
-
-/// A reference to a static-property array element (`$x = &self::$arr[$k]`, the former
-/// SLICE 3 deferral) is now supported end-to-end: the alias write-through is covered
-/// behaviorally by the references codegen tests; here the shape must simply type-check.
-#[test]
-fn test_ref_assign_static_property_array_element_supported() {
-    expect_ok(
-        "<?php class C { public static $a = [1, 2]; \
-         static function t() { $x = &self::$a[0]; return $x; } }",
-    );
-}
-
-/// SLICE 2/3: binding a static-property array element by reference (`self::$a[$d] = &self::$a[$k]`)
-/// against an UNKNOWN class must loud-error at the checker (via
-/// `resolve_static_property_assignment_target`) rather than miscompile the aliasing.
-#[test]
-fn test_error_ref_assign_static_prop_element_unknown_class() {
-    expect_error(
-        "<?php U::$a[$d] = &U::$a[$k];",
-        "Undefined class: U",
-    );
-}
-
-/// SLICE 2/3: the reference SOURCE for a static-property array element must itself be a
-/// static-property array element. A plain-variable source (`self::$a[$d] = &$local`) is a follow-up
-/// slice and must loud-error, not silently become a value copy.
-#[test]
-fn test_error_ref_assign_static_prop_element_non_static_source() {
-    expect_error(
-        "<?php class C { public static array $a = []; \
-         static function t() { $x = 1; self::$a[\"d\"] = &$x; } }",
-        "Reference source for a static-property array element must be another static-property array element",
-    );
-}
-
-/// SLICE 2/3: aliasing across TWO DIFFERENT static-property arrays (`self::$a[$d] = &self::$b[$k]`)
-/// is a follow-up slice; only the same-array GATE is supported, so the cross-array form loud-errors.
-#[test]
-fn test_error_ref_assign_static_prop_element_cross_array_source() {
-    expect_error(
-        "<?php class C { public static array $a = []; public static array $b = []; \
-         static function t() { $k = \"k\"; $d = \"d\"; self::$a[$d] = &self::$b[$k]; } }",
-        "Reference between two different static-property arrays is not yet supported",
-    );
-}
-
-/// SLICE 2/3: a NON-array static property cannot back a reference-into-element alias; the checker
-/// rejects `self::$n[0] = &self::$n[1]` on a scalar static property loudly.
-#[test]
-fn test_error_ref_assign_static_prop_element_non_array_property() {
-    expect_error(
-        "<?php class C { public static int $n = 0; \
-         static function t() { self::$n[0] = &self::$n[1]; } }",
-        "Reference assignment into a static-property array element requires an array static property",
-    );
-}
-
-/// Verifies that a by-reference assignment in expression position (`if (null !== $x = &$a[$k])`,
-/// the SLICE 4 form) is a parse error: `=&` is statement-only, so the `&` is rejected rather than
-/// silently accepted as a bitwise operator.
-#[test]
-fn test_error_ref_assign_in_expression_position_unsupported() {
-    expect_error(
-        "<?php $a = [\"k\" => 1]; if (null !== $x = &$a[\"k\"]) { echo \"y\"; }",
-        "Unexpected token",
-    );
-}
-
-/// Verifies that a reference to a DYNAMIC-named property on an untyped/`Mixed` receiver (`$x =
-/// &$obj->$p` where `$obj` has no static class) loud-errors instead of silently miscompiling: the
-/// SLICE 5 runtime-name dispatch needs a concrete class to enumerate promotable slots.
-#[test]
-fn test_error_ref_dynamic_property_on_mixed_receiver_unsupported() {
-    expect_error(
-        "<?php function f($obj, $p) { $x = &$obj->$p; return $x; }",
-        "Reference to a dynamic property is only supported on a statically-typed object receiver",
-    );
-}
-
-/// A dynamic-named property reference on a class whose reference-eligible properties disagree on
-/// their type loud-errors instead of silently miscompiling. The runtime-name dispatch selects one
-/// slot but the bound local has a single static type, so dereferencing an `array<string, string>`
-/// cell through an `array<int>` alias reads garbage — previously this widened to `Mixed` and
-/// produced wrong values with no diagnostic at all.
-#[test]
-fn test_error_ref_dynamic_property_heterogeneous_candidates_unsupported() {
-    expect_error(
-        "<?php class Bag { public $a = [1, 2]; public $b = ['x' => 'y']; }
-        $o = new Bag(); $n = 'a'; $r = &$o->$n; echo $r[0];",
-        "share one type",
-    );
-}
-
-/// Reference assignment INTO a dynamic property (`$obj->$name = &$v`) needs a concrete receiver
-/// class to enumerate promotable slots, so an untyped receiver is a loud, deferred error.
-#[test]
-fn test_error_ref_assign_into_dynamic_property_on_mixed_receiver_unsupported() {
-    expect_error(
-        "<?php function f($obj, string $n, $v) { $obj->$n = &$v; }",
-        "Reference assignment into a dynamic property is only supported on a statically-typed object receiver",
-    );
-}
-
-/// SLICE 2 (local): the reference SOURCE for a local array-element reference must be a plain
-/// variable (`&$x`). Aliasing an array element (`$a[] = &$b[$j]`) is a follow-up slice and is
-/// rejected loudly rather than silently value-copied.
-#[test]
-fn test_error_ref_local_array_append_non_variable_source() {
-    expect_error(
-        "<?php $a = []; $b = [1, 2]; $a[] = &$b[0];",
-        "Reference source for a local array-element reference must be a plain variable",
-    );
-}
-
-/// SLICE 2 (local): a string-VALUED source cannot back a reference-into-element alias — a kind-6
-/// reference cell holds a single machine word, so a two-word `{ptr,len}` string would drop its
-/// length. `$a[] = &$s` for a string `$s` is rejected loudly (mirrors the SLICE-1 string guard).
-#[test]
-fn test_error_ref_local_array_append_string_source() {
-    expect_error(
-        "<?php $a = []; $s = \"x\"; $a[] = &$s;",
-        "Reference to a string-valued source in a local array element is not yet supported",
-    );
-}
-
-/// SLICE 2 (local): appending a reference into a STATIC-property array (`self::$a[] = &$x`) is a
-/// follow-up slice, not the local-array-element form; the checker rejects it loudly.
-#[test]
-fn test_error_ref_local_array_append_into_static_property() {
-    expect_error(
-        "<?php class C { public static array $a = []; \
-         static function t() { $x = 1; self::$a[] = &$x; } }",
-        "Appending a reference into a static or instance property array is not supported",
-    );
-}
-
-/// SLICE 2 (local): appending a reference into an INSTANCE-property array (`$o->p[] = &$x`) is a
-/// follow-up slice, not the local-array-element form; the checker rejects it loudly.
-#[test]
-fn test_error_ref_local_array_append_into_instance_property() {
-    expect_error(
-        "<?php class C { public array $p = []; } \
-         $o = new C(); $x = 1; $o->p[] = &$x;",
-        "Appending a reference into a static or instance property array is not supported",
-    );
-}
-
-/// Verifies a PHP 8.2 DNF group with a single type and no intersection (`(A)|B`) is rejected, as
-/// PHP requires at least one `&` inside the parentheses.
-#[test]
-fn test_error_dnf_single_type_group_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} function s((A)|B $x): void {}",
-        "A parenthesized DNF type group must contain an intersection",
-    );
-}
-
-/// Verifies an unclosed DNF group (`(A&B` with no `)`) is rejected loudly at the missing paren.
-#[test]
-fn test_error_dnf_unclosed_group_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} function u((A&B $x): void {}",
-        "Expected ')' to close DNF intersection type group",
-    );
-}
-
-/// Verifies the `?` nullable shorthand cannot be combined with a DNF group (`?(A&B)`), matching
-/// PHP where that is a parse error; nullability must be spelled as the `(A&B)|null` union arm.
-#[test]
-fn test_error_dnf_nullable_shorthand_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} class Z { public ?(A&B) $p = null; }",
-        "Nullable shorthand cannot be combined with a DNF type group",
-    );
-}
-
-/// Verifies a value implementing only one arm of a DNF intersection (`(A&B)|null`, value implements
-/// only `B`) is rejected: the intersection is typed as its first member `A`, which the argument
-/// does not satisfy.
-#[test]
-fn test_error_dnf_value_missing_intersection_member_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} class OnlyB implements B {} \
-         function g((A&B)|null $x): string { return $x === null ? \"null\" : \"obj\"; } \
-         echo g(new OnlyB());",
-        "parameter $x expects",
-    );
-}
-
-/// Verifies a nested DNF group with the inner parentheses on the left (`((A&B)&C)`) is rejected
-/// in parameter position, matching PHP's hard `syntax error, unexpected token "("` — DNF groups
-/// forbid nesting, only a flat `(A&B&C)` intersection is valid.
-#[test]
-fn test_error_dnf_nested_group_left_param_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} interface C {} \
-         function f(((A&B)&C) $x): void {}",
-        "Nested parentheses are not allowed in a DNF type group",
-    );
-}
-
-/// Verifies a nested DNF group with the inner parentheses on the right (`(A&(B&C))`) is rejected
-/// in parameter position, matching PHP's hard parse error for nested DNF parentheses.
-#[test]
-fn test_error_dnf_nested_group_right_param_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} interface C {} \
-         function g((A&(B&C)) $x): void {}",
-        "Nested parentheses are not allowed in a DNF type group",
-    );
-}
-
-/// Verifies a nested DNF group in property position (`((A&B)&C)|null`) is rejected the same way
-/// as in parameter position — both type positions share the same DNF-group parser.
-#[test]
-fn test_error_dnf_nested_group_property_rejected() {
-    expect_error(
-        "<?php interface A {} interface B {} interface C {} \
-         class Z { protected ((A&B)&C)|null $p = null; }",
-        "Nested parentheses are not allowed in a DNF type group",
-    );
-}
-
-// --- Gradual-typing quick-wins batch (throw / arith+comparison / nullsafe+spread / list-unpack) ---
-
-/// R1 boundary: `throw 5;` on a proven non-object stays loud. PHP rejects throwing a
-/// scalar with a `TypeError` ("Can only throw objects"), so the checker keeps it loud.
-#[test]
-fn test_error_throw_scalar_stays_loud() {
-    expect_error("<?php throw 5;", "throw requires an object value");
-}
-
-/// R1 boundary: throwing a concrete non-Throwable object still reports the specific
-/// "implementing Throwable" diagnostic (the gradual relaxation only affects Mixed/union
-/// operands, never a proven non-Throwable class).
-#[test]
-fn test_error_throw_non_throwable_object_stays_loud() {
-    expect_error(
-        "<?php class Foo {} throw new Foo();",
-        "throw requires an object implementing Throwable",
-    );
-}
-
-/// R1 accept: `throw $mixed` type-checks (a `mixed` value may hold a Throwable at
-/// runtime; PHP defers the check to runtime).
-#[test]
-fn test_gradual_throw_mixed_operand_accepted() {
-    expect_ok("<?php function f(mixed $e): void { throw $e; }");
-}
-
-/// R2 accept: arithmetic on two `mixed` operands type-checks (gradual numeric dispatch).
-#[test]
-fn test_gradual_mixed_arithmetic_accepted() {
-    expect_ok("<?php function f(mixed $a, mixed $b) { return $a + $b; }");
-}
-
-/// R2 accept: arithmetic on a nullable-float union (`?float`) type-checks — every union
-/// member is a numeric operand, which the recursive operand check now accepts.
-#[test]
-fn test_gradual_nullable_float_arithmetic_accepted() {
-    expect_ok("<?php function f(?float $a): float { return $a - 1.0; }");
-}
-
-/// R2 accept: ordered comparison on two `mixed` operands type-checks.
-#[test]
-fn test_gradual_mixed_comparison_accepted() {
-    expect_ok("<?php function f(mixed $a, mixed $b): bool { return $a < $b; }");
-}
-
-/// R2 boundary: arithmetic on a proven array stays loud. PHP fatals on `array - int`
-/// ("Unsupported operand types"), so the checker keeps it loud.
-#[test]
-fn test_error_arithmetic_on_proven_array_stays_loud() {
-    expect_error(
-        "<?php function f(array $a) { return $a - 1; }",
-        "Arithmetic operators require numeric operands",
-    );
-}
-
-/// R3 accept: a nullsafe method call on a `mixed` receiver type-checks (unknown runtime
-/// class → gradual `Mixed` result, mirroring the plain `->` path).
-#[test]
-fn test_gradual_nullsafe_method_on_mixed_accepted() {
-    expect_ok("<?php function f(mixed $x): mixed { return $x?->doThing(); }");
-}
-
-/// Gradual accept: a call-argument spread of a `mixed` value type-checks. The EIR call-arg
-/// spread lowering now materializes a concrete packed `array<mixed>` through a runtime array
-/// guard (`Op::MixedToHash` + `array_values()`), so a `mixed` operand that holds an array
-/// unpacks correctly and a non-array payload raises a clean `TypeError` fatal (matching PHP's
-/// "Only arrays and Traversables can be unpacked") instead of the earlier SIGSEGV/garbage read
-/// that forced correction round 1's revert. Runtime behavior is covered by the
-/// `compile_and_run` cases in `tests/codegen/callables/state_and_variadics.rs`.
-#[test]
-fn test_gradual_spread_mixed_accepted() {
-    expect_ok(
-        "<?php function g(int ...$xs): int { return 0; } \
-         function f(mixed $args): int { return g(...$args); }",
-    );
-}
-
-/// R3 boundary: spreading a proven non-iterable (a bare callable) stays loud. A closure
-/// is not Traversable, so PHP fatals ("Only arrays and Traversables can be unpacked").
-#[test]
-fn test_error_spread_non_iterable_stays_loud() {
-    expect_error(
-        "<?php $c = fn() => 1; $a = [...$c];",
-        "Spread operator requires an array",
-    );
-}
-
-/// Gradual accept: a call-argument spread of a union that contains an array member
-/// (`array|false`) type-checks. The value is not provably an array, but the runtime array
-/// guard in the call-arg spread lowering unpacks the array case and raises a clean
-/// `TypeError` fatal for the `false` case (PHP fatals identically), so accepting it is sound.
-#[test]
-fn test_gradual_spread_array_or_false_union_accepted() {
-    expect_ok(
-        "<?php function g(int ...$xs): int { return 0; } \
-         function f(array|false $x): int { return g(...$x); }",
-    );
-}
-
-/// R4 accept: list-unpacking a `mixed` right-hand side type-checks (each positional
-/// target binds as `Mixed`; PHP reads offsets at runtime).
-#[test]
-fn test_gradual_list_unpack_mixed_accepted() {
-    expect_ok("<?php function f(mixed $arr) { [$a, $b] = $arr; return $a; }");
-}
-
-/// R4 boundary: list-unpacking a proven bare scalar stays loud. PHP assigns nulls with a
-/// warning rather than fatalling; elephc keeps this conservative loud error for now.
-#[test]
-fn test_error_list_unpack_scalar_stays_loud() {
-    expect_error(
-        "<?php function f(int $n) { [$a, $b] = $n; return $a; }",
-        "List unpacking requires an array on the right-hand side",
-    );
-}
-
-// --- Family A boundary: PHP's `array` hint rejects every NON-array value ---
-
-/// A `string` value into an `array` parameter stays loud: PHP's monolithic `array` hint accepts
-/// any array shape but TypeErrors on a non-array in both strict and coercive mode. Only the
-/// element type is unenforced; a scalar actual is a genuine error.
-#[test]
-fn test_error_string_into_array_param_stays_loud() {
-    expect_error(
-        "<?php function f(array $x): int { return count($x); } echo f(\"s\");",
-        "expects Array(Mixed), got Str",
-    );
-}
-
-/// An object value into an `array` parameter stays loud. Unlike `iterable`, PHP's `array` hint
-/// rejects even a `Traversable` object; a plain object is always a TypeError in both modes.
-#[test]
-fn test_error_object_into_array_param_stays_loud() {
-    expect_error(
-        "<?php class C {} function f(array $x): int { return count($x); } echo f(new C());",
-        "expects Array(Mixed), got Object",
-    );
-}
-
-// --- Family F boundary: two provably-disjoint concrete classes stay loud ---
-
-/// A value of an unrelated concrete class into a concrete-class parameter stays loud: PHP single
-/// inheritance makes the two classes disjoint, so PHP ALWAYS raises a TypeError. Only subtype
-/// relations (either direction) or an interface on either side are deferred to runtime.
-#[test]
-fn test_error_disjoint_concrete_object_param_stays_loud() {
-    expect_error(
-        "<?php class A { function a(): int { return 1; } } class B {} \
-         function needA(A $x): int { return $x->a(); } \
-         $b = new B(); echo needA($b);",
-        "expects Object(\"A\"), got Object(\"B\")",
-    );
-}
-
-/// A union with NO member assignable to the concrete object target stays loud: every possible
-/// runtime value would TypeError, so it is a guaranteed error, not a runtime-deferred one.
-#[test]
-fn test_error_union_no_assignable_object_member_stays_loud() {
-    expect_error(
-        "<?php class A { function a(): int { return 1; } } class B {} class C {} \
-         function needA(A $x): int { return $x->a(); } \
-         function pick(int $n): B|C { return new B(); } \
-         $x = pick($argc); echo needA($x);",
-        "expects Object(\"A\")",
-    );
-}
-
-/// SUPERSEDED by the checked downcast for UNION SOURCES: a union whose extra member is a scalar
-/// (`Q|string`) into an object parameter is accepted, because the boundary now emits a guard whose
-/// `Op::InstanceOf` answers false for a string payload and throws PHP's own catchable `TypeError`.
-/// No payload is ever bit-cast to an object pointer, which was the reason this stayed loud. The
-/// program itself runs under `php -n` (the value IS a `Q`), so the compile error rejected a
-/// program PHP accepts. The mismatch case that still throws is pinned end-to-end in
-/// `tests/codegen/oop/checked_downcast_argument.rs`.
-#[test]
-fn test_union_scalar_member_into_object_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class Q { function q(): int { return 1; } } \
-         function need(Q $x): int { return $x->q(); } \
-         function pick(int $n): Q|string { return new Q(); } \
-         $x = pick($argc); echo need($x);",
-    );
-}
-
-/// SUPERSEDED for the same reason as the sibling above: a scalar assignment inside a conditional
-/// branch still widens the post-branch flow type to `ConditionalObject|string`, but that union now
-/// reaches the parameter behind a runtime guard instead of being rejected outright.
-#[test]
-fn test_conditional_scalar_assignment_into_object_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class ConditionalObject {} \
-         function needConditionalObject(ConditionalObject $value): void {} \
-         $value = new ConditionalObject(); \
-         if ($argc > 1) { $value = 'bad'; } \
-         needConditionalObject($value);",
-    );
-}
-
-// --- Family F boundary: object flows with no proven-subtype edge stay loud (R1-R4 revert).
-//     The RETURN and single-object ARGUMENT members of this family were later SUPERSEDED, each
-//     when its boundary gained the checked-downcast runtime guard. What still stays loud, and is
-//     guarded here, is every flow no guard can enforce: property stores (no emitter yet) and
-//     union sources into a concrete object target. ---
-
-/// A base-typed value flowing into a derived-class parameter (`Base`-typed value into `Sub $x`)
-/// was rejected because elephc emitted no runtime instanceof guard at that boundary, which made
-/// accepting it a silent miscompile. It now emits one, so this flow is accepted exactly the way
-/// the return-position sibling below became accepted when the return guard landed: PHP's own
-/// catchable `TypeError` fires on an actual mismatch instead of the wrong object being bit-read,
-/// and keeping the compile error would now falsely reject a program PHP runs. End-to-end
-/// coverage, including the mismatch case that DOES still throw, lives in
-/// `tests/codegen/oop/checked_downcast_argument.rs`. The property-store sibling below stays loud:
-/// that position emits no guard yet, so its acceptance would still be unenforced.
-#[test]
-fn test_object_base_into_derived_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class B{} class S extends B{} function need(S $x){} \
-         function mk(int $n):B{return new S();} echo need(mk(1));",
-    );
-}
-
-/// SUPERSEDED by the checked downcast at the PROPERTY-STORE position, the third and last value
-/// boundary to get one. This test used to lock the rule "acceptance may only follow emission" from
-/// the side that had no emission: a property write emitted no runtime `instanceof`, so accepting an
-/// `I`-typed value into an `Impl $p` slot would have let the slot offset bit-read fields a non-`Impl`
-/// runtime value does not have (empirically a SIGSEGV / garbage read).
-///
-/// The write now emits that guard, so the rule is SATISFIED rather than weakened: a mismatching
-/// value throws PHP's own `Cannot assign A to property C::$p of type B` before any offset is used,
-/// and keeping the compile error would falsely reject a program PHP runs. Exactly the transition
-/// the ARGUMENT and RETURN siblings above went through when their guards landed. End-to-end
-/// coverage — the mismatch that throws, the ownership of the value on the throw path, and the
-/// declaring-class wording — lives in `tests/codegen/oop/checked_downcast_property_store.rs`.
-#[test]
-fn test_base_into_derived_typed_property_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php interface I {} class Impl implements I { public int $sx = 5; } \
-         class Holder { public Impl $p; } \
-         function mk(int $n): I { return new Impl(); } \
-         $h = new Holder(); $h->p = mk(1);",
-    );
-}
-
-/// A SIDEWAYS store off a CLASS-typed source stays loud, and that asymmetry with the interface
-/// source is the point. A class fixes its whole ancestry, so `instanceof Other` against an
-/// unrelated target could never match and accepting the flow would trade a compile error for a
-/// guaranteed runtime throw — no program becomes runnable. An INTERFACE source fixes nothing of the
-/// sort (one concrete class routinely implements two unrelated interfaces), which is why only that
-/// half was relaxed. Locks the boundary of `Checker::checked_downcast_guardable`'s sideways arm.
-#[test]
-fn test_error_sideways_class_source_into_unrelated_typed_property_stays_loud() {
-    expect_error(
-        "<?php class Src {} class Other {} class Holder { public Other $p; } \
-         function mk(int $n): Src { return new Src(); } \
-         $h = new Holder(); $h->p = mk(1);",
-        "Property Holder::$p expects Object(\"Other\"), got Object(\"Src\")",
-    );
-}
-
-/// SUPERSEDED by the checked downcast for UNION SOURCES. An all-object union whose extra member is
-/// UNRELATED to the concrete object target (`RC|Route` into `RC $x`) used to stay loud because the
-/// unrelated member would be bit-read as the wrong object. The boundary now emits the guard, so
-/// `Route` is RULED OUT by an `Op::InstanceOf` and throws PHP's own catchable `TypeError` instead
-/// of reaching the callee — and the matching member reaches it as a real `RC`. This is the exact
-/// Symfony `RouteTrait::$route` shape (a declared `RouteCollection|Route` feeding
-/// `RouteCollection::addCollection`). Runtime coverage of both arms lives in
-/// `tests/codegen/oop/checked_downcast_argument.rs`.
-#[test]
-fn test_object_union_unrelated_member_into_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class Route{} class RC{} function add(RC $x){} \
-         function pick(int $n):RC|Route{return new RC();} echo add(pick(1));",
-    );
-}
-
-/// SUPERSEDED by the checked-downcast-on-return feature (SPEC I2): a base-typed return
-/// expression flowing into a derived declared RETURN type is now accepted, but ONLY because
-/// `crate::ir_lower::checked_downcast` always emits a runtime `instanceof` guard at the return
-/// boundary that throws a catchable `TypeError` on an actual mismatch — this is no longer a
-/// silent miscompile. See `Checker::checked_downcast_guardable`
-/// (`src/types/checker/type_compat/object_types.rs`) for the checker-side relaxation and
-/// `tests/codegen/oop/checked_downcast_return.rs` for full end-to-end/guard coverage
-/// (including the negative/mismatch case, which DOES still throw at runtime). This exact
-/// shape — `scalarNode(): ScalarNodeDef { return $this->node(); }` where `node(): NodeDef` —
-/// is the canonical Symfony `NodeBuilder::scalarNode()`/`node()` pattern the feature targets.
-#[test]
-fn test_object_base_return_into_derived_return_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php \
-         class NodeDef { public function label(): string { return \"node\"; } } \
-         class ScalarNodeDef extends NodeDef { public function label(): string { return \"scalar\"; } } \
-         class Builder { \
-             public function scalarNode(): ScalarNodeDef { return $this->node(); } \
-             public function node(): NodeDef { return new ScalarNodeDef(); } \
-         } \
-         $b = new Builder(); echo $b->scalarNode()->label();",
-    );
-}
-
-// --- Family F boundary: the union supertype-object direction into a derived target is now
-//     GUARDED at the positions that emit one. `gradual_union_flows_into` still excludes it (it
-//     also feeds property stores, which emit nothing); the checked-downcast fallback admits it
-//     for call arguments and returns. ---
-
-/// SUPERSEDED by the checked downcast for UNION SOURCES: a nullable base type (`?B` into `S $x`)
-/// is the unprovable base→derived direction, and it is now DECIDED at runtime rather than refused
-/// at compile time. The guard tests the `null` arm first (a real null reaching a `?B` source is
-/// ruled out by `Op::IsNull`, not bit-read) and then `instanceof S`, so a bare `B` throws PHP's
-/// own catchable `TypeError` instead of SIGSEGVing. Runtime coverage in
-/// `tests/codegen/oop/checked_downcast_argument.rs`.
-#[test]
-fn test_nullable_base_into_derived_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class B{} class S extends B{} function need(S $x){} \
-         function mk(int $n): ?B { return new S(); } echo need(mk(1));",
-    );
-}
-
-/// SUPERSEDED for the same reason: a non-nullable `B|S` union into the derived `S $x` parameter is
-/// admitted behind the same guard, which lets the `S` member through and throws on a bare `B`.
-#[test]
-fn test_base_or_sub_union_into_derived_param_accepted_with_runtime_guard() {
-    expect_ok(
-        "<?php class B{} class S extends B{} function need(S $x){} \
-         function mk(int $n): B|S { return new S(); } echo need(mk(1));",
-    );
-}
-
 /// `Exception::__construct` third parameter must be `?Throwable`, matching PHP.
 #[test]
 fn test_error_exception_previous_rejects_non_throwable() {
     expect_error(
         "<?php throw new Exception('x', 0, previous: 123);",
         "previous",
-    );
-}
-
-/// A value narrowed to the builtin marker interface `\Reflector` (which every core `Reflection*`
-/// class implements) accepts a property read like `$m->name`: PHP interfaces cannot declare
-/// instance properties, so the read is a dynamic runtime read on the concrete implementor, typed
-/// `Mixed` rather than reported as an undefined class. This is the exact
-/// `Symfony\Component\VarDumper\Caster\ReflectionCaster::addMap()` shape that previously failed
-/// with "Undefined class: Reflector".
-#[test]
-fn test_reflector_marker_interface_property_read_accepted() {
-    expect_ok(
-        "<?php function g(mixed $m): mixed { return $m instanceof \\Reflector ? $m->name : $m; }",
-    );
-}
-
-/// The same acceptance generalizes to any user-declared interface: a value narrowed to an
-/// interface type may read an (interface-undeclarable) property as a dynamic `Mixed` read instead
-/// of erroring, since interfaces never carry an instance-property surface.
-#[test]
-fn test_user_interface_narrowed_property_read_accepted() {
-    expect_ok(
-        "<?php interface Marker {} \
-         function g(mixed $m): mixed { return $m instanceof Marker ? $m->anything : null; }",
-    );
-}
-
-/// Regression: nested array writes through a value of the `object` pseudo-type — modeled
-/// as `Object("")`, an object whose concrete class is not statically known — are deferred
-/// to runtime rather than hard-erroring "Undefined class: " (empty name). This is the
-/// array-write analogue of the direct-write degradation already applied in
-/// `check_object_property_write`, and mirrors symfony/console's `MapInput::tryFrom`
-/// (`$self = $reflection->getAttribute(...); $self->definition[$k] = $v; $self->items[] = $x`).
-/// See `stmt_check::assignments::properties`.
-#[test]
-fn test_object_pseudo_type_nested_property_writes_defer_to_runtime() {
-    expect_ok(
-        r#"<?php
-function fill(object $self): void {
-    $self->definition['x'] = 'arg';
-    $self->items[] = 'y';
-}
-"#,
-    );
-}
-
-/// Negative control for the `object` pseudo-type nested-write relaxation above: an indexed
-/// or push write against a property that does NOT exist on a statically-known class still
-/// errors. The relaxation is gated strictly on the empty (pseudo-type) class name, so a
-/// concrete receiver keeps full undefined-property detection.
-#[test]
-fn test_known_class_undefined_array_property_write_still_errors() {
-    expect_error(
-        r#"<?php
-class Box { public int $count = 0; }
-function bad(Box $b): void { $b->missing[] = 1; }
-"#,
-        "Undefined property: Box::missing",
     );
 }
 
@@ -1860,43 +1016,239 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
     );
 }
 
-/// SILENT-DIVERGENCE GATE: replacing the whole array (`$GLOBALS = [...]`) is a fatal in PHP 8.1+,
-/// and elephc must refuse it rather than compile a program that keeps running past the point PHP
-/// aborts. The statement parser is a SECOND entry point that does not reach the expression
-/// parser's own refusal — this shape compiled and ran until both routes shared one rule.
+/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
+/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
 #[test]
-fn test_error_globals_whole_array_assignment_is_refused() {
+fn test_undefined_variable_read_is_still_rejected() {
+    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
+}
+
+/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
+/// but not about `$a`, so the index subexpression keeps the diagnostic.
+#[test]
+fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
+    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+}
+
+/// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
+/// exactly what those constructs exist for. Runtime answers are pinned by codegen tests.
+#[test]
+fn test_null_probes_accept_a_never_declared_variable() {
+    expect_no_error("<?php var_dump(isset($neverA));");
+    expect_no_error("<?php var_dump(empty($neverB));");
+    expect_no_error(r#"<?php var_dump($neverC ?? "d");"#);
+    expect_no_error("<?php unset($neverD); echo 'ok';");
+    expect_no_error("<?php var_dump(isset($neverE['k']));");
+}
+
+/// Verifies a probed name that is ALSO assigned in the same scope keeps the diagnostic.
+///
+/// The tolerance is only sound while the variable stays `null` for the whole scope: main's local
+/// types come from the final global environment, so an assigned name gets that assigned type on a
+/// slot the probe would read before any store. Accepting it would miscompile, so the deferred
+/// check restores the original error.
+#[test]
+fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
     expect_error(
-        "<?php $x = 1; $GLOBALS = ['a' => 1];",
-        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        "<?php if (!isset($cfg)) { $cfg = 3; } var_dump($cfg);",
+        "Undefined variable: $cfg",
     );
 }
 
-/// Using `$GLOBALS` as a whole array (here `count()`) is refused LOUDLY instead of silently
-/// yielding an empty array, which is what it did before the superglobal was modelled.
+/// Verifies a lossy float constant at an `int` parameter is rejected instead of silently
+/// truncated. PHP passes `5` after emitting `Deprecated: Implicit conversion from float 5.5 to
+/// int loses precision`; elephc has no runtime deprecation channel, so it refuses the program
+/// rather than dropping the notice.
 #[test]
-fn test_error_globals_bare_use_is_refused() {
+fn test_error_int_parameter_rejects_lossy_float_constant() {
     expect_error(
-        "<?php $a = 1; function c() { return count($GLOBALS); } echo c();",
-        "Unsupported use of $GLOBALS",
+        "<?php function ti(int $i) { return $i; } echo ti(5.5);",
+        "PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision`",
     );
 }
 
-/// Negative control for the erased-object union deferral
-/// (`inference::objects::methods::infer_method_call_on_object_union`): a union of two KNOWN
-/// classes that both lack the method stays LOUD. The deferral is keyed on an erased member — a
-/// type that fixes no class — not on union-ness, so a union whose every member is settled keeps
-/// its diagnostic.
+/// Verifies a non-numeric string constant at an `int` parameter is rejected with PHP's
+/// failure mode named. PHP throws `TypeError` when the call runs.
 #[test]
-fn test_error_method_on_union_of_known_classes_without_it_stays_loud() {
+fn test_error_int_parameter_rejects_non_numeric_string_constant() {
     expect_error(
-        r#"<?php
-class A { public int $n = 1; }
-class B { public int $n = 2; }
-function pick(bool $c): A|B { return $c ? new A() : new B(); }
-$x = pick(true);
-echo $x->missingMethod();
-"#,
-        "Undefined method",
+        "<?php function ti(int $i) { return $i; } echo ti(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at an `int` parameter",
     );
+}
+
+/// Verifies a leading-numeric string constant is rejected too: PHP's `(int)` cast would give
+/// `42`, but parameter binding throws `TypeError` because the string is not fully numeric.
+#[test]
+fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(\"42abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"42abc\" at an `int` parameter",
+    );
+}
+
+/// Verifies a runtime float at an `int` parameter is rejected, because deciding between PHP's
+/// silent conversion, its deprecation notice and its `TypeError` needs a runtime check elephc
+/// cannot perform at a parameter boundary.
+#[test]
+fn test_error_int_parameter_rejects_runtime_float() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } $f = 5.5 * $argc; echo ti($f);",
+        "add an explicit cast at the call site",
+    );
+}
+
+/// Verifies a non-numeric string constant at a `float` parameter is rejected the same way.
+#[test]
+fn test_error_float_parameter_rejects_non_numeric_string_constant() {
+    expect_error(
+        "<?php function tf(float $f) { return $f; } echo tf(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at a `float` parameter",
+    );
+}
+
+/// Verifies an out-of-range float constant at an `int` parameter reports PHP's `TypeError`
+/// rather than wrapping around.
+#[test]
+fn test_error_int_parameter_rejects_out_of_range_float_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(1e20);",
+        "PHP throws `TypeError` for the float",
+    );
+}
+
+/// Verifies a pass-by-reference parameter stays on the strict path. PHP converts the caller's
+/// variable in place and writes the converted value back; elephc's binding would pass a
+/// converted temporary and silently drop the callee's writes, so the call is rejected instead.
+#[test]
+fn test_error_by_ref_parameter_is_not_coerced() {
+    expect_error(
+        "<?php function f(string &$s) { $s = $s . \"!\"; } $n = 42; f($n);",
+        "Function 'f' parameter $s expects Str, got Int",
+    );
+}
+
+/// Verifies `declare(strict_types=1)` rejects the `bool`→`int` binding PHP's coercive mode
+/// performs silently, and that the diagnostic names the `TypeError` PHP would throw.
+///
+/// This is the audit repro: before the directive was honoured, elephc compiled `ti(true)` to
+/// `int(1)` while PHP 8.4.20 fatals with
+/// `TypeError: ti(): Argument #1 ($i) must be of type int, true given`.
+#[test]
+fn test_error_strict_types_rejects_bool_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the strict diagnostic identifies the directive as the reason and suggests the cast
+/// that makes the call legal, rather than reading as a plain type mismatch.
+#[test]
+fn test_error_strict_types_diagnostic_names_the_directive() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}
+
+/// Verifies every scalar that binds to a `string` parameter in coercive mode is rejected under
+/// the directive: `int`, `float` and `bool` sources all throw `TypeError` in PHP 8.4.20.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_string_parameter() {
+    for (argument, php_type) in [("42", "int"), ("4.5", "float"), ("true", "bool")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function ts(string $s) {{ return $s; }} echo ts({});",
+                argument
+            ),
+            &format!("must be of type string, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the
+/// directive.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_bool_parameter() {
+    for (argument, php_type) in [("1", "int"), ("1.5", "float"), ("\"a\"", "string")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function tb(bool $b) {{ return $b; }} echo tb({});",
+                argument
+            ),
+            &format!("must be of type bool, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies the constant `float`/numeric-string arguments coercive mode folds into an `int`
+/// parameter are rejected under the directive instead.
+#[test]
+fn test_error_strict_types_rejects_constants_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(5.0);",
+        "must be of type int, float given",
+    );
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(\"42\");",
+        "must be of type int, string given",
+    );
+}
+
+/// Verifies a numeric string is rejected at a `float` parameter under the directive, even though
+/// coercive mode binds it as a constant.
+#[test]
+fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function tf(float $f) { return $f; } echo tf(\"1.5\");",
+        "must be of type float, string given",
+    );
+}
+
+/// Verifies the directive reaches method calls, not just plain functions.
+#[test]
+fn test_error_strict_types_rejects_method_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
+        "Method C::m parameter $i expects Int, got Bool",
+    );
+}
+
+/// Verifies the directive reaches a closure invoked through a variable, which is validated on a
+/// different checker path from a named function call.
+#[test]
+fn test_error_strict_types_rejects_closure_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int $i) { return $i; }; echo $f(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the directive reaches a declared variadic element type, which PHP checks exactly
+/// like a regular declared parameter.
+#[test]
+fn test_error_strict_types_rejects_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// Verifies `call_user_func` stays on the strict path. Unlike `array_map`, it forwards the
+/// caller's frame, so PHP 8.4.20 throws `TypeError` for `call_user_func('g', true)` in a
+/// strict file.
+#[test]
+fn test_error_strict_types_reaches_call_user_func() {
+    expect_error(
+        "<?php declare(strict_types=1); function g(int $i) { return $i; } echo call_user_func('g', true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies a coercive file is unaffected: the same `bool`→`int` call still binds, so the
+/// directive genuinely narrows only the files that declare it.
+#[test]
+fn test_strict_types_absent_keeps_coercive_binding() {
+    expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
 }

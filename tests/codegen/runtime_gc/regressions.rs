@@ -96,39 +96,6 @@ echo "done";
     assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
 }
 
-/// Verifies PHP bytewise string operator results are owned/released cleanly over many
-/// iterations. Each `&`/`|`/`^` result feeds `bin2hex` (which allocates an owned heap
-/// string) and is reassigned to `$out` every loop, so the previous owned value must be
-/// released without a double-free. Exercises the `$a & $a` self-alias release path and
-/// all three operators; 300 iterations must leave the heap clean (allocations ==
-/// deallocations, no corruption). `bin2hex("ABCD" ^ "\xF0\x0F\xF0\x0F")` is `b14db34b`.
-#[test]
-fn test_string_bitwise_result_released_cleanly() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-$a = "AB";
-$x = "ABCD";
-$y = "\xF0\x0F\xF0\x0F";
-$out = "";
-for ($i = 0; $i < 300; $i++) {
-    $out = bin2hex($a & $a);
-    $out = bin2hex($x & $y);
-    $out = bin2hex($x | $y);
-    $out = bin2hex($x ^ $y);
-}
-echo $out;
-"#,
-    );
-    assert_eq!(out.stdout, "b14db34b");
-    assert!(
-        !out.stderr.contains("double free") && !out.stderr.contains("bad refcount"),
-        "heap corruption detected: {}",
-        out.stderr
-    );
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
-}
-
 /// Regression: a temporary object implicitly stringified via `__toString` in `echo` must
 /// be released, not leaked. 100 iterations would accumulate 100 leaked objects otherwise.
 #[test]
@@ -714,44 +681,6 @@ echo count($x->a);
     );
 }
 
-/// Verifies that repeatedly pushing onto an associative-array property across
-/// several method calls appends with the next integer key and leaves the heap
-/// clean. The property is declared `array` with an associative default (codegen
-/// type `AssocArray`), so `$this->rows[] = $v` takes the EIR
-/// `lower_property_array_push` assoc branch: it acquires a distinct owned handle
-/// to the loaded hash, hash-appends (which COW-splits and may relocate the
-/// table), writes the possibly-relocated pointer back via `PropSet`, then
-/// releases the acquired copy. This exercises the acquire/release/`PropSet`
-/// ownership balance under repeated growth; a mismatched acquire or missing
-/// release would leak the hash or its inserted cells. Pushes `0, 10, 20` onto an
-/// initial `['a' => 1]`, so the final count is `4` with `$rows[0] == 0` and
-/// `$rows[2] == 20`; the heap must be clean at exit.
-#[test]
-fn test_regression_property_assoc_array_push_loop_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Rows {
-    private array $rows = ['a' => 1];
-    public function push($v): void { $this->rows[] = $v; }
-    public function total(): int { return count($this->rows); }
-    public function at(int $i): int { return $this->rows[$i]; }
-}
-$r = new Rows();
-for ($i = 0; $i < 3; $i++) {
-    $r->push($i * 10);
-}
-echo $r->total(), ":", $r->at(0), ",", $r->at(2);
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "4:0,20");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
 /// Verifies that assigning a Mixed indexed-array cell to a local retains an
 /// independent owner and does not leave the array with a dangling cell.
 #[test]
@@ -1246,6 +1175,28 @@ echo $total;
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "600");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: returning a borrowed Mixed parameter must not make the call
+/// result an owning temporary. Releasing that alias would invalidate the source
+/// local before its next use.
+#[test]
+fn test_borrowed_mixed_user_call_result_does_not_free_source_local() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function identity(mixed $value): mixed { return $value; }
+$values = [1];
+$value = array_pop($values);
+echo identity($value), "|", $value;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "1|1");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
         "expected a clean heap, got: {}",
@@ -3070,6 +3021,84 @@ echo $bag->items[0];
     );
 }
 
+/// Ensures widening a typed array into a generic `array` property preserves the
+/// caller's source owner while transferring the unique converted clone to the property.
+#[test]
+fn test_property_array_widening_preserves_source_and_cow_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ArrayWideningBag {
+    public array $items = [];
+}
+
+$source = [11, 22];
+$bag = new ArrayWideningBag();
+$bag->items = $source;
+echo $source[0], ",", $source[1];
+echo "|", $bag->items[0], ",", $bag->items[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures associative-array widening follows the same non-consuming property
+/// store contract while converting typed values to boxed `Mixed` entries.
+#[test]
+fn test_property_assoc_array_widening_preserves_source_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class AssocArrayWideningBag {
+    public array $items = [];
+}
+
+$source = ["left" => 11, "right" => 22];
+$bag = new AssocArrayWideningBag();
+$bag->items = $source;
+echo $source["left"], ",", $source["right"];
+echo "|", $bag->items["left"], ",", $bag->items["right"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected associative property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures releasing a temporary zero-property aggregate from a reused larger
+/// heap block cannot invalidate a `Mixed` foreach key that is still live.
+#[test]
+fn test_iterator_aggregate_array_keys_survive_source_release() {
+    let out = compile_and_run(
+        r#"<?php
+$first = new ArrayObject(["left" => "L"]);
+foreach ($first as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+
+class RetainedKeyAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator(["base" => "B"]);
+    }
+}
+
+$iterator = new IteratorIterator(new RetainedKeyAggregate());
+foreach ($iterator as $key => $value) {
+    echo $key, "=", $value;
+}
+"#,
+    );
+    assert_eq!(out, "left=L;base=B");
+}
+
 /// Verifies a nullsafe property read releases an owning nullable call result on
 /// both branches. In particular, a boxed null receiver must not leak when `?->`
 /// short-circuits before the property read.
@@ -3788,602 +3817,65 @@ echo gettype($s), "\n";
     );
 }
 
-/// Regression for the trim self-reassign fix: `$s = trim($s)` now persists an owned copy of the
-/// trimmed slice instead of returning a slice into the source buffer, so reassigning a heap string
-/// to a trimmed slice of itself under loop churn neither corrupts the string nor leaks/double-frees.
-/// Each iteration allocates the persisted copy and frees the previous value, so allocs and frees
-/// stay balanced. Mirrors symfony/yaml `Inline::parse`'s `$value = trim($value)` scalar path.
+/// Regression test: a function returning its Mixed-boxed static local must hand the
+/// caller an owned reference. The checked `++` widens the static slot to a boxed
+/// `int|float`, and the caller releases call results after consuming them, so an
+/// unretained `return $next_id` drops the slot's own box to refcount zero — every
+/// later call increments freed memory and reads garbage once the block is reused.
 #[test]
-fn test_trim_self_reassign_loop_balances_gc_stats() {
-    let out = compile_and_run_with_gc_stats(
+fn test_returned_static_local_mixed_box_survives_caller_release() {
+    let out = compile_and_run_with_heap_debug(
         r#"<?php
-$parts = ["  ele", "phc  "];
+function next_n() {
+    static $n = 0;
+    $n++;
+    return $n;
+}
+echo "N: " . next_n() . "\n";
+echo "N: " . next_n() . "\n";
+echo "N: " . next_n() . "\n";
+var_dump(next_n());
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "N: 1\nN: 2\nN: 3\nint(4)\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the returned static box to stay owned by its slot, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test: the freed-block reuse form of the same bug. A checked-arithmetic
+/// store into a global allocates between calls, reusing the static's freed box, so
+/// without the return retain the second `make_id()` concat prints an empty string
+/// instead of the counter value (the shape of `examples/advanced-functions`).
+#[test]
+fn test_returned_static_survives_interleaved_global_mixed_store() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
 $total = 0;
-for ($k = 0; $k < 6; $k++) {
-    $s = $parts[0] . $parts[1];
-    $s = trim($s);
-    $total = $total + strlen($s);
+function add_to_total($amount) {
+    global $total;
+    $total = $total + $amount;
 }
-echo $total;
+function make_id() {
+    static $next_id = 0;
+    $next_id++;
+    return $next_id;
+}
+echo "ID: " . make_id() . "\n";
+add_to_total(10);
+echo "ID: " . make_id() . "\n";
+echo "ID: " . make_id() . "\n";
+echo "Total: " . $total . "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "36");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "trim self-reassign loop leaked or double-freed");
-}
-
-/// Plain-concrete (no interface, no narrowing) heap regression for by-ref bug #5: a class that owns
-/// a reference property (one it returns by reference, `&ref()`) allocates a 16-byte ref-cell per
-/// instance at construction, but `__rt_object_free_deep` never releases that cell or the array it
-/// holds — the per-class GC descriptor tags owned reference properties `0` (no cleanup). The leak is
-/// purely instance-proportional: this loop only constructs objects (no method call, no `=&` bind)
-/// yet leaks ~4 blocks/iteration.
-///
-/// FIXED (by-ref bug #5): `__rt_object_free_deep` now emits descriptor tag 8 for owned
-/// reference-property cells with a refcounted payload (deref cell → `__rt_decref_any` payload →
-/// free cell) on both targets, so this construct-only loop reports `allocs == frees`.
-#[test]
-fn test_owned_reference_property_object_freed_cleanly() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class Box { public array $items = ['a']; public function &ref(): array { return $this->items; } }
-for ($i = 0; $i < 5; $i++) {
-    $b = new Box();
-}
-echo "ok";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "ok");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "owned reference-property object leaked: {}", out.stderr);
-}
-
-/// By-ref bug #5, tag 8 with a STRING payload: a class exposing a `string` property by reference
-/// (`public function &ref(): string`) owns a 16-byte ref-cell per instance holding a persisted
-/// string pointer. The destructor must decref the string then free the cell, so a construct-only
-/// loop stays heap-clean (`allocs == frees`).
-#[test]
-fn test_owned_string_reference_property_object_freed_cleanly() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class S { public string $name = 'hello'; public function &ref(): string { return $this->name; } }
-for ($i = 0; $i < 4; $i++) {
-    $s = new S();
-}
-echo "ok";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "ok");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "owned string reference-property object leaked: {}", out.stderr);
-}
-
-/// By-ref bug #5, tag 10 with a SCALAR payload: a class exposing an `int` property by reference
-/// (`public function &ref(): int`) owns a 16-byte ref-cell holding a non-refcounted scalar. The
-/// destructor must free the cell only (no payload decref), so a construct-only loop stays
-/// heap-clean (`allocs == frees`) with no spurious decref of an integer payload.
-#[test]
-fn test_owned_scalar_reference_property_object_freed_cleanly() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class N { public int $n = 7; public function &ref(): int { return $this->n; } }
-for ($i = 0; $i < 4; $i++) {
-    $x = new N();
-}
-echo "ok";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "ok");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "owned scalar reference-property object leaked: {}", out.stderr);
-}
-
-/// By-ref bug #5 double-free safety: `$h->data = &$b->items` overwrites Holder::data's slot with a
-/// pointer to Box::items's cell (`BindPropRefCell` shares the cell). Holder::data is a whole-program
-/// `=&` rebind target, so `rebound_reference_properties` demotes its owned cell back to descriptor
-/// tag 0 — only Box::items (tag 8) frees the shared cell, so the program must run cleanly and print
-/// the shared count (2) with no double-free/abort.
-#[test]
-fn test_cross_object_reference_bind_no_double_free() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class Box { public array $items = ['a']; }
-class Holder { public array $data = []; }
-$b = new Box();
-$h = new Holder();
-$h->data = &$b->items;
-$h->data[] = 'y';
-echo count($b->items);
-"#,
-    );
-    assert!(out.success, "cross-object reference bind aborted (double-free?): {}", out.stderr);
-    assert_eq!(out.stdout, "2");
-}
-
-/// By-ref bug #5 double-free safety, the narrow case: `$b1->items = &$b2->items` makes Box::items
-/// itself both a `=&` source and target. Because Box::items is a rebind target anywhere in the
-/// program, `rebound_reference_properties` demotes ALL Box::items cells to tag 0 (leak-as-before),
-/// guaranteeing the shared cell is never freed twice. The program must run cleanly and print 2.
-#[test]
-fn test_same_class_reference_bind_no_double_free() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class Box { public array $items = ['a']; }
-$b1 = new Box();
-$b2 = new Box();
-$b1->items = &$b2->items;
-$b1->items[] = 'y';
-echo count($b2->items);
-"#,
-    );
-    assert!(out.success, "same-class reference bind aborted (double-free?): {}", out.stderr);
-    assert_eq!(out.stdout, "2");
-}
-
-/// Heap behavior for an unspecialized `Mixed`-receiver `__call` that reads a forwarded string
-/// argument in a loop: the receiver is `mixed` (no singular class), so the checker finalization
-/// widens the `__call` `params[1]` from `Array(Never)` to `Array(Mixed)`, and the body reads `$a[0]`
-/// with an 8-byte Mixed stride matching the hand-built args array. Functional correctness (the
-/// forwarded string prints) is asserted here and fully covered by the codegen tests.
-///
-/// The `allocs == frees` assertion is left IGNORED because Mixed-receiver dispatch is inherently
-/// leaky today, independent of this checker fix: a plain (non-`__call`) Mixed-receiver method call in
-/// the same loop shape leaks ~1 block/iteration (the pre-existing union-receiver method-dispatch
-/// leak). The Mixed-args build/read path adds a further ~2 blocks/iteration. Neither leak is caused
-/// by widening `Array(Never)` to `Array(Mixed)` — the fix only makes the read return the correct
-/// value. Un-ignore once the union-receiver dispatch leak and the Mixed-args build/read leak are
-/// fixed separately.
-#[test]
-#[ignore = "pre-existing Mixed-receiver dispatch leak (reproduced without __call) plus Mixed-args build/read leak block heap-clean; checker fix only corrects the read value"]
-fn test_mixed_receiver_magic_call_string_arg_loop_heap_clean() {
-    let out = compile_and_run_with_gc_stats(
-        r#"<?php
-class P { public function __call($n, $a): string { return "h:" . $a[0]; } }
-function mk(int $i): mixed { return new P(); }
-for ($i = 0; $i < 5; $i++) {
-    $o = mk($i);
-    $s = $o->whatever("z");
-    echo $s;
-}
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "h:zh:zh:zh:zh:z");
-    let (allocs, frees) = parse_gc_stats(&out.stderr);
-    assert_eq!(allocs, frees, "expected clean heap, got: {}", out.stderr);
-}
-
-/// Regression: a refcounted method-call result consumed through a ternary must
-/// not leak. The ternary merge temp is typed `Mixed` (a method call's syntactic
-/// type is `Mixed` before lowering), so each branch value is `MixedBox`-ed. The
-/// box persists strings / increfs heap children into its own reference, so the
-/// original owned method-call result must be released after boxing; previously it
-/// leaked ~2-3 blocks per call. A runtime-unknown `$argc` keeps the ternary from
-/// being folded away. Heap must be clean at exit.
-#[test]
-fn test_regression_ternary_then_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c): string { return $c ? $a->g() : "z"; }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
+    assert_eq!(out.stdout, "ID: 1\nID: 2\nID: 3\nTotal: 10\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: the direct-return baseline (no ternary) of a method-call result
-/// must stay clean. Kept alongside the ternary shapes as a control so a future
-/// change that breaks the plain return path is caught here too.
-#[test]
-fn test_regression_direct_return_method_result_baseline_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a): string { return $a->g(); }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a ternary method-call result stored to a local and then returned
-/// must not leak. This isolates the merge-temp store path (the box's original
-/// source release) from the return-coercion path.
-#[test]
-fn test_regression_ternary_result_stored_then_returned_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c): string { $x = $c ? $a->g() : "z"; return $x; }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: the owning branch of a ternary in the else position must not leak.
-/// The condition is false at runtime (`$argc > 100`) so the method-call branch
-/// actually executes; the boxed merge temp and its return coercion must both
-/// release their owned sources.
-#[test]
-fn test_regression_ternary_else_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c): string { return $c > 100 ? "z" : $a->g(); }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a discarded ternary expression-statement whose taken branch owns a
-/// method-call result must not leak. With the result discarded, the merge temp is
-/// released at the merge block; the leak here came purely from the boxed branch
-/// value's original source never being released.
-#[test]
-fn test_regression_discarded_ternary_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c): void { $c ? $a->g() : "z"; }
-$a = new A();
-for ($i = 0; $i < 50; $i++) { f($a, $argc); }
-echo "ok";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "ok");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a short-ternary (`?:`) over a method-call result must not leak. It
-/// shares the merge-temp machinery with the full ternary, so the boxed value's
-/// source release and the return coercion release must both fire.
-#[test]
-fn test_regression_short_ternary_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a): string { return $a->g() ?: "z"; }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a nested ternary whose innermost taken branch owns a method-call
-/// result must not leak. Each ternary level allocates its own boxed merge temp;
-/// all owned sources must be released.
-#[test]
-fn test_regression_nested_ternary_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c): string { return $c ? ($c > 1 ? $a->g() : "y") : "z"; }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "y");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: an array-returning method consumed through a ternary must not leak.
-/// The array return path unboxes the Mixed merge temp back to a concrete array via
-/// a runtime clone; the source box must be released after the unbox, otherwise the
-/// box and its retained array child leak on every call.
-#[test]
-fn test_regression_ternary_array_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function arr(): array { return [1, 2, 3, 4]; } }
-function f(A $a, int $c): array { return $c ? $a->arr() : []; }
-$a = new A();
-$n = 0;
-for ($i = 0; $i < 50; $i++) { $r = f($a, $argc); $n = count($r); }
-echo $n;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "4");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a method returning an unannotated (`Mixed`) value consumed through
-/// a ternary with a `Mixed` function return must not leak. This exercises the
-/// concrete-to-Mixed return coercion (`MixedBox`) release path.
-#[test]
-fn test_regression_ternary_mixed_return_method_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class A { public function g(): string { return "v" . strlen("ab"); } }
-function f(A $a, int $c) { return $c ? $a->g() : "z"; }
-$a = new A();
-$last = "";
-for ($i = 0; $i < 50; $i++) { $last = f($a, $argc); }
-echo $last;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "v2");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies (Bug A) that an inline `new C()` passed directly as a user-call
-/// argument is released after the call. The callee `grab(Plain $p): int` borrows
-/// the object and returns an `int`, so the caller owns the temporary; before the
-/// fix the owning `object_new` argument was never released and leaked 1 block per
-/// loop iteration. The heap must be clean after 5 iterations.
-#[test]
-fn test_inline_new_call_arg_released_after_user_call() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Plain { public int $v = 1; public function get(): int { return $this->v; } }
-function grab(Plain $p): int { return $p->get(); }
-$t = 0;
-for ($i = 0; $i < 5; $i++) { $t += grab(new Plain()); }
-echo $t;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "5");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies (Bug A control) that assigning `new C()` to a local first and passing
-/// the local stays heap-clean — the argument is a `load_local`, not an owning
-/// temporary, so it must not be released by the caller (no regression, no
-/// double-free). The local is released by ordinary scope cleanup.
-#[test]
-fn test_local_object_call_arg_stays_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Plain { public int $v = 1; public function get(): int { return $this->v; } }
-function grab(Plain $p): int { return $p->get(); }
-$t = 0;
-for ($i = 0; $i < 5; $i++) { $o = new Plain(); $t += grab($o); }
-echo $t;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "5");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Verifies (Bug A no-double-free) that when a call returns its own inline-`new`
-/// argument (identity passthrough `f(Plain $p): Plain { return $p; }`), the
-/// returned object is NOT released early by the caller-side arg cleanup. The
-/// result aliases the argument, so `call_result_may_alias_arg` must skip it; the
-/// value survives to be read, and the heap stays clean over the loop.
-#[test]
-fn test_identity_passthrough_inline_new_not_double_freed() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Plain { public int $v = 7; }
-function f(Plain $p): Plain { return $p; }
-$s = 0;
-for ($i = 0; $i < 5; $i++) { $x = f(new Plain()); $s += $x->v; }
-echo $s;
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "35");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a discarded `realpath()` result must not leak. `realpath` boxes its
-/// result through `box_owned_string_or_false_result`, which allocates a fresh owned
-/// Mixed cell (refcount 1) holding an owned persisted string. As a discarded
-/// expression statement its temporary must be released like `end`/`array_pop`;
-/// before adding `realpath` to `builtin_call_result_owns_storage_as_temporary` it
-/// leaked two blocks per call (the Mixed cell + its inner string). Loops 100 times
-/// so any per-call leak is unmistakable; the heap must be clean at exit.
-#[test]
-fn test_regression_discarded_realpath_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$i = 0;
-while ($i < 100) { realpath("/tmp"); $i++; }
-echo "done";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression: a discarded `file_get_contents()` result must not leak. Like
-/// `realpath`, its EIR lowering boxes the read bytes through
-/// `box_owned_string_or_false_result` into a fresh owned Mixed cell, so a discarded
-/// statement result must be released as an owning temporary. Reads a portable file
-/// (`/etc/hosts` exists on macOS and Linux) 100 times and discards each result; the
-/// heap must be clean at exit (was two blocks per call before the fix).
-#[test]
-fn test_regression_discarded_file_get_contents_result_does_not_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$i = 0;
-while ($i < 100) { file_get_contents("/etc/hosts"); $i++; }
-echo "done";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "done");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a clean heap, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression test for the once-guard fix
-/// (`crate::ir_lower::stmt::lower_static_var`/`Op::StaticLocalInitialized`): a `static $f;
-/// $f ??= function() use (...) {...};` closure default must allocate its closure descriptor
-/// exactly once across calls, not once per call. Before the fix, `Op::InitStaticLocal`'s codegen
-/// only guarded the final store — the closure-creating instructions ran unconditionally on every
-/// call, leaking a fresh (unstored, unreleased) closure descriptor on calls 2..N (which would
-/// show up here as `live_blocks=N` for N extra unstored calls).
-///
-/// The heap must come out fully clean, not merely down to "one persistent block": `php -n`
-/// verified (destructor echo observed after "end of script") that PHP destructs an object held
-/// in a function's `static` variable at script shutdown, and
-/// `crate::codegen::frame::emit_main_static_local_cleanup` mirrors that by releasing every
-/// initialized static local's value in the `main()` epilogue. So the one Sentinel/closure this
-/// program ever constructs is expected to be released too, leaving `allocs == frees` overall —
-/// asserting `live_blocks=1` would incorrectly encode "statics are permanently leaked" as
-/// expected behavior.
-#[test]
-fn test_regression_static_closure_default_once_guard_no_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-function make() {
-    $x = 10;
-    static $f;
-    $f ??= function () use ($x) {
-        return $x;
-    };
-    return $f();
-}
-echo make();
-echo make();
-echo make();
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "101010");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected the once-constructed closure descriptor to be released at script shutdown \
-         (php -n: static-held objects are destructed at shutdown) and no extra unstored copies \
-         from calls 2/3, got: {}",
-        out.stderr
-    );
-}
-
-/// Regression test for the once-guard fix: a `static $obj = new Sentinel();` direct initializer
-/// must construct the object exactly once across calls, not once per call. Before the fix, the
-/// `new Sentinel()` value-producing instructions ran unconditionally on every call (only the
-/// final store into the persistent slot was once-guarded), leaking a fresh (unstored, unreleased)
-/// object on calls 2..N (which would show up here as `live_blocks=N` for N extra unstored calls).
-///
-/// The heap must come out fully clean, not merely down to "one persistent block": `php -n`
-/// verified (destructor echo observed after "end of script") that PHP destructs an object held
-/// in a function's `static` variable at script shutdown, and
-/// `crate::codegen::frame::emit_main_static_local_cleanup` mirrors that by releasing every
-/// initialized static local's value in the `main()` epilogue. So the one Sentinel this program
-/// ever constructs is expected to be released too, leaving `allocs == frees` overall — asserting
-/// `live_blocks=1` would incorrectly encode "statics are permanently leaked" as expected
-/// behavior.
-#[test]
-fn test_regression_static_direct_new_object_initializer_once_guard_no_leak() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-class Sentinel {
-    public int $hits = 0;
-}
-function f() {
-    static $s = new Sentinel();
-    $s->hits++;
-    return $s->hits;
-}
-echo f();
-echo f();
-echo f();
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "123");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected the once-constructed Sentinel to be released at script shutdown (php -n: \
-         static-held objects are destructed at shutdown) and no extra unstored copies from \
-         calls 2/3, got: {}",
+        "expected static-return and global checked-add stores to stay balanced, got: {}",
         out.stderr
     );
 }
@@ -4620,6 +4112,255 @@ echo $count;
     );
 }
 
+/// Regression test for issue #604: a freshly boxed owned Mixed value passed
+/// *directly* as a call argument to a function that returns that parameter, with the
+/// result consumed, must not over-release the shared box. The argument box and the
+/// returned box are the same allocation (`return $x` hands the parameter straight
+/// back); releasing it both as the argument temporary and as the call result frees it
+/// once too often. Before the fix, the caller released the argument box after the
+/// call and then re-acquired the same freed box to store the result — heap debug
+/// aborts with `bad refcount` (incref on a freed block).
+#[test]
+fn test_direct_owned_mixed_call_arg_with_consumed_result_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = idv($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the shared argument/return box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (single-call shape): the same over-release without a
+/// loop. The argument `$i + 1` is a fresh owned Mixed box passed directly to a callee
+/// that returns it, and the result is stored and echoed. Before the fix the stored
+/// value read back empty because the box was freed before the result was claimed.
+#[test]
+fn test_direct_owned_mixed_call_arg_single_call_is_correct() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+function test($i) {
+    $r = idv($i + 1);
+    echo $r, "\n";
+}
+test(5);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the single-call shared box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (method dispatch): a method that returns its
+/// parameter exercises the same shared argument/return box through the method-call
+/// argument-release path.
+#[test]
+fn test_direct_owned_mixed_method_arg_returns_arg_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Box { function idv($x) { return $x; } }
+$b = new Box();
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = $b->idv($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the shared method argument/return box to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (discarded result): a side-effecting callee that
+/// returns its parameter is called with a fresh owned Mixed box whose result is
+/// discarded. The single shared box must be released exactly once (by the discarded
+/// call result), not twice.
+#[test]
+fn test_direct_owned_mixed_call_arg_discarded_result_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function tap($x) { global $seen; $seen = $seen + 1; return $x; }
+$seen = 0;
+for ($i = 0; $i < 20; $i++) { tap($i + 1); }
+echo $seen, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the discarded shared box to be released exactly once, got: {}",
+        out.stderr
+    );
+}
+
+/// Control for issue #604: routing the fresh owned box through a local first stays
+/// clean. The argument is then a borrowed local load (not an owning temporary), so the
+/// argument-release suppression must not apply and the box stays owned by the local
+/// and by `$r`. Guards against the fix over-releasing the borrowed-argument path.
+#[test]
+fn test_owned_mixed_call_arg_via_local_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function idv($x) { return $x; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $x = $i + 1; $r = idv($x); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the via-local borrowed argument path to stay clean, got: {}",
+        out.stderr
+    );
+}
+
+/// Control for issue #604: a callee that does *not* return its argument (returns a
+/// constant) must still release the fresh owned Mixed box argument — the fix must not
+/// suppress the argument release for an unproven/non-aliasing return, or the box would
+/// leak once per call (the sibling leak, issue #486).
+#[test]
+fn test_owned_mixed_call_arg_callee_returns_constant_releases_arg() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function konst($x) { return 7; }
+$c = 0;
+for ($i = 0; $i < 20; $i++) { $r = konst($i + 1); $c = $c + $r; }
+echo $c, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the fresh argument box to be released when the callee drops it, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #604 (conditional-return callee, alias path): a callee
+/// that returns its parameter on one branch (`if ($c) return $x;`) is summarized as
+/// possibly returning that parameter, so the fix suppresses the argument release. When
+/// the runtime always takes the aliasing branch, the fresh boxed `$i + 1` flows through
+/// the result and is released exactly once — heap stays clean. (When a call instead
+/// takes the non-aliasing branch, the suppressed box leaks; that is the deliberate
+/// leak-over-crash trade-off documented at the suppression site.)
+#[test]
+fn test_conditional_return_callee_alias_path_stays_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, 1); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "210\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the conditional-return alias path to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+// --- Issue #619: runtime alias disambiguation for suppressed argument releases ---
+//
+// `ReturnArgAlias::Parameters` is a MAY summary — a union over branches — so a callee that
+// returns its parameter only conditionally still reports that parameter as possibly returned.
+// The caller therefore suppresses the argument release on *every* path, which is correct on
+// the branch that hands the box back (issue #604) and leaks one block per call on the branches
+// that do not. The suppression site now emits a conditional release instead: after the call,
+// compare the returned payload against the argument payload and release the argument when they
+// differ. These tests pin both directions — the alias path must not double-release, and the
+// non-alias path must not leak.
+
+/// Regression test for issue #619: a conditional-return callee taking the NON-aliasing branch
+/// must release the suppressed argument box. Before the fix this leaked one boxed `$i + 1` per
+/// call (20 blocks / 800 bytes) while still printing the right answer.
+#[test]
+fn test_conditional_return_callee_non_alias_path_releases_arg() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, 0); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the non-aliasing return path to release the suppressed argument box, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a fresh container passed by value is released when the callee returns a non-alias.
+///
+/// User-code callees privatize by-value containers before execution, so their result cannot
+/// retain the caller's original temporary. The caller may therefore release that temporary
+/// without the payload-level alias guard required for builtin and extern calls.
+#[test]
+fn test_conditional_return_callee_container_arg_releases_on_non_alias_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$n = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe([$i], 0); $n = $n + 1; }
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the container argument to be released on the non-alias path, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #619: both branches exercised in one program. The conditional
+/// release must fire per call on the runtime path actually taken — releasing on the aliasing
+/// iterations would double-free (the #604 crash), skipping it on the others leaks.
+#[test]
+fn test_conditional_return_callee_mixed_paths_stay_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, $i % 2); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "180\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected alternating alias/non-alias paths to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for #601: `implode()` over an indexed array held in a boxed
 /// `mixed` cell must release the persisted string produced when each boxed element
 /// is cast to a string. The ternary widens the two literal arms to a boxed mixed
@@ -4709,6 +4450,36 @@ echo $n, "\n";
     );
 }
 
+/// Regression: `implode()` over a `Mixed` operand holding HASH storage flattens the values into a
+/// temporary indexed array of boxed cells, and that temporary is this lowering's to release.
+///
+/// The storage kind is only known at runtime, so the free is guarded by a materialization flag:
+/// a leak here means the flag never reached the free, and a crash or a double-free means the flag
+/// was set for the indexed case too and destroyed the caller's own array. Both storage kinds are
+/// joined in the same loop so one run covers both arms. Measured with `php -n` (8.5.6): the
+/// per-iteration join lengths are 8 (`xx,2,1.5`) for the hash and 11 (`1.5,2.5,3.5`) for the
+/// indexed array, so 20 iterations print `380`.
+#[test]
+fn test_implode_mixed_hash_temp_is_released_but_indexed_operand_is_not() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $n += strlen(implode(",", eval('return ["a" => "xx", "b" => 2, "c" => 1.5];')));
+    $n += strlen(implode(",", eval('return [1.5, 2.5, 3.5];')));
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "380\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the materialized hash values temporary to be released, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for #601 (control): a homogeneous string array is a typed indexed
 /// array whose elements are borrowed slots, not boxed mixed cells. implode must copy
 /// those borrowed strings without releasing them (they are owned by the array). This
@@ -4751,117 +4522,32 @@ echo implode("", $r), "\n";
     );
 }
 
-/// A reassignment that changes a local's REPRESENTATION (`string` → `int`) must release the
-/// value being overwritten.
+/// Ownership regression for the newly added bounded-scratch string producers.
 ///
-/// The slot's frame layout is its FINAL widened type, so the occupant physically present at the
-/// second store is a Mixed cell — but lowering emitted the release eagerly, typed with the type
-/// visible at that moment (`Str`), because the widening store had not been lowered yet. The
-/// release then freed a Mixed cell as if it were a bare string block and dropped the string on
-/// the floor: one leaked block per reassignment, growing to ~400 KB over 10 000 iterations.
-/// A deferred `release_local_slot`, resolved by the backend against the final storage type, is
-/// what makes this correct.
+/// `chunk_split()`, `quotemeta()`, and `base_convert()` all write into a reservation taken
+/// from `__rt_concat_reserve`, so none of them can alias an argument. Leaving `chunk_split`
+/// in the default `MayAliasArguments` bucket suppressed the release of its owned subject
+/// temporary and leaked one block per call; `Independent`/`Fresh` ownership keeps the loop
+/// below clean.
 #[test]
-fn test_widening_reassign_releases_the_previous_string() {
+fn test_scratch_string_builtins_release_owned_argument_temporaries() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
-$n = 0;
+function build(): string { return str_repeat("a.b(", 30) . "c"; }
+$total = 0;
 for ($i = 0; $i < 20; $i++) {
-    $s = "hello world payload";
-    $n += strlen($s);
-    $s = 5;
-    $n += $s;
+    $total += strlen(chunk_split(build(), 7, "=="));
+    $total += strlen(quotemeta(build()));
+    $total += strlen(base_convert("ff", 16, 2));
 }
-echo $n, "\n";
+echo $total, "\n";
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "480\n");
+    assert_eq!(out.stdout, "6920\n");
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a string→int reassignment to release the overwritten string, got: {}",
-        out.stderr
-    );
-}
-
-/// Same defect, reached through a different refcounted representation: the overwritten value is
-/// an ARRAY rather than a string, and the reassignment widens the slot to Mixed exactly the same
-/// way. Covering both proves the fix is about the widening, not about strings.
-#[test]
-fn test_widening_reassign_releases_the_previous_array() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$n = 0;
-for ($i = 0; $i < 20; $i++) {
-    $a = [1, 2, 3];
-    $n += count($a);
-    $a = 7;
-    $n += is_int($a) ? 1 : 0;
-}
-echo $n, "\n";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "80\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected an array→int reassignment to release the overwritten array, got: {}",
-        out.stderr
-    );
-}
-
-/// Control for the two above: a SAME-representation reassignment (`string` → `string`) never
-/// widens the slot, so it was already clean and its release must keep firing exactly once.
-/// This is the arm a fix that simply stopped releasing would break — it would leak here too —
-/// and the arm a double-release would turn into a crash.
-#[test]
-fn test_same_representation_reassign_stays_clean() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-$n = 0;
-for ($i = 0; $i < 20; $i++) {
-    $s = "hello world payload";
-    $n += strlen($s);
-    $s = "second payload!!";
-    $n += strlen($s);
-}
-echo $n, "\n";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "700\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a string→string reassignment to stay leak-free, got: {}",
-        out.stderr
-    );
-}
-
-/// Passing a STRING local to a `mixed &$p` parameter widens that local's slot to Mixed storage
-/// for the call. Reading the concrete string back out of a slot whose final storage is Mixed
-/// unboxes it WITH an extra owned reference, and the boxing step is the only place that
-/// reference can be dropped — without the provisional release, the source string leaked once per
-/// call (measured: one block per iteration for a `string` source, none for an `int` one, which
-/// carries no reference to drop).
-#[test]
-fn test_by_ref_mixed_param_with_string_source_stays_leak_free() {
-    let out = compile_and_run_with_heap_debug(
-        r#"<?php
-function wb(mixed &$v): void { $v = 999; }
-$n = 0;
-for ($i = 0; $i < 20; $i++) {
-    $s = "hello world payload";
-    wb($s);
-    $n += $s;
-}
-echo $n, "\n";
-"#,
-    );
-    assert!(out.success, "program failed: {}", out.stderr);
-    assert_eq!(out.stdout, "19980\n");
-    assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
-        "expected a string source passed to a mixed by-ref param to stay leak-free, got: {}",
+        "expected scratch string builtins to release their argument temporaries, got: {}",
         out.stderr
     );
 }

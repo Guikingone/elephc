@@ -8,10 +8,6 @@
 //! Key details:
 //! - Conversion transfers existing slot ownership into Mixed boxes and stamps the
 //!   indexed array with value_type tag 7.
-//! - A payload whose uniform heap kind is 3 (associative hash — e.g. a statically
-//!   Array-typed value that was de-packed at runtime) passes through unchanged:
-//!   hash buckets are already Mixed-tagged, and walking them as indexed slots
-//!   would clone bucket memory as garbage elements.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -33,14 +29,6 @@ pub fn emit_array_to_mixed(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_to_mixed ---");
     emitter.label_global("__rt_array_to_mixed");
 
-    // -- hash pass-through: de-packed associative storage is already Mixed-valued --
-    emitter.instruction("ldr x9, [x0, #-8]");                                   // load the uniform heap kind word for the payload
-    emitter.instruction("and x9, x9, #0xff");                                   // isolate the low-byte heap kind tag
-    emitter.instruction("cmp x9, #3");                                          // is the payload associative-hash storage (kind 3)?
-    emitter.instruction("b.ne __rt_array_to_mixed_convert");                    // only true indexed arrays take the slot-conversion path
-    emitter.instruction("ret");                                                 // return the hash pointer unchanged (walking it as slots would corrupt it)
-
-    emitter.label("__rt_array_to_mixed_convert");
     emitter.instruction("sub sp, sp, #80");                                     // reserve conversion frame slots and saved return state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish a stable conversion frame
@@ -159,15 +147,6 @@ fn emit_array_to_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: array_to_mixed ---");
     emitter.label_global("__rt_array_to_mixed");
 
-    // -- hash pass-through: de-packed associative storage is already Mixed-valued --
-    emitter.instruction("mov r10, QWORD PTR [rdi - 8]");                        // load the uniform heap kind word for the payload
-    emitter.instruction("and r10, 0xff");                                       // isolate the low-byte heap kind tag
-    emitter.instruction("cmp r10, 3");                                          // is the payload associative-hash storage (kind 3)?
-    emitter.instruction("jne __rt_array_to_mixed_x86_convert");                 // only true indexed arrays take the slot-conversion path
-    emitter.instruction("mov rax, rdi");                                        // return the hash pointer unchanged (walking it as slots would corrupt it)
-    emitter.instruction("ret");                                                 // hand the untouched hash back to the caller
-
-    emitter.label("__rt_array_to_mixed_x86_convert");
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before converting slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable conversion frame
     emitter.instruction("sub rsp, 32");                                         // reserve slots for tag, array pointer, length, and index

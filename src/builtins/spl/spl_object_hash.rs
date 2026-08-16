@@ -13,24 +13,17 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "spl_object_hash",
-    area: Spl,
-    params: [object: Mixed],
-    returns: Str,
+    contract: "spl_object_hash",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::SplObjectHash,
     ),
-    summary: "Return hash id for given object.",
-    php_manual: "https://www.php.net/manual/en/function.spl-object-hash.php",
 }
 
 /// Validates that the argument is an object and returns `Str`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Accepted under the gradual object family (concrete object, `Mixed`, or a union
-    // containing an object/`Mixed` member); the real object check happens at runtime.
-    if !crate::types::checker::type_compat::type_is_gradual_object_family(&ty) {
+    if !matches!(ty, PhpType::Object(_)) {
         return Err(CompileError::new(
             cx.span,
             "spl_object_hash() argument must be an object",

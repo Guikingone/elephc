@@ -25,15 +25,23 @@ pub(crate) static RUNTIME_OBJ: OnceLock<std::path::PathBuf> = OnceLock::new();
 pub(crate) static RUNTIME_OBJS_BY_ASM: OnceLock<Mutex<HashMap<u64, std::path::PathBuf>>> =
     OnceLock::new();
 pub(crate) static BRIDGE_STATICLIB_BUILD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+pub(crate) static LIBPQ_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static DBLIB_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static FIREBIRD_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static ODBC_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static OCI_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
+pub(crate) static CUBRID_BRIDGE_BUILT: OnceLock<()> = OnceLock::new();
 pub(crate) static QEMU_SYSROOT: OnceLock<Option<String>> = OnceLock::new();
 pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 
 mod platform;
 mod runner;
 mod compiler;
+mod native_projects;
 mod projects;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
 pub(crate) use compiler::*;
+pub(crate) use native_projects::*;
 pub(crate) use projects::*;

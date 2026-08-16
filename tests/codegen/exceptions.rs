@@ -9,6 +9,23 @@
 
 use crate::support::*;
 
+/// Verifies a Throwable owns a dynamically concatenated message after the source
+/// temporary is released and unrelated catch-block strings reuse scratch storage.
+#[test]
+fn test_dynamic_exception_message_is_persisted() {
+    let out = compile_and_run(
+        r#"<?php
+$suffix = "payload";
+try {
+    throw new Error("dynamic:" . $suffix);
+} catch (Throwable $e) {
+    echo get_class($e) . "|" . $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "Error|dynamic:payload");
+}
+
 /// Verifies exception try catch same function.
 #[test]
 fn test_exception_try_catch_same_function() {
@@ -52,28 +69,14 @@ fn test_builtin_error_is_not_caught_by_exception() {
     assert_eq!(out, "error");
 }
 
-/// Checks that `$message` is reachable as a PROTECTED property from inside a subclass and that
-/// `getMessage()` returns the same constructor argument, verifying the Exception property surface.
-///
-/// PHP declares `protected $message = '';` on `Exception`, so the read has to happen through
-/// `$this` in a subclass; `php -n` on this source prints "boom:boom".
+/// Checks that the public `$message` property and getMessage() both return the
+/// constructor argument, verifying the Exception property surface.
 #[test]
 fn test_builtin_exception_message_api() {
     let out = compile_and_run(
-        "<?php class E extends Exception { public function raw(): string { return $this->message; } } $e = new E(\"boom\"); echo $e->raw(); echo \":\"; echo $e->getMessage();",
+        "<?php $e = new Exception(\"boom\"); echo $e->message; echo \":\"; echo $e->getMessage();",
     );
     assert_eq!(out, "boom:boom");
-}
-
-/// Verifies a subclass constructor may write `$this->message` and `getMessage()` reads it back
-/// through the compact Throwable payload, with the property now declared `protected` and UNTYPED
-/// as PHP declares it. `php -n` on this source prints "set-late".
-#[test]
-fn test_builtin_exception_message_writable_from_subclass_constructor() {
-    let out = compile_and_run(
-        "<?php class E extends RuntimeException { public function __construct() { $this->message = \"set-late\"; } } $e = new E(); echo $e->getMessage();",
-    );
-    assert_eq!(out, "set-late");
 }
 
 /// Verifies `getMessage()` returns a caller-owned string without consuming the
@@ -152,46 +155,21 @@ try {
 
 /// Verifies the full Throwable API surface on a caught Exception: getMessage,
 /// getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, and
-/// __toString all return expected values. File/line reflect the throw site.
+/// __toString all return expected values.
+///
+/// `getFile()` is compared against `__FILE__` rather than to a literal: both resolve through the
+/// same canonicalization, and the test's script lives in a temp directory whose name changes on
+/// every run. `getLine()` is `1` because the whole probe is one line — and it is the line of the
+/// `new`, which is what PHP records; the two coincide here only because they are the same line.
+///
+/// `getTrace()`/`getTraceAsString()` stay empty: elephc keeps no call stack to render, where
+/// reference PHP would report `#0 {main}`.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
     let out = compile_and_run(
-        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile(); echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
+        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile() === __FILE__ ? \"file\" : \"BAD(\" . $e->getFile() . \")\"; echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
-    assert_eq!(out, "caught:42::0:0::none:caught");
-}
-
-/// Verifies that the builtin exception constructor accepts PHP's optional third
-/// `?Throwable $previous` argument (`new RuntimeException($msg, $code, $previous)`).
-/// The message and code are stored and read back correctly. The compact runtime
-/// Throwable payload does not retain the chained cause, so `getPrevious()` returns
-/// null even when a previous exception was supplied — this is a documented limitation
-/// (storing `previous` would require expanding the fixed-size Throwable payload).
-#[test]
-fn test_builtin_exception_accepts_previous_constructor_argument() {
-    let out = compile_and_run(
-        r#"<?php
-$inner = new Exception("cause");
-$e = new RuntimeException("outer", 7, $inner);
-echo $e->getMessage(), ":", $e->getCode(), ":";
-echo $e->getPrevious() === null ? "null" : "set";
-"#,
-    );
-    assert_eq!(out, "outer:7:null");
-}
-
-/// Verifies that two-argument builtin exception construction still works after the
-/// optional third `previous` parameter was added, and that `getPrevious()` is null.
-#[test]
-fn test_builtin_exception_two_argument_construction_still_works() {
-    let out = compile_and_run(
-        r#"<?php
-$e = new RuntimeException("msg", 13);
-echo $e->getMessage(), ":", $e->getCode(), ":";
-echo $e->getPrevious() === null ? "null" : "set";
-"#,
-    );
-    assert_eq!(out, "msg:13:null");
+    assert_eq!(out, "caught:42:file:1:0::none:caught");
 }
 
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an
@@ -253,7 +231,10 @@ try {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "");
     assert!(
-        out.stderr.contains("Warning: file_get_contents()"),
+        out.stderr.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
         "expected runtime warning after unwinding @ scope, got stderr={}",
         out.stderr
     );
@@ -358,10 +339,12 @@ fn test_exception_throw_in_finally_overrides_prior_exception() {
 /// Verifies exception uncaught reports fatal error.
 #[test]
 fn test_exception_uncaught_reports_fatal_error() {
-    // Throws an exception with no enclosing try-catch. Verifies the compiler
-    // reports a "Fatal error: uncaught exception" rather than silently ignoring it.
+    // Throws an exception with no enclosing try-catch. The diagnostic names the CLASS, and
+    // carries no `": "` because the message is empty — reference PHP 8.5.6 prints exactly
+    // `Fatal error: Uncaught Exception in <file>:<line>` here, and elephc emits everything up
+    // to that suffix (there is no throw-site origin to report; see issue #660).
     let err = compile_and_run_expect_failure("<?php throw new Exception();");
-    assert!(err.contains("Fatal error: uncaught exception"), "{err}");
+    assert!(err.contains("Fatal error: Uncaught Exception"), "{err}");
 }
 
 /// Verifies exception with properties.
@@ -545,56 +528,6 @@ fn test_sequential_try_catch_does_not_blow_up_codegen() {
     assert_eq!(out, expected);
 }
 
-/// Verifies a user subclass whose `__construct` chains into the built-in
-/// Throwable root via `parent::__construct(message, code)` links and runs the
-/// standalone `_method_<Root>___construct` wrapper (backed by the
-/// `__rt_exception_construct` runtime helper), so `getMessage()`/`getCode()`
-/// observe the message/code written by the compact-payload constructor. Before
-/// the standalone constructor symbol existed the `parent::__construct` chain
-/// failed to link; this locks the read-back path (`boom|7`, matching PHP).
-#[test]
-fn test_subclass_parent_construct_sets_message_and_code() {
-    let out = compile_and_run(
-        r#"<?php
-class MyErr extends \RuntimeException {
-    public function __construct() {
-        parent::__construct("boom", 7);
-    }
-}
-$e = new MyErr();
-echo $e->getMessage(), "|", $e->getCode();
-"#,
-    );
-    assert_eq!(out, "boom|7");
-}
-
-/// Regression for a frame-slot overlap: a `string` parameter whose local is
-/// Mixed-widened is materialized in the prologue as a 16-byte `ptr,len` pair
-/// before being boxed, but the frame layout sized the slot for the 8-byte Mixed
-/// storage, so the length word overwrote the adjacent parameter slot (the
-/// receiver `$this`), producing a garbage receiver and a SIGSEGV. Reassigning
-/// the `string` param to the `mixed` property widens its local to Mixed and
-/// triggers the prologue box; dereferencing `$this` afterward crashed before the
-/// slot was sized to also fit the incoming string ABI shape. Correct output is
-/// `box:5` (matching PHP).
-#[test]
-fn test_string_param_widened_to_mixed_does_not_clobber_receiver() {
-    let out = compile_and_run(
-        r#"<?php
-final class Box {
-    public string $label = "box";
-    public mixed $extra = 5;
-    public function run(string $value): string {
-        if ($this->extra) { $value = $this->extra; }
-        return $this->label . ":" . $value;
-    }
-}
-$b = new Box();
-echo $b->run("hello");
-"#,
-    );
-    assert_eq!(out, "box:5");
-}
 /// Verifies that a private method call from an inaccessible scope raises a
 /// catchable `Error` at runtime (issue #383). PHP prints `err`, not `no`.
 #[test]
@@ -642,9 +575,12 @@ fn test_private_method_access_uncaught_is_fatal() {
         "<?php class C { private function secret() {} } $c = new C(); $c->secret();",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
+        output
+            .stderr
+            .contains("Fatal error: Uncaught Error: Call to private method C::secret() from global scope"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
         output.stderr
     );
 }
@@ -656,9 +592,12 @@ fn test_readonly_property_write_uncaught_is_fatal() {
         "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } $b = new Box(); $b->x = 2;",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
+        output
+            .stderr
+            .contains("Fatal error: Uncaught Error: Cannot modify readonly property Box::$x"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
         output.stderr
     );
 }
@@ -803,4 +742,118 @@ fn test_nullable_throwable_get_message_via_previous() {
         "<?php function show(?Throwable $t): string { return $t === null ? 'null' : $t->getMessage(); } $inner = new ValueError('inner'); $outer = new Exception('outer', 0, $inner); echo show($outer->getPrevious());",
     );
     assert_eq!(out, "inner");
+}
+
+// --- PHP 8 arithmetic errors (`DivisionByZeroError` / `ArithmeticError`) ---
+
+/// Verifies `%` by zero throws a catchable `DivisionByZeroError` with php-src's wording.
+///
+/// elephc used to return `0`, so no `catch` clause could ever observe the error. The divisor
+/// comes from `$argc - 1` so the constant folders cannot evaluate it at compile time.
+#[test]
+fn test_modulo_by_zero_throws_division_by_zero_error() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (DivisionByZeroError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+$a = 7;
+try { $a %= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "DivisionByZeroError:Modulo by zero|compound:Modulo by zero"
+    );
+}
+
+/// Verifies `/` by zero throws a catchable `DivisionByZeroError` for int and float operands.
+///
+/// PHP throws for `1/0`, `1.0/0`, `1/0.0`, `0/0`, and `-1.0/0.0` alike — the IEEE `INF`/`NaN`
+/// result is only reachable through `fdiv()`. elephc used to hand back `INF`.
+#[test]
+fn test_division_by_zero_throws_for_int_and_float_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+$zf = 0.0 * $argc;
+try { echo 1 / $z; } catch (DivisionByZeroError $e) { echo 'i:', $e->getMessage(); }
+echo '|';
+try { echo 1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'f:', $e->getMessage(); }
+echo '|';
+try { echo 1 / $zf; } catch (DivisionByZeroError $e) { echo 'if:', $e->getMessage(); }
+echo '|';
+try { echo $zf / $zf; } catch (DivisionByZeroError $e) { echo 'ff:', $e->getMessage(); }
+echo '|';
+try { echo -1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'nf:', $e->getMessage(); }
+echo '|';
+$b = 7;
+try { $b /= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "i:Division by zero|f:Division by zero|if:Division by zero|\
+         ff:Division by zero|nf:Division by zero|compound:Division by zero"
+    );
+}
+
+/// Verifies the arithmetic `DivisionByZeroError` is a real `ArithmeticError`/`Throwable`.
+#[test]
+fn test_division_by_zero_error_matches_parent_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (ArithmeticError $e) { echo 'arithmetic'; }
+echo '|';
+try { echo 1 / $z; } catch (Error $e) { echo 'error'; }
+echo '|';
+try { echo 1 % $z; } catch (Throwable $e) { echo get_class($e); }
+echo '|';
+try { echo intdiv(1, $z); } catch (DivisionByZeroError $e) { echo 'intdiv:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "arithmetic|error|DivisionByZeroError|intdiv:Division by zero"
+    );
+}
+
+/// Verifies a negative shift count throws a catchable `ArithmeticError` for `<<` and `>>`.
+///
+/// The hardware shift masks the count, so `1 << -1` used to evaluate to `PHP_INT_MIN`.
+#[test]
+fn test_negative_shift_count_throws_arithmetic_error() {
+    let out = compile_and_run(
+        r#"<?php
+$neg = -1 * $argc;
+try { echo (1 * $argc) << $neg; } catch (ArithmeticError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) >> $neg; } catch (ArithmeticError $e) { echo 'shr:', $e->getMessage(); }
+echo '|';
+$c = 5;
+try { $c <<= $neg; } catch (ArithmeticError $e) { echo 'compound:', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) << $neg; } catch (Throwable $e) { echo get_class($e); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ArithmeticError:Bit shift by negative number|\
+         shr:Bit shift by negative number|\
+         compound:Bit shift by negative number|ArithmeticError"
+    );
+}
+
+/// Verifies non-zero divisors and non-negative shift counts keep working after the guards.
+#[test]
+fn test_arithmetic_guards_do_not_disturb_normal_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo 7 % 3, '|', (7 * $n) % (3 * $n), '|', 8 / 2, '|', (7.5 * $n) / (2.5 * $n);
+echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $n) >> (1 * $n);
+"#,
+    );
+    assert_eq!(out, "1|1|4|3|3|INF|8|-4");
 }

@@ -55,6 +55,7 @@ mod fstat;
 mod fsync;
 mod ftell;
 mod ftruncate;
+mod fputs;
 mod fwrite;
 mod getcwd;
 mod glob;
@@ -100,6 +101,7 @@ mod stream_context_get_options;
 mod stream_context_get_params;
 mod stream_context_set_default;
 mod stream_context_set_option;
+mod stream_context_set_options;
 mod stream_context_set_params;
 mod stream_copy_to_stream;
 mod stream_filter_append;
@@ -113,6 +115,13 @@ mod stream_isatty;
 mod stream_resolve_include_path;
 mod stream_select;
 mod stream_set_blocking;
+mod diskfreespace;
+mod set_file_buffer;
+mod socket_get_status;
+mod socket_set_block;
+mod socket_set_blocking;
+mod socket_set_timeout;
+mod stream_register_wrapper;
 mod stream_set_chunk_size;
 mod stream_set_read_buffer;
 mod stream_set_timeout;
@@ -168,7 +177,6 @@ pub(in crate::interpreter) use flock::{eval_builtin_flock, eval_flock_result};
 pub(in crate::interpreter) use fsockopen::{
     eval_builtin_fsockopen_call, eval_fsockopen_with_error_result,
 };
-pub(in crate::interpreter) use stream_socket_client::eval_builtin_stream_socket_client_call;
 pub(in crate::interpreter) use stream_select::{
     eval_builtin_stream_select_call, eval_stream_select_result,
 };

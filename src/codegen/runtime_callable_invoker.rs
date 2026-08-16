@@ -20,12 +20,15 @@ use crate::codegen::callable_invoker_args::{
     emit_branch_if_mixed_arg_tag, emit_call_user_func_array_invalid_mixed_args_abort,
     INVOKER_ARG_REF_CELL_TAG,
 };
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
-use crate::codegen::{abi, emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed};
+use crate::codegen::{
+    abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
+    emit_box_runtime_payload_as_mixed,
+};
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SAVED_DEPTHS, TRY_HANDLER_SLOT_SIZE,
 };
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{FunctionSig, PhpType};
@@ -198,7 +201,7 @@ fn emit_runtime_callable_invoker_impl(
         &mut ctx,
         data,
     );
-    emit_box_current_value_as_mixed(emitter, &ret_ty.codegen_repr());
+    emit_boxed_invoker_return(emitter, &ret_ty);
     if catch_native_throws {
         emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     }
@@ -215,6 +218,42 @@ fn emit_runtime_callable_invoker_impl(
         abi::emit_frame_restore(emitter, frame_size);
         abi::emit_return(emitter);
     }
+}
+
+/// Boxes the callable target's return value into the invoker's uniform Mixed result.
+///
+/// OWNERSHIP — a `Str` return is already OWNED by the time it reaches here, so the Mixed cell
+/// TAKES it rather than copying it. `call_target_with_pushed_args` runs
+/// `restore_concat_offset_after_nested_call`, which unconditionally calls `__rt_str_persist` for a
+/// `Str` return type, and every path that produces `ret_ty` returns `sig.return_type` — the same
+/// value that persist was keyed on (`emit_loaded_indexed_array_callback_call`,
+/// `emit_loaded_assoc_array_callback_call`, and `emit_loaded_mixed_array_callback_call`, which only
+/// forwards to those two). So `ret_ty == Str` here implies a fresh heap copy is live in the string
+/// return registers, owned by nobody.
+///
+/// Boxing that through `emit_box_current_value_as_mixed` used the BORROWED contract:
+/// `__rt_mixed_from_value` persists a SECOND copy for the cell
+/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, `__rt_mixed_from_value_string`),
+/// leaving the first orphaned — one leaked heap block per invoked callable returning a string,
+/// which is what every closure / first-class-callable / `array_map` string-result call site was
+/// paying. `emit_box_current_owned_value_as_mixed` moves the pointer/length pair into a fresh cell
+/// instead.
+///
+/// This ELIDES AN ALLOCATION; it adds no release. The Mixed cell owned exactly one string payload
+/// before and owns exactly one now — the only change is WHICH copy it owns — so the number of
+/// frees `__rt_mixed_free_deep` performs is unchanged and no double free can be introduced.
+///
+/// Only `Str` is routed through the owning boxer ON PURPOSE. For a container or object return
+/// `emit_box_current_owned_value_as_mixed` would emit a decref of the original reference, and the
+/// invoker never took one — nothing persisted or retained a container on the way in, so releasing
+/// one here would free a reference the caller still holds.
+fn emit_boxed_invoker_return(emitter: &mut Emitter, ret_ty: &PhpType) {
+    let repr = ret_ty.codegen_repr();
+    if repr == PhpType::Str {
+        emit_box_current_owned_value_as_mixed(emitter, &PhpType::Str);
+        return;
+    }
+    emit_box_current_value_as_mixed(emitter, &repr);
 }
 
 /// Loads the descriptor entry slot from the first invoker argument into `call_reg`.
@@ -249,12 +288,10 @@ fn emit_invoker_exception_boundary_push(
             abi::store_at_offset(emitter, "x10", handler_base);
             abi::emit_load_symbol_to_reg(emitter, "x10", "_exc_call_frame_top", 0);
             abi::store_at_offset(emitter, "x10", handler_base - 8);
-            abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
-            abi::store_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::emit_load_symbol_to_reg(emitter, "x10", symbol, 0);
+                abi::store_at_offset(emitter, "x10", handler_base - offset);
+            }                                                                   // save every depth a throw would otherwise strand
             emitter.instruction(&format!("sub x10, x29, #{}", handler_base));   // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
@@ -269,11 +306,13 @@ fn emit_invoker_exception_boundary_push(
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base)); // save the previous native exception-handler head
             abi::emit_load_symbol_to_reg(emitter, "r10", "_exc_call_frame_top", 0);
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", handler_base - 8)); // preserve the caller activation frame across callable unwinding
-            abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!(
-                "mov QWORD PTR [rbp - {}], r10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // save diagnostic suppression depth for restoration
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::emit_load_symbol_to_reg(emitter, "r10", symbol, 0);
+                emitter.instruction(&format!(
+                    "mov QWORD PTR [rbp - {}], r10",
+                    handler_base - offset
+                ));
+            } // save every depth a throw would otherwise strand
             emitter.instruction(&format!("lea r10, [rbp - {}]", handler_base)); // compute the boundary handler record address
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!(
@@ -294,21 +333,21 @@ fn emit_invoker_exception_boundary_pop(emitter: &mut Emitter, handler_base: usiz
         Arch::AArch64 => {
             abi::load_at_offset(emitter, "x10", handler_base);
             abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
-            abi::load_at_offset(
-                emitter,
-                "x10",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET,
-            );
-            abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                abi::load_at_offset(emitter, "x10", handler_base - offset);
+                abi::emit_store_reg_to_symbol(emitter, "x10", symbol, 0);
+            }                                                                   // republish every depth saved on the way in
         }
         Arch::X86_64 => {
             emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", handler_base)); // reload the previous native exception-handler head
             abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
-            emitter.instruction(&format!(
-                "mov r10, QWORD PTR [rbp - {}]",
-                handler_base - TRY_HANDLER_DIAG_DEPTH_OFFSET
-            )); // reload the saved diagnostic suppression depth
-            abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
+            for (symbol, offset) in TRY_HANDLER_SAVED_DEPTHS {
+                emitter.instruction(&format!(
+                    "mov r10, QWORD PTR [rbp - {}]",
+                    handler_base - offset
+                ));
+                abi::emit_store_reg_to_symbol(emitter, "r10", symbol, 0);
+            } // republish every depth saved on the way in
         }
     }
 }
@@ -2511,6 +2550,7 @@ fn emit_call_user_func_array_missing_arg_abort(emitter: &mut Emitter, data: &mut
 mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
+    use crate::codegen_support::try_handlers::TRY_HANDLER_DIAG_DEPTH_OFFSET;
 
     /// Verifies expanded ARM64 invoker boundaries materialize far frame-slot addresses.
     #[test]
@@ -2532,6 +2572,16 @@ mod tests {
             INVOKER_BOUNDARY_BASE_OFFSET - TRY_HANDLER_DIAG_DEPTH_OFFSET,
         ] {
             assert!(output.contains(&format!("    sub x9, x29, #{}\n", offset)));
+        }
+        // The counters ABOVE the jmp_buf sit closer to the frame pointer and legitimately reach
+        // it through the near form, so the addressing mode is not what pins them — the symbol is.
+        // What must hold is that the boundary walks the WHOLE table the compiled `try` walks: a
+        // member saved at three of the four sites is exactly the leak the table exists to close.
+        for (symbol, _) in TRY_HANDLER_SAVED_DEPTHS {
+            assert!(
+                output.matches(symbol).count() >= 2,
+                "{symbol} must be both saved and republished by the invoker boundary"
+            );
         }
         assert!(output.contains("    str x10, [x9]\n"));
         assert!(output.contains("    ldr x10, [x9]\n"));

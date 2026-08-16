@@ -32,17 +32,6 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<PhpType, CompileError> {
-        let resolved;
-        let type_expr = if let Some(current_class) = self.current_class.as_deref() {
-            let parent = self
-                .classes
-                .get(current_class)
-                .and_then(|class_info| class_info.parent.as_deref());
-            resolved = type_expr.substitute_relative_class_types(current_class, parent);
-            &resolved
-        } else {
-            type_expr
-        };
         let ty = self.resolve_type_expr(type_expr, span)?;
         match ty {
             PhpType::Void => Err(CompileError::new(
@@ -71,13 +60,16 @@ impl Checker {
                 "never can only be used as a standalone return type",
             ));
         }
-        if let Some(current_class) = self.current_class.as_deref() {
-            let parent = self
-                .classes
-                .get(current_class)
-                .and_then(|class_info| class_info.parent.as_deref());
-            let resolved = type_expr.substitute_relative_class_types(current_class, parent);
-            return self.resolve_type_expr(&resolved, span);
+        if type_expr.contains_late_static() {
+            if let Some(current_class) = self.current_class.as_deref() {
+                let parent = self
+                    .classes
+                    .get(current_class)
+                    .and_then(|class_info| class_info.parent.as_deref());
+                let resolved =
+                    type_expr.substitute_relative_class_types(current_class, parent);
+                return self.resolve_type_expr(&resolved, span);
+            }
         }
         self.resolve_type_expr(type_expr, span)
     }
@@ -154,7 +146,7 @@ impl Checker {
         if Self::type_expr_contains_callable_pseudo_type(type_expr) {
             return Err(CompileError::new(
                 span,
-                &format!("{} cannot have type callable", context),
+                &format!("{} cannot use type callable", context),
             ));
         }
         Ok(ty)
@@ -225,7 +217,6 @@ impl Checker {
         }
         Ok(())
     }
-
 
     /// Validates that a default value expression is compatible with the declared type it is
     /// being assigned to. Checks using `require_compatible_arg_type`.
@@ -393,59 +384,49 @@ impl Checker {
         effective_sig
     }
 
-    /// Temporarily replaces callable-local checker state while running `f`.
-    ///
-    /// Active ref params, globals, statics, loop state, and return observations are scoped to the
-    /// callable and restored afterward. The returned vector contains each `return` type captured
-    /// at its actual flow-sensitive checking point.
+    /// Temporarily replaces the checker's active ref params, globals, and statics stacks with
+    /// the given values while running `f`. Saves and restores all state afterward to avoid
+    /// leaking context across nested checks.
     pub(crate) fn with_local_storage_context<T, F>(
         &mut self,
         ref_param_names: Vec<String>,
         f: F,
-    ) -> Result<(T, Vec<super::super::functions::ReturnInfo>), CompileError>
+    ) -> Result<T, CompileError>
     where
         F: FnOnce(&mut Self) -> Result<T, CompileError>,
     {
         let saved_ref_params = self.active_ref_params.clone();
-        let saved_declared_byref = self.declared_byref_param_locals.clone();
         let saved_globals = self.active_globals.clone();
         let saved_statics = self.active_statics.clone();
         let saved_foreach_keys = self.foreach_key_locals.clone();
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
-        let saved_in_callable_body = self.in_callable_body;
+        let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
-        // The declared set mirrors the seed exactly; `=&`-bind sites extend only
-        // `active_ref_params`, so this stays the "raw reference-address slots" set.
-        self.declared_byref_param_locals = self.active_ref_params.clone();
         self.active_globals.clear();
         self.active_statics.clear();
         self.foreach_key_locals.clear();
         self.eval_barrier_active = false;
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
-        self.in_callable_body = true;
-        self.active_return_info_scopes.push(Vec::new());
+        // A function/method/closure body is not the scope whose environment becomes
+        // `global_env`, so null-probe roots found here must not be deferred against it.
+        self.null_probe_scope_is_top_level = false;
 
         let result = f(self);
-        let return_infos = self
-            .active_return_info_scopes
-            .pop()
-            .expect("callable return observation scope must remain balanced");
 
         self.active_ref_params = saved_ref_params;
-        self.declared_byref_param_locals = saved_declared_byref;
         self.active_globals = saved_globals;
         self.active_statics = saved_statics;
         self.foreach_key_locals = saved_foreach_keys;
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
-        self.in_callable_body = saved_in_callable_body;
+        self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
 
-        result.map(|value| (value, return_infos))
+        result
     }
 }
 
@@ -457,22 +438,4 @@ fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
 /// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
 fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
-}
-
-impl Checker {
-        /// Returns true when a by-reference parameter needs boxed/nullable storage that the
-        /// caller variable's current type cannot provide. Passing a variable by reference is an
-        /// alias assignment: the callee may write any value the by-reference parameter permits,
-        /// so when the parameter is `mixed`/union/nullable and the caller variable is a plain
-        /// concrete scalar, the caller slot must be promoted to boxed storage before the call.
-        // Retained for the checker unit tests and pending re-integration after the
-        // origin/main merge; not reachable from the production checker paths yet.
-        #[allow(dead_code)]
-        pub(crate) fn by_ref_param_needs_storage_promotion(
-            &self,
-            param_ty: &PhpType,
-            var_ty: &PhpType,
-        ) -> bool {
-            requires_by_ref_boxed_storage(param_ty) && !supports_by_ref_boxed_storage(var_ty)
-        }
 }

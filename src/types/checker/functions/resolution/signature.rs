@@ -32,22 +32,6 @@ impl Checker {
         decl: &FnDecl,
         param_types: Vec<(String, PhpType)>,
     ) -> Result<PhpType, CompileError> {
-        // `param_types` may be a round-trip of a PREVIOUSLY resolved (and already
-        // `ensure_variadic_for_func_args`-mutated) signature — e.g. via
-        // `respecialize_resolved_function_params_if_needed`, which clones
-        // `stored_sig.params` (already carrying the synthetic
-        // `func_args_scan::SYNTHETIC_VARIADIC_NAME` slot) before calling back in here.
-        // Strip it before rebuilding: this function always re-derives `variadic` from
-        // `decl.variadic` (the real source declaration) below and re-applies
-        // `ensure_variadic_for_func_args` itself, so carrying the old synthetic slot
-        // through would leave it un-marked-variadic (a stray extra required param) or,
-        // on the next call, duplicated.
-        let param_types: Vec<(String, PhpType)> = param_types
-            .into_iter()
-            .filter(|(pname, _)| {
-                pname != super::super::super::func_args_scan::SYNTHETIC_VARIADIC_NAME
-            })
-            .collect();
         let mut local_env: TypeEnv = HashMap::new();
         for (pname, pty) in &param_types {
             local_env.insert(pname.clone(), pty.clone());
@@ -77,18 +61,20 @@ impl Checker {
             })
             .map(|(_, (pname, _))| pname.clone())
             .collect();
-        // Start this function's body check with an EMPTY slate for every
-        // variable-name-keyed callable side table (`callable_sigs`,
-        // `closure_return_types`, `callable_param_names`, and friends) — mirroring
-        // the fresh, per-function `local_env`. Without this, a closure assigned to
-        // an unrelated local variable elsewhere (e.g. another function's own
-        // `$callback`) would still be visible here purely because it shares a
-        // variable name; see `Checker::enter_callable_var_scope` for the confirmed
-        // cross-body collision this prevents.
-        let saved_callable_var_scope = self.enter_callable_var_scope();
+        let saved_callable_param_names = self.callable_param_names.clone();
         for pname in &declared_callable_param_names {
             self.callable_param_names.insert(pname.clone());
         }
+        let saved_callable_metadata: Vec<_> = callable_param_names
+            .iter()
+            .map(|pname| {
+                (
+                    pname.clone(),
+                    self.callable_sigs.get(pname).cloned(),
+                    self.closure_return_types.get(pname).cloned(),
+                )
+            })
+            .collect();
         for pname in &callable_param_names {
             if let Some(sig) = self
                 .callable_param_sigs
@@ -98,9 +84,10 @@ impl Checker {
                 self.closure_return_types
                     .insert(pname.clone(), sig.return_type.clone());
                 self.callable_sigs.insert(pname.clone(), sig);
+            } else {
+                self.closure_return_types.remove(pname);
+                self.callable_sigs.remove(pname);
             }
-            // No cached signature yet: leave the param absent from `callable_sigs`
-            // (pre-specialization fallback — validated only by count/by-ref).
         }
 
         let provisional_sig = FunctionSig {
@@ -113,7 +100,7 @@ impl Checker {
                 .collect(),
             param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
-            return_type: PhpType::Int,
+            return_type: self.provisional_return_type(decl),
             declared_return: decl.return_type.is_some(),
             by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
@@ -126,13 +113,10 @@ impl Checker {
                 .collect(),
             variadic: decl.variadic.clone(),
         };
-        let mut provisional_sig = provisional_sig;
-        if super::super::super::func_args_scan::body_calls_func_args_intrinsic(&decl.body) {
-            super::super::super::func_args_scan::ensure_variadic_for_func_args(&mut provisional_sig);
-        }
         self.functions.insert(name.to_string(), provisional_sig);
 
         let mut return_type = PhpType::Void;
+        let mut all_return_infos = Vec::new();
         let mut callable_return_sigs = Vec::new();
         let mut callable_array_return_sigs = Vec::new();
         let mut errors = Vec::new();
@@ -155,6 +139,7 @@ impl Checker {
                 if let Err(error) = checker.check_stmt(stmt, &mut local_env) {
                     errors.extend(error.flatten());
                 }
+                checker.collect_return_infos(stmt, &local_env, &mut all_return_infos);
                 checker.collect_return_callable_sigs(stmt, &local_env, &mut callable_return_sigs);
                 checker.collect_return_callable_array_sigs(
                     stmt,
@@ -167,19 +152,26 @@ impl Checker {
         self.resolving_functions.remove(&function_key);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
-        // Persist any specialization the body produced for its OWN declared callable
-        // params into the cross-call cache BEFORE restoring the caller's snapshot —
-        // done unconditionally (even if `body_check_result`/`errors` below is an
-        // error) so a partially-checked body cannot leave the caller's own callable
-        // side tables corrupted.
+        self.callable_param_names = saved_callable_param_names;
+        body_check_result?;
         for pname in &callable_param_names {
             if let Some(sig) = self.callable_sigs.get(pname).cloned() {
                 self.callable_param_sigs
                     .insert((function_key.clone(), pname.clone()), sig);
             }
         }
-        self.exit_callable_var_scope(saved_callable_var_scope);
-        let (_, all_return_infos) = body_check_result?;
+        for (pname, saved_sig, saved_return) in saved_callable_metadata {
+            if let Some(sig) = saved_sig {
+                self.callable_sigs.insert(pname.clone(), sig);
+            } else {
+                self.callable_sigs.remove(&pname);
+            }
+            if let Some(return_ty) = saved_return {
+                self.closure_return_types.insert(pname, return_ty);
+            } else {
+                self.closure_return_types.remove(&pname);
+            }
+        }
         if !errors.is_empty() {
             return Err(CompileError::from_many(errors));
         }
@@ -247,7 +239,7 @@ impl Checker {
             }
         }
 
-        let mut sig = FunctionSig {
+        let sig = FunctionSig {
             params: param_types,
             param_type_exprs: decl
                 .param_types
@@ -272,9 +264,6 @@ impl Checker {
                 &decl.attributes,
             ),
         };
-        if super::super::super::func_args_scan::body_calls_func_args_intrinsic(&decl.body) {
-            super::super::super::func_args_scan::ensure_variadic_for_func_args(&mut sig);
-        }
         self.functions.insert(name.to_string(), sig);
         if return_type == PhpType::Callable {
             if let Some(callable_sig) = matching_callable_sig(&callable_return_sigs) {
@@ -300,12 +289,44 @@ impl Checker {
         Ok(return_type)
     }
 
+    /// Picks the return type for the *provisional* signature published before a free
+    /// function's body is walked.
+    ///
+    /// The provisional signature exists so that a call to the function from inside its own
+    /// body — direct recursion, or a mutual-recursion cycle re-entering a function already
+    /// on the resolution stack — can be typed at all. Whatever this returns is what such a
+    /// self-call's expression type will be, since `resolving_functions` suppresses
+    /// re-specialization for in-flight functions (see `specialization.rs`).
+    ///
+    /// Resolution order mirrors the authoritative pass that runs after the body walk:
+    /// - a body containing `yield` always produces a `Generator`, whatever the annotation says;
+    /// - otherwise an explicit return hint is trusted verbatim;
+    /// - an unhinted function keeps the historical `Int` placeholder. That placeholder is not
+    ///   observable for a function with a base case, because the final unhinted return type is
+    ///   the `wider_type` merge of every `return` and the base case's real type absorbs it. It
+    ///   only survives for a function whose *only* return is the recursive call, which is
+    ///   unconditional infinite recursion and cannot produce a value anyway.
+    ///
+    /// A hint that fails to resolve (unknown class, misplaced `never`) falls back to the
+    /// placeholder rather than raising here: the authoritative pass resolves the same hint
+    /// again and reports that error with its original span and ordering.
+    fn provisional_return_type(&self, decl: &FnDecl) -> PhpType {
+        if super::super::super::yield_validation::body_contains_yield(&decl.body) {
+            return PhpType::Object("Generator".to_string());
+        }
+        let Some(type_ann) = decl.return_type.as_ref() else {
+            return PhpType::Int;
+        };
+        self.resolve_declared_return_type_hint(type_ann, decl.span, "")
+            .unwrap_or(PhpType::Int)
+    }
+
     /// Returns true when a declared generator return annotation accepts
     /// the actual `Generator` object returned when the body contains `yield`.
     ///
-    /// Exposed as `pub(crate)` so the method-return-type pass
-    /// (`crate::types::checker::method_pass`) can share the same generator-hint
-    /// acceptance rule as this function path instead of re-deriving it.
+    /// Shared with the method pass (`crate::types::checker::method_pass`) so a
+    /// generator method's hint is validated by exactly the same rule as a
+    /// generator function's.
     pub(crate) fn generator_return_type_accepts(&self, declared_ret: &PhpType) -> bool {
         if matches!(declared_ret, PhpType::Object(name) if name == "Traversable") {
             return true;

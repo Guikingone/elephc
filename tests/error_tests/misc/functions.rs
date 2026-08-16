@@ -77,69 +77,6 @@ fn test_error_closure_ref_param_requires_variable() {
     );
 }
 
-/// Verifies that passing a non-lvalue literal to a by-reference function parameter is still
-/// rejected. Only `$var` and non-nullsafe instance property fetches are accepted by reference.
-#[test]
-fn test_error_function_ref_param_rejects_literal() {
-    expect_error(
-        "<?php function bump(int &$p) { $p = $p + 1; } bump(1);",
-        "Function 'bump' parameter $p must be passed a variable",
-    );
-}
-
-/// Verifies that an explicit named `null` remains invalid for a by-reference parameter even when
-/// the declaration default is `null`; only an omitted parameter may consume that default.
-#[test]
-fn test_error_named_ref_param_rejects_explicit_default_value() {
-    expect_error(
-        "<?php
-        class Target {
-            static function parseName(
-                string $value,
-                ?string &$ignored = null,
-                ?string &$parsedName = null
-            ): string {
-                return $value;
-            }
-        }
-        $parsedName = '';
-        Target::parseName('binding', ignored: null, parsedName: $parsedName);",
-        "Static method Target::parseName parameter $ignored must be passed a variable",
-    );
-}
-
-/// Verifies that an array-element argument (`$arr['k']`) is still rejected for a by-reference
-/// parameter. The by-reference property relaxation is scoped to non-nullsafe instance property
-/// fetches only; array elements remain future work.
-#[test]
-fn test_error_function_ref_param_rejects_array_element() {
-    expect_error(
-        "<?php function f(array &$p) { $p[] = 1; } $arr = ['k' => [1]]; f($arr['k']);",
-        "Function 'f' parameter $p must be passed a variable",
-    );
-}
-
-/// Verifies that a static-property argument (`C::$p`) is still rejected for a by-reference
-/// parameter. The relaxation accepts instance properties only, never static properties.
-#[test]
-fn test_error_function_ref_param_rejects_static_property() {
-    expect_error(
-        "<?php class C { public static array $p = []; } function f(array &$p) { $p[] = 1; } f(C::$p);",
-        "Function 'f' parameter $p must be passed a variable",
-    );
-}
-
-/// Verifies that a nullsafe property fetch (`$o?->p`) is still rejected for a by-reference
-/// parameter. Copy-in/copy-out is only sound for a definitely-present instance property, so the
-/// nullsafe form stays rejected.
-#[test]
-fn test_error_function_ref_param_rejects_nullsafe_property() {
-    expect_error(
-        "<?php class C { public array $p = []; } function f(array &$p) { $p[] = 1; } $o = new C(); f($o?->p);",
-        "Function 'f' parameter $p must be passed a variable",
-    );
-}
-
 /// Verifies that a typed parameter rejects a mismatched argument type at the call site.
 #[test]
 fn test_error_function_typed_param_rejects_wrong_argument() {
@@ -177,14 +114,12 @@ fn test_error_generic_object_parameter_rejects_array() {
 }
 
 /// Verifies an unqualified `Closure` hint inside a namespace remains namespace-relative
-/// instead of silently referring to PHP's global `\Closure` class. The unresolved
-/// namespace-relative name degrades through the absent-class tolerance (a warning naming
-/// `App\Closure`), proving it was not rewritten to the global class.
+/// instead of silently referring to PHP's global `\Closure` class.
 #[test]
 fn test_error_namespaced_unqualified_closure_does_not_resolve_globally() {
-    expect_warning(
+    expect_error(
         "<?php namespace App; function consume(Closure $callback): void {}",
-        "unknown class 'App\\Closure' treated as an absent optional dependency",
+        "Unknown type: App\\Closure",
     );
 }
 
@@ -256,19 +191,6 @@ fn test_error_call_user_func_array_unknown_string_callback() {
     expect_error(
         "<?php $args = [1, 2]; call_user_func_array(\"does_not_exist\", $args);",
         "Undefined function: does_not_exist",
-    );
-}
-
-/// Pins the LOUD diagnostic for the array internal-pointer iteration gate
-/// (symfony/filesystem Path.php:629, `for (next($paths); null !== key($paths); ...)`):
-/// the `for` clauses now parse arbitrary expressions, but `next()` (and `prev()`) are not
-/// implemented builtins, so the program fails at type-check instead of iterating silently
-/// wrong. Un-pin this when next()/key() internal-pointer semantics land.
-#[test]
-fn test_error_for_clause_next_internal_pointer_gate_stays_loud() {
-    expect_error(
-        "<?php $paths = [\"a\", \"b\"]; for (next($paths); null !== key($paths); next($paths)) { echo \"x\"; }",
-        "Undefined function: next",
     );
 }
 
@@ -350,6 +272,95 @@ fn test_error_named_arguments_reject_spread_after_named() {
     );
 }
 
+/// Verifies that a *static string-keyed* unpack after a named argument is
+/// rejected as well. PHP raises "Cannot use argument unpacking after named
+/// arguments" while compiling the call, so the shape is illegal even though the
+/// unpacked keys are statically known and would otherwise be rewritten into
+/// named arguments before planning.
+#[test]
+fn test_error_named_arguments_reject_static_assoc_spread_after_named() {
+    expect_error(
+        "<?php function greet($name, $age = 0) { echo $name; } greet(name: \"Alice\", ...[\"age\" => 30]);",
+        "Function 'greet' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches instance method calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_method() {
+    expect_error(
+        "<?php class C { function m($a, $b = 0) { echo $a; } } (new C)->m(a: 1, ...[\"b\" => 2]);",
+        "Method C::m cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches static method calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_static_method() {
+    expect_error(
+        "<?php class C { static function m($a, $b = 0) { echo $a; } } C::m(a: 1, ...[\"b\" => 2]);",
+        "Static method C::m cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches constructor calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_constructor() {
+    expect_error(
+        "<?php class C { function __construct($a, $b = 0) { echo $a; } } new C(a: 1, ...[\"b\" => 2]);",
+        "Constructor 'C::__construct' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches builtin calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_builtin() {
+    expect_error(
+        "<?php echo str_pad(string: \"x\", ...[\"length\" => 3]);",
+        "Builtin 'str_pad' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches closure calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_closure() {
+    expect_error(
+        "<?php $f = function ($a, $b = 0) { echo $a; }; $f(a: 1, ...[\"b\" => 2]);",
+        "callable $f cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches first-class callables.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_first_class_callable() {
+    expect_error(
+        "<?php function f($a, $b = 0) { echo $a; } $c = f(...); $c(a: 1, ...[\"b\" => 2]);",
+        "first-class callable cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule still applies when the callee is a
+/// string callable resolved at run time, where no signature is available to plan
+/// against. PHP rejects the shape syntactically, so the callee being unknown is
+/// not an excuse to accept it.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_string_callable() {
+    expect_error(
+        "<?php function f($a, $b = 0) { echo $a; } $c = \"f\"; $c(a: 1, ...[\"b\" => 2]);",
+        "callable $c cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule still applies to `new $class(...)`,
+/// where the constructor is not resolvable at compile time.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_dynamic_constructor() {
+    expect_error(
+        "<?php class C { function __construct($a, $b = 0) { echo $a; } } $k = \"C\"; new $k(a: 1, ...[\"b\" => 2]);",
+        "Dynamic constructor cannot use argument unpacking after named arguments",
+    );
+}
+
 /// Verifies that even when a spread provides positional arguments, named arguments
 /// are still processed, and a missing required parameter is still reported.
 #[test]
@@ -376,52 +387,53 @@ fn test_error_named_arguments_reject_unknown_extern_parameter() {
     );
 }
 
-/// Verifies that a function with a declared return type that returns a NON-coercible mismatched
-/// type (without being called) produces a return type mismatch error. An `array` return is not
-/// weak-coercible to `string` (unlike `int`/`float`/Stringable), so it stays loud.
+/// Verifies that a function with a declared return type that returns a mismatched
+/// type (without being called) produces a return type mismatch error.
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_without_call() {
     expect_error(
-        "<?php function foo(): string { return [1]; }",
-        "Function 'foo' return type expects Str, got Array",
+        "<?php function foo(): string { return 1; }",
+        "Function 'foo' return type expects Str, got Int",
     );
 }
 
-/// Verifies that a function with a declared return type that is violated by a NON-coercible return
-/// when invoked via first-class callable syntax produces the expected error.
+/// Verifies that a function with a declared return type that is violated when
+/// invoked via first-class callable syntax produces the expected error.
 #[test]
 fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_callable() {
     expect_error(
-        "<?php function foo(): string { return [1]; } $f = foo(...);",
-        "Function 'foo' return type expects Str, got Array",
+        "<?php function foo(): string { return 1; } $f = foo(...);",
+        "Function 'foo' return type expects Str, got Int",
     );
 }
 
-/// A value-returning body that can reach its closing brace is ACCEPTED, because PHP accepts it:
-/// `php -n -l` reports no syntax error, and only the call that actually falls off the end raises
-/// a catchable `TypeError`. `crate::return_type_guard` materializes that throw, so these compile
-/// and fail at the same moment PHP fails.
-///
-/// These three used to be `expect_error` on "must return a value on every path". That diagnostic
-/// refused programs PHP runs — `symfony/cache`'s `TagAwareAdapter::getItem()` returns only from
-/// inside a `foreach` — so the rule was removed rather than kept. See
-/// `codegen::oop::return_type_guard` for the runtime side.
+/// Verifies that a function with a declared return type that does not return a
+/// value on all paths (bare function body) produces an error.
 #[test]
-fn test_function_declared_return_type_allows_fallthrough_body() {
-    expect_ok("<?php function foo(): int { }");
+fn test_error_function_declared_return_type_requires_return_value() {
+    expect_error(
+        "<?php function foo(): int { }",
+        "Function 'foo' must return a value on every path",
+    );
 }
 
-/// A value-returning function that returns on only SOME paths compiles, as in PHP.
+/// Verifies that a function with a declared return type that returns a value on
+/// some paths but not all (e.g., inside an `if` without an `else`) produces an error.
 #[test]
-fn test_function_declared_return_type_allows_partial_fallthrough() {
-    expect_ok("<?php function foo(bool $ok): int { if ($ok) { return 1; } }");
+fn test_error_function_declared_return_type_rejects_partial_fallthrough() {
+    expect_error(
+        "<?php function foo(bool $ok): int { if ($ok) { return 1; } }",
+        "Function 'foo' must return a value on every path",
+    );
 }
 
-/// A `switch` arm that leaves via `break` without returning compiles, as in PHP.
+/// Verifies that a function with a declared return type that can exit via a switch
+/// `break` without returning a value produces an error.
 #[test]
-fn test_function_declared_return_type_allows_switch_break_path() {
-    expect_ok(
+fn test_error_function_declared_return_type_rejects_switch_break_path() {
+    expect_error(
         "<?php function foo(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }",
+        "Function 'foo' must return a value on every path",
     );
 }
 
@@ -435,34 +447,14 @@ fn test_error_function_declared_return_type_rejects_bare_return() {
     );
 }
 
-/// A METHOD whose body can reach its closing brace compiles too, matching PHP (`php -n -l`
-/// accepts it; the failure is a runtime `TypeError`). Same behaviour change as the free
-/// functions above.
+/// Verifies that a method with a declared return type that does not return a
+/// value on all paths produces an error.
 #[test]
-fn test_method_declared_return_type_allows_fallthrough_body() {
-    expect_ok("<?php class Box { public function value(): int { } }");
-}
-
-/// Verifies that a GENERATOR method (body contains `yield`) whose declared
-/// return hint does NOT accept a `Generator` still errors with a return-type
-/// mismatch — the method-pass generator guard mirrors the free-function path.
-/// The diagnostic must be the Generator/return-type mismatch, NOT "must return
-/// a value on every path" (which must no longer fire for a generator body).
-#[test]
-fn test_error_generator_method_non_generator_return_hint_rejected() {
+fn test_error_method_declared_return_type_requires_return_value() {
     expect_error(
-        "<?php class C { public function g(): int { yield 1; } }",
-        "Method 'C::g' return type expects Int",
+        "<?php class Box { public function value(): int { } }",
+        "Method 'Box::value' must return a value on every path",
     );
-}
-
-/// The generator guard's sibling case: an ORDINARY method (no `yield`) that never returns
-/// compiles, and its declared return type is enforced at RUNTIME. PHP behaves identically —
-/// the distinction the generator guard protects is that a `yield`-bodied function raises
-/// nothing at all when it runs off the end, whereas this one raises a `TypeError`.
-#[test]
-fn test_ordinary_method_missing_return_is_a_runtime_error_not_a_compile_error() {
-    expect_ok("<?php class C { public function g(): string { $x = 1; } }");
 }
 
 /// Verifies that a typed closure parameter rejects a mismatched argument type
@@ -540,16 +532,13 @@ fn test_error_dynamic_method_call_rejects_named_arguments() {
     );
 }
 
-/// Verifies the gradual-typing model accepts passing a plain `int` variable to a nullable
-/// by-reference parameter (`?int &$x`): this is valid PHP (the callee may write null, after which
-/// the caller variable is null). The caller variable is promoted to boxed/nullable storage rather
-/// than the call being rejected for storage-mismatch.
+/// Verifies that a nullable by-reference parameter (e.g., `?int &$x`) requires
+/// boxed storage (mixed/union/nullable) when passed by reference.
 #[test]
-fn test_nullable_by_ref_parameter_promotes_caller_storage() {
-    assert!(
-        check_source("<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);")
-            .is_ok(),
-        "passing an int variable to a ?int by-ref parameter is valid PHP and should promote it",
+fn test_error_nullable_by_ref_parameter_requires_boxed_storage() {
+    expect_error(
+        "<?php function bump(?int &$x) { $x = null; } $value = 1; bump($value);",
+        "requires a variable with mixed/union/nullable storage when passed by reference",
     );
 }
 
@@ -574,28 +563,6 @@ fn test_error_static_arrow_closure_uses_this() {
     );
 }
 
-/// A `: string` function with NO return statement must not report a spurious "got Int" — the
-/// unsound `Int`-vs-`Str` mismatch the `Void` no-return seed was introduced to prevent. Accepting
-/// the source proves that: any surviving return-type mismatch would fail this. The declared type
-/// is now enforced at runtime instead (see `codegen::arg_return_coercions`), matching PHP, which
-/// compiles this and raises a `TypeError` only on a call that falls off the end.
-#[test]
-fn test_string_function_no_return_does_not_report_got_int() {
-    expect_ok("<?php function foo(): string { }");
-}
-
-/// Verifies that a `: int` function returning a string literal still produces the
-/// genuine "expects Int, got Str" error. Guards that the real mismatch path still
-/// fires after the unknown-default edits (the changed defaults only affect unknown
-/// constructs, not the well-typed `Str`-from-string-literal inference).
-#[test]
-fn test_error_int_function_returning_string_still_reports_got_str() {
-    expect_error(
-        "<?php function foo(): int { return 'x'; }",
-        "Function 'foo' return type expects Int, got Str",
-    );
-}
-
 /// Verifies that `isset($this->prop)` in a static closure is still rejected
 /// because `$this->prop` is a real property access, not a bare existence probe
 /// (issue #359 regression guard).
@@ -617,12 +584,12 @@ fn test_error_by_value_self_capture_still_undefined() {
     );
 }
 
-/// Verifies that a by-reference capture (`use(&$h)`) of a variable that does not yet exist in
-/// the enclosing scope is ACCEPTED: PHP auto-vivifies the parent binding to null and binds it
-/// into the closure by reference, never warning. (This corrects the earlier issue #382 guard,
-/// which over-strictly rejected the shape; by-value `use($f)` of an undefined variable still
-/// errors — see `test_error_by_value_self_capture_still_undefined`.)
+/// Verifies that a by-ref capture of a variable that is NOT the assignment
+/// target is still rejected as undefined (issue #382 guard).
 #[test]
-fn test_by_ref_capture_of_undefined_auto_vivifies() {
-    expect_ok("<?php $g = function() use(&$h) { return $h; };");
+fn test_error_by_ref_capture_not_assignment_target_still_undefined() {
+    expect_error(
+        "<?php $g = function() use(&$h) { return $h; };",
+        "Undefined variable in use()",
+    );
 }

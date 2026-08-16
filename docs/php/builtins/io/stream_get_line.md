@@ -2,13 +2,13 @@
 title: "stream_get_line()"
 description: "Gets line from stream resource up to a given delimiter."
 sidebar:
-  order: 222
+  order: 240
 ---
 
 ## stream_get_line()
 
 ```php
-function stream_get_line(resource $stream, int $length, string $ending = ''): string
+function stream_get_line(resource $stream, int $length, string $ending = ''): mixed
 ```
 
 Gets line from stream resource up to a given delimiter.
@@ -18,7 +18,7 @@ Gets line from stream resource up to a given delimiter.
 - `$length` (`int`)
 - `$ending` (`string`), default `''`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 
@@ -26,12 +26,6 @@ Gets line from stream resource up to a given delimiter.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_get_line.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

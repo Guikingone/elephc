@@ -1,7 +1,6 @@
 //! Purpose:
-//! Defines PHP stream / I/O-adjacent constants exposed as integer constants.
-//! Single source of truth for `STREAM_*`, `PSFS_*`, `FILE_*`, `FILEINFO_*`, output-buffer,
-//! INI-scanner, and `GLOB_*` values.
+//! Defines PHP stream / stream-adjacent constants exposed as integer constants.
+//! Single source of truth for `STREAM_*`, `PSFS_*`, `FILE_*`, and `GLOB_*` values.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` when registering predefined constants.
@@ -14,34 +13,86 @@
 //!   registered elsewhere (and `FNM_*` is target-sensitive). `STREAM_PF_INET6`
 //!   is target-divergent (AF_INET6: 30 on macOS, 10 on Linux) and is registered
 //!   target-sensitively when the socket layer lands.
-//! - `GLOB_ERR`/`GLOB_MARK`/`GLOB_NOCHECK`/`GLOB_NOSORT`/`GLOB_BRACE`/
-//!   `GLOB_NOESCAPE` are native libc `glob()` bit flags forwarded straight into
-//!   the `glob()` syscall wrapper — NOT POSIX-portable (contrary to a prior
-//!   comment here): BSD/Darwin (macOS) and glibc (Linux) assign different bit
-//!   positions to the same flag name. They live in `GLOB_PLATFORM_CONSTANTS`
-//!   below, mirroring `crate::types::pcntl_constants::PCNTL_PLATFORM_SIGNALS`.
-//!   `GLOB_ONLYDIR` is the one exception: PHP defines it as its OWN portable
-//!   sentinel (`1 << 30`) on every platform — libc's native `GLOB_ONLYDIR` hint
-//!   (where one exists) is documented as unreliable, so PHP (and elephc) always
-//!   strip the bit before calling `glob()` and post-filter matches with `stat()`
-//!   instead. That is why `GLOB_ONLYDIR` stays in the flat, target-invariant
-//!   `STREAM_INT_CONSTANTS` table below.
+//! - The configured wrapper/transport/filter slices are shared by lowering and
+//!   Gate 0 compliance export so advertised capabilities cannot drift silently.
+
+/// The wrappers `stream_get_wrappers()` advertises, in php-src's own
+/// registration order (measured on php 8.5.6).
+///
+/// `zip` is last, exactly where php-src registers it. It is advertised only
+/// because `fopen("zip://archive.zip#entry")` and `file_get_contents()` now
+/// really read the entry through the elephc-phar bridge — advertising a scheme
+/// `fopen()` cannot open would move the lie rather than remove it.
+pub(crate) const STREAM_WRAPPERS: &[&str] = &[
+    "https",
+    "ftps",
+    "compress.zlib",
+    "compress.bzip2",
+    "php",
+    "file",
+    "glob",
+    "data",
+    "http",
+    "ftp",
+    "phar",
+    "zip",
+];
+
+/// The transports `stream_get_transports()` advertises, in php-src's own order.
+///
+/// `sslv2` and `sslv3` are deliberately absent: PHP 8.5.6 does not list them, the
+/// protocols are dead, and advertising a transport tells a caller it may open one.
+pub(crate) const STREAM_TRANSPORTS: &[&str] = &[
+    "tcp",
+    "udp",
+    "unix",
+    "udg",
+    "ssl",
+    "tls",
+    "tlsv1.0",
+    "tlsv1.1",
+    "tlsv1.2",
+    "tlsv1.3",
+];
+
+/// The filters `stream_get_filters()` advertises, in php-src's own order
+/// (measured on php 8.5.6).
+///
+/// php publishes filter FAMILIES, not concrete names: `zlib.*` stands for
+/// `zlib.deflate`/`zlib.inflate`, `bzip2.*` for the bzip2 pair, and `convert.*`
+/// for the base64 and quoted-printable pairs. `string.strip_tags` is absent
+/// because php removed that filter in 8.0.
+pub(crate) const STREAM_FILTERS: &[&str] = &[
+    "zlib.*",
+    "bzip2.*",
+    "convert.iconv.*",
+    "string.rot13",
+    "string.toupper",
+    "string.tolower",
+    "convert.*",
+    "consumed",
+    "dechunk",
+];
+
+/// `STREAM_SERVER_BIND`: give the socket its address.
+pub(crate) const STREAM_SERVER_BIND: i64 = 4;
+
+/// `STREAM_SERVER_LISTEN`: also make it a listening socket, which only a stream transport accepts.
+/// `udp://` and `udg://` carry datagrams, so PHP fails a server asked for this on either of them.
+pub(crate) const STREAM_SERVER_LISTEN: i64 = 8;
+
+/// What `stream_socket_server()` uses when the caller omits `$flags`.
+pub(crate) const STREAM_SERVER_DEFAULT_FLAGS: i64 = STREAM_SERVER_BIND | STREAM_SERVER_LISTEN;
 
 pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
-    // Core I/O-adjacent extension flags.
-    ("FILEINFO_MIME_TYPE", 16),
-    ("INI_SCANNER_NORMAL", 0),
-    ("INI_SCANNER_RAW", 1),
-    ("INI_SCANNER_TYPED", 2),
-    ("PHP_OUTPUT_HANDLER_CLEANABLE", 16),
-    ("PHP_OUTPUT_HANDLER_FLUSHABLE", 32),
-    ("PHP_OUTPUT_HANDLER_REMOVABLE", 64),
-    // Client / server connection flags.
+    // Client / server connection flags. php-src orders the client bits
+    // PERSISTENT, ASYNC_CONNECT, CONNECT (ext/standard/file.stub.php:126-140,
+    // measured: `php -n -r 'var_dump(STREAM_CLIENT_CONNECT);'` = 4).
     ("STREAM_CLIENT_PERSISTENT", 1),
     ("STREAM_CLIENT_ASYNC_CONNECT", 2),
     ("STREAM_CLIENT_CONNECT", 4),
-    ("STREAM_SERVER_BIND", 4),
-    ("STREAM_SERVER_LISTEN", 8),
+    ("STREAM_SERVER_BIND", STREAM_SERVER_BIND),
+    ("STREAM_SERVER_LISTEN", STREAM_SERVER_LISTEN),
     // Shutdown directions for stream_socket_shutdown().
     ("STREAM_SHUT_RD", 0),
     ("STREAM_SHUT_WR", 1),
@@ -144,37 +195,26 @@ pub(crate) const STREAM_INT_CONSTANTS: &[(&str, i64)] = &[
     ("FILE_SKIP_EMPTY_LINES", 4),
     ("FILE_APPEND", 8),
     ("FILE_NO_DEFAULT_CONTEXT", 16),
-    // glob() ONLYDIR is PHP's own portable sentinel (elephc post-filters with
-    // stat() instead of relying on libc's unreliable native ONLYDIR hint) — see
-    // the module doc for why this one glob() flag is NOT in `GLOB_PLATFORM_CONSTANTS`.
-    ("GLOB_ONLYDIR", 1073741824),
-    // scandir() sort orders (php-verified, target-invariant — these are PHP's
-    // own enum values, not forwarded to any libc call).
+    // scandir() sorting orders.
     ("SCANDIR_SORT_ASCENDING", 0),
     ("SCANDIR_SORT_DESCENDING", 1),
     ("SCANDIR_SORT_NONE", 2),
-];
-
-/// `(name, macos_value, linux_value)` for `glob()` bit flags forwarded directly
-/// into libc `glob()`. BSD/Darwin (macOS) and glibc (Linux) `<glob.h>` assign
-/// different bit positions to the same flag names, so these values differ by
-/// compile target (selected from the `Platform` the same way as
-/// `PHP_RUNTIME_PLATFORM_CONSTANTS`, not `cfg(target_os)`, since elephc
-/// cross-compiles).
-///
-/// macOS values php-verified locally (`php -n -r 'echo GLOB_MARK,",",GLOB_NOSORT,",",GLOB_BRACE;'`
-/// → `8,32,128`) and cross-checked against Darwin's `<glob.h>`. Linux values are
-/// glibc's well-established, decades-stable `<glob.h>` bit positions
-/// (`GLOB_ERR=1<<0`, `GLOB_MARK=1<<1`, `GLOB_NOSORT=1<<2`, `GLOB_NOCHECK=1<<4`,
-/// `GLOB_NOESCAPE=1<<6`, `GLOB_BRACE=1<<10`, a GNU extension supported by both
-/// glibc targets elephc ships — `linux-x86_64` and `linux-aarch64`).
-pub(crate) const GLOB_PLATFORM_CONSTANTS: &[(&str, i64, i64)] = &[
-    ("GLOB_ERR", 4, 1),
-    ("GLOB_MARK", 8, 2),
-    ("GLOB_NOSORT", 32, 4),
-    ("GLOB_NOCHECK", 16, 16),
-    ("GLOB_NOESCAPE", 4096, 64),
-    ("GLOB_BRACE", 128, 1024),
+    // seek() whence constants (also used by fseek).
+    ("SEEK_SET", 0),
+    ("SEEK_CUR", 1),
+    ("SEEK_END", 2),
+    // STREAM_FROM_START / _CUR / _END are php-src *internal* whence names, not
+    // PHP constants: `php -n -r 'var_dump(defined("STREAM_FROM_START"));'` is
+    // false. Declaring them let a program name a constant php does not have and
+    // still compile. Same for STREAM_META_MODIFIED and STREAM_OPTION_CHUNK_SIZE.
+    // glob() flags (POSIX-portable values).
+    ("GLOB_ERR", 4),
+    ("GLOB_MARK", 8),
+    ("GLOB_NOCHECK", 16),
+    ("GLOB_NOSORT", 32),
+    ("GLOB_BRACE", 128),
+    ("GLOB_NOESCAPE", 4096),
+    ("GLOB_ONLYDIR", 1073741824),
 ];
 
 #[cfg(test)]
@@ -191,33 +231,88 @@ mod tests {
         assert_eq!(entry.1, 3);
     }
 
-    /// Verifies the stream constant invariant for stream client connect is four.
+    /// Verifies the three `STREAM_CLIENT_*` bits carry php-src's values.
+    ///
+    /// This test used to read `stream_client_connect_is_one` and assert `1`,
+    /// pinning a permutation: php orders the bits PERSISTENT, ASYNC_CONNECT,
+    /// CONNECT, so `STREAM_CLIENT_CONNECT` is 4. Measured on php 8.5.6 —
+    /// `var_dump(STREAM_CLIENT_CONNECT, STREAM_CLIENT_PERSISTENT,
+    /// STREAM_CLIENT_ASYNC_CONNECT)` = `int(4) int(1) int(2)` — and confirmed
+    /// by the frozen oracle in `tests/php_oracle/manifests/streams`.
     #[test]
-    fn stream_client_connect_is_four() {
-        let entry = STREAM_INT_CONSTANTS
-            .iter()
-            .find(|(name, _)| *name == "STREAM_CLIENT_CONNECT")
-            .expect("STREAM_CLIENT_CONNECT defined");
-        assert_eq!(entry.1, 4);
+    fn stream_client_flags_match_php_src_order() {
+        for (name, expected) in [
+            ("STREAM_CLIENT_PERSISTENT", 1),
+            ("STREAM_CLIENT_ASYNC_CONNECT", 2),
+            ("STREAM_CLIENT_CONNECT", 4),
+        ] {
+            let entry = STREAM_INT_CONSTANTS
+                .iter()
+                .find(|(entry_name, _)| *entry_name == name)
+                .unwrap_or_else(|| panic!("{name} defined"));
+            assert_eq!(entry.1, expected, "{name}");
+        }
     }
 
-    /// Verifies Symfony-demanded I/O-adjacent flags against PHP 8.5.6.
+    /// Verifies php-src's internal-only names stay out of the PHP constant table.
+    ///
+    /// `php -n -r 'var_dump(defined("STREAM_FROM_START"));'` and the other four
+    /// all report `false`; declaring them let a program name a constant php does
+    /// not have and still compile.
     #[test]
-    fn io_adjacent_flags_match_php() {
-        let value_of = |name: &str| {
-            STREAM_INT_CONSTANTS
-                .iter()
-                .find(|(constant_name, _)| *constant_name == name)
-                .unwrap_or_else(|| panic!("{name} defined"))
-                .1
-        };
-        assert_eq!(value_of("FILEINFO_MIME_TYPE"), 16);
-        assert_eq!(value_of("INI_SCANNER_NORMAL"), 0);
-        assert_eq!(value_of("INI_SCANNER_RAW"), 1);
-        assert_eq!(value_of("INI_SCANNER_TYPED"), 2);
-        assert_eq!(value_of("PHP_OUTPUT_HANDLER_CLEANABLE"), 16);
-        assert_eq!(value_of("PHP_OUTPUT_HANDLER_FLUSHABLE"), 32);
-        assert_eq!(value_of("PHP_OUTPUT_HANDLER_REMOVABLE"), 64);
+    fn does_not_declare_php_src_internal_constants() {
+        for name in [
+            "STREAM_FROM_START",
+            "STREAM_FROM_CUR",
+            "STREAM_FROM_END",
+            "STREAM_META_MODIFIED",
+            "STREAM_OPTION_CHUNK_SIZE",
+        ] {
+            assert!(
+                !STREAM_INT_CONSTANTS.iter().any(|(entry, _)| *entry == name),
+                "{name} is not a PHP constant",
+            );
+        }
+    }
+
+    /// Verifies the published surfaces stay in php-src's own order.
+    ///
+    /// Measured on php 8.5.6 with `var_export(stream_get_wrappers())` and
+    /// `var_export(stream_get_filters())`; php's twelfth and last wrapper is
+    /// `zip`, which elephc now reads through the elephc-phar bridge.
+    #[test]
+    fn published_surfaces_follow_php_order() {
+        assert_eq!(
+            STREAM_WRAPPERS,
+            [
+                "https",
+                "ftps",
+                "compress.zlib",
+                "compress.bzip2",
+                "php",
+                "file",
+                "glob",
+                "data",
+                "http",
+                "ftp",
+                "phar",
+                "zip",
+            ]
+        );
+        assert_eq!(
+            STREAM_FILTERS,
+            [
+                "zlib.*",
+                "bzip2.*",
+                "convert.iconv.*",
+                "string.rot13",
+                "string.toupper",
+                "string.tolower",
+                "convert.*",
+                "consumed",
+                "dechunk",
+            ]
+        );
     }
 
     /// Verifies the stream constant invariant for no duplicate constant names.
@@ -228,60 +323,6 @@ mod tests {
         let len_before = names.len();
         names.dedup();
         assert_eq!(names.len(), len_before, "duplicate stream constant name");
-    }
-
-    /// Verifies `GLOB_PLATFORM_CONSTANTS` has no duplicate names, and no overlap
-    /// with the flat `STREAM_INT_CONSTANTS` table (in particular `GLOB_ONLYDIR`
-    /// must stay a single portable value, not be duplicated here).
-    #[test]
-    fn glob_platform_constants_no_duplicates_and_no_overlap() {
-        let mut names: Vec<&str> = GLOB_PLATFORM_CONSTANTS.iter().map(|(n, _, _)| *n).collect();
-        names.sort_unstable();
-        let len_before = names.len();
-        names.dedup();
-        assert_eq!(len_before, names.len(), "duplicate GLOB_PLATFORM_CONSTANTS name");
-        for (name, _, _) in GLOB_PLATFORM_CONSTANTS {
-            assert!(
-                !STREAM_INT_CONSTANTS.iter().any(|(n, _)| n == name),
-                "{name} must not be registered in both tables",
-            );
-        }
-    }
-
-    /// php-verified (macOS 8.5.6 local): `GLOB_MARK,GLOB_NOSORT,GLOB_BRACE` = `8,32,128`.
-    #[test]
-    fn glob_platform_constants_macos_values_match_php_verify() {
-        let get = |name: &str| {
-            GLOB_PLATFORM_CONSTANTS
-                .iter()
-                .find(|(n, _, _)| *n == name)
-                .unwrap_or_else(|| panic!("{name} defined"))
-                .1
-        };
-        assert_eq!(get("GLOB_MARK"), 8);
-        assert_eq!(get("GLOB_NOSORT"), 32);
-        assert_eq!(get("GLOB_BRACE"), 128);
-        assert_eq!(get("GLOB_ERR"), 4);
-        assert_eq!(get("GLOB_NOCHECK"), 16);
-        assert_eq!(get("GLOB_NOESCAPE"), 4096);
-    }
-
-    /// Linux (glibc) `<glob.h>` bit positions differ from Darwin/BSD for these flags.
-    #[test]
-    fn glob_platform_constants_linux_values_are_glibc_bits() {
-        let get = |name: &str| {
-            GLOB_PLATFORM_CONSTANTS
-                .iter()
-                .find(|(n, _, _)| *n == name)
-                .unwrap_or_else(|| panic!("{name} defined"))
-                .2
-        };
-        assert_eq!(get("GLOB_MARK"), 2);
-        assert_eq!(get("GLOB_NOSORT"), 4);
-        assert_eq!(get("GLOB_BRACE"), 1024);
-        assert_eq!(get("GLOB_ERR"), 1);
-        assert_eq!(get("GLOB_NOCHECK"), 16);
-        assert_eq!(get("GLOB_NOESCAPE"), 64);
     }
 
     /// Verifies the stream constant invariant for does not redeclare lock or fnmatch constants.

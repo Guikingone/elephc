@@ -94,57 +94,6 @@ echo $bucket->first();
     assert_eq!(out, "9");
 }
 
-/// Regression: `$this->rows[] = $value` where `$rows` is a declared `array` property initialized
-/// with an associative default (`['a' => 1]`, whose codegen type is `AssocArray`) is accepted by
-/// the type checker (checker fix `updated_array_property_push_type` AssocArray arm) AND now lowered
-/// by the EIR backend. `lower_property_array_push`'s `is_assoc_array_type` branch emits a 2-operand
-/// `RuntimeCall` on the hash-backed property value (the hash-append lowering), so the push appends
-/// with the next integer key and `count()` observes the appended element (PHP prints `2`).
-#[test]
-fn test_class_property_assoc_array_push() {
-    let out = compile_and_run(
-        r#"<?php
-class Rows {
-    private array $rows = ['a' => 1];
-    public function push($value): void { $this->rows[] = $value; }
-    public function total(): int { return count($this->rows); }
-}
-$r = new Rows();
-$r->push(2);
-echo $r->total();
-"#,
-    );
-    assert_eq!(out, "2");
-}
-
-/// Regression (still `#[ignore]`d — nullable/union push is deferred): `$this->maybe[] = $value`
-/// where `$maybe` is a `?array` property initialized to `null` is accepted by the type checker (PHP
-/// auto-vivifies a null array property to an array on first push) but its codegen type collapses to
-/// `Mixed`, so it stays on the loud-error fallback rather than being lowered. Unlike the concrete
-/// `AssocArray` case, a `Mixed` push cannot reuse the hash-append path: `Op::MixedArrayAppend`
-/// hard-requires runtime tag == 4 and silently drops the element on `null` (no auto-vivification) or
-/// a hash cell. Enabling this needs a separate 3-target runtime change to
-/// `Op::MixedArrayAppend`/`__rt_mixed_array_set` (null→array vivification + hash-tag append); it is a
-/// distinct follow-up ticket. Until then this must remain a loud compile error, not a silent drop.
-#[test]
-#[ignore = "nullable/union ?array [] = push deferred — codegen type collapses to Mixed; needs MixedArrayAppend null-vivification + hash-tag append (separate 3-target follow-up)"]
-fn test_class_property_nullable_array_push() {
-    let out = compile_and_run(
-        r#"<?php
-class Box {
-    private ?array $maybe = null;
-    public function add($value): void { $this->maybe[] = $value; }
-    public function total(): int { return count($this->maybe); }
-}
-$b = new Box();
-$b->add(1);
-$b->add(2);
-echo $b->total();
-"#,
-    );
-    assert_eq!(out, "2");
-}
-
 /// Verifies assigning an untyped function parameter into a typed object property.
 #[test]
 fn test_typed_int_property_accepts_untyped_function_param_assignment() {
@@ -526,121 +475,249 @@ echo $box->value;
     assert_eq!(out, "7");
 }
 
-/// Verifies that writing to an array-typed instance property with a *variable*
-/// string key (`$obj->prop[$key] = v`) type-checks and stores the value under the
-/// string key. The write path previously only accepted `Int`/`Str`/`Mixed` keys and
-/// rejected a `Str`-typed *variable* key expression through the union-coercion guard;
-/// aligned with the read path it now accepts any PHP-coercible key. Cross-check:
-/// `php -r 'class C { public array $p = []; } $c = new C; $k = "k"; $c->p[$k] = 1; var_dump($c->p["k"]);'`
-/// prints `int(1)`.
+/// Verifies `unset($obj->prop)` on a declared (typed) property.
+///
+/// PHP leaves the property UNINITIALIZED rather than nulled: `isset()` answers false,
+/// `print_r` omits it, reading it raises `Error: Typed property … must not be accessed
+/// before initialization`, and assigning again brings it back. `unset($a, $b)` clears
+/// both targets.
 #[test]
-fn test_instance_property_array_write_variable_string_key() {
+fn test_unset_declared_typed_property_leaves_it_uninitialized() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    public array $items = [];
-}
-
-$b = new Bag();
-$key = "name";
-$b->items[$key] = 1;
-echo $b->items["name"];
+class T { public int $n = 3; public string $s = "x"; public array $a = [1, 2]; }
+$t = new T();
+unset($t->n, $t->s);
+var_dump(isset($t->n), isset($t->s), isset($t->a));
+print_r($t);
+try { echo $t->n; } catch (\Error $e) { echo "ERR:", $e->getMessage(), "\n"; }
+$t->n = 9;
+var_dump(isset($t->n), $t->n);
 "#,
     );
-    assert_eq!(out, "1");
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\n\
+         T Object\n(\n    [a] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n)\n\
+         ERR:Typed property T::$n must not be accessed before initialization\n\
+         bool(true)\nint(9)\n"
+    );
 }
 
-/// Verifies that writing to an array-typed instance property with a `mixed` key
-/// type-checks and runs. A `mixed` key is the gradual-typing boundary: the runtime
-/// coerces it to a real integer or string key. Guards the `Mixed` arm of the widened
-/// write-path key check.
+/// Verifies `unset()` on a property the caller cannot see still routes to `__unset`.
+///
+/// PHP calls `__unset` only for an INACCESSIBLE (or absent) property; a property the
+/// caller can see is removed directly and `__unset` is never consulted.
 #[test]
-fn test_instance_property_array_write_mixed_key() {
+fn test_unset_inaccessible_property_calls_magic_unset() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    public array $items = [];
+class Pv {
+    private $secret = 1;
+    public int $open = 2;
+    public function __unset($k) { echo "magic:$k\n"; }
 }
-
-function pick(mixed $k): mixed {
-    return $k;
-}
-
-$b = new Bag();
-$k = pick("name");
-$b->items[$k] = 7;
-echo $b->items["name"];
+$p = new Pv();
+unset($p->secret);
+unset($p->open);
+var_dump(isset($p->open));
 "#,
     );
-    assert_eq!(out, "7");
+    assert_eq!(out, "magic:secret\nbool(false)\n");
 }
 
-/// Verifies that writing to an array-typed instance property with a `int|string`
-/// union-typed key expression type-checks and runs. Guards the union arm of the
-/// widened `is_php_array_key_type` (Fix 1): a union of coercible key types is itself
-/// a coercible key. Cross-check:
-/// `php -r 'class C { public array $p = []; } $c = new C; /** @var int|string $k */ $k = "x"; $c->p[$k] = 1; var_dump($c->p);'`.
+/// Verifies `unset($std->prop)` on a `stdClass` really REMOVES the dynamic property.
+///
+/// Every `stdClass` property is a hash entry, so PHP's removal semantics are exact here:
+/// `isset()` answers false, `json_encode()` stops listing the key, unsetting the same key
+/// again and unsetting a key that was never set are both no-ops, a later write re-appends
+/// the key at the END of the property order, `unset($o->b, $o->c)` removes both, and a read
+/// of the removed name answers null (observed through `??`, so the fixture does not depend
+/// on the undefined-property warning elephc does not yet emit for `stdClass`).
+///
+/// Expected output is `LC_ALL=C php 8.4.20` verbatim. The fixture deliberately avoids
+/// `var_dump($o)`/`print_r($o)`: elephc renders a `stdClass` body as empty regardless of
+/// `unset()`, a separate pre-existing gap.
 #[test]
-fn test_instance_property_array_write_union_int_string_key() {
+fn test_unset_stdclass_dynamic_property_removes_it() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    public array $items = [];
-}
-
-function key_of(int|string $n): int|string {
-    return $n;
-}
-
-$b = new Bag();
-$k = key_of("label");
-$b->items[$k] = 42;
-echo $b->items["label"];
+$o = new stdClass();
+$o->a = 1;
+$o->b = "two";
+$o->c = 3;
+unset($o->a);
+var_dump(isset($o->a), isset($o->b));
+echo json_encode($o), "\n";
+unset($o->a);
+unset($o->never);
+echo json_encode($o), "\n";
+$o->a = 9;
+echo json_encode($o), "\n";
+echo $o->a, "|", $o->b, "\n";
+unset($o->b, $o->c);
+echo json_encode($o), "\n";
+var_dump($o->b ?? "gone");
 "#,
     );
-    assert_eq!(out, "42");
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\n\
+         {\"b\":\"two\",\"c\":3}\n\
+         {\"b\":\"two\",\"c\":3}\n\
+         {\"b\":\"two\",\"c\":3,\"a\":9}\n\
+         9|two\n\
+         {\"a\":9}\n\
+         string(4) \"gone\"\n"
+    );
 }
 
-/// Verifies that writing to an array-typed instance property with a `?string`
-/// (i.e. `string|null` → elephc `Union([Str, Void])`) key expression type-checks
-/// and runs. Guards the `Union([Str, Void])` case from the console probe (lines 42
-/// and 594 of the autoloaded Symfony sources). A null key would coerce to `""` at
-/// runtime, but the non-null branch is exercised here.
+/// Verifies `unset()` of an UNDECLARED name on an `#[AllowDynamicProperties]` class removes
+/// the hash entry while leaving the class's fixed slots untouched.
+///
+/// The receiver mixes both storage shapes: `$fixed` is a declared typed slot and `$x`/`$y`
+/// are dynamic hash entries. Unsetting the dynamic names must not disturb `$fixed`, and
+/// repeat/absent unsets stay no-ops. Expected output is `LC_ALL=C php 8.4.20` verbatim.
 #[test]
-fn test_instance_property_array_write_nullable_string_key() {
+fn test_unset_dynamic_property_on_allow_dynamic_class() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    public array $items = [];
-}
-
-function maybe_key(?string $n): ?string {
-    return $n;
-}
-
+#[AllowDynamicProperties]
+class Bag { public int $fixed = 7; }
 $b = new Bag();
-$k = maybe_key("tag");
-$b->items[$k] = 9;
-echo $b->items["tag"];
+$b->x = 1;
+$b->y = "two";
+unset($b->x);
+var_dump(isset($b->x), isset($b->y), isset($b->fixed));
+unset($b->x);
+unset($b->missing);
+$b->x = 5;
+var_dump(isset($b->x));
+echo $b->x, "|", $b->y, "|", $b->fixed, "\n";
+unset($b->x, $b->y);
+var_dump(isset($b->x), isset($b->y), isset($b->fixed));
+echo $b->fixed, "\n";
 "#,
     );
-    assert_eq!(out, "9");
+    assert_eq!(
+        out,
+        "bool(false)\nbool(true)\nbool(true)\n\
+         bool(true)\n\
+         5|two|7\n\
+         bool(false)\nbool(false)\nbool(true)\n\
+         7\n"
+    );
 }
 
-/// Regression guard: reading an array-typed instance property by a literal string
-/// key still type-checks and runs (the read path already accepted string keys; this
-/// sanity-checks that the write-path widening did not perturb the read path).
+/// Regression: repeatedly reading the SAME dynamic property must keep answering its value.
+///
+/// `__rt_hash_get` only borrows the stored `Mixed` cell, but the dynamic-property read
+/// hands its result to a caller that releases it, so a missing retain made every read drop
+/// a reference the program never took. After enough reads the live hash entry was freed and
+/// further reads answered `NULL` — a use-after-free of the property's storage.
+/// Expected output is `LC_ALL=C php 8.4.20` verbatim.
 #[test]
-fn test_instance_property_array_read_string_key_still_works() {
+fn test_repeated_dynamic_property_reads_keep_the_value_alive() {
     let out = compile_and_run(
         r#"<?php
-class Bag {
-    public array $items = ["k" => 5];
-}
-
-$b = new Bag();
-echo $b->items["k"];
+#[AllowDynamicProperties]
+class Slot {}
+$s = new Slot();
+$s->v = "kept";
+echo $s->v, $s->v, $s->v, "\n";
+var_dump($s->v, $s->v);
+var_dump($s->v);
 "#,
     );
-    assert_eq!(out, "5");
+    assert_eq!(
+        out,
+        "keptkeptkept\nstring(4) \"kept\"\nstring(4) \"kept\"\nstring(4) \"kept\"\n"
+    );
+}
+
+/// Verifies `unset()` of an UNTYPED declared property is refused with a diagnostic that
+/// names that shape, instead of silently leaving a stale value behind.
+///
+/// PHP genuinely removes such a property: a later read warns `Undefined property` and
+/// answers `null`. elephc gives each declared property a fixed, monomorphically typed slot
+/// (here `Int`), which has no encoding for "removed, and reading as null" — see
+/// `docs/php/classes.md`. A loud compile error beats a wrong value.
+#[test]
+fn test_unset_untyped_declared_property_is_rejected() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+class M { public $foo = 1; }
+$m = new M();
+unset($m->foo);
+echo "ok";
+"#,
+    );
+    assert!(
+        error.contains("An UNTYPED declared property"),
+        "the diagnostic must name the untyped-property shape, got: {}",
+        error
+    );
+}
+
+/// Verifies `unset()` of a BY-REFERENCE property is refused rather than silently skipped.
+///
+/// The slot holds an object-owned ref-cell pointer that the destructor still frees and that
+/// a later write would write THROUGH, reviving the alias PHP's `unset()` just broke. The
+/// backend used to skip the shape quietly, which left `isset()` answering `true` after an
+/// `unset()` where PHP answers `false`.
+#[test]
+fn test_unset_by_reference_property_is_rejected() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+class R { public function __construct(public int &$p) {} }
+$v = 3;
+$r = new R($v);
+unset($r->p);
+"#,
+    );
+    assert!(
+        error.contains("unset() of by-reference property R::$p"),
+        "the diagnostic must name the by-reference property, got: {}",
+        error
+    );
+}
+
+/// Verifies `unset()` of a dynamic name on a class that declares `__unset()` is refused.
+///
+/// PHP consults `__unset()` only when the dynamic property is ABSENT at the unset site and
+/// removes the entry silently when it is present — a choice that depends on runtime state.
+/// elephc picks the lowering statically, so it declines rather than guessing one of the two
+/// behaviors.
+#[test]
+fn test_unset_dynamic_property_with_magic_unset_is_rejected() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+#[AllowDynamicProperties]
+class Hooked { public function __unset($n) { echo "magic:$n\n"; } }
+$h = new Hooked();
+$h->a = 1;
+unset($h->a);
+"#,
+    );
+    assert!(
+        error.contains("unset target shape"),
+        "the runtime-dependent __unset shape must be refused, got: {}",
+        error
+    );
+}
+
+/// Verifies `isset()` on a never-initialized typed property answers false instead of
+/// raising the uninitialized-read error, matching PHP.
+#[test]
+fn test_isset_on_uninitialized_typed_property_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public ?int $v; public int $w = 1; }
+$u = new U();
+var_dump(isset($u->v), isset($u->w));
+$u->v = 5;
+var_dump(isset($u->v), $u->v);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
 }

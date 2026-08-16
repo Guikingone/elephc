@@ -2,13 +2,13 @@
 title: "preg_match_all()"
 description: "Performs a global regular expression match and returns the number of matches."
 sidebar:
-  order: 338
+  order: 379
 ---
 
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject, array $matches = [], int $flags = 0, int $offset = 0): int
+function preg_match_all(string $pattern, string $subject): int
 ```
 
 Performs a global regular expression match and returns the number of matches.
@@ -16,9 +16,6 @@ Performs a global regular expression match and returns the number of matches.
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
-- `$matches` (`array`), passed by reference, default `[]`, optional
-- `$flags` (`int`), default `0`, optional
-- `$offset` (`int`), default `0`, optional
 
 **Returns**: `int`
 
@@ -28,12 +25,6 @@ Performs a global regular expression match and returns the number of matches.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_match_all.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

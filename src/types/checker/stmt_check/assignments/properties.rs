@@ -37,6 +37,13 @@ pub(super) fn check_property_assign(
     if let PhpType::Object(class_name) = &obj_ty {
         check_object_property_write(checker, object, class_name, property, value, &val_ty, span)?;
         refine_object_property_type(checker, class_name, property, &val_ty);
+    } else if let Some(class_name) = checker.union_single_object_class(&obj_ty) {
+        // A factory-style `Object|false` receiver still targets the one object
+        // class when the runtime value is an object. Validate writes against that
+        // class so readonly/visibility/type rules are not silently bypassed merely
+        // because the success value has not yet been narrowed with instanceof.
+        check_object_property_write(checker, object, &class_name, property, value, &val_ty, span)?;
+        refine_object_property_type(checker, &class_name, property, &val_ty);
     }
     if let PhpType::Pointer(Some(class_name)) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
@@ -61,15 +68,8 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     match &obj_ty {
         PhpType::Object(class_name) => {
-            // The `object` pseudo-type is modeled as `Object("")` (an object whose class is not
-            // statically known). Its property set is only knowable at runtime, so a push through
-            // it (`$o->prop[] = v`) is deferred to runtime rather than resolved against a class —
-            // looking up the empty class name would otherwise emit a bogus `Undefined class: `.
-            if class_name.is_empty() {
-                return Ok(());
-            }
             let (prop_ty, property_has_declared_type) =
-                resolve_object_array_property(checker, object, class_name, property, span)?;
+                resolve_object_array_property(checker, class_name, property, span)?;
             let updated_prop_ty = updated_array_property_push_type(
                 checker,
                 &prop_ty,
@@ -128,13 +128,7 @@ pub(super) fn check_property_array_assign(
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
-    // `Mixed` and the `object` pseudo-type (modeled as `Object("")`, an object whose class is not
-    // statically known) both have a runtime-only property set: an indexed write through them
-    // (`$o->prop[$k] = v`) is deferred to runtime. The index must still be a valid array key, but
-    // the property is not resolved against a class — resolving the empty class name would emit a
-    // bogus `Undefined class: `.
-    let object_pseudo_type = matches!(&obj_ty, PhpType::Object(class_name) if class_name.is_empty());
-    if matches!(obj_ty, PhpType::Mixed) || object_pseudo_type {
+    if matches!(obj_ty, PhpType::Mixed) {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }
@@ -143,9 +137,11 @@ pub(super) fn check_property_array_assign(
     match &obj_ty {
         PhpType::Object(class_name) => {
             let (prop_ty, property_has_declared_type) =
-                resolve_object_array_property(checker, object, class_name, property, span)?;
-            if type_satisfies_array_access(checker, &prop_ty) {
-                return Ok(());
+                resolve_object_array_property(checker, class_name, property, span)?;
+            if let PhpType::Object(prop_class_name) = &prop_ty {
+                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
+                    return Ok(());
+                }
             }
             if !is_php_array_key_type(&normalized_idx_ty) {
                 return Err(CompileError::new(span, "Array index must be integer"));
@@ -236,13 +232,21 @@ fn check_object_property_write(
                 &format!("Undefined property: {}::{}", class_name, property),
             ));
         }
-        validate_object_property_access(checker, object, class_name, property, true, span)?;
+        validate_object_property_access(checker, class_name, property, true, span)?;
         let expected_ty = class_info
             .visible_property(property)
             .map(|(_, (_, ty))| ty.clone())
             .unwrap_or(PhpType::Int);
         let readonly_non_null_coalesce_keep =
             null_coalesce_property_keeps_non_null(object, property, value, &expected_ty);
+        let internal_pdo_statement_initializer = checker
+            .current_method
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("__elephcInitialize"))
+            && class_info
+                .property_declaring_classes
+                .get(property)
+                .is_some_and(|owner| owner.trim_start_matches('\\').eq_ignore_ascii_case("PDOStatement"));
         if class_info.readonly_properties.contains(property)
             && !(checker.current_class.as_deref()
                 == class_info
@@ -250,6 +254,7 @@ fn check_object_property_write(
                     .get(property)
                     .map(String::as_str)
                 && checker.current_method.as_deref() == Some("__construct"))
+            && !internal_pdo_statement_initializer
             && !readonly_non_null_coalesce_keep
         {
             // PHP raises this as a catchable `Error` at runtime instead of a
@@ -267,12 +272,9 @@ fn check_object_property_write(
             );
             return Ok(());
         }
-        // A property with a `get` hook but no `set` hook is read-only ONLY when it is VIRTUAL —
-        // i.e. when the hook body never names `$this-><property>`. When the body does name it the
-        // property is BACKED, and PHP allows the write (it goes to the backing store) even from
-        // outside the class; `hooked_property_is_backed` carries the measured `php -n` matrix.
-        // Writes from inside the property's own accessor target the raw backing slot and are
-        // likewise allowed.
+        // A property with a `get` hook but no `set` hook is read-only: external writes are an error
+        // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's
+        // own accessor target the raw backing slot and are allowed.
         let has_get_hook = class_info
             .methods
             .contains_key(&php_symbol_key(&property_hook_get_method(property)));
@@ -287,41 +289,22 @@ fn check_object_property_write(
                 method == php_symbol_key(&property_hook_get_method(property))
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
-        if has_get_hook
-            && !has_set_hook
-            && !in_own_accessor
-            && !super::super::super::property_hooks::hooked_property_is_backed(
-                checker, class_name, property,
-            )
-        {
+        if has_get_hook && !has_set_hook && !in_own_accessor {
             return Err(CompileError::new(
                 span,
                 &format!(
-                    "Cannot write to read-only hooked property {}::{} (its get hook is virtual — it never reads or writes $this->{}, and there is no set hook)",
-                    class_name, property, property
+                    "Cannot write to read-only hooked property {}::{} (it declares a get hook but no set hook)",
+                    class_name, property
                 ),
             ));
         }
         if class_info.visible_property_is_declared(property) {
-            // A declared property type is a RUNTIME check in PHP, not a static one: assigning an
-            // ancestor-typed value to a narrower slot raises a catchable
-            // `TypeError: Cannot assign A to property C::$p of type B` at the write, and elephc
-            // now emits exactly that guard at this same boundary. Gated on
-            // `checked_downcast_guardable` so acceptance and emission read ONE predicate — a flow
-            // admitted here but not guarded there would be an unguarded representation change, not
-            // a compile error.
-            if !checker.checked_downcast_guardable(
+            checker.require_compatible_arg_type(
                 &expected_ty,
                 val_ty,
-                crate::types::checked_downcast::GuardPosition::PropertyStore,
-            ) {
-                checker.require_compatible_arg_type(
-                    &expected_ty,
-                    val_ty,
-                    span,
-                    &format!("Property {}::${}", class_name, property),
-                )?;
-            }
+                span,
+                &format!("Property {}::${}", class_name, property),
+            )?;
         }
     }
     Ok(())
@@ -333,7 +316,6 @@ fn check_object_property_write(
 /// `Checker::can_access_member` to enforce access control rules.
 fn validate_object_property_access(
     checker: &Checker,
-    receiver: &Expr,
     class_name: &str,
     property: &str,
     is_write: bool,
@@ -357,7 +339,7 @@ fn validate_object_property_access(
             .get(property)
             .map(String::as_str)
             .unwrap_or(class_name);
-        if !checker.can_access_property(receiver, declaring_class, visibility) {
+        if !checker.can_access_member(declaring_class, visibility) {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -461,7 +443,7 @@ pub(super) fn refined_untyped_property_assignment_type(
 /// Delegates the type decision to `refined_untyped_property_assignment_type`; see its
 /// documentation for the nullable-union storage rules. Only updates when the refined
 /// type differs from the current type.
-pub(super) fn refine_object_property_type(
+fn refine_object_property_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
@@ -554,7 +536,6 @@ fn check_pointer_property_write(
 /// Returns an error if the class or property is undefined.
 fn resolve_object_array_property(
     checker: &Checker,
-    object: &Expr,
     class_name: &str,
     property: &str,
     span: Span,
@@ -571,7 +552,7 @@ fn resolve_object_array_property(
     }
     // Indirect array modification (`$obj->prop[] = x` / `$obj->prop[$k] = x`) is a write, so it
     // must honor PHP 8.4 asymmetric `set` visibility — not the read visibility.
-    validate_object_property_access(checker, object, class_name, property, true, span)?;
+    validate_object_property_access(checker, class_name, property, true, span)?;
     let property_has_declared_type = class_info.visible_property_is_declared(property);
     let prop_ty = class_info
         .visible_property(property)
@@ -584,11 +565,6 @@ fn resolve_object_array_property(
 ///
 /// For typed arrays: validates the pushed value against the element type via `require_compatible_arg_type`.
 /// For untyped arrays: merges the pushed value's type into the element type via `merge_array_element_type`.
-/// For `AssocArray` properties: always gradual-merges (a PHP `array` hint is unconstrained and assoc
-/// element types are inferred, never a user constraint), widening keys with `Int` and values with the
-/// pushed type — this never emits an element-type error.
-/// For union properties containing an array-like member (e.g. `?array` = `array|null`): accepts the push
-/// (PHP auto-vivifies a null property to an array) and keeps the declared union shape.
 /// For untyped `Int` or `Void` base types: converts the property to `array<value_type>`.
 /// Returns an error for buffer types or non-array property types.
 fn updated_array_property_push_type(
@@ -626,33 +602,6 @@ fn updated_array_property_push_type(
             span,
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         )),
-        PhpType::AssocArray { key, value } => {
-            // `$prop[] = v` appends with the next integer key, so the property stays an associative
-            // array whose keys may now include Int and whose values widen to include the pushed type.
-            // A PHP `array`/`?array` hint imposes no element constraint (arrays are heterogeneous) and
-            // the assoc element types are inferred, so this is always a gradual merge — never an error.
-            let merged_value = checker
-                .merge_array_element_type(value, val_ty)
-                .unwrap_or(PhpType::Mixed);
-            let merged_key = checker
-                .merge_array_element_type(key, &PhpType::Int)
-                .unwrap_or(PhpType::Mixed);
-            Ok(PhpType::AssocArray {
-                key: Box::new(merged_key),
-                value: Box::new(merged_value),
-            })
-        }
-        PhpType::Union(members)
-            if members
-                .iter()
-                .any(|m| matches!(m, PhpType::Array(_) | PhpType::AssocArray { .. })) =>
-        {
-            // e.g. `?array` (`array|null`): `$prop[] = v` targets the array arm; PHP auto-vivifies a
-            // null-valued array property to an array on first push. Accept and keep the property's
-            // declared union shape (do not collapse the nullability). A union with no array-like member
-            // still falls through to the error below.
-            Ok(prop_ty.clone())
-        }
         other => Err(CompileError::new(
             span,
             &format!("Array push requires an array property, got {}", other),
@@ -668,8 +617,6 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
-/// - For `Mixed`: accepts the write and keeps the property `Mixed` (boxed-cell storage, mutated
-///   in place by `__rt_mixed_array_set`, which also performs PHP's null/false auto-vivification).
 fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -745,29 +692,6 @@ fn updated_array_property_assign_type(
                 value: Box::new(merged_value),
             })
         }
-        PhpType::Mixed => {
-            // A `mixed`-typed property is a boxed runtime cell, exactly the representation
-            // `__rt_mixed_array_set` mutates: it inserts into a cell already holding an array and
-            // auto-vivifies a `null`/`false` payload into a fresh one, which is PHP's own rule
-            // (`php -n`: writing `$stub->value['k']` both extends an existing array and vivifies a
-            // null property). Lowering reaches that writer through the runtime property-array-set
-            // fallback in `ir_lower::stmt`, whose `PhpType::Object(_)` arm resolves the inline slot
-            // via `known_class_mixed_property_offset` — which admits precisely the properties whose
-            // `codegen_repr()` is `Mixed`, i.e. this arm. The property keeps its `Mixed` type: the
-            // cell's runtime tag, not a static type, records that it now holds an array.
-            Ok(prop_ty.clone())
-        }
-        PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
-            // e.g. `array|false` (PHP's deprecated-but-working auto-conversion of `false` to
-            // array) or `?array` (`array|null`): PHP auto-vivifies a false/null-valued array
-            // property to an array on first indexed write (probe-verified: `Deprecated:
-            // Automatic conversion of false to array` for `false`, silently for `null`).
-            // `__rt_mixed_array_set` implements exactly that vivify matrix (false/null →
-            // fresh array; other scalars keep the pre-existing silent drop, unchanged this
-            // wave). Mirrors the sibling `$prop[] = v` push acceptance above: keep the
-            // property's declared union shape rather than collapsing it.
-            Ok(prop_ty.clone())
-        }
         other => Err(CompileError::new(
             span,
             &format!(
@@ -778,71 +702,9 @@ fn updated_array_property_assign_type(
     }
 }
 
-/// Returns true when `members` is a union of array-family types (`Array`/`AssocArray`) plus
-/// only `Bool` and/or `Void` (null) as non-array alternatives, and includes at least one
-/// array-family member. This is the exact PHP auto-vivify matrix `__rt_mixed_array_set`
-/// implements: `false`/`null` payloads vivify into a fresh array, while `true`/int/float/string
-/// fatal in real PHP (kept loud here by rejecting unions with those non-array members).
-pub(super) fn array_family_bool_void_union_accepts_write(members: &[PhpType]) -> bool {
-    let mut saw_array = false;
-    for member in members {
-        match member {
-            PhpType::Array(_) | PhpType::AssocArray { .. } => saw_array = true,
-            // `PhpType::False` is PHP's `false` pseudo-type, kept distinct from `PhpType::Bool`
-            // by `normalize_union_type` when the union has no sibling `bool` member (e.g.
-            // `array|false` normalizes to `Union([Array, False])`, never collapsing to `Bool`).
-            // Both must vivify here (`array|false` behaves exactly like `?array` on write —
-            // `php -n` verified: `Deprecated: Automatic conversion of false to array`, then the
-            // write and read both succeed).
-            PhpType::Bool | PhpType::False | PhpType::Void => {}
-            _ => return false,
-        }
-    }
-    saw_array
-}
-
-/// Returns true if `ty` can act as a PHP array key at the gradual-typing boundary
-/// for a WRITE (`$a[$k] = v`). Mirrors the read-path `php_type_is_array_key_coercible`
-/// (`src/types/checker/inference/expr/mod.rs`): `int`, `string`, `Mixed`, the scalar
-/// families PHP coerces to a key (`bool`, `float`), the null-like `Void`/`Never` tags
-/// (a null key becomes `""`), and unions composed only of those. Heap container types
-/// are rejected. Kept in lockstep with the read path so read and write key acceptance
-/// never diverge.
-pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Int | PhpType::Str | PhpType::Mixed | PhpType::Bool
-        | PhpType::Float | PhpType::Void | PhpType::Never => true,
-        PhpType::Union(members) => members.iter().all(is_php_array_key_type),
-        _ => false,
-    }
-}
-
-/// Returns whether every non-null member is an object implementing `ArrayAccess`.
-pub(super) fn type_satisfies_array_access(checker: &Checker, ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Object(class_name) => {
-            checker.object_type_implements_interface(class_name, "ArrayAccess")
-        }
-        PhpType::Union(members) => {
-            let mut saw_array_access = false;
-            for member in members {
-                match member {
-                    PhpType::Void | PhpType::Never => {}
-                    PhpType::Object(class_name)
-                        if checker.object_type_implements_interface(
-                            class_name,
-                            "ArrayAccess",
-                        ) =>
-                    {
-                        saw_array_access = true;
-                    }
-                    _ => return false,
-                }
-            }
-            saw_array_access
-        }
-        _ => false,
-    }
+/// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
+fn is_php_array_key_type(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Int | PhpType::Str | PhpType::Mixed)
 }
 
 /// Computes the resulting `PhpType::AssocArray` type after writing to an array property with a

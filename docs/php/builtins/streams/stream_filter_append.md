@@ -2,21 +2,21 @@
 title: "stream_filter_append()"
 description: "Attaches a filter to a stream."
 sidebar:
-  order: 358
+  order: 399
 ---
 
 ## stream_filter_append()
 
 ```php
-function stream_filter_append(resource $stream, string $filtername, int $read_write = 3, mixed $params = null): mixed
+function stream_filter_append(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): mixed
 ```
 
 Attaches a filter to a stream.
 
 **Parameters**:
 - `$stream` (`resource`)
-- `$filtername` (`string`)
-- `$read_write` (`int`), default `3`, optional
+- `$filter_name` (`string`)
+- `$mode` (`int`), default `0`, optional
 - `$params` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
@@ -27,12 +27,6 @@ Attaches a filter to a stream.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_filter_append.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

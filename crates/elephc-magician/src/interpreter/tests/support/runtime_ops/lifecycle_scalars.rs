@@ -15,6 +15,12 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
         self.runtime_object_identity(object)
     }
+    /// Returns the fake object handle as the PHP object handle: the fake runtime
+    /// mints one small stable integer per object, which is the same shape PHP's
+    /// handles have, so identity-comparison tests behave identically.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        self.runtime_object_identity(object)
+    }
     /// Returns fake object identity for releases that target object cells.
     fn final_object_identity_for_release(
         &mut self,
@@ -35,8 +41,22 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
         self.runtime_retain(value)
     }
     /// Records fake PHP warnings without writing to stderr.
+    ///
+    /// Gated on the `@` depth exactly like the real bridge, so a test asserting the
+    /// suppression sees the same silence a compiled program produces.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
+        if self.suppress_depth > 0 {
+            return Ok(());
+        }
         self.runtime_warning(message)
+    }
+
+    fn suppress_begin(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_add(1);
+    }
+
+    fn suppress_end(&mut self) {
+        self.suppress_depth = self.suppress_depth.saturating_sub(1);
     }
     /// Creates a fake null cell.
     fn null(&mut self) -> Result<RuntimeCellHandle, EvalStatus> {
@@ -53,6 +73,10 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     /// Creates a fake resource cell.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_resource(value)
+    }
+    /// Creates a fake inert hash-context cell, consuming no fake PHP resource id.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_hash_context(value)
     }
     /// Creates a fake float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {

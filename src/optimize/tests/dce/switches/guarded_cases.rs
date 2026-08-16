@@ -13,3 +13,4 @@ use super::*;
 mod impossible;
 mod truthiness;
 mod cumulative;
+mod fallthrough;

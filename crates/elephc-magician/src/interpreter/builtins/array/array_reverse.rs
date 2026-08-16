@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the array-reverse hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_reverse",
+    contract: "array_reverse",
     area: Array,
-    params: [array, preserve_keys = EvalBuiltinDefaultValue::Bool(false)],
     direct: ArrayReverse,
     values: ArrayReverse,
 }
@@ -52,13 +49,17 @@ pub(in crate::interpreter) fn eval_builtin_array_reverse(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match args {
+        // php evaluates every argument before the type check throws, so the check waits
+        // for the whole operand list.
         [array] => {
             let array = eval_expr(array, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_reverse", &[array], context, values)?;
             eval_array_reverse_result(array, false, values)
         }
         [array, preserve_keys] => {
             let array = eval_expr(array, context, scope, values)?;
             let preserve_keys = eval_expr(preserve_keys, context, scope, values)?;
+            super::array_arg_check::eval_check_array_args("array_reverse", &[array], context, values)?;
             let preserve_keys = values.truthy(preserve_keys)?;
             eval_array_reverse_result(array, preserve_keys, values)
         }

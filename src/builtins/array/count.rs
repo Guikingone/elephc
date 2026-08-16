@@ -8,74 +8,63 @@
 //! - `check` validates the argument type (Array, AssocArray, Mixed, Union-of-countable, or
 //!   Countable Object) and returns `Int`. The Countable interface check delegates to
 //!   `cx.checker.class_implements_interface`.
-//! - `max_args: 1` reproduces the legacy checker's exactly-1 enforcement: `mode` has a
-//!   default so `min` derives to 1; capping `max` at 1 yields the standard
-//!   "count() takes exactly 1 argument" diagnostic. The 2-param golden is preserved for
-//!   FCC and parity.
+//! - `$mode` accepts `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`); anything else raises
+//!   PHP's catchable `ValueError`. The guard lives in the backend
+//!   (`codegen::lower_inst::builtins::lower_count`) because `$mode` may be a runtime value.
 //! - All accepted representations lower through typed `runtime.count` so a typed array
 //!   value carrying the runtime null-container sentinel still raises PHP's catchable TypeError.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::semantics::{
-    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinEffects,
+    BuiltinSemanticInput, BuiltinSemantics,
 };
 use crate::errors::CompileError;
 use crate::types::checker::builtins::arrays::union_member_is_countable_array;
 use crate::types::PhpType;
 
 builtin! {
-    name: "count",
-    area: Array,
-    params: [value: Mixed, mode: Int = DefaultSpec::Int(0)],
-    max_args: 1,
-    returns: Int,
+    contract: "count",
     check: check,
     semantics: count_semantics(),
-    summary: "Counts all elements in an array or Countable object.",
-    php_manual: "https://www.php.net/manual/en/function.count.php",
 }
 
 /// Builds typed runtime semantics while retaining count's one-visible-argument lowering rule.
 const fn count_semantics() -> BuiltinSemantics {
-    with_argument_lowering(
+    let mut semantics = with_argument_lowering(
         runtime_fn_semantics(crate::ir::RuntimeFnId::Count),
         BuiltinArgumentLowering::Count,
-    )
+    );
+    semantics.effects = BuiltinEffects::Shared(effects);
+    semantics
+}
+
+/// Resolves count's intrinsic read/throw contract from the checked receiver representation.
+///
+/// `MAY_THROW` is unconditional: besides the null-container `TypeError`, every call can raise
+/// the `ValueError` for a `$mode` outside `COUNT_NORMAL`/`COUNT_RECURSIVE`, so the call must
+/// never be treated as a removable pure call.
+fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    match input.arg_types.first().map(PhpType::codegen_repr) {
+        Some(PhpType::Array(_) | PhpType::AssocArray { .. }) => {
+            crate::ir::Effects::READS_HEAP | crate::ir::Effects::MAY_THROW
+        }
+        _ => crate::ir::RuntimeFnId::Count.effects() | crate::ir::Effects::MAY_THROW,
+    }
 }
 
 /// Validates the argument type and returns `Int`.
 ///
-/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), `Iterable`, a Union where every
-/// member is countable, or an Object that implements the `Countable` interface. Arity
-/// enforcement (exactly 1 argument) is handled by the registry's `check_arity` via
-/// `max_args: 1`. Returns a `CompileError` for non-countable types or non-Countable objects.
-///
-/// This is the ONE source of truth for `count()` argument acceptance; `count` is
-/// registry-backed, so `Checker::check_builtin` reaches this hook and never falls through to
-/// the legacy `types::checker::builtins::arrays` dispatcher.
+/// Accepts Array, AssocArray, Mixed (heterogeneous arrays), a Union where every member
+/// is countable, or an Object that implements the `Countable` interface. Arity
+/// enforcement (1 or 2 arguments) is handled by the registry's `check_arity`; `$mode`'s
+/// value range is a runtime `ValueError`, not a compile-time error, exactly like PHP.
+/// Returns a `CompileError` for non-countable types or non-Countable objects.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     match &ty {
-        // `Iterable` is PHP's `array|Traversable`. Its array half is countable, so this is the
-        // same gradual boundary as the `Union` arms below: accepted at compile time, with the
-        // runtime `runtime.count` lowering raising PHP's catchable TypeError when the value
-        // turns out to be a Traversable that is not Countable.
-        PhpType::Array(_)
-        | PhpType::AssocArray { .. }
-        | PhpType::Mixed
-        | PhpType::Iterable => Ok(PhpType::Int),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed => Ok(PhpType::Int),
         PhpType::Union(members) if members.iter().all(union_member_is_countable_array) => {
-            Ok(PhpType::Int)
-        }
-        // Gradual boundary: a union CONTAINING an array (e.g. the `array|Countable`
-        // produced by an `is_countable()` narrowing of an `iterable` parameter) is
-        // accepted; the EIR lowering emits a runtime unbox/assert that throws a
-        // TypeError for a non-countable runtime value.
-        ty2 @ PhpType::Union(_)
-            if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(
-                ty2,
-            ) =>
-        {
             Ok(PhpType::Int)
         }
         PhpType::Object(class_name) => {

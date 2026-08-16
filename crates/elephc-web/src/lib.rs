@@ -39,7 +39,7 @@ pub use request_state::{
 
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
-pub use request_state::{elephc_web_header, elephc_web_header_remove, elephc_web_set_status};
+pub use request_state::{elephc_web_header, elephc_web_set_status};
 
 // Re-exported so the compiled `--web` web prelude can link against all session
 // C-ABI bridge symbols defined in `session/` (state, file I/O, ID generation,

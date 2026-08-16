@@ -7,16 +7,18 @@
 //!
 //! Key details:
 //! - Branch and loop handling must preserve PHP execution order and conservative type environments.
-//! - `if`/elseif/else chains and `switch (true)` case bodies apply flow-sensitive type-guard
-//!   narrowing via `crate::types::checker::stmt_check::narrowing`; case-body narrowing is gated on
-//!   fall-in safety so a case reachable by fall-through from a non-terminating case is not narrowed.
+//! - A `foreach` over a PHP-visible non-iterable (`int`, `string`, `bool`, `null`, `float`,
+//!   `resource`) is a WARNING, not an error: php-src raises
+//!   `foreach() argument must be of type array|object, <type> given` at runtime and keeps
+//!   going, so rejecting it would make elephc refuse a program PHP runs. Codegen emits the
+//!   matching runtime warning and skips the loop
+//!   (`IteratorSourceKind::NonIterable` in `crate::codegen::lower_inst::iterators`).
+//!   Compiler-internal types with no PHP spelling stay a hard error.
 
 use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Stmt, StmtKind};
 use crate::types::{PhpType, TypeEnv};
-use std::collections::BTreeMap;
 
-use super::super::type_compat::type_is_gradual_object_family;
 use super::super::Checker;
 
 const FS_CURRENT_AS_SELF: i64 = 16;
@@ -28,11 +30,8 @@ const FS_SKIP_DOTS: i64 = 4096;
 ///
 /// The shared analysis iterates over rebinds and growth sites with an evolving environment, so
 /// cascading promotions, non-literal RHSs, and raw-to-raw element changes converge before any
-/// header/body read is checked. This includes entry-empty roots autovivified by nested writes: a
-/// read earlier in the body can observe the container created by a prior iteration, so the
-/// single-pass checker must use the back-edge's boxed element representation from the start. EIR
-/// lowering later consumes the recorded contract for the same loop span rather than repeating
-/// expression inference.
+/// header/body read is checked. EIR lowering later consumes the recorded contract for the same
+/// loop span rather than repeating expression inference.
 fn stabilize_loop_storage(
     checker: &mut Checker,
     loop_span: crate::span::Span,
@@ -96,91 +95,25 @@ fn restore_narrowed_var(env: &mut TypeEnv, var: &str, saved: &Option<PhpType>) {
     }
 }
 
-/// Collects variable names bound by a simple `$var = <expr>` assignment appearing directly in an
-/// `if`/`elseif` condition (`if (!$x = f())`, `false === $y = g()`, `$a && $b = h()`). Such a
-/// variable takes the condition-assigned type on the frame slot, which then persists past the whole
-/// construct as a member that no reaching branch actually leaves live once a later branch reassigns
-/// it — the post-`if` join must recompute its type from the branches instead. Only the assignment
-/// target is collected; assignment right-hand sides are not descended into.
-fn collect_condition_assigned_vars(cond: &Expr, out: &mut Vec<String>) {
-    match &cond.kind {
-        ExprKind::Not(inner) | ExprKind::Negate(inner) => {
-            collect_condition_assigned_vars(inner, out);
-        }
-        ExprKind::BinaryOp { left, right, .. } => {
-            collect_condition_assigned_vars(left, out);
-            collect_condition_assigned_vars(right, out);
-        }
-        ExprKind::Assignment { target, .. } => {
-            if let ExprKind::Variable(name) = &target.kind {
-                if !out.iter().any(|existing| existing == name) {
-                    out.push(name.clone());
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Records a variable's pre-`if` type the first time the chain touches it, so the post-`if`
-/// restore (and the branch-union join) has the un-narrowed type to fall back to. Later touches are
-/// ignored: by then `env` already carries an accumulated complement from an earlier clause.
-fn remember_pre_if_type(
-    saved_vars: &mut Vec<(String, Option<PhpType>)>,
-    var: &str,
-    env: &TypeEnv,
-) {
-    if !saved_vars.iter().any(|(existing, _)| existing == var) {
-        saved_vars.push((var.to_string(), env.get(var).cloned()));
-    }
-}
-
-/// Returns true when `ty` carries an object member: an `Object`, or a union with an object member.
-/// The post-`if` branch-union join is scoped to object-bearing variables because the dead-member
-/// staleness it fixes is an object member-access concern; a scalar/`Mixed` local (e.g. an
-/// `int` exit code narrowed by `is_numeric` and reassigned to `int` in both arms) keeps its
-/// conservative type, so the join never tightens a scalar or gradual slot into a strict union.
-fn type_is_object_bearing(ty: &PhpType) -> bool {
+/// Names a `foreach` source that PHP accepts but can never iterate, or `None` when the type
+/// has no PHP-visible spelling and must stay a hard compile error.
+///
+/// The names match what php-src prints in `foreach() argument must be of type array|object,
+/// <name> given` (captured from PHP 8.5.6): `int`, `float`, `string`, `null`, `resource`, and
+/// `true`/`false` for booleans. Only `PhpType::False` pins the boolean value at compile time;
+/// a general `bool` is reported as `bool` here, while the RUNTIME warning emitted by
+/// `__rt_warn_foreach_non_iterable` always prints the real `true`/`false`.
+fn non_iterable_foreach_argument_name(ty: &PhpType) -> Option<&'static str> {
     match ty {
-        PhpType::Object(_) => true,
-        PhpType::Union(members) => members.iter().any(type_is_object_bearing),
-        _ => false,
+        PhpType::Int => Some("int"),
+        PhpType::Float => Some("float"),
+        PhpType::Str => Some("string"),
+        PhpType::False => Some("false"),
+        PhpType::Bool => Some("bool"),
+        PhpType::Void => Some("null"),
+        PhpType::Resource(_) => Some("resource"),
+        _ => None,
     }
-}
-
-/// Collects the names of variables directly reassigned by a top-level `$var = <expr>` statement in
-/// a branch body. Used to scope the post-`if` branch-union join to variables a branch actually
-/// rebinds: a variable only *narrowed* across the branches (each clause tests it but none reassigns
-/// it) rejoins to its pre-`if` type, and reconstructing it as the union of its per-branch narrowings
-/// would needlessly re-partition e.g. `\Throwable` into `FatalError|Error|ErrorException|Throwable`.
-fn collect_body_assigned_vars(body: &[Stmt], out: &mut Vec<String>) {
-    for stmt in body {
-        if let StmtKind::Assign { name, .. } = &stmt.kind {
-            if !out.iter().any(|existing| existing == name) {
-                out.push(name.clone());
-            }
-        }
-    }
-}
-
-/// Snapshots a branch's exit environment for the post-`if` join. Clones the current flow types and
-/// re-applies the precise per-path types a conditional body widens away in `env`: each surviving
-/// direct overwrite (e.g. a `new Concrete()` store reverted to its conservative frame-slot type on
-/// exit) and a trailing `$name = <expr>` assignment (whose value the widened slot would otherwise
-/// mask). A later union over the reaching branches then sees the precise per-path type.
-fn snapshot_branch_exit(
-    env: &TypeEnv,
-    overwrites: &BTreeMap<String, PhpType>,
-    final_assignment: &Option<(String, PhpType)>,
-) -> TypeEnv {
-    let mut snapshot = env.clone();
-    for (name, ty) in overwrites {
-        snapshot.insert(name.clone(), ty.clone());
-    }
-    if let Some((name, ty)) = final_assignment {
-        snapshot.insert(name.clone(), ty.clone());
-    }
-    snapshot
 }
 
 /// Returns the synthetic constructor default flags for filesystem iterators.
@@ -193,57 +126,6 @@ fn filesystem_iterator_default_flags(class_name: &str) -> Option<i64> {
 }
 
 impl Checker {
-    /// Promotes an untyped parameter of the method currently being checked to `Mixed` when
-    /// `foreach` proves that the legacy `Int` fallback is not a usable static representation.
-    ///
-    /// Method schemas initially use `Int` for untyped parameters until a call site specializes
-    /// them. Uncalled framework methods have no such call site, but their bodies are still
-    /// validated and emitted. Recording `Mixed` on the authoritative method signature keeps the
-    /// checker environment, EIR parameter ABI, and runtime `foreach` guard aligned.
-    fn promote_untyped_foreach_method_param(
-        &mut self,
-        iterable: &Expr,
-        iterable_ty: &PhpType,
-        env: &mut TypeEnv,
-    ) -> bool {
-        if !matches!(iterable_ty, PhpType::Int) {
-            return false;
-        }
-        let ExprKind::Variable(param_name) = &iterable.kind else {
-            return false;
-        };
-        let (Some(class_name), Some(method_name)) =
-            (self.current_class.clone(), self.current_method.clone())
-        else {
-            return false;
-        };
-        let Some(class_info) = self.classes.get_mut(&class_name) else {
-            return false;
-        };
-        let sig = if self.current_method_is_static {
-            class_info.static_methods.get_mut(&method_name)
-        } else {
-            class_info.methods.get_mut(&method_name)
-        };
-        let Some(sig) = sig else {
-            return false;
-        };
-        let Some(param_index) = sig.params.iter().position(|(name, _)| name == param_name) else {
-            return false;
-        };
-        if sig
-            .declared_params
-            .get(param_index)
-            .copied()
-            .unwrap_or(false)
-        {
-            return false;
-        }
-        sig.params[param_index].1 = PhpType::Mixed;
-        env.insert(param_name.clone(), PhpType::Mixed);
-        true
-    }
-
     /// Validates control-flow statements and updates the type environment for their assignment effects.
     ///
     /// Dispatches to specific handlers for `foreach`, `switch`, `if`, `do-while`, `while`, `for`,
@@ -263,10 +145,7 @@ impl Checker {
                 value_by_ref,
                 body,
             } => {
-                let mut arr_ty = self.infer_type_with_assignment_effects(array, env)?;
-                if self.promote_untyped_foreach_method_param(array, &arr_ty, env) {
-                    arr_ty = PhpType::Mixed;
-                }
+                let arr_ty = self.infer_type_with_assignment_effects(array, env)?;
                 if let PhpType::Array(elem_ty) = &arr_ty {
                     if let Some(k) = key_var {
                         // A genuinely packed array has int keys; an UNKNOWN-element array (an
@@ -293,38 +172,28 @@ impl Checker {
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                 } else if let PhpType::Object(class_name) = &arr_ty {
-                    let normalized_class_name = class_name.trim_start_matches('\\');
-                    let is_iter = normalized_class_name == "Iterator"
-                        || self.class_implements_interface(class_name, "Iterator")
+                    let is_iter = self.class_implements_interface(class_name, "Iterator")
                         || self.interface_extends_interface(class_name, "Iterator");
-                    let is_iter_agg = normalized_class_name == "IteratorAggregate"
-                        || self.class_implements_interface(class_name, "IteratorAggregate")
+                    let is_iter_agg = self
+                        .class_implements_interface(class_name, "IteratorAggregate")
                         || self.interface_extends_interface(class_name, "IteratorAggregate");
-                    let is_traversable = normalized_class_name == "Traversable"
-                        || self.interface_extends_interface(class_name, "Traversable");
-                    if is_iter || is_iter_agg || is_traversable {
-                        let (key_ty, value_ty) =
-                            self.foreach_object_key_value_types(class_name, array);
-                        if let Some(k) = key_var {
-                            env.insert(k.clone(), key_ty);
-                            self.clear_foreach_callable_metadata(k);
-                        }
-                        env.insert(value_var.clone(), value_ty);
-                        self.clear_foreach_callable_metadata(value_var);
-                    } else {
-                        // A plain object implementing none of Iterator/IteratorAggregate/
-                        // Traversable iterates its accessible declared properties in PHP:
-                        // property-name string keys with values in declaration order. The
-                        // EIR backend snapshots the object's public properties into a hash
-                        // and drives the hash-iteration path (see `lower_iter_start`), so
-                        // bind the key to `Str` and the value to `Mixed` accordingly.
-                        if let Some(k) = key_var {
-                            env.insert(k.clone(), PhpType::Str);
-                            self.clear_foreach_callable_metadata(k);
-                        }
-                        env.insert(value_var.clone(), PhpType::Mixed);
-                        self.clear_foreach_callable_metadata(value_var);
+                    if !is_iter && !is_iter_agg {
+                        return Err(CompileError::new(
+                            stmt.span,
+                            &format!(
+                                "foreach over object requires {} to implement Iterator or IteratorAggregate",
+                                class_name
+                            ),
+                        ));
                     }
+                    let (key_ty, value_ty) =
+                        self.foreach_object_key_value_types(class_name, array);
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), key_ty);
+                        self.clear_foreach_callable_metadata(k);
+                    }
+                    env.insert(value_var.clone(), value_ty);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else if matches!(
                     arr_ty,
                     PhpType::Iterable | PhpType::Mixed | PhpType::Union(_)
@@ -335,13 +204,35 @@ impl Checker {
                     }
                     env.insert(value_var.clone(), PhpType::Mixed);
                     self.clear_foreach_callable_metadata(value_var);
+                } else if let Some(type_name) = non_iterable_foreach_argument_name(&arr_ty) {
+                    // php-src does NOT reject this: `ZEND_FE_RESET_R` raises
+                    // `foreach() argument must be of type array|object, <type> given`
+                    // (E_WARNING), skips the loop body, and execution continues. Mirroring
+                    // that as a hard error would make elephc reject a program PHP runs, so
+                    // the diagnostic is a compile warning and codegen emits the same
+                    // runtime warning (`IteratorSourceKind::NonIterable` in
+                    // `src/codegen/lower_inst/iterators.rs`). Compiler-internal types
+                    // (`Packed`, `Pointer`, `Buffer`, `Never`, `Callable`, `TaggedScalar`)
+                    // have no PHP-visible spelling and stay a hard error below.
+                    self.warnings.push(crate::errors::CompileWarning::new(
+                        stmt.span,
+                        &format!(
+                            "foreach() argument must be of type array|object, {} given; the loop body will never run",
+                            type_name
+                        ),
+                    ));
+                    // The body is still type-checked, so bind both loop variables the way
+                    // the `Mixed` source path does.
+                    if let Some(k) = key_var {
+                        env.insert(k.clone(), PhpType::Mixed);
+                        self.clear_foreach_callable_metadata(k);
+                    }
+                    env.insert(value_var.clone(), PhpType::Mixed);
+                    self.clear_foreach_callable_metadata(value_var);
                 } else {
                     return Err(CompileError::new(
                         stmt.span,
-                        &format!(
-                            "foreach requires an array, iterable, or an object implementing Iterator/IteratorAggregate, got {:?}",
-                            arr_ty
-                        ),
+                        "foreach requires an array, iterable, or an object implementing Iterator/IteratorAggregate",
                     ));
                 }
                 // A foreach key is a boxed `Mixed` cell at runtime regardless of
@@ -380,67 +271,12 @@ impl Checker {
                     }
                 }
                 self.break_continue_depth += 1;
-                // `switch (true)` runs a case body when the case guard is truthy, so the body should
-                // see that guard's narrowing (mirroring the if-then narrowing above). Only narrow a
-                // case body that cannot be reached by falling through from a previous, non-terminating
-                // case: otherwise the case's own guard may be false at runtime when control fell in.
-                // `fall_in_safe` is true for the first case and for any case whose predecessor
-                // terminates (break/continue/return/throw/diverge). The narrowing is inserted into a
-                // saved-and-restored case environment, so it never leaks past the case body.
-                //
-                // Every case is also a direct dispatch target. A terminated predecessor therefore
-                // cannot feed its assignments into the next case; start that sibling from the
-                // switch-entry environment. Non-terminated predecessors keep their environment to
-                // model real fallthrough. Exit environments are joined separately for statements
-                // after the switch, so isolating sibling entry does not lose conservative storage
-                // widening across the construct.
-                let subject_is_true = matches!(&subject.kind, ExprKind::BoolLiteral(true));
-                let switch_entry_env = env.clone();
-                let mut switch_exit_env = switch_entry_env.clone();
-                let mut previous_case_env: Option<TypeEnv> = None;
-                let mut prev_terminates = true;
-                for (values, body) in cases {
-                    let fall_in_safe = prev_terminates;
-                    let mut case_env = if prev_terminates {
-                        switch_entry_env.clone()
-                    } else {
-                        previous_case_env
-                            .take()
-                            .unwrap_or_else(|| switch_entry_env.clone())
-                    };
-                    if subject_is_true && fall_in_safe && values.len() == 1 {
-                        let narrowings =
-                            self.and_chain_then_narrowings(&values[0], &case_env);
-                        let saved: Vec<(String, Option<PhpType>)> = narrowings
-                            .iter()
-                            .map(|(var, _)| (var.clone(), case_env.get(var).cloned()))
-                            .collect();
-                        for (var, then_ty) in &narrowings {
-                            case_env.insert(var.clone(), then_ty.clone());
-                        }
-                        errors.extend(self.check_body(body, &mut case_env));
-                        for (var, original) in &saved {
-                            restore_narrowed_var(&mut case_env, var, original);
-                        }
-                    } else {
-                        errors.extend(self.check_body(body, &mut case_env));
-                    }
-                    self.merge_switch_path_env(&mut switch_exit_env, &case_env);
-                    prev_terminates = self.case_body_terminates(body);
-                    previous_case_env = Some(case_env);
+                for (_, body) in cases {
+                    errors.extend(self.check_body(body, env));
                 }
                 if let Some(body) = default {
-                    let mut default_env = if prev_terminates {
-                        switch_entry_env.clone()
-                    } else {
-                        previous_case_env
-                            .take()
-                            .unwrap_or_else(|| switch_entry_env.clone())
-                    };
-                    errors.extend(self.check_body(body, &mut default_env));
-                    self.merge_switch_path_env(&mut switch_exit_env, &default_env);
+                    errors.extend(self.check_body(body, env));
                 }
-                *env = switch_exit_env;
                 self.break_continue_depth -= 1;
                 if errors.is_empty() {
                     Ok(())
@@ -475,199 +311,78 @@ impl Checker {
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
                 let mut applied_any_guard = false;
-                // Set when the clause loop already persisted a top-level `||` condition's De Morgan
-                // complement on the fall-through edge, so the single-clause block after the join
-                // does not apply the same narrowing a second time against an already-narrowed
-                // environment.
-                let mut or_complement_applied = false;
-                let track_single_guard_convergence =
-                    clauses.len() == 1 && else_body.is_none();
-                let mut single_guard_then_exit: Option<(String, PhpType, bool)> = None;
-                let mut branch_overwrites = Vec::new();
-                // Exit environment of every branch that can fall through past the `if`. The post-`if`
-                // type of a joined variable is the union of its type across them, which is precise
-                // only when every path reaching the following code is one of the recorded snapshots.
-                //
-                // With an explicit `else` those are exactly the branch bodies. Without one, the
-                // implicit false edge also reaches, so it is recorded too — as the accumulated
-                // complement env, which is what a value satisfying no condition actually carries.
-                // A single guard with no `else` is excluded: `single_guard_then_exit` below already
-                // computes that same two-path union and additionally refines it when the false edge
-                // is impossible, so re-deriving it here would only widen it back.
-                let record_branch_exits = else_body.is_some() || clauses.len() > 1;
-                let mut branch_exit_snapshots: Vec<TypeEnv> = Vec::new();
-                // Variables bound inside a clause condition (`if (!$x = f())`). Their condition type
-                // otherwise persists past the construct even when a later branch reassigns them, so
-                // they take the branch-union at the join, alongside the guard-narrowed `saved_vars`.
-                let mut condition_assigned_vars: Vec<String> = Vec::new();
-                let mut precise_object_overwrites = if let Some(else_branch) = else_body {
-                    let mut branch_bodies: Vec<&[Stmt]> =
-                        clauses.iter().map(|(_, body)| body.as_slice()).collect();
-                    branch_bodies.push(else_branch.as_slice());
-                    Self::convergent_direct_object_overwrites(&branch_bodies)
-                } else {
-                    BTreeMap::new()
-                };
-                precise_object_overwrites.retain(|name, _| {
-                    matches!(
-                        env.get(name),
-                        Some(
-                            PhpType::Str
-                                | PhpType::Int
-                                | PhpType::Float
-                                | PhpType::Bool
-                                | PhpType::False
-                                | PhpType::Void
-                        )
-                    )
-                });
+                // Single-clause join state: the guarded key and the type it has where the
+                // then-branch falls out of the construct. `None` means "no usable fact" (the
+                // branch diverged, or a call inside it purged the narrowing).
+                let mut join_key: Option<String> = None;
+                let mut then_exit_ty: Option<PhpType> = None;
+                let single_clause = clauses.len() == 1;
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
-                    if else_body.is_some() {
-                        collect_condition_assigned_vars(cond, &mut condition_assigned_vars);
-                    }
 
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
                         // Remember the variable's pre-`if` type the first time we narrow it.
-                        remember_pre_if_type(&mut saved_vars, &guard.var, env);
+                        if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
+                            saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
+                        }
 
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
                         env.insert(guard.var.clone(), guard.then_ty.clone());
-                        // Assignment-receiver aliases (`$f = $src`) hold the same value on branch
-                        // entry, so they take the same narrowing in the guarded body. This is a
-                        // branch-entry fact; a later reassignment inside the body overwrites it.
-                        for alias in &guard.aliases {
-                            env.insert(alias.clone(), guard.then_ty.clone());
+                        for s in *body {
+                            if let Err(error) = self.check_stmt(s, env) {
+                                errors.extend(error.flatten());
+                            }
                         }
-                        let (body_errors, overwrites, final_assignment) = self
-                            .check_conditional_path_body(
-                            body,
-                            &precise_object_overwrites,
-                            env,
-                        );
-                        errors.extend(body_errors);
-                        if !self.body_cannot_fall_through(body) {
-                            if track_single_guard_convergence {
-                                if let Some(exit_ty) = final_assignment
-                                    .as_ref()
-                                    .filter(|(name, _)| name == &guard.var)
-                                    .map(|(_, ty)| ty.clone())
-                                    .or_else(|| overwrites.get(&guard.var).cloned())
-                                    .or_else(|| env.get(&guard.var).cloned())
-                                {
-                                    let false_edge_impossible =
-                                        saved.as_ref() == Some(&guard.then_ty);
-                                    single_guard_then_exit = Some((
-                                        guard.var.clone(),
-                                        exit_ty,
-                                        false_edge_impossible,
-                                    ));
-                                }
-                            }
-                            if record_branch_exits {
-                                branch_exit_snapshots.push(snapshot_branch_exit(
-                                    env,
-                                    &overwrites,
-                                    &final_assignment,
-                                ));
-                            }
-                            branch_overwrites.push(overwrites);
+                        // Join only when the then-branch WROTE the guarded place, i.e. when the
+                        // fact at branch exit is no longer the guard's own `then` type. That is
+                        // exactly the lazy-initialization shape; joining unconditionally would
+                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
+                        // after the `if`, where it does not hold.
+                        let branch_exit = env.get(&guard.var);
+                        if single_clause
+                            && Self::narrowed_place_key_is_property(&guard.var)
+                            && !self.body_cannot_fall_through(body)
+                            && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
+                        {
+                            join_key = Some(guard.var.clone());
+                            then_exit_ty = branch_exit.cloned();
                         }
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
                         // sees the complement.
                         env.insert(guard.var.clone(), guard.else_ty.clone());
-                        // Assignment-receiver aliases (`$f = $src`) share the value, so the
-                        // complement applies to them on the fallthrough edge too.
-                        for alias in &guard.aliases {
-                            env.insert(alias.clone(), guard.else_ty.clone());
-                        }
                     } else {
-                        // A pure `&&` condition can prove several independent facts in its
-                        // true branch. Its false-side complement is a disjunction, which this
-                        // environment can represent only when every conjunct constrains the same
-                        // binding (`and_chain_else_narrowings`); a top-level `||` condition
-                        // contributes its De Morgan complement to the same fall-through edge.
-                        // Anything else leaves the fall-through environment unchanged.
-                        let narrowings = self.and_chain_then_narrowings(cond, env);
-                        let saved: Vec<(String, Option<PhpType>)> = narrowings
-                            .iter()
-                            .map(|(var, _)| (var.clone(), env.get(var).cloned()))
-                            .collect();
-                        for (var, then_ty) in &narrowings {
-                            remember_pre_if_type(&mut saved_vars, var, env);
-                            env.insert(var.clone(), then_ty.clone());
-                        }
-                        let (body_errors, overwrites, final_assignment) =
-                            self.check_conditional_path_body(
-                                body,
-                                &precise_object_overwrites,
-                                env,
-                            );
-                        errors.extend(body_errors);
-                        if !self.body_cannot_fall_through(body) {
-                            if record_branch_exits {
-                                branch_exit_snapshots.push(snapshot_branch_exit(
-                                    env,
-                                    &overwrites,
-                                    &final_assignment,
-                                ));
+                        // No narrowing for this clause — check the body with the current env.
+                        for s in *body {
+                            if let Err(error) = self.check_stmt(s, env) {
+                                errors.extend(error.flatten());
                             }
-                            branch_overwrites.push(overwrites);
-                        }
-                        for (var, original) in &saved {
-                            restore_narrowed_var(env, var, original);
-                        }
-                        // Falling past this clause proves its condition false. A `&&` chain whose
-                        // conjuncts all constrain one binding, and a top-level `||` chain, both
-                        // have a false edge this environment can represent, so persist it for the
-                        // remaining clauses, the `else` body, and — when no clause falls through —
-                        // the statements after the `if`.
-                        let mut complements = self.and_chain_else_narrowings(cond, env);
-                        let or_complements = self.or_chain_complement_narrowings(cond, env);
-                        or_complement_applied |= !or_complements.is_empty();
-                        complements.extend(or_complements);
-                        if !complements.is_empty() {
-                            applied_any_guard = true;
-                        }
-                        for (var, else_ty) in complements {
-                            remember_pre_if_type(&mut saved_vars, &var, env);
-                            env.insert(var, else_ty);
                         }
                     }
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
+                // `None` = the else path cannot reach the code after the `if`. `Some(None)` = it
+                // can, but the guarded fact was lost there. `Some(Some(ty))` = it can and the
+                // fact is `ty`.
+                let mut else_exit_ty: Option<Option<PhpType>> = None;
+                let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
-                    let (body_errors, overwrites, final_assignment) =
-                        self.check_conditional_path_body(
-                            body,
-                            &precise_object_overwrites,
-                            env,
-                        );
-                    errors.extend(body_errors);
-                    if !self.body_cannot_fall_through(body) {
-                        branch_exit_snapshots.push(snapshot_branch_exit(
-                            env,
-                            &overwrites,
-                            &final_assignment,
-                        ));
-                        branch_overwrites.push(overwrites);
+                    for s in body {
+                        if let Err(error) = self.check_stmt(s, env) {
+                            errors.extend(error.flatten());
+                        }
                     }
-                } else {
-                    // The implicit false edge reaches the code after the `if` carrying the
-                    // accumulated complement — the type a value satisfying no clause condition
-                    // actually has. Recording it as a reaching path keeps the union below sound
-                    // for a chain that has no `else`.
-                    if record_branch_exits {
-                        branch_exit_snapshots.push(env.clone());
+                    else_falls_through = !self.body_cannot_fall_through(body);
+                }
+                if let Some(key) = &join_key {
+                    if else_falls_through {
+                        else_exit_ty = Some(env.get(key).cloned());
                     }
-                    // The implicit false edge performs no unconditional overwrite.
-                    branch_overwrites.push(BTreeMap::new());
                 }
 
                 // Keep the accumulated complement for the statements after the `if` only when no
@@ -679,171 +394,27 @@ impl Checker {
                     && clauses
                         .iter()
                         .all(|(_, body)| self.body_cannot_fall_through(body));
+                // A single guarded clause whose then-branch also falls through joins the two
+                // exit facts instead of discarding both. `if (X === null) { X = new S(); }`
+                // leaves `S` on the then path (the write recorded it) and `S` on the else path
+                // (the guard complement), so the union is `S` — the singleton pattern.
+                let joined = join_key.as_ref().and_then(|key| {
+                    let then_ty = then_exit_ty.clone()?;
+                    let joined = match &else_exit_ty {
+                        None => then_ty,
+                        Some(Some(else_ty)) => {
+                            self.normalize_union_type(vec![then_ty, else_ty.clone()])
+                        }
+                        Some(None) => return None,
+                    };
+                    Some((key.clone(), joined))
+                });
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
-                        let converged = single_guard_then_exit
-                            .as_ref()
-                            .and_then(|(then_var, then_ty, false_edge_impossible)| {
-                                if then_var != var {
-                                    return None;
-                                }
-                                if *false_edge_impossible {
-                                    return Some(then_ty.clone());
-                                }
-                                let false_ty = env.get(var)?;
-                                if false_ty == then_ty {
-                                    return Some(then_ty.clone());
-                                }
-                                if Self::array_family_gradual_accepts(false_ty, then_ty) {
-                                    if let Some(merged) =
-                                        self.merged_assignment_type(false_ty, then_ty)
-                                    {
-                                        return Some(merged);
-                                    }
-                                }
-                                // Single guard, no `else`: exactly two paths reach the code after
-                                // the `if` — the guard-true body exit (`then_ty`) and the
-                                // guard-false complement (`false_ty`). The precise post-`if` type
-                                // is their union. Falling through to restore the pre-`if` type
-                                // needlessly widened the variable back to members the complement
-                                // had eliminated (`if ($x instanceof C) { $x = ...; }` over a
-                                // `string|C|null` value kept `C` in the join, so a following use
-                                // saw the object member the `instanceof` had just ruled out).
-                                Some(self.normalize_union_type(vec![
-                                    then_ty.clone(),
-                                    false_ty.clone(),
-                                ]))
-                            });
-                        if let Some(converged) = converged {
-                            env.insert(var.clone(), converged);
-                        } else {
-                            restore_narrowed_var(env, var, original);
-                        }
+                        restore_narrowed_var(env, var, original);
                     }
-
-                    // Every path that reaches the code after the `if` is one of the recorded branch
-                    // exits: a clause body that falls through, the `else` body, or — for a chain
-                    // with no `else` — the implicit false edge carrying the accumulated complement
-                    // (a clause that diverges via `return`/`continue`/`throw` records nothing).
-                    // A variable that a branch *reassigns* therefore has, after the `if`, the union of
-                    // its type across those reaching branches. This is the precise flow join, scoped
-                    // to variables that are both (a) narrowed by a guard or bound in a clause
-                    // condition and (b) reassigned by some branch: it recovers an `else`-branch (or
-                    // `elseif`-condition) reassignment the path-insensitive frame-slot join would
-                    // otherwise leave carrying a value only live on a path that reassigned or diverged
-                    // away from it — e.g. Symfony's `ResolveAutowireInlineAttributesPass`, where
-                    // `$attribute` is bound in an `elseif` condition, that clause `continue`s, and the
-                    // `else` rebinds it via `newInstance()`, so `ReflectionAttribute` never reaches
-                    // the following `$attribute->value`. A variable only narrowed across the branches
-                    // (`if ($e instanceof Error) ... elseif ... else ...` over a `\Throwable`, no
-                    // clause rebinding `$e`) is excluded: it rejoins to its pre-`if` type rather than
-                    // a re-partitioned union, and gradual/`Mixed` slots are never tightened here.
-                    if !branch_exit_snapshots.is_empty() {
-                        let mut reassigned_in_branch: Vec<String> = Vec::new();
-                        for (_, body) in &clauses {
-                            collect_body_assigned_vars(body, &mut reassigned_in_branch);
-                        }
-                        if let Some(else_branch) = else_body {
-                            collect_body_assigned_vars(else_branch, &mut reassigned_in_branch);
-                        }
-                        let mut joined: Vec<(String, PhpType)> = Vec::new();
-                        let join_names = saved_vars
-                            .iter()
-                            .map(|(name, _)| name)
-                            .chain(condition_assigned_vars.iter());
-                        let mut seen: Vec<&String> = Vec::new();
-                        for name in join_names {
-                            if seen.iter().any(|existing| *existing == name) {
-                                continue;
-                            }
-                            seen.push(name);
-                            if !reassigned_in_branch.iter().any(|v| v == name) {
-                                continue;
-                            }
-                            // Two reasons a name reaches the join, and they need different scoping.
-                            //
-                            // The original one is an OBJECT member going stale in the frame slot,
-                            // which is why a scalar/gradual local used to be left untouched here.
-                            //
-                            // The second is the one that gate silently swallowed: the restore above
-                            // puts every narrowed variable back to its PRE-`if` type, which is right
-                            // for the narrowing and wrong for an ASSIGNMENT made under it. `$loop =
-                            // null; if (null !== $loop) {} elseif (…) { $loop = []; }` came out of
-                            // the construct as `null` — PHP's own `array|null` was thrown away, and
-                            // only because the guard happened to test `$loop` itself (guarding any
-                            // OTHER variable kept the assignment). Symfony's `PhpDumper` builds its
-                            // circular-reference path in exactly that shape.
-                            //
-                            // So the join now also covers a narrowed variable whose branch-exit
-                            // types are not all the restored type. That is strictly the union over
-                            // the reaching branches, which is what the restored value was standing
-                            // in for.
-                            let restored = env.get(name);
-                            let assignment_changed_it = branch_exit_snapshots
-                                .iter()
-                                .any(|snapshot| snapshot.get(name) != restored);
-                            if !restored.is_some_and(type_is_object_bearing) && !assignment_changed_it
-                            {
-                                continue;
-                            }
-                            let mut members = Vec::with_capacity(branch_exit_snapshots.len());
-                            let mut bound_on_every_branch = true;
-                            for snapshot in &branch_exit_snapshots {
-                                match snapshot.get(name) {
-                                    Some(ty) => members.push(ty.clone()),
-                                    // Not bound on this reaching branch: possibly-undefined after the
-                                    // `if`, so leave its env entry untouched rather than narrow it.
-                                    None => {
-                                        bound_on_every_branch = false;
-                                        break;
-                                    }
-                                }
-                            }
-                            if bound_on_every_branch && !members.is_empty() {
-                                joined.push((name.clone(), self.normalize_union_type(members)));
-                            }
-                        }
-                        for (name, ty) in joined {
-                            env.insert(name, ty);
-                        }
-                    }
-                }
-
-                // A local directly overwritten to the same type on every continuing branch has
-                // that precise flow type after the `if`, even though its frame slot remains
-                // conservatively widened while each conditional store is checked.
-                if let Some(first) = branch_overwrites.first() {
-                    for (name, ty) in first {
-                        if branch_overwrites
-                            .iter()
-                            .all(|path| path.get(name) == Some(ty))
-                        {
-                            env.insert(name.clone(), ty.clone());
-                        }
-                    }
-                }
-
-                // De Morgan complement for a diverging single-clause `if (A || B) { <diverges> }`:
-                // reaching the statements after the `if` proves the whole `||` condition was false,
-                // hence every disjunct false. Persist each disjunct's guard-false narrowing so a
-                // receiver proven by `!(cond || !$x instanceof T)` (i.e. `$x instanceof T`) is usable
-                // afterward. Gated on a body that cannot fall through (the only way past the `if` is
-                // with the condition false) and on there being no elseif/else clause — a
-                // fall-through clause would leave another path to the following code.
-                //
-                // Skipped when the clause loop already persisted the same complement: with no
-                // `elseif` the loop's only clause *is* this `if`, so re-deriving the disjuncts'
-                // guard-false facts here would run them against an environment they have already
-                // narrowed. That second pass is not guaranteed to be a no-op — a guard whose
-                // false type is computed from the receiver's current type would be applied twice —
-                // so the duplicate is removed rather than assumed idempotent.
-                if else_body.is_none()
-                    && elseif_clauses.is_empty()
-                    && !or_complement_applied
-                    && self.body_cannot_fall_through(then_body)
-                {
-                    for (var, then_ty) in self.or_chain_complement_narrowings(condition, env) {
-                        env.insert(var, then_ty);
+                    if let Some((key, joined)) = joined {
+                        env.insert(key, joined);
                     }
                 }
 
@@ -866,21 +437,7 @@ impl Checker {
             StmtKind::While { condition, body } => {
                 stabilize_loop_storage(self, stmt.span, body, None, env);
                 self.infer_type_with_assignment_effects(condition, env)?;
-                // Entering the body proves every guard in a pure `&&` condition true. Keep these
-                // facts scoped to the body: a while may execute zero times, so they cannot refine
-                // the environment after the loop.
-                let narrowings = self.and_chain_then_narrowings(condition, env);
-                let saved: Vec<(String, Option<PhpType>)> = narrowings
-                    .iter()
-                    .map(|(var, _)| (var.clone(), env.get(var).cloned()))
-                    .collect();
-                for (var, then_ty) in &narrowings {
-                    env.insert(var.clone(), then_ty.clone());
-                }
                 let errors = self.check_break_continue_target_body(body, env);
-                for (var, original) in &saved {
-                    restore_narrowed_var(env, var, original);
-                }
                 if errors.is_empty() {
                     Ok(())
                 } else {
@@ -892,14 +449,24 @@ impl Checker {
                 condition,
                 update,
                 body,
-            } => self.check_for_stmt(
-                stmt.span,
-                init.as_deref(),
-                condition.as_ref(),
-                update.as_deref(),
-                body,
-                env,
-            ),
+            } => {
+                if let Some(s) = init {
+                    self.check_stmt(s, env)?;
+                }
+                stabilize_loop_storage(self, stmt.span, body, update.as_deref(), env);
+                if let Some(c) = condition {
+                    self.infer_type_with_assignment_effects(c, env)?;
+                }
+                if let Some(s) = update {
+                    self.check_stmt(s, env)?;
+                }
+                let errors = self.check_break_continue_target_body(body, env);
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(CompileError::from_many(errors))
+                }
+            }
             StmtKind::Throw(expr) => {
                 let thrown_ty = self.infer_type_with_assignment_effects(expr, env)?;
                 match thrown_ty {
@@ -912,13 +479,6 @@ impl Checker {
                         stmt.span,
                         "Type error: throw requires an object implementing Throwable",
                     )),
-                    // Gradual operands — `Mixed` (e.g. `throw new <class not in the closed
-                    // world>`, which degrades to `Mixed`), `?Object`/`Object|null`, an
-                    // object-plus-scalar union, or any union containing an object/`Mixed`
-                    // member — cannot have their Throwable contract proven statically. PHP
-                    // only enforces it at runtime, so accept here (the EIR backend still
-                    // faults a non-Throwable at throw time). A proven non-object stays loud.
-                    ref ty if type_is_gradual_object_family(ty) => Ok(()),
                     _ => Err(CompileError::new(
                         stmt.span,
                         "Type error: throw requires an object value",
@@ -932,7 +492,7 @@ impl Checker {
             } => {
                 let mut errors = Vec::new();
                 for s in try_body {
-                    if let Err(error) = self.check_conditional_stmt(s, env) {
+                    if let Err(error) = self.check_stmt(s, env) {
                         errors.extend(error.flatten());
                     }
                 }
@@ -944,15 +504,6 @@ impl Checker {
                         if !self.classes.contains_key(&exception_type)
                             && !self.interfaces.contains_key(&exception_type)
                         {
-                            // An exception type that is unknown everywhere in the closed world is
-                            // an absent optional dependency (e.g. `ProcessFailedException`): warn
-                            // and skip it rather than erroring. The class does not exist at runtime,
-                            // so the clause simply never matches; `$e` is bound below from whatever
-                            // types did resolve (falling back to `Throwable` when none did).
-                            if !self.class_like_exists(&exception_type) {
-                                self.warn_absent_class(stmt.span, &exception_type);
-                                continue;
-                            }
                             return Err(CompileError::new(
                                 stmt.span,
                                 &format!("Undefined class: {}", exception_type),
@@ -976,7 +527,7 @@ impl Checker {
                         );
                     }
                     for s in &catch_clause.body {
-                        if let Err(error) = self.check_conditional_stmt(s, env) {
+                        if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
                     }
@@ -1152,59 +703,6 @@ impl Checker {
         errors
     }
 
-    /// Checks a `for` statement in PHP execution order while keeping its initializer precise.
-    ///
-    /// A nested `for` can itself sit on a conditional path, but once its body is entered the
-    /// initializer has definitely executed. Temporarily removing the enclosing conditional depth
-    /// lets that initializer overwrite stale flow types for the body; the completed loop path is
-    /// joined back with the entry environment before returning to the enclosing conditional path.
-    fn check_for_stmt(
-        &mut self,
-        loop_span: crate::span::Span,
-        init: Option<&Stmt>,
-        condition: Option<&Expr>,
-        update: Option<&Stmt>,
-        body: &[Stmt],
-        env: &mut TypeEnv,
-    ) -> Result<(), CompileError> {
-        let enclosing_conditional_depth = self.conditional_assignment_depth;
-        let conditional_entry_env =
-            (enclosing_conditional_depth > 0).then(|| env.clone());
-        if conditional_entry_env.is_some() {
-            self.conditional_assignment_depth = 0;
-        }
-
-        let result = (|| {
-            if let Some(stmt) = init {
-                self.check_stmt(stmt, env)?;
-            }
-            stabilize_loop_storage(self, loop_span, body, update, env);
-            if let Some(expr) = condition {
-                self.infer_type_with_assignment_effects(expr, env)?;
-            }
-            // Check in PHP execution order: on the first iteration the body observes the types
-            // established by `init`, while `update` runs only after that body. This is especially
-            // important for integer `++`/`--`: their post-update type is `Mixed` because overflow
-            // may promote to float, but that future type must not infect the preceding body.
-            let errors = self.check_break_continue_target_body(body, env);
-            if let Some(stmt) = update {
-                self.check_conditional_stmt(stmt, env)?;
-            }
-            if errors.is_empty() {
-                Ok(())
-            } else {
-                Err(CompileError::from_many(errors))
-            }
-        })();
-
-        self.conditional_assignment_depth = enclosing_conditional_depth;
-        if let Some(entry_env) = conditional_entry_env {
-            let path_env = std::mem::replace(env, entry_env);
-            self.merge_switch_path_env(env, &path_env);
-        }
-        result
-    }
-
     /// Updates callable metadata for a foreach value variable.
     ///
     /// Homogeneous arrays that store callable descriptors keep their signature
@@ -1268,173 +766,18 @@ impl Checker {
         self.first_class_callable_targets.remove(dest);
     }
 
-    /// Joins one switch path into the conservative environment used after the switch.
-    fn merge_switch_path_env(&self, merged: &mut TypeEnv, path: &TypeEnv) {
-        for (name, path_ty) in path {
-            let Some(existing) = merged.get(name).cloned() else {
-                merged.insert(name.clone(), path_ty.clone());
-                continue;
-            };
-            if existing == *path_ty {
-                continue;
-            }
-            merged.insert(
-                name.clone(),
-                self.normalize_union_type(vec![existing, path_ty.clone()]),
-            );
-        }
-    }
-
     /// Checks each statement in a body sequentially, collecting all errors.
     ///
     /// Unlike `check_break_continue_target_body`, this does not update `break_continue_depth`.
     /// Used for `switch` cases, `if` branches, `try` blocks, and other bodies where the
     /// break/continue level is managed at a higher level.
     fn check_body(&mut self, body: &[Stmt], env: &mut TypeEnv) -> Vec<CompileError> {
-        self.conditional_assignment_depth += 1;
         let mut errors = Vec::new();
         for stmt in body {
             if let Err(error) = self.check_stmt(stmt, env) {
                 errors.extend(error.flatten());
             }
         }
-        self.conditional_assignment_depth -= 1;
         errors
-    }
-
-    /// Checks one conditional path while retaining precise direct-overwrite types between its
-    /// statements, then restores the conservative storage joins before returning.
-    ///
-    /// The returned map contains locals whose precise overwrite survived to the path exit. The
-    /// enclosing `if` may keep such a type only when every continuing branch reports the same
-    /// overwrite. The third element is the `(name, type)` of a trailing `$name = <expr>` statement,
-    /// inferred with the pre-statement environment: nothing runs after it on this path, so it is the
-    /// variable's precise flow type at the branch exit — used both for single-guard convergence and
-    /// for the post-`if` branch join (a conditional store otherwise widens the local's env entry
-    /// back to its conservative frame slot, discarding the assigned value).
-    fn check_conditional_path_body(
-        &mut self,
-        body: &[Stmt],
-        precise_object_overwrites: &BTreeMap<String, PhpType>,
-        env: &mut TypeEnv,
-    ) -> (
-        Vec<CompileError>,
-        BTreeMap<String, PhpType>,
-        Option<(String, PhpType)>,
-    ) {
-        let mut errors = Vec::new();
-        let mut precise_overwrites = BTreeMap::new();
-        let mut conservative_types = BTreeMap::new();
-        let mut final_assignment = None;
-        for (index, stmt) in body.iter().enumerate() {
-            if index + 1 == body.len() {
-                if let StmtKind::Assign { name, value } = &stmt.kind {
-                    final_assignment = self
-                        .infer_type(value, env)
-                        .ok()
-                        .map(|ty| (name.clone(), ty));
-                }
-            }
-            let direct_overwrite = match &stmt.kind {
-                StmtKind::Assign { name, value }
-                    if precise_object_overwrites.contains_key(name)
-                        && !matches!(
-                            &value.kind,
-                            ExprKind::NullCoalesce { value: current, .. }
-                                if matches!(&current.kind, ExprKind::Variable(current_name) if current_name == name)
-                        ) =>
-                {
-                    self.infer_type(value, env)
-                        .ok()
-                        .or_else(|| self.assignment_recovery_call_return_type(value))
-                        .filter(|ty| precise_object_overwrites.get(name) == Some(ty))
-                        .map(|ty| (name.clone(), ty))
-                }
-                // Flow-sensitive concrete-object assignment: `$x = new Concrete()` types `$x` as
-                // that exact class for the reads that follow it on THIS path, even when a sibling
-                // branch assigns a different (e.g. base) class and the storage-wide join is the
-                // common base. The join is restored at branch exit (via `conservative_types`), so
-                // the type after the whole `if` stays the conservative least-upper-bound — a
-                // Derived-only call past the merge still errors.
-                StmtKind::Assign { name, value }
-                    if matches!(&value.kind, ExprKind::NewObject { .. }) =>
-                {
-                    match self.infer_type(value, env) {
-                        Ok(PhpType::Object(class)) if !class.is_empty() => {
-                            Some((name.clone(), PhpType::Object(class)))
-                        }
-                        _ => None,
-                    }
-                }
-                _ => None,
-            };
-            let result = self.check_conditional_stmt(stmt, env);
-            if let Err(error) = result {
-                errors.extend(error.flatten());
-            }
-
-            if let Some((name, ty)) = direct_overwrite {
-                if let Some(conservative) = env.get(&name).cloned() {
-                    conservative_types.insert(name.clone(), conservative);
-                    env.insert(name.clone(), ty.clone());
-                    precise_overwrites.insert(name, ty);
-                };
-            } else {
-                precise_overwrites.retain(|name, ty| env.get(name) == Some(ty));
-            }
-        }
-        for name in precise_overwrites.keys() {
-            if let Some(conservative) = conservative_types.get(name).cloned() {
-                env.insert(name.clone(), conservative);
-            }
-        }
-        (errors, precise_overwrites, final_assignment)
-    }
-
-    /// Returns direct local overwrites by concrete `new` expressions that survive to a branch's
-    /// end; a later direct assignment to the same local invalidates the earlier object fact.
-    fn direct_object_overwrites(body: &[Stmt]) -> BTreeMap<String, PhpType> {
-        let mut overwrites = BTreeMap::new();
-        for stmt in body {
-            if let StmtKind::Assign { name, value } = &stmt.kind {
-                if let ExprKind::NewObject { class_name, .. } = &value.kind {
-                    overwrites.insert(
-                        name.clone(),
-                        PhpType::Object(class_name.as_str().trim_start_matches('\\').to_string()),
-                    );
-                } else {
-                    overwrites.remove(name);
-                }
-            }
-        }
-        overwrites
-    }
-
-    /// Intersects direct object overwrites across every explicit branch, retaining only locals
-    /// assigned the same concrete class on all paths.
-    fn convergent_direct_object_overwrites(
-        branches: &[&[Stmt]],
-    ) -> BTreeMap<String, PhpType> {
-        let Some(first) = branches.first() else {
-            return BTreeMap::new();
-        };
-        let mut convergent = Self::direct_object_overwrites(first);
-        for branch in branches.iter().skip(1) {
-            let branch_overwrites = Self::direct_object_overwrites(branch);
-            convergent.retain(|name, ty| branch_overwrites.get(name) == Some(ty));
-        }
-        convergent
-    }
-
-    /// Checks one statement whose writes may be skipped by the surrounding control-flow edge.
-    fn check_conditional_stmt(
-        &mut self,
-        stmt: &Stmt,
-        env: &mut TypeEnv,
-    ) -> Result<(), CompileError> {
-        self.conditional_assignment_depth += 1;
-        let result = self.check_stmt(stmt, env);
-        self.conditional_assignment_depth -= 1;
-        result
     }
 }

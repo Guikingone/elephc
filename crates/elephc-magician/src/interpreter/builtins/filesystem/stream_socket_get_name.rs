@@ -9,9 +9,8 @@
 //!   internal stream table ids.
 
 eval_builtin! {
-    name: "stream_socket_get_name",
+    contract: "stream_socket_get_name",
     area: Filesystem,
-    params: [socket, remote],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -65,9 +64,5 @@ pub(in crate::interpreter) fn eval_socket_resource_id(
     resource: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(resource)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(resource, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(resource, values)
 }

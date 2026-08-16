@@ -35,10 +35,15 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 ## Name resolution rules
 - Unqualified class names honor `use` aliases, otherwise resolve relative to current namespace
 - Functions/constants: `use function`/`use const` aliases first, then current namespace, then global fallback
-- Fully-qualified `\Lib\Tool` always refers to global canonical name
+- Qualified names (containing `\` but not starting with one) have their **first segment** expanded
+  through the class/namespace import table — the plain `use` table — whether the name denotes a
+  class, a function, or a constant. With `use App\Math as M;`, all of `M\double(5)`,
+  `new M\Thing()`, `M\Thing::method()`, `$x instanceof M\Thing` and `M\FOO` resolve into
+  `App\Math`. Only the first segment is substituted, and `use function` / `use const` aliases do
+  not participate (they apply to unqualified names only), matching PHP
+- Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
+  alias expansion, so `\M\double()` is *not* rewritten
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
-
-The global fallback also covers a function declared conditionally, the Composer-polyfill shape (`if (!function_exists('some_func')) { function some_func() {...} }`), whether the guard and declaration live in the same program as the caller or in a separate Composer `autoload.files` entry loaded independently. A namespaced caller's unqualified `some_func()` still resolves to the eventual global declaration in both cases, matching PHP.
 
 ## Case sensitivity
 
@@ -54,8 +59,12 @@ elephc follows PHP's symbol case rules:
 String-literal callback names follow the same resolution rules as function calls.
 
 `function_exists()` is introspection rather than invocation: its string argument
-is checked as a literal global or fully-qualified function name. It does not
-apply the current namespace or `use function` imports to an unqualified string.
+is checked as a global or fully-qualified function name (a single leading `\` is
+accepted, as in PHP). It does not apply the current namespace or `use function`
+imports to an unqualified string. The name does not have to be a literal: a
+literal const-folds at compile time, while any other `string` expression is
+matched case-insensitively at run time against the set of functions the binary
+declares — that set is fixed by the AOT link, so both forms always agree.
 
 ## Include / Require
 ```php
@@ -184,11 +193,19 @@ Rejected (compile error):
 
 `const` or `define()` calls inside functions, methods, loops, and branches are scoped to that resolved body during include expansion. They do not leak into the surrounding top-level include path resolver.
 
-**Other limitations:** Included files must start with `<?php`. Runtime-dynamic include paths are not supported by the current AOT resolver.
+**Other limitations:** Tagged-PHP included files must start with `<?php`;
+physical `.lfc` targets are parsed as tagless code. Runtime-dynamic include
+paths are not supported by the current AOT resolver.
 
 ## Composer PSR-4 autoload (static)
 
-The compiler reads `composer.json` from the directory containing the entry `.php` file and from each `vendor/<vendor>/<package>/composer.json`. PSR-4 mappings in those files are walked at compile time, and any class your program references is resolved through the resulting index — equivalent in spirit to `composer dump-autoload --classmap-authoritative`, but executed during compilation.
+The compiler reads `composer.json` from the directory containing the entry
+source file and from each `vendor/<vendor>/<package>/composer.json`. PSR-4
+mappings in those files are walked at compile time, and any class your program
+references is resolved through the resulting index — equivalent in spirit to
+`composer dump-autoload --classmap-authoritative`, but executed during
+compilation. Directory scans recognize tagged `.php` and tagless `.lfc` class
+files.
 
 ```json
 // composer.json
@@ -218,8 +235,8 @@ The compiler reads four `autoload` (and `autoload-dev`) subsections:
 |---|---|
 | `psr-4` | Standard PSR-4 mapping. Multiple namespace prefixes resolve longest-first, matching composer's rule. Empty prefix `""` (root namespace) is supported |
 | `psr-0` | Legacy PSR-0 mapping. Both namespaced prefixes (`Vendor\\Pkg\\`) and underscore-class prefixes (`Twig_`) are supported |
-| `classmap` | List of files or directories to scan. Every `.php` file is parsed and its class/interface/trait/enum declarations are added to the FQN→file index. Useful for non-PSR code |
-| `files` | List of files that must always be inlined at compile time, regardless of which classes the program references. Spliced into the program at the start of the autoload pass |
+| `classmap` | List of files or directories to scan. Every `.php` or `.lfc` file is parsed in its physical source mode and its class/interface/trait/enum declarations are added to the FQN→file index. Useful for non-PSR code |
+| `files` | List of files that must always be inlined at compile time, regardless of which classes the program references. Spliced into the program at the start of the autoload pass and parsed according to each path |
 | `exclude-from-classmap` | Glob patterns that drop matching files from `classmap` scanning. Supports `*` (within a path segment), `**` (across segments), `?` (single character). A trailing `/` is the directory shorthand and is rewritten as `<pattern>**` |
 
 `autoload-dev` is always merged in alongside `autoload`. There is no production/test split in the AOT model — both contribute to the same compiled binary.
@@ -244,45 +261,116 @@ If `$autoload` is `false`, no compile-time load is forced; the call returns whet
 | `get_declared_interfaces()` | Same as above for interfaces |
 | `get_declared_traits()` | Returns user-declared trait names in source order |
 | `spl_classes()` | Returns the indexed array of SPL/core class and interface names shipped by the compiler today (currently 61 entries: SPL/core interfaces, throwable types, SPL exception classes, runtime-backed containers, and storage/decorator/filesystem iterators). The list grows as later phases ship more SPL types |
-| `spl_object_id($obj)` | The object's heap pointer cast to int — unique per object, stable per process |
-| `spl_object_hash($obj)` | The object's heap pointer formatted as a decimal string. PHP returns a 32-character hex string; we return a decimal string. Both are unique-per-object and stable per-process — only the textual format differs |
-| `get_class($obj)` | Resolves to the object's runtime class name (not its static declared type, so a base-typed variable holding a derived instance reports the derived class). Inside a method called with no argument, returns the current class context |
+| `spl_object_id($obj)` | PHP's object handle: a small dense integer starting at 1, reused LIFO once an object is destroyed. Same value `var_dump()` prints as `object(C)#N` |
+| `spl_object_hash($obj)` | PHP's 32-character rendering of that same handle — 16 zero-padded hex digits followed by 16 zeros, so handle `1` is `"00000000000000010000000000000000"` |
+| `get_class($obj)` | Resolves to the argument's static type name. Inside a method called with no argument, returns the current class context |
 | `get_parent_class($obj)` | Returns the parent class name from `ctx.classes[name].parent`, or empty string when the class has no parent |
 | `class_implements($object_or_class, bool $autoload = true)` | Returns an associative `interface => interface` array for a class/object, including inherited parent interfaces. When the argument names an interface, returns that interface's parent interfaces |
 | `class_parents($object_or_class, bool $autoload = true)` | Returns an associative `parent => parent` array, starting with the immediate parent and then ancestors |
 | `class_uses($object_or_class, bool $autoload = true)` | Returns an associative `trait => trait` array for traits used directly by the class or trait declaration. Parent class traits and traits imported by those traits are not included, matching PHP |
-| `get_class_methods($object_or_class)` | Returns the indexed array of method names visible from the calling scope, in PHP declaration order (own class first in source order, then each ancestor's own methods, skipping a name already claimed by a more-derived override). Outside any class: public methods only. Inside a method of the SAME class the target resolves to: public + protected + the class's own private methods (an ancestor's private method stays excluded) |
 | `is_a($obj, "Foo")` | Compile-time fold when the second argument is a string literal: returns `true` when the object's static type equals `Foo`, descends from it, or implements it as an interface |
 | `is_subclass_of($obj, "Foo")` | Same as `is_a` but excludes the case where the static type *is* `Foo` |
 | `method_exists($object_or_class, $method): bool` | Compile-time fold from class metadata. Returns `true` when the class declares or inherits the named instance or static method (matched case-insensitively, like PHP). With an object target, inherited private methods are also found through the parent chain; with a class-name string target, inherited private methods are hidden, matching PHP. The method name must be a literal string and the target a statically-typed object or literal class-name string; an unknown class name returns `false` |
 | `property_exists($object_or_class, $property): bool` | Compile-time fold from class metadata. Returns `true` when the class declares or inherits the named instance or static property (matched case-sensitively, like PHP). Inherited private properties are visible only on the class that declares them. Same literal-argument requirements as `method_exists()`; an unknown class name returns `false` |
 | `class_alias($original, $alias)` | At compile time, top-level literal calls synthesize `class $alias extends $original {}`. The alias is realised as a *subclass* rather than a true name alias: `new $alias()`, `$obj instanceof $alias`, and `$alias::CONST` work; `(new $original()) instanceof $alias` returns `false` (it would be `true` under PHP runtime semantics). Runtime-dynamic call shapes are rejected because elephc cannot mutate the class table after compilation |
 
-`class_implements`, `class_parents`, and `class_uses` accept an object
-expression or a string class-like name, literal or runtime-computed. A literal
-string name folds to compile-time metadata. A non-literal string name, and
-every object argument, resolve at runtime through a closed-world per-class
-relation registry (`_class_relation_table`/`_interface_relation_table`/
-`_trait_relation_table`); object arguments always resolve through the
-object's *runtime* class, never its static declared type, so a base-typed
-parameter holding a derived-class instance reports the derived class's
-relations. The optional `$autoload` flag must be a literal bool or int in the
-current AOT model — elephc's closed-world class table already contains every
-declared class, so autoloading has no runtime effect either way. A name that
-is not compiled into the binary returns `false`, matching PHP's
-unresolved-name result; a name that resolves to a class-like symbol of the
-"wrong" kind for the relation being asked (e.g. `class_parents()` on an
-interface, or `class_implements()` on a trait) returns an empty array rather
-than `false`, matching PHP.
+`var_dump()` prints PHP's `#N` object handle: `object(C)#1 (2) {`. The handle is
+the value `spl_object_id()` returns — both read the same runtime pool, so they
+cannot contradict each other. Handles start at 1, are dense, and are **reused
+LIFO** once an object is destroyed, exactly as php-src does: after
+`$a = new P(); $b = new P(); unset($a); unset($b);` the next two objects are `#2`
+then `#1`.
 
-`get_class_methods()` requires a literal class-name string, or an object
-argument with a statically-known concrete type, in the current AOT model —
-compile-time bake, not a runtime table walk. A non-literal string or a
-Mixed/Union-typed object argument is a compile error rather than a silent
-guess. Unlike `class_implements()`/`class_parents()`, the target resolves
-against the argument's *declared* type, not its (possibly more derived)
-runtime type: a base-typed variable holding a derived-class instance reports
-the base class's methods.
+Everything PHP counts as an object draws from that one pool, including the things
+elephc does not represent as class-id-headed objects: a **closure**, an **arrow
+function**, a **first-class callable** `f(...)`, a `Closure::bind()` result and a
+**generator** each consume a handle, so `$f = function () {}; var_dump(new P());`
+prints `object(P)#2` here just as it does in PHP. Capture-free closures are given
+runtime descriptor storage for exactly this reason — a closure with no heap
+storage would have no lifetime to hold or release a handle with. Objects created
+by builtins (`new stdClass`, `(object)` casts, exceptions and the SPL containers,
+`Fiber`, `ArrayObject`, reflection instances, engine-thrown `ValueError` /
+`DivisionByZeroError` / `JsonException`) all acquire handles too, and every one is
+released when its storage is reclaimed.
+
+**`hash_init()` — parity.** PHP 8 returns a `HashContext` object from
+`hash_init()`, which consumes a handle, and elephc now does the same: the class is
+declared by a compiler-injected prelude (`src/hash_prelude.rs`) and allocated
+through the standard object path, so it draws from this pool in creation order and
+`class Dummy {} $o1 = new Dummy(); $c = hash_init('sha256'); $o2 = new Dummy();`
+prints `#1`, `#2`, `#3` on both sides. This was previously a residual divergence in
+which the hashing state was a resource and consumed no handle. Symmetrically, a
+context now consumes no *resource* id either, so it no longer shifts the ids of
+surrounding `fopen()` streams — the two numbering spaces stay disjoint exactly as
+in php-src. PHP *resources* (`fopen`, `opendir`) correctly consume no handle on
+either side. Pinned by
+`hash_context_draws_an_object_handle_in_creation_order` in
+`tests/var_dump_object_tests.rs` and by
+`hash_contexts_are_objects_and_consume_no_resource_id` in
+`tests/resource_id_and_hash_context_tests.rs`.
+
+**`eval()` — parity.** An object that outlives an `eval()` keeps its handle. This
+was previously documented as a divergence in which the bridge "re-materializes
+live objects"; that was a misdiagnosis. The shift it described was visible on an
+object dumped *before* the `eval()` ever ran, which no staging behaviour can
+explain, and its real cause was eager enum-case materialization: a module
+containing `eval()` treated every enum as reachable, so the four prelude cases
+(`PropertyHookType::{Get,Set}`, `SortDirection::{Ascending,Descending}`) took
+handles 1..4 before user code started. Lazy materialization removed it; nothing in
+the bridge changed. Pinned by `eval_in_scope_preserves_object_handles`.
+
+**Enum cases — parity, and they are LAZY.** A case object is created on its FIRST
+evaluation and cached in a per-case global slot; a case that is never evaluated
+allocates nothing and consumes no handle, so
+`enum E { case A; case B; case C; } $case = E::A; var_dump(new P());` prints
+`object(P)#2` on both sides. Cases used to be created in bulk in `main`'s
+prologue, which burnt one handle per case of every *referenced* enum — including
+enums reached only by a never-called function — and shifted all later numbering.
+
+PHP's two enum kinds behave differently and both are reproduced:
+
+- A **pure** enum materializes ONLY the case that was touched.
+- A **backed** enum materializes EVERY case, in declaration order, on the first
+  touch of ANY case, because php-src builds the whole backing table at once. So
+  `enum E: int { case A = 1; case B = 2; case C = 3; } $e = E::B;` leaves the next
+  object at `#4`, while the same program written as a pure enum leaves it at `#2`.
+
+`E::cases()` materializes any case that does not exist yet, in declaration order,
+and reuses the ones that do — touch `E::C` then `E::A` and a later `cases()`
+returns them in declaration order holding handles 2, 3, 1. `from()` and
+`tryFrom()` materialize every case even when the lookup matches nothing. Separate
+enums are numbered in ACCESS order, not by name. Identity is preserved across
+every path: `E::A === E::A`, `$cases[$i] === E::A`, `E::from(…) === E::A`, a case
+used as a class constant, a default parameter value, a `match` subject or an array
+key all reach the same object. Covered by the LAZY ENUM CASE MATERIALIZATION block
+in `tests/var_dump_object_tests.rs`.
+
+Under `--web` the slots are per-process BSS: a prefork worker gets a private copy
+the moment it writes one, the parent never runs user code before forking, and
+requests are served serially inside a worker, so no slot is ever raced.
+`__rt_web_reset` clears every slot between requests, which keeps the pre-existing
+per-request lifecycle — the handler prologue used to re-run the eager initializers
+and overwrite each slot every request, so a case object never spanned two requests.
+
+**Residual divergence — a discarded pure call that would have materialized a
+case.** A call whose result is unused and whose body has no observable effect is
+eliminated, so a case it would have created stays unborn and later cases take
+lower handles: `function f(): D { return D::A; } f(); echo spl_object_id(D::A);`
+prints `1` on both sides, but interleaving it with another case read can reorder
+the two handles. Any call with a visible effect still runs, so this only shows up
+through handle numbering.
+
+**Residual divergence — a prelude enum case named inside `eval()`.** `eval('return
+PropertyHookType::Get;')` is answered by the interpreter's own builtin-enum
+support rather than by the case slot, so the returned object is not the one
+`PropertyHookType::Get` reads outside the `eval()` and `===` between them is
+`false`. User-declared enums go through the slot and compare correctly.
+
+`class_implements`, `class_parents`, and `class_uses` accept either an object
+expression with a known static class type or a string literal class-like name.
+The optional `$autoload` flag must be a literal bool or int in the current AOT
+model. A string name that is not compiled into the binary returns `false`,
+matching PHP's unresolved-name result.
 
 ### Closure-based autoload (`spl_autoload_register`)
 
@@ -371,6 +459,13 @@ define("PI", 3.14159);
 |---|---|---|
 | `PHP_EOL` | string | `"\n"` |
 | `PHP_OS` | string | `"Darwin"` on macOS targets, `"Linux"` on Linux targets |
+| `PHP_VERSION` | string | The targeted PHP language version, `"8.<minor>.0"` for `--php-version` (`"8.5.0"` by default) |
+| `PHP_VERSION_ID` | int | `major * 10000 + minor * 100 + release`, e.g. `80500` |
+| `PHP_MAJOR_VERSION` | int | `8` |
+| `PHP_MINOR_VERSION` | int | `2` … `5`, following `--php-version` |
+| `PHP_RELEASE_VERSION` | int | `0` — elephc targets a language profile, not a patch release |
+| `PHP_EXTRA_VERSION` | string | `""` |
+| `PHP_SAPI` | string | `"cli"`, or `"cli-server"` under `--web` |
 | `DIRECTORY_SEPARATOR` | string | `"/"` |
 | `STDIN` | resource | Standard input stream |
 | `STDOUT` | resource | Standard output stream |
@@ -380,12 +475,27 @@ define("PI", 3.14159);
 | `PATHINFO_EXTENSION` | int | 4 |
 | `PATHINFO_FILENAME` | int | 8 |
 | `PATHINFO_ALL` | int | 15 |
+| `PHP_URL_SCHEME` | int | 0 |
+| `PHP_URL_HOST` | int | 1 |
+| `PHP_URL_PORT` | int | 2 |
+| `PHP_URL_USER` | int | 3 |
+| `PHP_URL_PASS` | int | 4 |
+| `PHP_URL_PATH` | int | 5 |
+| `PHP_URL_QUERY` | int | 6 |
+| `PHP_URL_FRAGMENT` | int | 7 |
 | `FNM_NOESCAPE` | int | Target-specific libc/PHP value |
 | `FNM_PATHNAME` | int | Target-specific libc/PHP value |
 | `FNM_PERIOD` | int | 4 |
 | `FNM_CASEFOLD` | int | 16 |
-
-These predefined constants live in the global namespace, so inside a namespace they may be written either bare or fully-qualified with a leading backslash — `\PHP_INT_MAX`, `\PHP_EOL`, `\DIRECTORY_SEPARATOR`, `\M_PI`, `\INF`, `\true`/`\false`/`\null` — and both forms resolve to the same value. Library code often uses the `\` form to stay namespace-safe.
+| `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
+| `STR_PAD_LEFT` | int | 0 |
+| `STR_PAD_BOTH` | int | 2 |
+| `COUNT_NORMAL` | int | 0 — `count()`'s default mode |
+| `COUNT_RECURSIVE` | int | 1 |
+| `PHP_ROUND_HALF_UP` | int | 1 — `round()`'s default mode |
+| `PHP_ROUND_HALF_DOWN` | int | 2 |
+| `PHP_ROUND_HALF_EVEN` | int | 3 |
+| `PHP_ROUND_HALF_ODD` | int | 4 |
 
 ## Superglobals
 

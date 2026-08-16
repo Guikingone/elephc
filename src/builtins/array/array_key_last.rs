@@ -12,16 +12,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_key_last",
-    area: Array,
-    params: [array: Mixed],
-    returns: Mixed,
+    contract: "array_key_last",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayKeyLast,
     ),
-    summary: "Gets the last key of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-key-last.php",
 }
 
 /// Validates that the argument is an array or Mixed and returns `Mixed`.
@@ -30,9 +25,7 @@ builtin! {
 /// Mixed is permitted because heterogeneous arrays are represented as Mixed at compile time.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Gradual boundary: accept a concrete array, `Mixed`, or a union containing an
-    // array; a concretely non-array argument stays a compile error.
-    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
+    if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed) {
         return Err(CompileError::new(
             cx.span,
             "array_key_last() argument must be array",

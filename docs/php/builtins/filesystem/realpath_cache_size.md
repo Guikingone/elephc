@@ -2,7 +2,7 @@
 title: "realpath_cache_size()"
 description: "Returns the amount of memory used by the realpath cache."
 sidebar:
-  order: 147
+  order: 154
 ---
 
 ## realpath_cache_size()
@@ -23,12 +23,6 @@ Returns the amount of memory used by the realpath cache.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/realpath_cache_size.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

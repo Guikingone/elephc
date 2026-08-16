@@ -86,7 +86,6 @@ pub enum Token {
     For,
     Break,
     Continue,
-    Goto,
     Function,
     Return,
     True,
@@ -137,6 +136,12 @@ pub enum Token {
     Global,         // global
     Declare,        // declare (strict_types/ticks/encoding directive)
     EndDeclare,     // enddeclare (alternative declare block terminator)
+    EndIf,          // endif (alternative if block terminator)
+    EndWhile,       // endwhile (alternative while block terminator)
+    EndFor,         // endfor (alternative for block terminator)
+    EndForeach,     // endforeach (alternative foreach block terminator)
+    EndSwitch,      // endswitch (alternative switch block terminator)
+    Goto,           // goto (unconditional jump to a labeled statement)
     Static,         // static
     Self_,          // self
     Trait,          // trait
@@ -180,7 +185,6 @@ pub enum Token {
     Dot,            // .
     Comma,          // ,
     Backslash,      // \
-    Dollar,         // bare `$` (before `{`/`$`): dynamic-name marker, e.g. `self::${$n}`
     LBracket,       // [
     RBracket,       // ]
     Question,       // ?
@@ -216,6 +220,7 @@ pub enum Token {
     EqualEqual,     // ==
     EqualEqualEqual, // ===
     NotEqual,       // !=
+    LessGreater,    // <> (PHP alias for !=)
     NotEqualEqual,  // !==
     Less,           // <
     Greater,        // >
@@ -311,6 +316,12 @@ impl Token {
             Token::Global => Some("global"),
             Token::Declare => Some("declare"),
             Token::EndDeclare => Some("enddeclare"),
+            Token::EndIf => Some("endif"),
+            Token::EndWhile => Some("endwhile"),
+            Token::EndFor => Some("endfor"),
+            Token::EndForeach => Some("endforeach"),
+            Token::EndSwitch => Some("endswitch"),
+            Token::Goto => Some("goto"),
             Token::Static => Some("static"),
             Token::Self_ => Some("self"),
             Token::Trait => Some("trait"),

@@ -10,12 +10,8 @@
 
 
 builtin! {
-    name: "preg_match_all",
-    area: System,
-    params: [pattern: Str, subject: Str, ref matches: Mixed = crate::builtins::spec::DefaultSpec::EmptyArray, flags: Int = crate::builtins::spec::DefaultSpec::Int(0), offset: Int = crate::builtins::spec::DefaultSpec::Int(0)],
-    returns: Int,
+    contract: "preg_match_all",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::PregMatchAll,
     ),
-    summary: "Performs a global regular expression match and returns the number of matches.",
 }

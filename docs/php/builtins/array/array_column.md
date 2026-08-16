@@ -2,7 +2,7 @@
 title: "array_column()"
 description: "Returns the values from a single column of an array of arrays."
 sidebar:
-  order: 5
+  order: 4
 ---
 
 ## array_column()
@@ -25,12 +25,6 @@ Returns the values from a single column of an array of arrays.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_column.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_column.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -120,8 +120,6 @@ pub fn emit_hash_free_deep(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // objects release through the uniform dispatch helper
     emitter.instruction("cmp x14, #7");                                         // is this a boxed mixed value?
     emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // mixed cells release through the uniform dispatch helper
-    emitter.instruction("cmp x14, #11");                                        // is this a reference-cell value?
-    emitter.instruction("b.eq __rt_hash_free_deep_value_any");                  // reference cells release through the uniform dispatch helper
     emitter.instruction("cmp x14, #10");                                        // is this a callable descriptor value?
     emitter.instruction("b.eq __rt_hash_free_deep_value_callable");             // callable descriptors release through the descriptor helper
     emitter.instruction("b __rt_hash_free_deep_next");                          // plain scalars need no cleanup
@@ -240,8 +238,6 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_free_deep_value_object");                 // release nested object payloads through object decref
     emitter.instruction("cmp r8, 7");                                           // detect boxed mixed payloads in the current bootstrap subset
     emitter.instruction("je __rt_hash_free_deep_value_mixed");                  // release boxed mixed payloads through mixed decref
-    emitter.instruction("cmp r8, 11");                                          // detect reference-cell payloads stored in associative-array entries
-    emitter.instruction("je __rt_hash_free_deep_value_ref");                    // release reference cells through the uniform decref dispatcher
     emitter.instruction("cmp r8, 10");                                          // detect callable descriptor payloads stored in associative-array entries
     emitter.instruction("je __rt_hash_free_deep_value_callable");               // release callable descriptors through the descriptor helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // plain scalar payloads do not require any additional cleanup
@@ -280,11 +276,6 @@ fn emit_hash_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the boxed mixed pointer stored in the current hash-entry payload
     emitter.instruction("call __rt_decref_mixed");                              // release the boxed mixed payload through the x86_64 mixed decref helper
     emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the boxed mixed payload
-
-    emitter.label("__rt_hash_free_deep_value_ref");
-    emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the reference-cell pointer stored in the current hash-entry payload
-    emitter.instruction("call __rt_decref_any");                                // release the reference cell through the uniform x86_64 decref dispatcher
-    emitter.instruction("jmp __rt_hash_free_deep_next");                        // continue scanning entries after releasing the reference cell
 
     emitter.label("__rt_hash_free_deep_value_callable");
     emitter.instruction("mov rax, QWORD PTR [rcx + 24]");                       // load the callable descriptor pointer stored in the current hash-entry payload

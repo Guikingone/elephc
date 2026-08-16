@@ -31,7 +31,6 @@ pub use runtime_fn::{
     RuntimeFnBackendMapping, RuntimeFnDescriptor, RuntimeFnId, RuntimeFnTargetSupport,
 };
 pub use builder::Builder;
-pub(crate) use builder::widened_local_storage_type;
 pub use effects::Effects;
 pub use function::{
     Function, FunctionFlags, FunctionId, FunctionParam, GeneratorSource, LocalKind, LocalSlot,
@@ -39,11 +38,11 @@ pub use function::{
 };
 pub use instr::{
     BuiltinId, CmpPredicate, Immediate, InstId, Instruction, MixedNumericOp, Op, PhpTypePredicate,
-    RuntimeId, PassOrigin, StrBitKind,
+    RuntimeId, PassOrigin,
 };
 pub use module::{
-    ClassTable, ConstScalar, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl,
-    InterfaceTable, Module, PackedLayoutTable, TraitMethodInfo,
+    ClassTable, DataId, DataPool, EnumTable, ExternDecl, ExternParamDecl, InterfaceTable,
+    Module, PackedLayoutTable, TraitMethodInfo,
 };
 pub use print::{print_function, print_module};
 pub use runtime_call::{RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime};

@@ -58,19 +58,6 @@ impl Checker {
         match expected {
             PhpType::Mixed => true,
             PhpType::Bool if matches!(actual, PhpType::False) => true,
-            PhpType::Callable => match actual {
-                PhpType::Object(name)
-                    if name
-                        .trim_start_matches('\\')
-                        .eq_ignore_ascii_case("Closure") =>
-                {
-                    true
-                }
-                PhpType::Union(members) => members
-                    .iter()
-                    .all(|member| self.type_accepts(expected, member)),
-                _ => false,
-            },
             // PHP coercive mode: scalars accept Mixed with runtime narrowing.
             PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str
                 if matches!(actual, PhpType::Mixed) =>
@@ -124,17 +111,6 @@ impl Checker {
                         || self.class_implements_interface(actual_name, expected_name)
                         || self.interface_extends_interface(actual_name, expected_name)
                 }
-                // A `Closure`/`Callable` value IS an object in PHP (every closure is a
-                // `Closure` instance), so it satisfies the bare `object` pseudo-type
-                // (`Object("")`, an object whose class is not statically known). This lets a
-                // closure flow into an `object` slot — including as the `object` member of a
-                // `string|array|object` callable union (HttpKernel `ControllerEvent::$controller`).
-                // Reading such a union back yields a boxed-`Mixed` slot, so a later invocation
-                // dispatches by runtime tag (the safe `lower_mixed_callable_descriptor_invoke`
-                // path), never a by-offset object access. A CONCRETE class target (non-empty
-                // name) still rejects a callable: elephc emits no by-name/instanceof guard there,
-                // and a closure is not an instance of that class.
-                PhpType::Callable if expected_name.is_empty() => true,
                 _ => false,
             },
             PhpType::Iterable => match actual {
@@ -144,309 +120,6 @@ impl Checker {
             },
             PhpType::Pointer(_) => Self::pointer_types_compatible(expected, actual),
             PhpType::Resource(_) => PhpType::resource_types_compatible(expected, actual),
-            _ => false,
-        }
-    }
-
-    /// Returns true when a value statically typed `actual` may flow into a position whose
-    /// declared concrete target type is `expected`, under elephc's gradual-typing boundary
-    /// model. This is deliberately looser than `type_accepts`/`types_compatible`: a `Mixed`
-    /// source is accepted for every target (Mixed is the gradual top type), and a union
-    /// source is accepted when one member matches the target and the remaining members are
-    /// coercible to the target's value family. EIR codegen emits a runtime boundary guard
-    /// (unbox + coercive cast, or unbox + null/heap-tag assert) for every flow accepted here.
-    ///
-    /// A concrete source type that is disjoint from `expected` (non-Mixed, non-union) is NOT
-    /// accepted, so genuine type errors — e.g. passing a statically-`int` value to a `string`
-    /// parameter — keep being reported by the strict predicates that call this as a fallback.
-    pub(crate) fn gradual_boundary_accepts(&self, expected: &PhpType, actual: &PhpType) -> bool {
-        match actual {
-            // Mixed is the gradual top type. A boundary guard coerces the boxed payload to
-            // the target representation at runtime, so any concrete target accepts it.
-            PhpType::Mixed => true,
-            PhpType::Union(src_members) if matches!(expected, PhpType::Union(_)) => {
-                // Union source into a union target: accept when every source member is
-                // acceptable to the target union (order-independent set compatibility).
-                // Mixed was already normalized out of both unions.
-                src_members
-                    .iter()
-                    .all(|member| self.type_accepts(expected, member))
-            }
-            PhpType::Union(src_members) => self.gradual_union_flows_into(expected, src_members),
-            _ => false,
-        }
-    }
-
-    /// Returns true when a union source (`src_members`) may flow into the concrete target
-    /// `expected`: one member must match the target (equal, a subtype in the class hierarchy,
-    /// or — for non-object members only — a supertype/numeric-widening compatible type) and
-    /// every other member must be coercible to the target's value family (scalar targets accept
-    /// any scalar plus null; class and array/iterable targets accept only null among the extra
-    /// members).
-    ///
-    /// The supertype direction is deliberately excluded when both the target and the member are
-    /// object types: a union member that is a base class/interface of a concrete OBJECT target is
-    /// the unprovable base->derived direction, so it must fall through to the loud coercible check
-    /// instead of matching here. Sound covariant object unions (union of subtypes into a common
-    /// base) still match via the subtype direction.
-    ///
-    /// That direction is no longer a dead end: at the positions that emit
-    /// `src/ir_lower/checked_downcast.rs`'s tag+instanceof chain (call arguments, returns) it is
-    /// admitted by the checked-downcast FALLBACK, `Checker::checked_downcast_guardable`, which
-    /// runs only after this predicate has said no. Widening BOTH would be two permissive branches
-    /// unioning their permissiveness — and this one also feeds positions that emit no guard at
-    /// all, so it stays exactly as strict as it is.
-    fn gradual_union_flows_into(&self, expected: &PhpType, src_members: &[PhpType]) -> bool {
-        // The gradual rule only loosens flows into a single concrete target. Union and Mixed
-        // targets are already handled by the strict predicates that call this as a fallback.
-        if matches!(expected, PhpType::Union(_) | PhpType::Mixed) {
-            return false;
-        }
-        let mut has_match = false;
-        for member in src_members {
-            // The supertype direction (`type_accepts(member, expected)`) is only sound for
-            // NON-object members: a union member that is a base class/interface of a concrete
-            // OBJECT target is the unprovable base->derived direction, so it must fall through to
-            // the coercible check (which is loud for objects) rather than matching. The guarded
-            // positions pick it up afterwards through `checked_downcast_guardable`; see this
-            // function's doc comment.
-            let member_matches = self.type_accepts(expected, member)
-                || (self.type_accepts(member, expected)
-                    && !matches!(
-                        (expected, member),
-                        (PhpType::Object(_), PhpType::Object(_))
-                    ));
-            if member_matches {
-                has_match = true;
-            } else if !self.gradual_other_member_coercible(expected, member) {
-                return false;
-            }
-        }
-        has_match
-    }
-
-    /// Returns true when `member` — a non-matching member of a union source — is acceptable
-    /// alongside the matching member when the union flows into the concrete `target`. Null and
-    /// void map to the boxed-null tag and are accepted for any target family.
-    ///
-    /// A concrete NON-object target physically receives a boxed cell for a union argument
-    /// (`PhpType::Union(_).codegen_repr() == Mixed`) and coerces it at the call/return boundary
-    /// with defined, memory-safe runtime semantics (string/array/scalar casts, or a graceful
-    /// "could not be converted" fatal) — identical to the already-accepted `mixed` source — so any
-    /// extra member is deferred to runtime. The single deliberate exception is `false`: a
-    /// `false` alongside a scalar (`int|false`, `string|false`) stays a hard error to preserve the
-    /// sentinel-return diagnostic, because a silent `false`→`0`/`""` coercion is the classic
-    /// `strpos()`/`fgetc()` footgun (`0` is a valid offset).
-    ///
-    /// OBJECT targets are excluded entirely (`_ => false`), and the reason has CHANGED. It used to
-    /// be that elephc emitted no runtime instanceof guard at an object boundary, so a wrongly-typed
-    /// extra member would be bit-read as the wrong object (a SIGSEGV risk). It now emits one —
-    /// `src/ir_lower/checked_downcast.rs` tests the declared arms by tag and by `instanceof` and
-    /// throws PHP's own catchable `TypeError` — so that precondition is gone.
-    ///
-    /// The exclusion stays for a different, narrower reason: this predicate is reached from
-    /// `require_compatible_arg_type`, which ALSO serves positions that emit no guard (property and
-    /// static-property stores), so widening it would grant permissiveness the emitter does not
-    /// back. The guarded positions get the object direction from the checked-downcast fallback
-    /// instead — `Checker::checked_downcast_guardable`, which is position-aware and consulted only
-    /// by call arguments and returns. A `false` member reaching an object target is therefore
-    /// still refused here, and still refused by the fallback whenever no guard could rule it out.
-    fn gradual_other_member_coercible(&self, target: &PhpType, member: &PhpType) -> bool {
-        if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
-            return true;
-        }
-        match target {
-            PhpType::Int
-            | PhpType::Float
-            | PhpType::Bool
-            | PhpType::Str
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Iterable => !matches!(member, PhpType::False),
-            _ => false,
-        }
-    }
-
-    /// PHP weak-mode call-argument / return coercions that the value-passing codegen boundary
-    /// realizes with defined, memory-safe semantics. This is used ONLY as a fallback at
-    /// call-argument and return positions (`require_compatible_call_arg_type` and the
-    /// `require_compatible_return_type` fallback) — never at property or static-property stores,
-    /// which emit no coercion and must keep using the strict predicates only.
-    ///
-    /// Accepted flows (everything else stays loud):
-    /// 1. Concrete `int`/`float`/`bool` → `string`. The call/return boundary emits the same
-    ///    `IToStr`/`FToStr` used by `(string)$scalar`. `bool`/`false` are included because the
-    ///    `IToStr` codegen dispatches on the operand's PHP type (`lower_int_like_to_string`):
-    ///    a `bool`/`false` source stringifies through `lower_loaded_bool_to_string` to PHP's
-    ///    exact `false`→`""` / `true`→`"1"`, not the int form `"0"`/`"1"`. This is what admits a
-    ///    `return false;` in a `: string`-declared method (e.g. the mbstring polyfill's `mb_scrub`,
-    ///    whose invalid-encoding arm returns `false` under a `: string` return type).
-    /// 2. Stringable object → `string`. A class (or ancestor) with a public `__toString()` is
-    ///    coerced through the same `__toString()` dispatch as `(string)$obj`.
-    /// 3. A SCALAR-ONLY union with a boxed-`Mixed` codegen representation → `string` (e.g.
-    ///    `string|false`, `string|null`, `string|int`). The boundary's `__rt_mixed_cast_string`
-    ///    tag dispatch realizes the exact PHP weak-mode form of whichever scalar the box holds
-    ///    (`false`→"", `null`→"", `int`→decimal, …) — the shape Symfony's non-`strict_types`
-    ///    boundaries rely on. See `coerces_to_string_boundary`.
-    /// 4. Concrete scalar (`int`/`float`/`bool`/`string`) or Stringable object → a union whose
-    ///    codegen representation is a boxed `Mixed` and that offers a compatible member. The
-    ///    source is boxed into the union slot and the callee weak-coerces it at use, so no eager
-    ///    conversion is emitted. A union source whose every member so flows is accepted too.
-    ///
-    /// Deliberately kept loud: non-Stringable objects into `string`, `array` into `string`, a
-    /// union carrying any array/object member into `string` (`__rt_mixed_cast_string` would turn
-    /// it into "" rather than PHP's TypeError), scalars into a scalar-free union (e.g.
-    /// `array|null`), and any object mismatch against a concrete (by-offset) object target — none
-    /// of which the boundary can realize safely.
-    pub(crate) fn weak_boundary_coercion_accepts(
-        &self,
-        expected: &PhpType,
-        actual: &PhpType,
-    ) -> bool {
-        match expected {
-            PhpType::Str => self.coerces_to_string_boundary(actual),
-            PhpType::Union(members) if expected.codegen_repr() == PhpType::Mixed => {
-                self.scalar_or_stringable_flows_into_boxed_union(members, actual)
-            }
-            _ => false,
-        }
-    }
-
-    /// Returns true when `actual` coerces to a plain `string` slot at a value boundary: a
-    /// concrete `int`/`float`/`bool`, or a Stringable object.
-    ///
-    /// The object case requires a CONCRETE, non-abstract static class with a resolvable
-    /// `__toString` (`object_class_has_eager_tostring`): the plain-`string` boundary emits an
-    /// eager `(string)$obj` cast, which resolves a DIRECT call to the class's `__toString`
-    /// symbol. An abstract-base or interface static type has no such body-linked symbol, so it
-    /// stays loud here (a value typed by an abstract/interface Stringable reaches a `string`
-    /// slot only through a boxed union in practice — that path dispatches `__toString` virtually
-    /// at use). See `weak_boundary_coercion_accepts`.
-    ///
-    /// A SCALAR-ONLY union whose codegen representation is a boxed `Mixed` cell (e.g.
-    /// `string|false`, `string|null`, `string|int`) also coerces here: the plain-`string`
-    /// boundary emits the `__rt_mixed_cast_string` tag dispatch (int→decimal, float→ftoa,
-    /// bool/`false`→"1"/"", string→persisted copy, null→""), which is exactly PHP weak-mode
-    /// `string`-boundary coercion. This is the shape Symfony's non-`strict_types` boundaries rely
-    /// on (Dotenv/Path/Yaml `string|false` returns and parameters). It stays loud for any
-    /// array/object union member — `__rt_mixed_cast_string` has no tag for those and would
-    /// silently yield "" instead of PHP's TypeError — and for a TAGGED-scalar union such as
-    /// `int|null` (codegen repr `TaggedScalar`, not `Mixed`), whose null case the `IToStr`
-    /// coercion would mis-stringify.
-    fn coerces_to_string_boundary(&self, actual: &PhpType) -> bool {
-        match actual {
-            // `bool`/`false` stringify to PHP's exact `""`/`"1"` here: the plain-`string`
-            // boundary's `IToStr` codegen is PHP-type-aware and routes a bool/false source
-            // through `lower_loaded_bool_to_string`, not the int form. See the doc comment on
-            // `weak_boundary_coercion_accepts`.
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => true,
-            PhpType::Object(name) => self.object_class_has_eager_tostring(name),
-            PhpType::Union(members) if actual.codegen_repr() == PhpType::Mixed => {
-                members
-                    .iter()
-                    .all(Self::union_member_weak_coerces_to_string)
-            }
-            _ => false,
-        }
-    }
-
-    /// Returns true for a union member that `__rt_mixed_cast_string` dispatches to its exact PHP
-    /// weak-mode `string` form: `string`, `int`, `float`, `bool`/`false`, or `null`
-    /// (`void`/`never`). Array and object members are excluded — the cast has no tag for them and
-    /// would silently yield "" instead of PHP's TypeError, so a union carrying one stays loud.
-    fn union_member_weak_coerces_to_string(member: &PhpType) -> bool {
-        matches!(
-            member,
-            PhpType::Str
-                | PhpType::Int
-                | PhpType::Float
-                | PhpType::Bool
-                | PhpType::False
-                | PhpType::Void
-                | PhpType::Never
-        )
-    }
-
-    /// Returns true when `actual` may flow into a boxed-`Mixed` union target: a concrete scalar
-    /// or Stringable object matching a compatible member, or a union source whose every member
-    /// so flows. See `weak_boundary_coercion_accepts`.
-    fn scalar_or_stringable_flows_into_boxed_union(
-        &self,
-        members: &[PhpType],
-        actual: &PhpType,
-    ) -> bool {
-        match actual {
-            // A CONCRETE scalar argument (including a bare `false`, which PHP coerces to `""`)
-            // boxes into the union's `Mixed` slot and weak-coerces at use. This is distinct from a
-            // `false` MEMBER of a union SOURCE (a `strpos()`-style sentinel), which stays loud
-            // below to preserve the sentinel diagnostic.
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str => {
-                union_has_scalar_member(members)
-            }
-            PhpType::Object(name) => {
-                members.iter().any(|member| *member == PhpType::Str)
-                    && self.object_class_is_stringable(name)
-            }
-            // A union source flows straight through only when it is ALSO a boxed `Mixed` slot:
-            // the boundary copies the box pointer with no conversion. A nullable-int union source
-            // (`int|null`) has a TAGGED-SCALAR representation, not `Mixed`, so copying it into a
-            // `Mixed` slot would be read as a boxed pointer — a crash — and it must stay loud.
-            PhpType::Union(_) if actual.codegen_repr() == PhpType::Mixed => {
-                let PhpType::Union(src_members) = actual else {
-                    return false;
-                };
-                src_members
-                    .iter()
-                    .all(|member| self.boxed_union_source_member_flows(members, member))
-            }
-            _ => false,
-        }
-    }
-
-    /// Returns true when one `member` of a union source may flow into a boxed-`Mixed` union
-    /// target: null/void, an exact/subtype member match, a scalar coercible to a target scalar
-    /// member, or a Stringable object where the target offers `string`.
-    fn boxed_union_source_member_flows(&self, target_members: &[PhpType], member: &PhpType) -> bool {
-        if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
-            return true;
-        }
-        if target_members
-            .iter()
-            .any(|target_member| self.type_accepts(target_member, member))
-        {
-            return true;
-        }
-        match member {
-            // A `false`/`bool` sentinel member of a boxed union source flows into a boxed union
-            // target that carries an object member (e.g. `DateTimeInterface|false` into a
-            // `?DateTimeInterface`-shaped `Mixed` slot — `HeaderBag::getDate`, `Response::getExpires`,
-            // an `expiresAt` property). This path runs only when the target Union's codegen repr is
-            // already `Mixed` (guarded upstream) and the source is also a boxed Union, so it is a
-            // memory-safe box-pointer copy; a stray `false` reaching an object use (`->format()`)
-            // fatals loudly as PHP's `TypeError`. Kept narrow to object-bearing targets: a scalar-only
-            // union target (`int|false`) keeps its sentinel loudness through the arms below.
-            PhpType::False | PhpType::Bool
-                if target_members
-                    .iter()
-                    .any(|target_member| matches!(target_member, PhpType::Object(_))) =>
-            {
-                true
-            }
-            // F4: a `false` sentinel member of a boxed union source (e.g. `string|false`) also
-            // flows into a boxed-`Mixed` union target that carries a scalar member — realizing PHP
-            // weak-mode coercion at the boundary (a `?string`-shaped return weak-casts `false`→"").
-            // The return-boundary codegen (`coerce_union_scalar_member_to_return_type`) emits that
-            // string coercion for the `?string`-shaped case; every other scalar target box-copies
-            // the payload and tag-dispatches at use, matching the pre-existing `Int|Float|Bool|Str`
-            // scalar-member handling one line up. Object-bearing targets are handled by the arm
-            // above; scalar-free targets (`array|null`) fall through to `_ => false`.
-            PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str => {
-                union_has_scalar_member(target_members)
-            }
-            PhpType::Object(name) => {
-                target_members.iter().any(|tm| *tm == PhpType::Str)
-                    && self.object_class_is_stringable(name)
-            }
             _ => false,
         }
     }
@@ -499,18 +172,6 @@ impl Checker {
         existing: &PhpType,
         new_ty: &PhpType,
     ) -> Option<PhpType> {
-        // A `Mixed` on either side dominates the merge and yields `Mixed`. This must precede the
-        // `type_accepts` shortcut below: under gradual typing `type_accepts(existing, Mixed)` is
-        // true for any concrete `existing`, so the shortcut would return that narrower `existing`
-        // type and silently discard the widening. As a *join* (this helper backs the conditional
-        // reassignment and ternary/if branch merges), the least upper bound of a concrete type and
-        // a gradual `Mixed` value is `Mixed`, never the concrete side. Discarding it left a
-        // reassigned local mis-typed: `$x = <string>; $x = unserialize(...);` inside a branch kept
-        // `Str`, so a later `$x->method()` resolved against the string receiver and fell through to
-        // the `Int` method-call fallback (Symfony DI `ParentTrait::parent()`).
-        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
-            return Some(PhpType::Mixed);
-        }
         if self.type_accepts(existing, new_ty) {
             return Some(existing.clone());
         }
@@ -529,6 +190,9 @@ impl Checker {
             && matches!(existing, PhpType::Array(_) | PhpType::AssocArray { .. })
         {
             return Some(existing.clone());
+        }
+        if matches!(existing, PhpType::Mixed) || matches!(new_ty, PhpType::Mixed) {
+            return Some(PhpType::Mixed);
         }
         if *new_ty == PhpType::Void {
             return Some(existing.clone());
@@ -597,30 +261,6 @@ impl Checker {
         }
     }
 
-    /// Returns true when `actual` may flow into `expected` under PHP's monolithic `array`
-    /// type hint: any array-family value (`Array`/`AssocArray`) satisfies any array-family
-    /// declared type, regardless of the inferred element key/value types.
-    ///
-    /// PHP's `array` hint carries no element type and is never element-checked at runtime
-    /// (verified on PHP 8.5 in both strict and coercive mode: `function f(array $x)` accepts
-    /// `[1,2,3]`, `["a"=>"b"]`, and `[]` identically, and rejects only non-arrays). elephc's
-    /// more specific `Array(T)`/`AssocArray{K,V}` element types are whole-program inference
-    /// artifacts (from property writes, empty-`[]` defaults, or `@param array` phpdoc), not
-    /// PHP constraints, so a differently-typed array actual must still be accepted here.
-    ///
-    /// Both sides must be array-family: a non-array actual (`Str`/`Int`/`Object`/null) into
-    /// an array-family expected keeps failing through the strict predicates, exactly matching
-    /// PHP's `array` hint (which TypeErrors on non-arrays, and — unlike `iterable` — even on
-    /// `Traversable` objects) in both strict and coercive mode. Codegen is sound because all
-    /// PHP arrays share one refcounted, per-slot-tagged runtime representation passed by
-    /// pointer, so the inferred element type never changes the ABI or storage layout.
-    pub(crate) fn array_family_gradual_accepts(expected: &PhpType, actual: &PhpType) -> bool {
-        matches!(
-            expected,
-            PhpType::Array(_) | PhpType::AssocArray { .. }
-        ) && matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. })
-    }
-
     /// Returns true if `ty` is `PhpType::Array(Box::new(PhpType::Mixed))`, i.e., an
     /// untyped `array` hint without element type specialization.
     pub(crate) fn is_generic_array_hint(ty: &PhpType) -> bool {
@@ -680,17 +320,4 @@ impl Checker {
             _ => declared_ty.clone(),
         }
     }
-}
-
-/// Returns true when `members` contains at least one scalar member (`string`/`int`/`float`/
-/// `bool`/`false`) that a weak-mode scalar argument can coerce to when boxed into the union's
-/// `Mixed` slot. A scalar-free union (for example `array|null`) returns false so a scalar into
-/// it stays a loud type error, matching PHP.
-fn union_has_scalar_member(members: &[PhpType]) -> bool {
-    members.iter().any(|member| {
-        matches!(
-            member,
-            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
-        )
-    })
 }

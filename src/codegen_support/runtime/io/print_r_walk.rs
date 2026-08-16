@@ -25,29 +25,15 @@
 //!   entries, 0 for a top-level Mixed value).
 //! - Scalars render PHP-style with no type wrapper: int/float as decimals,
 //!   strings raw, bool true as `1` and bool false / null as the empty string.
-//! - Nested objects (tag 6) are rendered as the bare `Array` header only; full
-//!   `ClassName Object` dumps need class metadata the runtime walker lacks.
+//! - Nested objects (tag 6) hand off to `__rt_print_r_object` in
+//!   `codegen_support::runtime::objects::print_r_object`, which owns the whole
+//!   `ClassName Object\n(\n ... )\n` frame (and the enum header) the same way the
+//!   tag-4/5 branches own the array frame.
 //! - The AArch64 path is shared by macOS and Linux ARM64 (`emitter.syscall(4)`
 //!   maps to the platform write number); the `_linux_x86_64` paths are SysV.
-//! - The three entry points reachable from `codegen_ir` (`__rt_print_r_indexed`,
-//!   `__rt_print_r_hash`, and `__rt_print_r_value` — the last one is ALSO a
-//!   direct entry for `print_r()` of a Mixed-typed value, not merely reached
-//!   via recursion) each open with `emit_ob_incompat_check`: these walkers
-//!   write via raw `write(1, …)` syscalls that bypass `__rt_stdout_write`
-//!   (`ob_start()`'s choke point), so they go loud instead of silently writing
-//!   outside an active buffer (see
-//!   `crate::codegen_support::runtime::data::OB_PRINT_R_UNSUPPORTED_MSG`).
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
-
-/// Emits this file's shared `ob_start()`-incompatibility guard, naming the
-/// caller's label prefix (must be unique per walker entry — see
-/// `emit_ob_incompat_check`'s own doc comment).
-fn emit_print_r_ob_guard(_emitter: &mut Emitter, _label_prefix: &str) {
-    // Output-buffering now routes these walkers through the shared write
-    // indirection (`__rt_stdout_write`), so no incompatibility guard is needed.
-}
 
 /// `__rt_print_r_spaces`: write `n` ASCII spaces to stdout in <=64-byte chunks.
 /// Input: AArch64 x0 / x86_64 rdi = space count.
@@ -302,7 +288,6 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
-    emit_print_r_ob_guard(emitter, "pr_value");
 
     emitter.instruction("sub sp, sp, #48");                                     // allocate the value frame
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
@@ -325,7 +310,9 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_pr_val_arr");                                // recurse into the indexed walker
     emitter.instruction("cmp x0, #5");                                          // tag 5 = hash
     emitter.instruction("b.eq __rt_pr_val_hash");                               // recurse into the hash walker
-    emitter.instruction("b __rt_pr_val_done");                                  // tag 6 object / 8 null → render nothing
+    emitter.instruction("cmp x0, #6");                                          // tag 6 = object
+    emitter.instruction("b.eq __rt_pr_val_obj");                                // recurse into the object walker
+    emitter.instruction("b __rt_pr_val_done");                                  // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the integer payload
@@ -371,6 +358,13 @@ pub fn emit_print_r_value(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_print_r_hash");                                // recurse into the hash walker
     emitter.instruction("b __rt_pr_val_done");                                  // value rendered
 
+    emitter.label("__rt_pr_val_obj");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // nested object pointer
+    emitter.instruction("cbz x0, __rt_pr_val_done");                            // defensive: a null instance renders nothing
+    emitter.instruction("ldr x1, [sp, #16]");                                   // base = the nested paren indent
+    emitter.instruction("bl __rt_print_r_object");                              // recurse into the object walker
+    emitter.instruction("b __rt_pr_val_done");                                  // value rendered
+
     emitter.label("__rt_pr_val_mixed");
     emitter.instruction("ldr x0, [sp, #0]");                                    // boxed Mixed cell pointer
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
@@ -388,7 +382,6 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_value ---");
     emitter.label_global("__rt_print_r_value");
-    emit_print_r_ob_guard(emitter, "pr_value");
 
     emitter.instruction("push rbp");                                            // save caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the value frame pointer
@@ -412,7 +405,9 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_pr_val_arr_x86");                              // recurse into the indexed walker
     emitter.instruction("cmp rax, 5");                                          // tag 5 = hash
     emitter.instruction("je __rt_pr_val_hash_x86");                             // recurse into the hash walker
-    emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 6 object / 8 null → render nothing
+    emitter.instruction("cmp rax, 6");                                          // tag 6 = object
+    emitter.instruction("je __rt_pr_val_obj_x86");                              // recurse into the object walker
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // tag 8 null → render nothing
 
     emitter.label("__rt_pr_val_int_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the integer payload
@@ -461,6 +456,14 @@ fn emit_print_r_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_print_r_hash");                              // recurse into the hash walker
     emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
 
+    emitter.label("__rt_pr_val_obj_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested object pointer
+    emitter.instruction("test rdi, rdi");                                       // defensive null-instance check
+    emitter.instruction("jz __rt_pr_val_done_x86");                             // a null instance renders nothing
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // base = the nested paren indent
+    emitter.instruction("call __rt_print_r_object");                            // recurse into the object walker
+    emitter.instruction("jmp __rt_pr_val_done_x86");                            // value rendered
+
     emitter.label("__rt_pr_val_mixed_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // boxed Mixed cell pointer → RAX
     emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
@@ -487,7 +490,6 @@ pub fn emit_print_r_indexed(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
-    emit_print_r_ob_guard(emitter, "pr_indexed");
 
     // Frame (64 bytes): [0]arr [8]base [16]entry_indent [24]count [32]index
     //   [40]stamp [48]x29 [56]x30.
@@ -581,7 +583,6 @@ fn emit_print_r_indexed_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_indexed ---");
     emitter.label_global("__rt_print_r_indexed");
-    emit_print_r_ob_guard(emitter, "pr_indexed");
 
     // rbp-relative frame: [-8]arr [-16]base [-24]entry_indent [-32]count
     //   [-40]index [-48]stamp.
@@ -686,7 +687,6 @@ pub fn emit_print_r_hash(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
-    emit_print_r_ob_guard(emitter, "pr_hash");
 
     // Frame (112 bytes): [0]hash [8]base [16]entry_indent [24]count [32]cursor
     //   [40]items [48]key_ptr [56]key_len [64]val_lo [72]val_hi [80]val_tag
@@ -765,7 +765,6 @@ fn emit_print_r_hash_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: print_r_hash ---");
     emitter.label_global("__rt_print_r_hash");
-    emit_print_r_ob_guard(emitter, "pr_hash");
 
     // rbp-relative frame: [-8]hash [-16]base [-24]entry_indent [-32]count
     //   [-40]cursor [-48]items [-56]key_ptr [-64]key_len [-72]val_lo

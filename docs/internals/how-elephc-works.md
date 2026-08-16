@@ -264,7 +264,7 @@ This pass currently handles cases such as:
 - materializing constant `switch` execution into the exact statement tail that would run
 - hoisting safe non-throwing prefixes out of `try` blocks
 - simplifying non-throwing `try` / `catch` and some non-throwing `try` / `finally` fallthrough cases
-- pruning nested guard contradictions, including boolean/composite guards, strict scalar checks, loose-equality complements, and safe relational-comparison complements
+- pruning nested guard contradictions, including boolean/composite guards, strict scalar checks, loose-equality complements, safe relational-comparison complements, proven-integer range facts, and cross-variable relational / strict-equality atoms
 - using local CFG-lite reachability for structured `if` / `switch` / `try` shapes, including switch throw-path analysis before `catch` guard invalidation
 - dropping pure expression statements and other leftover non-observable statements exposed by earlier passes
 

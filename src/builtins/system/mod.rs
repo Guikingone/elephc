@@ -16,6 +16,8 @@
 //! - Check-hook builtins: microtime (literal-dependent return type), strtotime
 //!   (returns Union(Int, Bool)), getenv (returns Union(Str, Bool)), php_uname (validates
 //!   arg type), define (side-effect: registers constant type), defined (validates literal),
+//!   extension_loaded (validates literal; const-folds extension membership),
+//!   get_loaded_extensions (validates optional literal flag; const-folds the extension list),
 //!   class_attribute_names/class_attribute_args/class_get_attributes (compile-time reflection),
 //!   json_encode, json_decode, json_validate, unserialize, preg_match (by-ref `$matches`
 //!   variable check), preg_split (element type refined by arg count).
@@ -23,8 +25,14 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_class_has_constructor;
 pub mod __elephc_gmmktime_raw;
+pub mod __elephc_initialize_pdo_statement;
+pub mod __elephc_invoke_pdo_statement_constructor;
 pub mod __elephc_mktime_raw;
+pub mod __elephc_new_without_constructor;
+pub mod __elephc_pdo_called_class_status;
+pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
 pub mod attr_support;
 pub mod checkdate;
@@ -34,9 +42,12 @@ pub mod class_get_attributes;
 pub mod date;
 pub mod date_default_timezone_get;
 pub mod date_default_timezone_set;
+pub mod constant;
 pub mod define;
 pub mod defined;
 pub mod exec;
+pub mod extension_loaded;
+pub mod get_loaded_extensions;
 pub mod getdate;
 pub mod getenv;
 pub mod gmdate;
@@ -51,7 +62,6 @@ pub mod json_last_error_msg;
 pub mod json_support;
 pub mod json_validate;
 pub mod localtime;
-pub mod memory_get_usage;
 pub mod microtime;
 pub mod mktime;
 pub mod passthru;

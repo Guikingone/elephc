@@ -2,13 +2,13 @@
 title: "fputcsv()"
 description: "Format line as CSV and write to file pointer."
 sidebar:
-  order: 174
+  order: 183
 ---
 
 ## fputcsv()
 
 ```php
-function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"'): int
+function fputcsv(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int
 ```
 
 Format line as CSV and write to file pointer.
@@ -18,6 +18,8 @@ Format line as CSV and write to file pointer.
 - `$fields` (`array`)
 - `$separator` (`string`), default `','`, optional
 - `$enclosure` (`string`), default `'"'`, optional
+- `$escape` (`string`), default `'\\'`, optional
+- `$eol` (`string`), default `'\n'`, optional
 
 **Returns**: `int`
 
@@ -27,12 +29,6 @@ Format line as CSV and write to file pointer.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/fputcsv.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

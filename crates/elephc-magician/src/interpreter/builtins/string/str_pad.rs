@@ -7,17 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and implemented through the string-pad hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "str_pad",
+    contract: "str_pad",
     area: String,
-    params: [
-        string,
-        length,
-        pad_string = EvalBuiltinDefaultValue::String(" "),
-        pad_type = EvalBuiltinDefaultValue::Int(1),
-    ],
     direct: StrPad,
     values: StrPad,
 }

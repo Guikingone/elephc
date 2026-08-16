@@ -28,8 +28,6 @@
 //!   migrated from `src/types/checker/builtins/io/files.rs` (io batch C2).
 //! - `pathinfo` owns the relocated `pathinfo_static_flag_value` helper (was in io/paths.rs).
 //! - `stat_support` holds `stat_result_type` shared by stat/lstat/fstat check hooks.
-//! - `connect_error_params` holds `check_connect_error_params`, shared by the socket-connect
-//!   check hooks (fsockopen, pfsockopen, stream_socket_client).
 //! - `touch` owns the relocated `check_touch` helper (was in io/files.rs).
 //! - Add `pub mod <name>;` here for every new io builtin home.
 
@@ -49,6 +47,7 @@ pub mod __elephc_phar_set_stub;
 pub mod __elephc_phar_set_zip_password;
 pub mod __elephc_phar_sign_hash;
 pub mod __elephc_phar_sign_openssl;
+pub mod __elephc_zip_stat_entries;
 pub mod basename;
 pub mod chdir;
 pub mod chgrp;
@@ -58,6 +57,7 @@ pub mod clearstatcache;
 pub mod closedir;
 pub mod copy;
 pub mod dirname;
+pub mod diskfreespace;
 pub mod disk_free_space;
 pub mod disk_total_space;
 pub mod fclose;
@@ -94,6 +94,7 @@ pub mod fsync;
 pub mod ftell;
 pub mod ftruncate;
 pub mod fsockopen;
+pub mod fputs;
 pub mod fwrite;
 pub mod getcwd;
 pub mod gethostbyaddr;
@@ -105,6 +106,8 @@ pub mod getservbyname;
 pub mod getservbyport;
 pub mod glob;
 pub mod hash_file;
+pub mod http_clear_last_response_headers;
+pub mod http_get_last_response_headers;
 pub mod is_dir;
 pub mod is_executable;
 pub mod is_file;
@@ -150,7 +153,6 @@ pub mod rewinddir;
 pub mod rmdir;
 pub mod scandir;
 pub mod stat;
-pub(crate) mod connect_error_params;
 pub(crate) mod stat_support;
 pub mod stream_bucket_append;
 pub mod stream_bucket_make_writeable;
@@ -162,6 +164,7 @@ pub mod stream_context_get_options;
 pub mod stream_context_get_params;
 pub mod stream_context_set_default;
 pub mod stream_context_set_option;
+pub mod stream_context_set_options;
 pub mod stream_context_set_params;
 pub mod stream_copy_to_stream;
 pub mod stream_filter_append;
@@ -204,5 +207,11 @@ pub mod tmpfile;
 pub mod touch;
 pub mod umask;
 pub mod unlink;
+pub mod set_file_buffer;
+pub mod socket_get_status;
+pub mod socket_set_block;
+pub mod socket_set_blocking;
+pub mod socket_set_timeout;
+pub mod stream_register_wrapper;
 pub mod var_dump;
 pub mod vfprintf;

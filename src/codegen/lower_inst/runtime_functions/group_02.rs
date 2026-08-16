@@ -43,8 +43,8 @@ pub(super) fn lower(
                     "get_declared_traits",
                 )
         }),
-        RuntimeFnId::GetDefinedFunctions => Some({
-            crate::codegen::lower_inst::builtins::types::lower_get_defined_functions(ctx, inst)
+        RuntimeFnId::GetLoadedExtensions => Some({
+            crate::codegen::lower_inst::builtins::types::lower_get_loaded_extensions(ctx, inst)
         }),
         RuntimeFnId::GetParentClass => Some({
             crate::codegen::lower_inst::builtins::types::lower_class_name_lookup(
@@ -102,6 +102,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ElephcPharListEntries => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_list_entries(ctx, inst)
+        }),
+        RuntimeFnId::ElephcZipStatEntries => Some({
+            crate::codegen::lower_inst::builtins::io::lower_elephc_zip_stat_entries(ctx, inst)
         }),
         RuntimeFnId::ElephcPharSetCompression => Some({
             crate::codegen::lower_inst::builtins::io::lower_elephc_phar_set_compression(ctx, inst)

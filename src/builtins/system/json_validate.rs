@@ -9,25 +9,17 @@
 //!   and that the flags value (if statically known) is 0 or JSON_INVALID_UTF8_IGNORE.
 //!   Type errors are reported at the offending argument's span.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::builtins::system::json_support;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "json_validate",
-    area: System,
-    params: [
-        json: Str,
-        depth: Int = DefaultSpec::Int(512),
-        flags: Int = DefaultSpec::Int(0),
-    ],
-    returns: Bool,
+    contract: "json_validate",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::JsonValidate,
     ),
-    summary: "Checks if a string contains valid JSON.",
 }
 
 /// Validates the json argument is string-compatible, depth/flags are integers,

@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the binary path operation helper.
 
 eval_builtin! {
-    name: "copy",
+    contract: "copy",
     area: Filesystem,
-    params: [from, to],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -49,7 +48,8 @@ pub(in crate::interpreter) fn eval_builtin_binary_path_bool(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let [from, to] = args else {
+    // `copy()`'s third parameter is php's `$context`, accepted and ignored (see `opendir`).
+    let ([from, to] | [from, to, _]) = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let from = eval_expr(from, context, scope, values)?;

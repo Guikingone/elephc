@@ -8,20 +8,10 @@
 //! Key details:
 //! - Builtin class-like symbols are seeded so unresolved user names can still bind to PHP builtins.
 
-use crate::names::{canonical_name_for_decl, php_symbol_key, Name, NameKind};
-use crate::parser::ast::{ExprKind, Stmt, StmtKind};
+use crate::names::{canonical_name_for_decl, php_symbol_key};
+use crate::parser::ast::{Stmt, StmtKind};
 
 use super::{canonical_builtin_function_name, namespace_name, Symbols};
-
-/// Returns `true` if `name` refers to the builtin `define()` function, i.e. an
-/// unqualified or fully-qualified single-segment name equal to `"define"`.
-/// Inlined here (mirroring `src/resolver/state.rs::is_define_call_name`) because
-/// the resolver helper is `pub(super)`-private and must not be widened.
-fn is_define_call_name(name: &Name) -> bool {
-    matches!(name.kind, NameKind::Unqualified | NameKind::FullyQualified)
-        && name.parts.len() == 1
-        && name.parts[0] == "define"
-}
 
 const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "ArrayAccess",
@@ -61,21 +51,27 @@ const BUILTIN_CLASS_LIKE_SYMBOLS: &[&str] = &[
     "SplSubject",
     "Stringable",
     "Traversable",
-    "UnitEnum",
-    "BackedEnum",
 ];
 
 impl Symbols {
     /// canonical_function
     pub(super) fn canonical_function(&self, name: &str) -> Option<String> {
         let key = php_symbol_key(name);
+        let extension_builtin =
+            crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                &key,
+                true,
+            )
+            .then(|| canonical_builtin_function_name(name))
+            .flatten();
+        if !crate::strict_php::is_enabled() && extension_builtin.is_some() {
+            return extension_builtin;
+        }
         self.functions
             .get(&key)
             .or_else(|| self.extern_functions.get(&key))
             .cloned()
             .or_else(|| canonical_builtin_function_name(name))
-            .or_else(|| super::canonical_prelude_global_function_name(name))
-            .or_else(|| super::canonical_known_composer_global_function_name(name))
     }
 
     /// Returns whether `name` resolves to a user-declared (or extern) function,
@@ -179,87 +175,10 @@ pub(super) fn collect_symbols(
                     canonical_name_for_decl(namespace.as_deref(), name),
                 );
             }
-            // Conditionally-declared functions (`if (!function_exists('X')) { function X(){} }`,
-            // the composer-polyfill `files` shape) are still nested inside their guard body at
-            // this pass — `crate::resolver::hoist_conditional_function_declarations` only moves
-            // them to the top level LATER, after name resolution runs. Without this recursive
-            // discovery, `Symbols::canonical_function`'s namespace-fallback lookup (see
-            // `name_resolver::names::resolve_function_name`) never sees these names, so an
-            // unqualified call to one from inside a `namespace` resolves to the (never-declared)
-            // namespace-qualified form instead of falling back to the eventual global function.
-            // Recursing here only builds the lookup table; the AST itself is untouched. Mirrors
-            // the same statement shapes `hoist_conditional_function_declarations` descends
-            // through, EXCEPT it does not track `function_exists` guards or drop dead branches —
-            // registering an unreachable/never-hoisted nested declaration is harmless here since
-            // `canonical_function` already prefers a real match over the builtin/prelude fallback.
-            // Function/method/closure bodies are never descended into, matching the hoist pass:
-            // a function declared inside another function is a runtime-local declaration.
-            StmtKind::If {
-                then_body,
-                elseif_clauses,
-                else_body,
-                ..
-            } => {
-                collect_symbols(then_body, namespace.as_deref(), symbols);
-                for (_, body) in elseif_clauses {
-                    collect_symbols(body, namespace.as_deref(), symbols);
-                }
-                if let Some(body) = else_body {
-                    collect_symbols(body, namespace.as_deref(), symbols);
-                }
-            }
-            StmtKind::While { body, .. }
-            | StmtKind::DoWhile { body, .. }
-            | StmtKind::For { body, .. }
-            | StmtKind::Foreach { body, .. } => {
-                collect_symbols(body, namespace.as_deref(), symbols);
-            }
-            StmtKind::Switch { cases, default, .. } => {
-                for (_, body) in cases {
-                    collect_symbols(body, namespace.as_deref(), symbols);
-                }
-                if let Some(body) = default {
-                    collect_symbols(body, namespace.as_deref(), symbols);
-                }
-            }
-            StmtKind::Try {
-                try_body,
-                catches,
-                finally_body,
-            } => {
-                collect_symbols(try_body, namespace.as_deref(), symbols);
-                for catch in catches {
-                    collect_symbols(&catch.body, namespace.as_deref(), symbols);
-                }
-                if let Some(body) = finally_body {
-                    collect_symbols(body, namespace.as_deref(), symbols);
-                }
-            }
-            StmtKind::Synthetic(body) | StmtKind::IncludeOnceGuard { body, .. } => {
-                collect_symbols(body, namespace.as_deref(), symbols);
-            }
             StmtKind::ConstDecl { name, .. } => {
                 symbols
                     .constants
                     .insert(canonical_name_for_decl(namespace.as_deref(), name));
-            }
-            // Top-level `\define('LITERAL', ...)` calls create GLOBAL constants
-            // (or FQN constants when the literal name contains `\`). Register the
-            // name so the namespace global-fallback in `resolve_constant_name`
-            // (names.rs step 5) can resolve unqualified references inside a
-            // namespace to this global. The value's TYPE is registered separately
-            // by the checker's `define` handler (`builtins/system.rs`); the
-            // name_resolver only needs the name for fallback resolution.
-            StmtKind::ExprStmt(expr) => {
-                if let ExprKind::FunctionCall { name, args } = &expr.kind {
-                    if args.len() >= 2 && is_define_call_name(name) {
-                        if let ExprKind::StringLiteral(const_name) = &args[0].kind {
-                            symbols
-                                .constants
-                                .insert(const_name.trim_start_matches('\\').to_string());
-                        }
-                    }
-                }
             }
             _ => {}
         }

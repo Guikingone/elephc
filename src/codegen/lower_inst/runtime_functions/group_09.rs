@@ -35,6 +35,9 @@ pub(super) fn lower(
         RuntimeFnId::SplObjectId => Some({
             crate::codegen::lower_inst::builtins::spl::lower_spl_object_id(ctx, inst)
         }),
+        RuntimeFnId::Base64Decode => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_decode(ctx, inst)
+        }),
         RuntimeFnId::Chop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_trim_like(
                     ctx,
@@ -61,6 +64,9 @@ pub(super) fn lower(
         }),
         RuntimeFnId::CtypeSpace => Some({
             crate::codegen::lower_inst::builtins::ctype::lower_ctype_space(ctx, inst)
+        }),
+        RuntimeFnId::ExpectArrayArg => Some({
+            crate::codegen::lower_inst::builtins::lower_expect_array_arg(ctx, inst)
         }),
         RuntimeFnId::Explode => Some({
             crate::codegen::lower_inst::builtins::strings::lower_explode(ctx, inst)
@@ -103,6 +109,18 @@ pub(super) fn lower(
         }),
         RuntimeFnId::HashUpdate => Some({
             crate::codegen::lower_inst::builtins::strings::lower_hash_update(ctx, inst)
+        }),
+        RuntimeFnId::OpensslCipherIvLength => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_cipher_iv_length(ctx, inst)
+        }),
+        RuntimeFnId::OpensslDecrypt => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_decrypt(ctx, inst)
+        }),
+        RuntimeFnId::OpensslEncrypt => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_encrypt(ctx, inst)
+        }),
+        RuntimeFnId::OpensslGetCipherMethods => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_get_cipher_methods(ctx, inst)
         }),
         RuntimeFnId::Htmlentities => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")

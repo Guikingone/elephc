@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind};
-use crate::resolver::path_eval::fold_dirname;
 
 use super::rule::AutoloadRule;
 
@@ -172,6 +171,14 @@ impl Interpreter {
                 "PATHINFO_BASENAME" => Some(Value::Int(PATHINFO_BASENAME)),
                 "PATHINFO_EXTENSION" => Some(Value::Int(PATHINFO_EXTENSION)),
                 "PATHINFO_FILENAME" => Some(Value::Int(PATHINFO_FILENAME)),
+                "PHP_URL_SCHEME" => Some(Value::Int(0)),
+                "PHP_URL_HOST" => Some(Value::Int(1)),
+                "PHP_URL_PORT" => Some(Value::Int(2)),
+                "PHP_URL_USER" => Some(Value::Int(3)),
+                "PHP_URL_PASS" => Some(Value::Int(4)),
+                "PHP_URL_PATH" => Some(Value::Int(5)),
+                "PHP_URL_QUERY" => Some(Value::Int(6)),
+                "PHP_URL_FRAGMENT" => Some(Value::Int(7)),
                 _ => None,
             },
             ExprKind::BinaryOp { left, op, right } => {
@@ -401,6 +408,24 @@ fn fold_sprintf(format: &str, substitutions: &[String]) -> Option<String> {
         }
     }
     Some(out)
+}
+
+/// `dirname(path, levels)` — strip `levels` trailing path components.
+/// Levels is clamped at 1 when the input is missing or invalid (PHP
+/// default).
+fn fold_dirname(path: &str, levels: i64) -> Option<String> {
+    let mut current = path.to_string();
+    for _ in 0..levels {
+        let parent = Path::new(&current).parent()?;
+        let parent_str = parent.to_string_lossy().into_owned();
+        if parent_str.is_empty() {
+            // PHP returns "." for empty parents.
+            current = ".".to_string();
+        } else {
+            current = parent_str;
+        }
+    }
+    Some(current)
 }
 
 /// Check if a path is readable (file or directory).

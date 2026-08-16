@@ -196,12 +196,6 @@ pub(super) fn eval_reflection_owner_object_with_members(
         Some(value) => (value, false),
         None => (values.null()?, true),
     };
-    // `getNumberOfParameters()` reads a dedicated baked count slot instead of
-    // `count(__parameters)` (see `RuntimeValueOps::reflection_owner_new`), so it must be backed
-    // here from the same `parameter_metadata` the `__parameters` array itself is built from.
-    // Ignored by owner kinds without a `__parameter_count` slot (only ReflectionMethod and
-    // ReflectionFunction declare one).
-    let parameter_count = parameter_metadata.len() as u64;
     let object = values.reflection_owner_new(
         owner_kind,
         reflected_name,
@@ -219,7 +213,6 @@ pub(super) fn eval_reflection_owner_object_with_members(
         constant_value_cell,
         backing_value_cell,
         constructor,
-        parameter_count,
     )?;
     if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
         let has_type = values.bool_value(type_metadata.is_some())?;
@@ -648,7 +641,6 @@ pub(super) fn eval_reflection_parameter_object_result(
         default_value_constant_name,
         class_value,
         constructor,
-        0, // ReflectionParameter has no `__parameter_count` slot; value is ignored.
     )?;
     values.release(attrs)?;
     values.release(declaring_function)?;
@@ -851,7 +843,6 @@ pub(super) fn eval_reflection_named_type_object_result(
         constant_value,
         backing_value,
         constant_value,
-        0, // ReflectionNamedType has no `__parameter_count` slot; value is ignored.
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -899,7 +890,6 @@ pub(super) fn eval_reflection_union_type_object_result(
         constant_value,
         backing_value,
         constant_value,
-        0, // ReflectionUnionType has no `__parameter_count` slot; value is ignored.
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;
@@ -946,7 +936,6 @@ pub(super) fn eval_reflection_intersection_type_object_result(
         constant_value,
         backing_value,
         constant_value,
-        0, // ReflectionIntersectionType has no `__parameter_count` slot; value is ignored.
     )?;
     values.release(attrs)?;
     values.release(interface_names)?;

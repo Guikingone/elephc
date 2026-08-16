@@ -55,6 +55,146 @@ fn assert_scope_eir_aot_without_bridge(
     );
 }
 
+/// Verifies dynamic eval compiles and runs without any native project or PCRE2 artifact.
+#[test]
+fn test_dynamic_eval_without_regex_needs_no_native_project() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_without_native_project");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : 'echo "eval-ok";';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval without regex should compile without a native project:\n{compile_stderr}"
+    );
+    assert!(
+        compile_stderr.contains("dynamic eval was compiled without optional regex support")
+            && compile_stderr.contains("elephc --with-regex <source-file>"),
+        "compile output should contain the regex capability reminder:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("native project error"),
+        "eval-only compilation must not resolve managed PCRE2:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval fixture");
+    assert!(
+        run.status.success(),
+        "dynamic eval fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "eval-ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies unavailable dynamic regex calls compile but fail only when executed.
+#[test]
+fn test_dynamic_eval_regex_without_capability_fails_at_runtime() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_regex_without_capability");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo function_exists("preg_match") ? "available" : "missing"; preg_match("/a/", "a");';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "opaque dynamic regex usage should not fail compilation:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval regex fixture");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "missing regex capability should fail at runtime");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "missing");
+    assert!(
+        stderr.contains("Fatal error: eval() runtime failed"),
+        "runtime failure should use the eval fatal diagnostic:\n{stderr}"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-regex` registers managed PCRE2 for dynamic eval builtin dispatch.
+#[test]
+fn test_dynamic_eval_with_regex_uses_managed_provider() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_with_regex");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : '$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches); echo (function_exists("preg_match") ? "yes" : "no") . ":" . $ok . ":" . $matches[1] . ":" . $matches[2];';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
+        .args(["--quiet", "--with-regex", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval with managed regex should compile:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("dynamic eval was compiled without optional regex support"),
+        "explicit regex capability should suppress the reminder:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run managed dynamic eval regex fixture");
+    assert!(
+        run.status.success(),
+        "managed dynamic eval regex fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "yes:1:id:42");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a statically detected regex call also exposes the provider to dynamic eval.
+#[test]
+fn test_static_regex_detection_enables_dynamic_eval_regex() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/a/", "cat") . ":";
+$code = $argc > 1 ? $argv[1] : 'echo preg_match("/b/", "cab");';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "1:1");
+}
+
 /// Verifies `eval` is resolved as a language construct, not a PHP-visible callable function.
 #[test]
 fn test_eval_is_not_function_exists_or_callable() {
@@ -4540,7 +4680,7 @@ fn test_eval_null_argument_is_empty_fragment() {
 fn test_eval_integer_argument_is_coerced_then_parse_checked() {
     let err = compile_and_run_expect_failure("<?php eval(123);");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
@@ -5296,17 +5436,39 @@ echo $items["name"];
     assert_eq!(out, "Ada");
 }
 
-/// Verifies nested eval calls reuse the materialized caller scope.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, refusing what PHP refuses.
+///
+/// This previously asserted `5`, which reference PHP 8.5.6 NEVER produces. It passed only because
+/// the magician's lexer had no interpolation scanner, so `"$x = $x + 4;"` reached the inner
+/// `eval()` literally and assigned in the shared scope. Once the interpreter learned to
+/// interpolate, `$x` became its VALUE and the inner fragment reads `1 = 1 + 4;` — an assignment to
+/// a literal. Measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token "=" in …(3) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// PHP's stdout is EMPTY — an `E_PARSE` inside `eval()` halts the script, so the trailing
+/// `echo $x` never runs. elephc halts the same way, so the two agree on both the refusal and the
+/// absence of output; only the diagnostic wording differs.
+///
+/// Nested-eval SCOPE SHARING itself is unaffected and still covered: see
+/// `test_eval_nested_interpolates_scalar_into_inner_fragment`, where the inner fragment reads the
+/// outer `$v`, and `test_eval_nested_eval_return_value_is_expression_result` just below.
 #[test]
 fn test_eval_nested_eval_uses_same_scope() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $x = 1;
 eval('eval("$x = $x + 4;");');
 echo $x;
 "#,
     );
-    assert_eq!(out, "5");
+    assert!(
+        err.contains("Parse error: syntax error, unexpected end of file"),
+        "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
+         refuses it; stderr was: {err}"
+    );
 }
 
 /// Verifies a nested eval return is the value of the inner eval expression.
@@ -6466,6 +6628,38 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
 }
 
+/// Verifies an eval()'d open failure names the file and the reason, as the compiled path does.
+///
+/// The AOT warning was fixed to carry both; the eval interpreter has its own emitter and was
+/// left behind saying `fopen(): Failed to open stream` with nothing after it. `file()` was
+/// worse: it announced itself as `file_get_contents()`. The reason is read from the OS rather
+/// than assumed, because "No such file or directory" is wrong for a file that exists and
+/// cannot be read.
+#[test]
+fn test_eval_open_failure_names_the_file_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$a = fopen("missing_a.txt", "r");');
+eval('$b = file_get_contents("missing_b.txt");');
+eval('$c = file("missing_c.txt");');
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    for expected in [
+        "Warning: fopen(missing_a.txt): Failed to open stream: No such file or directory",
+        "Warning: file_get_contents(missing_b.txt): Failed to open stream: No such file or directory",
+        "Warning: file(missing_c.txt): Failed to open stream: No such file or directory",
+    ] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected:?}, got stderr={}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies eval fragments can construct and dispatch SPL container objects.
 #[test]
 fn test_eval_constructs_and_dispatches_spl_container_objects() {
@@ -7029,14 +7223,11 @@ echo function_exists("time"); echo function_exists("phpversion"); echo function_
 echo function_exists("sys_get_temp_dir");');
 "#,
     );
-    assert_eq!(
-        out,
-        format!(
-            "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:1111",
-            env!("CARGO_PKG_VERSION"),
-            env!("CARGO_PKG_VERSION")
-        )
-    );
+    // `phpversion()` reports the PHP LANGUAGE version, not elephc's package version. The eval
+    // interpreter cannot read `--php-version` itself, so the compiler forwards the profile to
+    // it; this program compiles with the default, hence 8.5.0. `eval_follows_a_non_default_profile`
+    // in `php_version_surface_tests` is where the forwarding itself is measured.
+    assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
 }
 
 /// Verifies eval `date()` formats timestamps and `mktime()` creates them.
@@ -7346,7 +7537,7 @@ echo $call_wrappers[10] . ":";
 $call_transports = call_user_func_array("stream_get_transports", []);
 echo $call_transports[11] . ":";
 $call_filters = call_user_func_array("stream_get_filters", []);
-echo $call_filters[13] . ":";
+echo $call_filters[8] . ":";
 $tmp = tmpfile();
 echo stream_is_local("php://memory") ? "local" : "bad"; echo ":";
 echo stream_supports_lock($tmp) ? "lock" : "bad"; echo ":";
@@ -7356,9 +7547,16 @@ echo function_exists("stream_get_wrappers"); echo function_exists("stream_get_tr
 echo function_exists("stream_is_local"); echo function_exists("stream_supports_lock");');
 "#,
     );
+    // php 8.5.6 answers `https` / `file` / `phar` at wrapper indices 0/5/10 and
+    // `convert.iconv.*` / `dechunk` at filter indices 2/8 over nine families.
+    // The eval tables mirror the native lists, so this pins both. The old
+    // expectation read `11:file:https:...:14:string.rot13:...` off the pre-php
+    // wrapper order and the fourteen-concrete-name filter list. The transport
+    // half still reads the eval table's twelve entries, which have not been
+    // trimmed to php's ten the way the native list was.
     assert_eq!(
         out,
-        "11:file:https:12:tcp:tlsv1.0:14:string.rot13:glob:tlsv1.3:bzip2.decompress:local:lock:calllocal:calllock:11111"
+        "11:https:file:12:tcp:tlsv1.0:9:convert.iconv.*:phar:tlsv1.3:dechunk:local:lock:calllocal:calllock:11111"
     );
 }
 
@@ -7442,7 +7640,7 @@ echo ":"; echo function_exists("stream_resolve_include_path");');
 /// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
 #[test]
 fn test_eval_dispatches_preg_builtin_calls() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches);
 echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
@@ -7514,7 +7712,7 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
 /// Verifies eval `preg_replace_callback()` accepts general callable forms.
 #[test]
 fn test_eval_preg_replace_callback_accepts_general_callables() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 echo eval('class EvalPregCallbackBox {
     public $prefix = "";
@@ -7538,7 +7736,7 @@ return preg_replace_callback("/[m]/", $static, "mm");');
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$match = "preg_match";
 $ok = $match("/([a-z]+)([0-9]+)/", "id42", $matches);
@@ -7557,7 +7755,7 @@ echo $okAgain . ":" . $firstClassMatches[0];');
 /// Verifies named eval preg calls write by-reference `$matches` arrays.
 #[test]
 fn test_eval_named_preg_calls_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$named = [];
 $ok = preg_match(pattern: "/([a-z]+)([0-9]+)/", subject: "id42", matches: $named);
@@ -7574,7 +7772,7 @@ echo preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);');
 /// Verifies eval `call_user_func*()` warns for by-value regex `$matches` outputs.
 #[test]
 fn test_eval_call_user_func_regex_ref_like_builtin_args_warn_and_use_value_copy() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_capture_with_regex(
         r#"<?php
 eval('$matches = ["old"];
 echo call_user_func("preg_match", "/x/", "x", $matches) . ":" . $matches[0] . "|";
@@ -7667,6 +7865,31 @@ echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");');
     assert_eq!(
         out,
         "/var/log|syslog.log|log|syslog:gz:dotfile:trail:empty-dir:no-ext:b.php:foo.txt:zero:11"
+    );
+}
+
+/// Verifies eval `parse_url()` supports array/component shapes, constants, callables, and errors.
+#[test]
+fn test_eval_dispatches_parse_url_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$info = parse_url("https://user:pass@example.com:8080/path?q=1#frag");
+echo $info["scheme"] . "|" . $info["host"] . "|" . $info["port"] . "|" . $info["path"] . ":";
+echo parse_url("http://[::1]:80/", PHP_URL_HOST) . ":";
+echo parse_url("http://host: 80", PHP_URL_PORT) . ":";
+echo parse_url("http://host:\t80", PHP_URL_PORT) . ":";
+echo parse_url(url: "http://host", component: PHP_URL_PORT) === null ? "missing" : "bad"; echo ":";
+echo parse_url("http://") === false ? "false" : "bad"; echo ":";
+echo count(parse_url("/path", -2)); echo ":";
+echo call_user_func("parse_url", "//callable/path", PHP_URL_HOST); echo ":";
+echo call_user_func_array("parse_url", ["url" => "mailto:a@b", "component" => PHP_URL_PATH]); echo ":";
+try { parse_url("x", 8); } catch (ValueError $error) { echo $error->getMessage(); }
+echo ":"; echo function_exists("parse_url"); echo defined("PHP_URL_FRAGMENT");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "https|example.com|8080|/path:[::1]:80:80:missing:false:1:callable:a@b:parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given:11"
     );
 }
 
@@ -8246,6 +8469,25 @@ echo ":"; echo function_exists("strpos"); echo function_exists("strrpos");');
 "#,
     );
     assert_eq!(out, "2:4:F:0:3:1:3:11");
+}
+
+/// Verifies eval honors PHP's third `$offset` argument on both position builtins, including
+/// the named-argument spelling and `strrpos()`'s negative-offset rule (which bounds where a
+/// match may end rather than where the scan starts).
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_string_position_builtins_honor_offset_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strpos("hello world", "o", 5);
+echo ":"; echo strrpos("hello world", "o", -3);
+echo ":"; echo strpos("hello world", "o", offset: -4);
+echo ":"; echo strrpos("abcabc", "bc", -6) === false ? "F" : "bad";
+echo ":"; echo strpos("abc", "", 1);
+echo ":"; echo strrpos("abc", "", -1);');
+"#,
+    );
+    assert_eq!(out, "7:7:7:F:1:2");
 }
 
 /// Verifies eval `strstr()` returns matching suffixes, prefixes, and false for misses.
@@ -9103,38 +9345,107 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
 fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     let err = compile_and_run_expect_failure("<?php eval('if (');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse-error diagnostic: {err}"
     );
 }
 
-/// Verifies eval failure classes map to distinct stable user-facing diagnostics.
+/// Verifies an `eval()` parse error carries php's LOCATION and php's exit status.
+///
+/// Measured on `php -n` 8.5.6, for a file whose fourth line is `eval("1 +");`:
+///
+/// ```text
+/// \nParse error: syntax error, unexpected end of file in /tmp/ev.php(4) : eval()'d code on line 1\n
+/// ```
+/// with status 255. elephc printed `Parse error: eval() fragment is invalid` and exited 1 —
+/// neither the location nor the status, and a wording that appears nowhere in php.
+///
+/// The line INSIDE the fragment is asserted on a THREE-line fragment as well, because that is
+/// the case a fixed `1` would get wrong: php reports an unterminated fragment against the end
+/// of input, which is the empty fourth line, not the last line carrying code.
+///
+/// What is deliberately NOT asserted is php's syntactic complaint. php words at least five
+/// (`unexpected end of file`, `… expecting "("`, `unexpected token ";"`, `Unclosed '('`,
+/// `Unmatched '}'`); the bridge answers a status code, so elephc always writes the first.
 #[test]
-fn test_eval_error_contract_distinguishes_parse_unsupported_runtime_and_warning() {
-    let parse_err = compile_and_run_expect_failure("<?php eval('if (');");
+fn test_eval_parse_error_carries_phps_location_and_exit_status() {
+    let single = compile_and_run_capture("<?php\necho \"kept\";\neval('1 +');\n");
+    assert!(!single.success, "an unparsable fragment must be fatal");
+    assert_eq!(single.exit_code, Some(255), "stderr={}", single.stderr);
+    assert_eq!(single.stdout, "kept");
     assert!(
-        parse_err.contains("Parse error: eval() fragment is invalid"),
-        "stderr did not contain eval parse-error diagnostic: {parse_err}"
+        single
+            .stderr
+            .contains(") : eval()'d code on line 1\n"),
+        "the eval location tail is missing, got stderr={}",
+        single.stderr
     );
-    assert_no_rust_panic_leaked(&parse_err);
+    assert!(
+        single
+            .stderr
+            .starts_with("\nParse error: syntax error, unexpected end of file in "),
+        "the parse error lost php's opening, got stderr={:?}",
+        single.stderr
+    );
+    assert!(
+        single.stderr.contains(".php(3) : eval()'d code"),
+        "the host file and the eval() call line are missing, got stderr={}",
+        single.stderr
+    );
 
-    let unsupported_err = compile_and_run_expect_failure(
+    let multi = compile_and_run_capture("<?php\neval(\"\\$a = 1;\\n\\$b = 2;\\n1 +\\n\");\n");
+    assert!(!multi.success, "an unparsable fragment must be fatal");
+    assert_eq!(multi.exit_code, Some(255), "stderr={}", multi.stderr);
+    assert!(
+        multi.stderr.contains(".php(2) : eval()'d code on line 4\n"),
+        "the fragment's own line was not measured, got stderr={}",
+        multi.stderr
+    );
+}
+
+/// Compiles one eval fixture that must fail with the requested diagnostic fragment.
+fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
+    let stderr = compile_and_run_expect_failure(source);
+    assert!(
+        stderr.contains(expected),
+        "stderr did not contain expected eval diagnostic {expected:?}: {stderr}"
+    );
+    stderr
+}
+
+/// Verifies eval parse failures retain their stable user-facing diagnostic.
+#[test]
+fn test_eval_error_contract_reports_parse_failure() {
+    let stderr = assert_eval_failure_contains(
+        "<?php eval('if (');",
+        "Parse error: syntax error, unexpected end of file",
+    );
+    assert_no_rust_panic_leaked(&stderr);
+}
+
+/// Verifies unsupported eval syntax retains its stable user-facing diagnostic.
+#[test]
+fn test_eval_error_contract_reports_unsupported_construct() {
+    let stderr = assert_eval_failure_contains(
         "<?php eval('function eval_bad_static_return(): static {}');",
+        "Fatal error: eval() fragment uses an unsupported construct",
     );
-    assert!(
-        unsupported_err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported-construct diagnostic: {unsupported_err}"
-    );
-    assert_no_rust_panic_leaked(&unsupported_err);
+    assert_no_rust_panic_leaked(&stderr);
+}
 
-    let runtime_err =
-        compile_and_run_expect_failure("<?php eval('return MissingEvalContractConst;');");
-    assert!(
-        runtime_err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime-fatal diagnostic: {runtime_err}"
+/// Verifies eval runtime failures retain their stable user-facing diagnostic.
+#[test]
+fn test_eval_error_contract_reports_runtime_failure() {
+    let stderr = assert_eval_failure_contains(
+        "<?php eval('return MissingEvalContractConst;');",
+        "Fatal error: eval() runtime failed",
     );
-    assert_no_rust_panic_leaked(&runtime_err);
+    assert_no_rust_panic_leaked(&stderr);
+}
 
+/// Verifies eval warnings remain non-fatal and are written to stderr.
+#[test]
+fn test_eval_error_contract_reports_non_fatal_warning() {
     let warning = compile_and_run_capture(
         r#"<?php
 eval('define("EvalErrorContractConst", 1);');
@@ -9162,7 +9473,7 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
     for (source, expected) in [
         (
             "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
+            "Parse error: syntax error, unexpected end of file",
         ),
         (
             "<?php eval('clamp(5, 10, 0);');",
@@ -9174,7 +9485,9 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
                 "$callback = new EvalPanicBoundaryPlainCallback(); ",
                 "call_user_func($callback);');"
             ),
-            "Fatal error: uncaught exception",
+            // Prefix only: this row pins THAT the eval boundary raises a fatal, not which
+            // Throwable the invoker synthesizes for a non-callable object.
+            "Fatal error: Uncaught ",
         ),
     ] {
         let err = compile_and_run_expect_failure(source);
@@ -9347,7 +9660,11 @@ echo function_exists("sprintf"); echo is_callable("printf"); echo function_exist
     );
 }
 
-/// Verifies eval `sscanf()` returns indexed string matches through direct and callable paths.
+/// Verifies eval `sscanf()` returns php-typed matches through direct and callable paths.
+///
+/// `-2.5e3` reads back as `-2500`, not as the matched text: `%f` yields a FLOAT, so echoing
+/// it prints php's float rendering. The old assertion held the scanned SLICE, which is what
+/// the interpreter's scanf subset used to answer — `php -n` (8.5.6) gives `float(-2500)`.
 #[test]
 fn test_eval_dispatches_sscanf_builtin_call() {
     let out = compile_and_run(
@@ -9363,7 +9680,7 @@ echo $spread[0] . ":";
 echo function_exists("sscanf");');
 "#,
     );
-    assert_eq!(out, "John:1.5:30:-25:-2.5e3:ok:1");
+    assert_eq!(out, "John:1.5:30:-25:-2500:ok:1");
 }
 
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.
@@ -14610,9 +14927,9 @@ echo count($implements) . ":" . $implements["EvalDynNamedReader"] . ":" . $imple
     );
 }
 
-/// Verifies eval-declared method overrides enforce covariant return types.
+/// Verifies eval-declared method overrides accept covariant return types.
 #[test]
-fn test_eval_declared_method_return_type_override_contracts() {
+fn test_eval_declared_method_return_type_override_accepts_covariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalReturnBase {
@@ -14648,8 +14965,12 @@ echo $child->id();');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "2");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject nullable return widening.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_nullable_widening() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnNarrowBase {
     public function id(): int { return 1; }
@@ -14658,13 +14979,14 @@ class EvalReturnWiderNullable extends EvalReturnNarrowBase {
     public function id(): ?int { return 2; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject replacing `static` with `self`.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_static_to_self() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnStaticBase {
     public function make(): static { return $this; }
@@ -14673,13 +14995,14 @@ class EvalReturnSelfChild extends EvalReturnStaticBase {
     public function make(): self { return $this; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared method overrides reject widening nullable returns to `mixed`.
+#[test]
+fn test_eval_declared_method_return_type_override_rejects_mixed_widening() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalReturnNullableBase {
     public function maybe(): ?int { return null; }
@@ -14688,16 +15011,13 @@ class EvalReturnMixedChildBad extends EvalReturnNullableBase {
     public function maybe(): mixed { return null; }
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        "Fatal error: eval() runtime failed",
     );
 }
 
-/// Verifies eval-declared method overrides enforce contravariant parameter types.
+/// Verifies eval-declared method overrides accept contravariant parameter types.
 #[test]
-fn test_eval_declared_method_parameter_type_override_contracts() {
+fn test_eval_declared_method_parameter_type_override_accepts_contravariance() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalParamBase {
@@ -14722,8 +15042,12 @@ echo $child->maybeInt(null) === null ? "null" : "bad";');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:mixed:ok:null");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject unrelated child types.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_unrelated_type() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamTypeBase {
     public function read(int $value) { return $value; }
@@ -14732,13 +15056,14 @@ class EvalParamStringChild extends EvalParamTypeBase {
     public function read(string $value) { return $value; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject removing parent nullability.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_nullable_narrowing() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamNullableBase {
     public function maybe(?int $value) { return $value; }
@@ -14747,13 +15072,14 @@ class EvalParamNonNullChild extends EvalParamNullableBase {
     public function maybe(int $value) { return $value; }
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared parameter overrides reject narrowing an untyped parent.
+#[test]
+fn test_eval_declared_method_parameter_type_override_rejects_typed_child() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalParamUntypedBase {
     public function read($value) { return $value; }
@@ -14762,10 +15088,7 @@ class EvalParamTypedChild extends EvalParamUntypedBase {
     public function read(int $value) { return $value; }
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
+        "Fatal error: eval() runtime failed",
     );
 }
 
@@ -15198,7 +15521,7 @@ echo $box->hidden();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: uncaught exception"),
+        err.contains("Fatal error: Uncaught "),
         "stderr did not contain uncaught throwable diagnostic: {err}"
     );
 }
@@ -19267,10 +19590,10 @@ eval('class EvalAotFinalPropertyChild extends EvalAotFinalPropertyBase {
     );
 }
 
-/// Verifies eval validates generated/AOT parent property visibility and storage contracts.
+/// Verifies eval rejects reducing a generated/AOT parent property's visibility.
 #[test]
-fn test_eval_declared_class_rejects_incompatible_aot_parent_property_contracts() {
-    for source in [
+fn test_eval_declared_class_rejects_reduced_aot_parent_property_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotPublicPropertyBase {
     public int $value = 1;
@@ -19279,6 +19602,14 @@ eval('class EvalAotProtectedPropertyChild extends EvalAotPublicPropertyBase {
     protected int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects replacing a generated/AOT static property with an instance property.
+#[test]
+fn test_eval_declared_class_rejects_aot_static_property_as_instance() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotStaticPropertyBase {
     public static int $value = 1;
@@ -19287,6 +19618,14 @@ eval('class EvalAotInstancePropertyChild extends EvalAotStaticPropertyBase {
     public int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects replacing a generated/AOT readonly property with a mutable property.
+#[test]
+fn test_eval_declared_class_rejects_aot_readonly_property_as_mutable() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotReadonlyPropertyBase {
     public readonly int $value;
@@ -19295,6 +19634,14 @@ eval('class EvalAotMutablePropertyChild extends EvalAotReadonlyPropertyBase {
     public int $value = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
+    );
+}
+
+/// Verifies eval rejects redeclaring a generated/AOT private-set property.
+#[test]
+fn test_eval_declared_class_rejects_redeclared_aot_private_set_property() {
+    assert_eval_failure_contains(
         r#"<?php
 class EvalAotPrivateSetPropertyBase {
     public private(set) int $value = 1;
@@ -19303,13 +19650,8 @@ eval('class EvalAotPrivateSetPropertyChild extends EvalAotPrivateSetPropertyBase
     public private(set) int $value = 2;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() runtime failed"),
-            "stderr did not contain eval runtime fatal diagnostic: {err}"
-        );
-    }
+        "Fatal error: eval() runtime failed",
+    );
 }
 
 /// Verifies eval rejects incompatible generated/AOT parent property types.
@@ -19551,37 +19893,56 @@ return EvalMultiConstEnum::G + EvalMultiConstEnum::H;');
     assert_eq!(out.stdout, "12:34:56:15");
 }
 
-/// Verifies eval rejects PHP's reserved `class` class-constant name.
+/// Verifies eval classes reject PHP's reserved `class` constant name.
 #[test]
-fn test_eval_declared_reserved_class_constant_name_fails() {
-    for source in [
+fn test_eval_declared_class_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalBadConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval interfaces reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_interface_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalBadIfaceConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval traits reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_trait_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('trait EvalBadTraitConstName {
     const class = 1;
 }');
 "#,
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
+}
+
+/// Verifies eval enums reject PHP's reserved `class` constant name.
+#[test]
+fn test_eval_declared_enum_rejects_reserved_class_constant_name() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('enum EvalBadEnumConstName {
     const class = 1;
 }');
 "#,
-    ] {
-        let err = compile_and_run_expect_failure(source);
-        assert!(
-            err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-            "stderr did not contain eval unsupported-construct diagnostic: {err}"
-        );
-    }
+        "Fatal error: eval() fragment uses an unsupported construct",
+    );
 }
 
 /// Asserts one eval fragment rejects a PHP-reserved class-like declaration name.
@@ -19740,9 +20101,9 @@ eval('class EvalAotFinalConstChild extends EvalAotFinalConstBase {
     );
 }
 
-/// Verifies eval-declared class constants preserve PHP visibility redeclaration rules.
+/// Verifies eval-declared class constants accept public visibility redeclarations.
 #[test]
-fn test_eval_declared_class_constant_visibility_contracts() {
+fn test_eval_declared_class_constant_visibility_accepts_public_redeclarations() {
     let out = compile_and_run_capture(
         r#"<?php
 eval('class EvalConstVisibilityBase {
@@ -19767,8 +20128,12 @@ echo EvalConstVisibilityImpl::TOKEN;');
         out.stdout, out.stderr
     );
     assert_eq!(out.stdout, "7:5");
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared class constants cannot reduce inherited public visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_parent_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('class EvalConstPublicBase {
     public const SEED = 1;
@@ -19777,13 +20142,14 @@ class EvalConstProtectedChild extends EvalConstPublicBase {
     protected const SEED = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared classes cannot reduce interface constant visibility.
+#[test]
+fn test_eval_declared_class_constant_visibility_rejects_reduced_interface_visibility() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalConstPublicContract {
     public const SEED = 1;
@@ -19792,22 +20158,20 @@ class EvalConstProtectedImpl implements EvalConstPublicContract {
     protected const SEED = 2;
 }');
 "#,
+        "Fatal error: eval() runtime failed",
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+}
 
-    let err = compile_and_run_expect_failure(
+/// Verifies eval-declared interfaces reject protected constants.
+#[test]
+fn test_eval_declared_interface_rejects_protected_constant() {
+    assert_eval_failure_contains(
         r#"<?php
 eval('interface EvalConstProtectedIface {
     protected const SEED = 1;
 }');
 "#,
-    );
-    assert!(
-        err.contains("Fatal error: eval() fragment uses an unsupported construct"),
-        "stderr did not contain eval unsupported-construct diagnostic: {err}"
+        "Fatal error: eval() fragment uses an unsupported construct",
     );
 }
 
@@ -28439,7 +28803,7 @@ echo $x;
 fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
     let err = compile_and_run_expect_failure("<?php eval('<?php echo 1;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
@@ -28478,10 +28842,34 @@ try {
     assert_eq!(out, "caught:dyn boom");
 }
 
-/// Verifies Throwable objects thrown by nested eval calls keep the original catch target.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, as reference PHP does.
+///
+/// This test previously asserted `caught:nested boom`, which reference PHP 8.5.6 NEVER produces.
+/// It passed only because the magician's lexer had no interpolation scanner: `"throw $e;"` reached
+/// the inner `eval()` with `$e` still literal, so the inner fragment parsed as a plain `throw $e;`
+/// and the exception crossed the caller's `try`. Once the interpreter learned to interpolate, the
+/// old expectation became unreachable — the test was pinning the absence of a feature.
+///
+/// What reference PHP actually does, measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token ":" in …(4) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// `$e` is an `Exception`, so interpolating it calls `__toString()` and the inner fragment becomes
+/// `throw Exception: nested boom in /path…;` — a syntax error. Neither `bad` nor `caught:` is ever
+/// printed. That the fragment is REFUSED is the behaviour worth pinning.
+///
+/// The failure MODE still differs and is a pre-existing divergence, not one this change
+/// introduced: reference PHP reports a recoverable parse error and continues, while elephc treats
+/// an unparseable eval fragment as fatal (the same `Fatal error: eval() runtime failed` every
+/// other invalid-fragment test in this file asserts). Only WHICH fragments are invalid moved here.
+///
+/// The scalar case is the positive half and is verified separately: `eval('eval("echo $v + 1;");')`
+/// with `$v = 41` prints `42` in both, so interpolation reaches nested fragments correctly.
 #[test]
 fn test_eval_nested_throw_crosses_caller_try_catch() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $e = new Exception("nested boom");
 try {
@@ -28492,7 +28880,30 @@ try {
 }
 "#,
     );
-    assert_eq!(out, "caught:nested boom");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "an interpolated Exception makes the inner fragment unparseable, as it does in reference \
+         PHP; stderr was: {err}"
+    );
+}
+
+/// Verifies nested `eval()` interpolation of a SCALAR, the positive half of the case above.
+///
+/// `eval('eval("echo $v + 1;");')` with `$v = 41` prints `42` under reference PHP 8.5.6, proving
+/// the outer fragment's double-quoted string is interpolated before the inner `eval()` sees it.
+/// Before the interpreter grew an interpolation scanner this printed nothing useful, because the
+/// inner fragment received the literal text `echo $v + 1;` and resolved `$v` itself — which
+/// happens to agree here, so only a case where interpolation CHANGES the parse (the Exception
+/// above) could tell the two models apart. Both are pinned so neither can regress alone.
+#[test]
+fn test_eval_nested_interpolates_scalar_into_inner_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+$v = 41;
+eval('eval("echo $v + 1;");');
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies eval-internal try/catch consumes a thrown Throwable before returning.
@@ -28591,4 +29002,66 @@ echo eval('try {
 "#,
     );
     assert_eq!(out, "F1");
+}
+
+/// Verifies eval honors PHP's second `intval()` argument, including the named spelling, the
+/// `strtol()` prefix rules, the silent `0` for an out-of-range base, and the rule that `$base`
+/// is ignored for a non-string subject.
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_intval_honors_base_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo intval("42", 8);
+echo ":"; echo intval("0x1A", 0);
+echo ":"; echo intval("0b101", 0);
+echo ":"; echo intval("42", base: 8);
+echo ":"; echo intval("42", 1);
+echo ":"; echo intval(42.9, 8);
+echo ":"; echo intval("ffffffffffffffffff", 16);
+echo ":"; echo intval("42");');
+"#,
+    );
+    assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
+}
+
+/// Verifies `eval()` reads every PHP numeric literal form in the same base the AOT compiler
+/// does, so the two halves of elephc cannot disagree about what a literal means.
+///
+/// Measured against PHP 8.5.6 (`php -n`), which prints the same value for the direct and the
+/// `eval()`d spelling of each form:
+/// `0700`/`0o700`/`0O700`/`0_700`/`0o7_00` → `448`, `0x1F`/`0X1f`/`0x1_F` → `31`,
+/// `0b101`/`0B101`/`0b1_01` → `5`, `1_000` → `1000`, `0` and `00` → `0`,
+/// `0100644` → `33188`, `010` → `8`, `1e3` → `1000`, `1e-3` → `0.001`, `1.5e2` → `150`.
+///
+/// Before this test the eval lexer scanned decimal digits only, so `eval('echo 0700;')`
+/// printed `700` and `eval('echo 0100644;')` printed `100644` — a silent wrong answer that
+/// made every permission mask evaluated at runtime mean something else — while the prefixed
+/// forms split into an integer plus an identifier. The direct (AOT) column is asserted in the
+/// same test so a future divergence in EITHER lexer fails here.
+///
+/// The two columns are printed by `echo` rather than compared as returned arrays because
+/// `eval('return [1, 2];')` segfaults on its own — an unrelated, pre-existing defect that
+/// would mask this one.
+#[test]
+fn test_eval_numeric_literal_bases_match_the_aot_lexer() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";');
+echo 0700, ",", 0o700, ",", 0O700, ",", 0x1F, ",", 0X1f, ",", 0b101, ",", 0B101, ",", 1_000, "\n";
+eval('echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";');
+echo 0, ",", 00, ",", 0100644, ",", 0_700, ",", 0o7_00, ",", 0x1_F, ",", 0b1_01, ",", 010, "\n";
+eval('echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";');
+echo 1e3, ":", 1e-3, ":", 1.5e2, ":", 1_000.5, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "448,448,448,31,31,5,5,1000\n\
+         448,448,448,31,31,5,5,1000\n\
+         0,0,33188,448,448,31,5,8\n\
+         0,0,33188,448,448,31,5,8\n\
+         1000:0.001:150:1000.5\n\
+         1000:0.001:150:1000.5\n"
+    );
 }

@@ -15,13 +15,24 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 /// Each line includes its trailing newline character (`\n`) except for the last line if the file
 /// does not end with a newline. Returns a pointer to a runtime array of strings.
 ///
+/// PHP's `$flags` bitmask is applied while the lines are produced, so no line is ever allocated
+/// and then trimmed or discarded: `FILE_IGNORE_NEW_LINES` (2) drops a trailing `\n` plus a
+/// preceding `\r` before the line is pushed, and `FILE_SKIP_EMPTY_LINES` (4) then suppresses a
+/// line that is left empty. php-src evaluates the two in exactly that order, which is why
+/// `FILE_SKIP_EMPTY_LINES` alone keeps a bare `"\n"` line (its length is still 1).
+/// `FILE_USE_INCLUDE_PATH` (1) is accepted and has no effect: elephc resolves includes at compile
+/// time and has no run-time include path, which matches PHP's own default empty `include_path`.
+///
 /// Stack frame (ARM64, 64 bytes):
 /// - sp+#0..#7:   file data pointer and length (saved across calls)
 /// - sp+#8..#15:  scratch
 /// - sp+#16..#23: result array pointer (preserved across `__rt_array_push_str` calls)
 /// - sp+#24..#31: saved scan cursor when calling `__rt_array_push_str`
-/// - sp+#32..#47: scratch
+/// - sp+#32..#39: the `$flags` bitmask (saved across every call)
+/// - sp+#40..#47: scratch
 /// - sp+#48..#63: saved x29/x30
+///
+/// Input: x0 = `$flags`, x1 = filename pointer, x2 = filename length.
 ///
 /// On x86_64 Linux, delegates to `emit_file_linux_x86_64` which follows the System V AMD64 ABI.
 pub fn emit_file(emitter: &mut Emitter) {
@@ -38,9 +49,30 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
 
     // -- read entire file contents --
-    emitter.instruction("bl __rt_file_get_contents");                           // read file, x1=ptr, x2=len
+    emitter.instruction("bl __rt_file_get_contents_maybe_url");                 // read the file OR the wrapper URL, x1=ptr, x2=len
+    emitter.instruction("b __rt_file_split");                                   // and split whatever came back
+
+    // -- second entry: the caller already read the bytes (a php://filter chain read) --
+    // `file()` on a filter URL is "read through the chain, then split": the read half lives in
+    // the lowering's filter route, which cannot reach the split loop through `__rt_file`
+    // because that entry performs its own read. Same frame, same flags slot, same loop.
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("sub sp, sp, #64");                                     // the same frame the ordinary entry builds
+    emitter.instruction("stp x29, x30, [sp, #48]");
+    emitter.instruction("add x29, sp, #48");
+    emitter.instruction("str x0, [sp, #32]");                                   // save the PHP $flags bitmask across every helper call
+
+    // A shared label, not a local one: the plain `b` above crosses from `__rt_file`'s atom into
+    // this one, and a local label would be dropped by macOS dead-stripping (`.alt_entry` keeps
+    // it addressable; the jump is an unconditional `b`, which is what `.alt_entry` supports).
+    emitter.label_shared("__rt_file_split");
+    // A null payload pointer is the reader's failure signal — php answers FALSE for a file it
+    // cannot read, and a null return is what the caller's boxing turns into that false. An
+    // EMPTY file arrives as a non-null pointer with length zero and still answers `[]`.
+    emitter.instruction("cbz x1, __rt_file_failed");
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
@@ -66,14 +98,17 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("cmp w6, #0x0A");                                       // compare with newline
     emitter.instruction("b.ne __rt_file_scan");                                 // if not newline, continue scanning
 
-    // -- found newline: push this line to array --
+    // -- found newline: apply the PHP $flags bitmask, then push this line to array --
+    emitter.instruction("sub x7, x3, x5");                                      // line start = current pos - line length
+    emit_file_line_flags_aarch64(emitter, "scan");
     emitter.instruction("str x3, [sp, #24]");                                   // save scan pointer (push_str clobbers x3)
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
-    emitter.instruction("sub x1, x3, x5");                                      // line start = current pos - line length
-    emitter.instruction("mov x2, x5");                                          // line length (including \n)
+    emitter.instruction("mov x1, x7");                                          // line start pointer
+    emitter.instruction("mov x2, x5");                                          // line length after flag trimming
     emitter.instruction("bl __rt_array_push_str");                              // push line to array (x0 = possibly new array)
     emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible growth
     emitter.instruction("ldr x3, [sp, #24]");                                   // restore scan pointer
+    emitter.label("__rt_file_scan_skip");
     emitter.instruction("mov x5, #0");                                          // reset line length for next line
 
     // -- reload scan state and continue --
@@ -84,19 +119,61 @@ pub fn emit_file(emitter: &mut Emitter) {
     // -- handle last line (no trailing newline) --
     emitter.label("__rt_file_last");
     emitter.instruction("cbz x5, __rt_file_ret");                               // if last line is empty, skip it
+    emitter.instruction("sub x7, x3, x5");                                      // line start = current pos - line length
+    emit_file_line_flags_aarch64(emitter, "last");
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
-    emitter.instruction("sub x1, x3, x5");                                      // line start = current pos - line length
-    emitter.instruction("mov x2, x5");                                          // line length
+    emitter.instruction("mov x1, x7");                                          // line start pointer
+    emitter.instruction("mov x2, x5");                                          // line length after flag trimming
     emitter.instruction("bl __rt_array_push_str");                              // push last line to array
+    emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible growth
+    emitter.label("__rt_file_last_skip");
 
     // -- return array pointer --
     emitter.label("__rt_file_ret");
     emitter.instruction("ldr x0, [sp, #16]");                                   // return array pointer
 
     // -- restore frame and return --
+    emitter.label("__rt_file_out");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    emitter.label("__rt_file_failed");
+    emitter.instruction("mov x0, #0");                                          // the caller boxes the null as PHP false
+    emitter.instruction("b __rt_file_out");
+}
+
+/// Emits the ARM64 `$flags` handling applied to one complete `file()` line before it is pushed.
+///
+/// On entry `x7` is the line start pointer and `x5` its length including any terminator; on exit
+/// `x5` is the length PHP would store. `FILE_IGNORE_NEW_LINES` (bit 1) removes a trailing `\n` and
+/// then a trailing `\r`, so a CRLF file yields the same lines as an LF one. `FILE_SKIP_EMPTY_LINES`
+/// (bit 2) is evaluated afterwards and branches to `__rt_file_<site>_skip`, suppressing the push
+/// entirely; the ordering is what makes `FILE_SKIP_EMPTY_LINES` alone keep a bare `"\n"` line, the
+/// same as php-src.
+///
+/// `site` names the caller so the mid-loop and trailing-line copies get distinct local labels.
+fn emit_file_line_flags_aarch64(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the PHP $flags bitmask
+    emitter.instruction("tst x9, #2");                                          // FILE_IGNORE_NEW_LINES requested?
+    emitter.instruction(&format!("b.eq __rt_file_{}_keep_eol", site));          // keep the terminator when the flag is clear
+    emitter.instruction(&format!("cbz x5, __rt_file_{}_keep_eol", site));       // an already-empty line has no terminator to drop
+    emitter.instruction("sub x10, x5, #1");                                     // index of the line's last byte
+    emitter.instruction("ldrb w11, [x7, x10]");                                 // load the line's last byte
+    emitter.instruction("cmp w11, #0x0A");                                      // is the line terminated by a line feed?
+    emitter.instruction(&format!("b.ne __rt_file_{}_keep_eol", site));          // nothing to trim without a line feed
+    emitter.instruction("mov x5, x10");                                         // drop the trailing line feed
+    emitter.instruction(&format!("cbz x5, __rt_file_{}_keep_eol", site));       // a lone line feed leaves an empty line
+    emitter.instruction("sub x10, x5, #1");                                     // index of the byte before the dropped line feed
+    emitter.instruction("ldrb w11, [x7, x10]");                                 // load that byte to detect a CRLF terminator
+    emitter.instruction("cmp w11, #0x0D");                                      // is the terminator a carriage return + line feed pair?
+    emitter.instruction(&format!("b.ne __rt_file_{}_keep_eol", site));          // a bare line feed needs no further trimming
+    emitter.instruction("mov x5, x10");                                         // drop the carriage return of a CRLF terminator
+    emitter.label(&format!("__rt_file_{}_keep_eol", site));
+    emitter.instruction("tst x9, #4");                                          // FILE_SKIP_EMPTY_LINES requested?
+    emitter.instruction(&format!("b.eq __rt_file_{}_emit", site));              // keep every line when the flag is clear
+    emitter.instruction(&format!("cbz x5, __rt_file_{}_skip", site));           // suppress a line left empty by the trimming above
+    emitter.label(&format!("__rt_file_{}_emit", site));
 }
 
 /// Emits the x86_64 Linux variant of `__rt_file` using the System V AMD64 ABI.
@@ -110,7 +187,10 @@ pub fn emit_file(emitter: &mut Emitter) {
 /// - rbp-16:  owned file payload length (preserved across array operations)
 /// - rbp-24:  result array pointer (updated after each `__rt_array_push_str` call)
 /// - rbp-32:  scan cursor spill (preserved across `__rt_array_push_str`)
+/// - rbp-40:  the `$flags` bitmask (preserved across every call)
 /// Caller-saved registers r8–r11 and rcx hold the scan state.
+///
+/// Input: rdi = `$flags`, plus the filename in the shared x86_64 elephc string registers.
 fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: file ---");
@@ -119,8 +199,24 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file() uses scan state and array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file payload, scan cursors, and result array pointer
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the file payload, line scan cursors, and result array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
 
-    emitter.instruction("call __rt_file_get_contents");                         // read the full file payload into an owned elephc string before splitting it into lines
+    emitter.instruction("call __rt_file_get_contents_maybe_url");               // read the file OR the wrapper URL into an owned elephc string before splitting it into lines
+    emitter.instruction("jmp __rt_file_split_x");                               // and split whatever came back
+
+    // -- second entry: the caller already read the bytes; see the AArch64 counterpart --
+    emitter.label_global("__rt_file_from_bytes");
+    emitter.instruction("push rbp");                                            // the same frame the ordinary entry builds
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 64");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // save the PHP $flags bitmask across every helper call
+
+    // See the AArch64 counterpart: the `jmp` crosses into this entry's section, so the label
+    // must survive section-level garbage collection.
+    emitter.label_shared("__rt_file_split_x");
+    // See the AArch64 counterpart: a null payload pointer answers null, which boxes to false.
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_file_failed_x");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
 
@@ -144,16 +240,18 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp dl, 0x0A");                                        // test whether the consumed byte is a line-feed terminator
     emitter.instruction("jne __rt_file_scan");                                  // continue scanning the current line until a terminating line-feed is found
 
+    emit_file_line_flags_x86_64(emitter, "scan");
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // preserve the active scan cursor because array_push_str() is free to clobber caller-saved registers
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("mov rsi, r9");                                         // pass the current line start pointer as the string payload argument to array_push_str()
-    emitter.instruction("mov rdx, rcx");                                        // pass the completed line length, including the trailing newline, to array_push_str()
+    emitter.instruction("mov rdx, rcx");                                        // pass the completed line length after flag trimming to array_push_str()
     emitter.instruction("call __rt_array_push_str");                            // append the completed line slice as an owned string in the result array
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the updated array pointer after array_push_str() handles possible growth
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // restore the active scan cursor after the append helper clobbers caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the full file payload length before rebuilding the end-of-buffer pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the owned file payload base pointer before rebuilding the end-of-buffer pointer
     emitter.instruction("add r11, r10");                                        // rebuild the pointer one byte past the end of the owned file payload after the helper call
+    emitter.label("__rt_file_scan_skip");
     emitter.instruction("mov r9, r8");                                          // start the next line at the scan cursor immediately after the consumed newline
     emitter.instruction("xor rcx, rcx");                                        // reset the current line length counter before scanning the next line
     emitter.instruction("jmp __rt_file_scan");                                  // continue scanning the remaining bytes in the file payload for more newline terminators
@@ -161,15 +259,58 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_file_last");
     emitter.instruction("test rcx, rcx");                                       // detect whether the file ended with a partial line that still needs to be appended
     emitter.instruction("jz __rt_file_cleanup");                                // skip the final push when the file already ended exactly on a newline boundary
+    emit_file_line_flags_x86_64(emitter, "last");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("mov rsi, r9");                                         // pass the trailing line start pointer as the string payload argument to array_push_str()
-    emitter.instruction("mov rdx, rcx");                                        // pass the trailing line length without a newline terminator to array_push_str()
+    emitter.instruction("mov rdx, rcx");                                        // pass the trailing line length after flag trimming to array_push_str()
     emitter.instruction("call __rt_array_push_str");                            // append the trailing partial line as an owned string in the result array
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the updated array pointer after appending the trailing partial line
+    emitter.label("__rt_file_last_skip");
 
     emitter.label("__rt_file_cleanup");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the result array pointer in the canonical x86_64 integer result register
+    emitter.label("__rt_file_out_x");
     emitter.instruction("add rsp, 64");                                         // release the temporary file payload and scan-state spill slots used by file()
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the line array
     emitter.instruction("ret");                                                 // return the array of file lines to the caller
+
+    emitter.label("__rt_file_failed_x");
+    emitter.instruction("xor eax, eax");                                        // the caller boxes the null as PHP false
+    emitter.instruction("jmp __rt_file_out_x");
+}
+
+/// Emits the x86_64 `$flags` handling applied to one complete `file()` line before it is pushed.
+///
+/// Mirrors [`emit_file_line_flags_aarch64`] instruction for instruction: on entry `r9` is the line
+/// start pointer and `rcx` its length including any terminator, and on exit `rcx` is the length
+/// PHP would store. `FILE_IGNORE_NEW_LINES` (bit 1) drops a trailing `\n` and then a trailing `\r`;
+/// `FILE_SKIP_EMPTY_LINES` (bit 2) is evaluated afterwards and jumps to `__rt_file_<site>_skip`.
+///
+/// `site` names the caller so the mid-loop and trailing-line copies get distinct local labels.
+fn emit_file_line_flags_x86_64(emitter: &mut Emitter, site: &str) {
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the PHP $flags bitmask
+    emitter.instruction("test rax, 2");                                         // FILE_IGNORE_NEW_LINES requested?
+    emitter.instruction(&format!("je __rt_file_{}_keep_eol", site));            // keep the terminator when the flag is clear
+    emitter.instruction("test rcx, rcx");                                       // does the line have any bytes to trim?
+    emitter.instruction(&format!("jz __rt_file_{}_keep_eol", site));            // an already-empty line has no terminator to drop
+    emitter.instruction("mov rsi, rcx");                                        // copy the line length before computing the last byte index
+    emitter.instruction("sub rsi, 1");                                          // index of the line's last byte
+    emitter.instruction("mov dl, BYTE PTR [r9 + rsi]");                         // load the line's last byte
+    emitter.instruction("cmp dl, 0x0A");                                        // is the line terminated by a line feed?
+    emitter.instruction(&format!("jne __rt_file_{}_keep_eol", site));           // nothing to trim without a line feed
+    emitter.instruction("mov rcx, rsi");                                        // drop the trailing line feed
+    emitter.instruction("test rcx, rcx");                                       // did dropping the line feed leave an empty line?
+    emitter.instruction(&format!("jz __rt_file_{}_keep_eol", site));            // a lone line feed leaves an empty line
+    emitter.instruction("mov rsi, rcx");                                        // copy the trimmed length before probing the previous byte
+    emitter.instruction("sub rsi, 1");                                          // index of the byte before the dropped line feed
+    emitter.instruction("mov dl, BYTE PTR [r9 + rsi]");                         // load that byte to detect a CRLF terminator
+    emitter.instruction("cmp dl, 0x0D");                                        // is the terminator a carriage return + line feed pair?
+    emitter.instruction(&format!("jne __rt_file_{}_keep_eol", site));           // a bare line feed needs no further trimming
+    emitter.instruction("mov rcx, rsi");                                        // drop the carriage return of a CRLF terminator
+    emitter.label(&format!("__rt_file_{}_keep_eol", site));
+    emitter.instruction("test rax, 4");                                         // FILE_SKIP_EMPTY_LINES requested?
+    emitter.instruction(&format!("je __rt_file_{}_emit", site));                // keep every line when the flag is clear
+    emitter.instruction("test rcx, rcx");                                       // is the line empty after the trimming above?
+    emitter.instruction(&format!("jz __rt_file_{}_skip", site));                // suppress a line left empty by the trimming above
+    emitter.label(&format!("__rt_file_{}_emit", site));
 }

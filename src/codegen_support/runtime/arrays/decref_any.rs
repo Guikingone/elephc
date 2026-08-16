@@ -52,7 +52,7 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("and x13, x11, #0xff");                                 // isolate the low-byte heap kind tag
     emitter.instruction("cmp x13, #2");                                         // is this a refcounted indexed array?
     emitter.instruction("b.lo __rt_decref_any_dispatch");                       // strings should still be freed immediately
-    emitter.instruction("cmp x13, #7");                                         // is this within the refcounted array/hash/object/mixed/throwable/refcell range?
+    emitter.instruction("cmp x13, #6");                                         // is this within the refcounted array/hash/object/mixed/throwable range?
     emitter.instruction("b.hi __rt_decref_any_dispatch");                       // raw/untyped blocks are not part of refcounted graph cleanup
     emitter.instruction("mov x14, #1");                                         // prepare a single-bit reachable mask
     emitter.instruction("lsl x14, x14, #16");                                   // x14 = GC reachable bit in the kind word
@@ -74,8 +74,6 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_decref_any_mixed");                          // release mixed cells through __rt_decref_mixed
     emitter.instruction("cmp x11, #6");                                         // is this a throwable object?
     emitter.instruction("b.eq __rt_decref_any_object");                         // release throwables through the object decref helper
-    emitter.instruction("cmp x11, #7");                                         // is this a refcounted reference cell?
-    emitter.instruction("b.eq __rt_decref_any_ref");                            // release reference cells through __rt_ref_cell_decref
     emitter.instruction("ret");                                                 // unknown/raw kinds need no release
 
     emitter.label("__rt_decref_any_string");
@@ -92,9 +90,6 @@ pub fn emit_decref_any(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("b __rt_decref_mixed");                                 // tail-call to mixed-cell decref
-
-    emitter.label("__rt_decref_any_ref");
-    emitter.instruction("b __rt_ref_cell_decref");                              // tail-call to reference-cell decref
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release
@@ -139,8 +134,6 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_decref_any_mixed");                            // mixed cells release through the x86_64 mixed decref helper
     emitter.instruction("cmp r10, 6");                                          // does this heap-backed payload point at a throwable object (issue #448)?
     emitter.instruction("je __rt_decref_any_object");                           // throwables release through the x86_64 object decref helper like plain objects
-    emitter.instruction("cmp r10, 7");                                          // does this heap-backed payload point at a reference cell?
-    emitter.instruction("je __rt_decref_any_ref");                              // reference cells release through the x86_64 reference-cell decref helper
     emitter.instruction("jmp __rt_decref_any_done");                            // unknown/raw heap kinds need no release work in the current x86_64 bootstrap runtime
 
     emitter.label("__rt_decref_any_string");
@@ -157,9 +150,6 @@ fn emit_decref_any_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_decref_any_mixed");
     emitter.instruction("jmp __rt_decref_mixed");                               // tail-call to the mixed-box decref helper on x86_64
-
-    emitter.label("__rt_decref_any_ref");
-    emitter.instruction("jmp __rt_ref_cell_decref");                            // tail-call to the reference-cell decref helper on x86_64
 
     emitter.label("__rt_decref_any_done");
     emitter.instruction("ret");                                                 // nothing to release for null, foreign, or unsupported heap kinds

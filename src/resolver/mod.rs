@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Includes are resolved in source-file context so declarations are available before type checking.
+//! - `resolve_collecting_includes` additionally surfaces the canonical path of every file the
+//!   resolver statically loaded, which `crate::opcache_prelude` bakes into the OPcache script
+//!   manifest.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -19,12 +22,8 @@ mod engine_includes;
 mod exprs;
 mod files;
 mod function_variants;
-mod hoist_conditional_functions;
-mod hoist_includes;
 mod include_once;
 mod include_path;
-mod reflection_source_files;
-pub(crate) mod path_eval;
 mod state;
 mod stmt_exprs;
 
@@ -36,9 +35,6 @@ use contains::has_includes;
 use discovery::discover_include_declarations;
 use engine::resolve_stmts;
 use state::ResolveState;
-
-pub use hoist_conditional_functions::hoist_conditional_function_declarations;
-pub use reflection_source_files::scan_reflection_source_files;
 
 /// Resolves all include/require statements by inlining the referenced files.
 ///
@@ -57,42 +53,61 @@ pub use reflection_source_files::scan_reflection_source_files;
 /// processed for cycle detection), and `ResolveState` (per-file state
 /// including discovered function variants). The `discovery` phase performs
 /// filesystem I/O to locate included files before any AST rewriting occurs.
+///
+/// This is the include-set-discarding wrapper over [`resolve_collecting_includes`]. It is kept
+/// because the fourteen call sites that do not care about the include set (the `ir_lower`,
+/// `error_tests` and `tests/codegen/support` harnesses) read better without a `.0`; only
+/// `crate::pipeline`, which bakes the OPcache script manifest, takes the longer form.
+#[allow(dead_code)] // Consumed by the test harnesses; `crate::pipeline` uses the collecting form.
 pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileError> {
-    resolve_inner(program, base_dir, false)
+    resolve_collecting_includes(program, base_dir).map(|(program, _)| program)
 }
 
-/// Like [`resolve`], but lowers an unresolvable runtime-dynamic include/require path into a
-/// diverging runtime-fatal stub instead of failing compilation. Used by the autoloader when
-/// splicing transitively-referenced library code (`crate::autoload`): such files may contain
-/// lazy dynamic includes (e.g. a polyfill that `require`s a data table by a computed path) that
-/// never execute for the program being built, so they must not block the closed-world compile.
-/// The main program keeps the strict [`resolve`] behavior.
-pub fn resolve_lenient_includes(
+/// Same as [`resolve`], but also returns the CANONICAL path of every source file the
+/// resolver statically loaded through `include` / `require` / `include_once` /
+/// `require_once`, each exactly once.
+///
+/// SOURCE OF THE SET: the engine's `declared_once`, threaded through
+/// `resolver::engine::resolve_stmts` and inserted by
+/// `resolver::engine_includes::resolve_include_stmt` for every one of the four include
+/// forms once its target has been parsed. It is deliberately NOT
+/// `discovery::DiscoveryEntry::canonical`: `DiscoveryOutput::push` drops any entry whose
+/// `declarations` are empty, so a file that only holds executable statements (a config
+/// array, a bootstrap side effect) would never be recorded — yet it IS compiled into the
+/// binary and therefore IS a cached script. `declared_once` records every include the
+/// engine actually inlined, declarations or not, and its `HashSet` gives the
+/// exactly-once property for free (repeat plain `include`s of one file collapse to one
+/// manifest entry, which is what "cached script" means).
+///
+/// The paths carry the SAME normalization `__FILE__` bakes
+/// (`crate::magic_constants::file_pass`, `Path::canonicalize`): `resolve_include_stmt`
+/// canonicalizes before inserting, and only inserts after the target parsed — so a
+/// missing file (whose `canonicalize` would have fallen back to the raw path) never
+/// reaches the set.
+///
+/// The vector is SORTED so a build is byte-reproducible; `declared_once` is a `HashSet`
+/// and its iteration order is not.
+pub fn resolve_collecting_includes(
     program: Program,
     base_dir: &Path,
-) -> Result<Program, CompileError> {
-    resolve_inner(program, base_dir, true)
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_with_defines(program, base_dir, &HashSet::new())
 }
 
-/// Shared implementation of [`resolve`] and [`resolve_lenient_includes`]. `lenient_includes`
-/// selects whether an unresolvable runtime-dynamic include path becomes a runtime-fatal stub
-/// (`true`) or a hard compile error (`false`).
-fn resolve_inner(
+/// Resolves includes while applying the invocation's conditional symbols to every loaded file.
+pub fn resolve_collecting_includes_with_defines(
     program: Program,
     base_dir: &Path,
-    lenient_includes: bool,
-) -> Result<Program, CompileError> {
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if !has_includes(&program) {
-        return Ok(program);
+        return Ok((program, Vec::new()));
     }
 
-    let discovery = discover_include_declarations(&program, base_dir, lenient_includes)?;
+    let discovery = discover_include_declarations(&program, base_dir, defines)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
-    let mut state = ResolveState {
-        lenient_dynamic_includes: lenient_includes,
-        ..ResolveState::default()
-    };
+    let mut state = ResolveState::with_conditional_defines(defines);
     let resolved = resolve_stmts(
         program,
         base_dir,
@@ -102,8 +117,11 @@ fn resolve_inner(
         &discovery.function_variants,
     )?;
 
+    let mut included_files: Vec<PathBuf> = declared_once.into_iter().collect();
+    included_files.sort();
+
     if discovery.declarations.is_empty() {
-        return Ok(resolved);
+        return Ok((resolved, included_files));
     }
 
     let prelude_span = discovery
@@ -119,5 +137,5 @@ fn resolve_inner(
         prelude_span,
     )];
     resolved_with_prelude.extend(resolved);
-    Ok(resolved_with_prelude)
+    Ok((resolved_with_prelude, included_files))
 }

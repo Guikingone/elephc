@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_sum",
-    area: Array,
-    params: [array: Mixed],
-    returns: Int,
+    contract: "array_sum",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArraySum,
     ),
-    summary: "Calculate the sum of values in an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-sum.php",
 }
 
 /// Computes the return type (Int or Float) based on the array element type.
@@ -32,6 +27,9 @@ builtin! {
 /// Non-array arguments are rejected.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    // An `array|false` union (scandir, glob, file) reads through to its array member;
+    // the argument lowering pairs the acceptance with an unbox-or-throw for the `false`.
+    let ty = ty.array_or_false_member().cloned().unwrap_or(ty);
     match ty {
         PhpType::Array(ref elem_ty) if **elem_ty == PhpType::Float => Ok(PhpType::Float),
         PhpType::Array(_) => Ok(PhpType::Int),

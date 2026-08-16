@@ -1,5 +1,5 @@
 //! Purpose:
-//! Emits the `__rt_array_splice_refcounted`, `__rt_array_new` runtime helper assembly for array splice refcounted.
+//! Emits the `__rt_array_splice_refcounted` runtime helper assembly for array splice refcounted.
 //! Keeps PHP array/hash storage, heap ownership, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -7,9 +7,12 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - The removal window is normalized by the shared `slice_bounds` prologue, so the removal count is
+//!   always non-negative and the compaction loop never reads or writes outside the source payload.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
 
 /// Emits the `__rt_array_splice_refcounted` runtime helper for array splice.
 ///
@@ -22,14 +25,17 @@ use crate::codegen_support::platform::Arch;
 ///
 /// # Input registers (ARM64 calling convention)
 /// * `x0` - source array pointer
-/// * `x1` - splice offset (starting position of removal)
-/// * `x2` - removal length; `-1` means "remove everything from offset to the end"
+/// * `x1` - `$offset` (starting position of removal, may be negative)
+/// * `x2` - `$length` (may be negative)
+/// * `x3` - 1 when a `$length` was supplied, 0 when it was omitted or `null`
 ///
 /// # Output registers (ARM64 calling convention)
 /// * `x0` - new array containing the removed elements (caller owns)
+/// * `x1` - the normalized removal offset, i.e. the index a `$replacement` is inserted at
 ///
 /// # ABI details
-/// * Clamps the removal length so it never exceeds the remaining elements.
+/// * `emit_slice_bounds` normalizes the offset/length pair first, so the removal count is always in
+///   `[0, array_length - offset]`.
 /// * Preserves source array metadata; updates the source array's logical length in-place.
 /// * Calls `__rt_array_new` and `__rt_array_push_refcounted` helpers.
 pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
@@ -47,14 +53,10 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
-    emitter.instruction("str x1, [sp, #8]");                                    // save offset
-    emitter.instruction("str x2, [sp, #16]");                                   // save removal length
 
-    // -- clamp removal length to not exceed array bounds --
-    emitter.instruction("ldr x3, [x0]");                                        // load source array length
-    emitter.instruction("sub x4, x3, x1");                                      // compute maximum removable length
-    emitter.instruction("cmp x2, x4");                                          // compare requested length with maximum removable length
-    emitter.instruction("csel x2, x4, x2, gt");                                 // clamp length to the remaining number of elements
+    // -- normalize the requested removal window against PHP's offset/length rules --
+    emit_slice_bounds(emitter, "__rt_array_splice_ref");
+    emitter.instruction("str x1, [sp, #8]");                                    // save normalized offset
     emitter.instruction("str x2, [sp, #16]");                                   // save clamped removal length
 
     // -- create result array for removed elements --
@@ -106,6 +108,7 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
 
     // -- return removed-elements result array --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // return the normalized removal offset, the index a $replacement is inserted at
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return result array
@@ -114,10 +117,12 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
 /// Emits the x86_64 Linux variant of `__rt_array_splice_refcounted`.
 ///
 /// Identical in behavior to the ARM64 variant but emits x86_64 instructions using the
-/// System V AMD64 ABI (registers: rdi=array, rsi=offset, rdx=length; return in rax).
+/// System V AMD64 ABI (registers: rdi=array, rsi=`$offset`, rdx=`$length`, rcx=1 when a `$length`
+/// was supplied and 0 when it was omitted or `null`; returns the removed-elements array in rax and
+/// the normalized removal offset in rdx).
 ///
-/// The implementation mirrors the ARM64 logic: clamp length, copy removed elements into a
-/// new result array, shift remaining elements left in-place, and return the result array.
+/// The implementation mirrors the ARM64 logic: normalize the removal window, copy removed elements
+/// into a new result array, shift remaining elements left in-place, and return the result array.
 fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: array_splice_refcounted ---");
@@ -127,20 +132,10 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the source indexed-array pointer, clamped removal length, and removed-elements result array
     emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the refcounted splice bookkeeping while keeping helper calls 16-byte aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the source indexed-array pointer across removal-length clamping and result-array construction
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested splice offset across the result-array constructor call and later compaction loop
-    emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load the source indexed-array logical length before clamping the requested removal length
-    emitter.instruction("mov rcx, r10");                                        // seed the remaining-window scratch register from the source indexed-array logical length
-    emitter.instruction("sub rcx, rsi");                                        // compute the maximum removable refcounted payload count from the requested splice offset
-    emitter.instruction("cmp rdx, -1");                                         // detect the sentinel that means array_splice should remove until the end of the source indexed array
-    emitter.instruction("jne __rt_array_splice_ref_known_len_x86");             // keep the explicit requested removal length when the caller did not use the until-end sentinel
-    emitter.instruction("mov rdx, rcx");                                        // replace the until-end sentinel with the remaining refcounted payload count in the source indexed array
 
-    emitter.label("__rt_array_splice_ref_known_len_x86");
-    emitter.instruction("cmp rdx, rcx");                                        // clamp the requested removal length so it never extends beyond the source indexed-array bounds
-    emitter.instruction("jle __rt_array_splice_ref_len_ready_x86");             // keep the explicit requested removal length when it already fits inside the remaining refcounted payload window
-    emitter.instruction("mov rdx, rcx");                                        // clamp the requested removal length down to the maximum removable refcounted payload count
-
-    emitter.label("__rt_array_splice_ref_len_ready_x86");
+    // -- normalize the requested removal window against PHP's offset/length rules --
+    emit_slice_bounds(emitter, "__rt_array_splice_ref");
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the normalized splice offset across the result-array constructor call and later compaction loop
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the clamped removal length across the result-array constructor call and later compaction loop
     emitter.instruction("mov rdi, rdx");                                        // pass the clamped removal length as the removed-elements result capacity to the shared constructor
     emitter.instruction("mov rsi, 8");                                          // request 8-byte payload slots for the removed-elements result indexed array
@@ -193,6 +188,7 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r11, r9");                                         // compute the shortened source indexed-array logical length after removing the splice window
     emitter.instruction("mov QWORD PTR [r10], r11");                            // persist the shortened source indexed-array logical length back into the array header
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the removed-elements result indexed-array pointer before returning it to the caller
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the normalized removal offset, the index a $replacement is inserted at
     emitter.instruction("add rsp, 48");                                         // release the refcounted splice spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the removed-elements result indexed-array pointer in rax

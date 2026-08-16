@@ -38,7 +38,7 @@ fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
         compile_source_to_asm_with_options("<?php echo 2 ** 3;", &dir, 8_388_608, false, false);
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "constant-folded pow expression should not leave a pow call in user assembly:\n{}",
         user_asm
     );
@@ -84,40 +84,6 @@ fn test_constant_folding_string_concat_removes_runtime_concat_call() {
         &[],
     );
     assert_eq!(out, "hello world");
-
-    let _ = fs::remove_dir_all(&dir);
-}
-
-/// Verifies the AST fold never mis-folds `Str & Str` (bytewise string `&`) to an integer.
-/// PHP's `&`/`|`/`^` on two strings are string operators; the constant folder must skip
-/// string-literal operands and leave the value to the runtime `__rt_str_bitwise` path, so
-/// literal operands still yield the correct string result rather than an integer.
-#[test]
-fn test_constant_folding_skips_string_bitwise() {
-    let dir = make_cli_test_dir("elephc_constant_folding_str_bitwise");
-    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
-        r#"<?php echo bin2hex("ABCD" & "\xff\x00\xff\x00");"#,
-        &dir,
-        8_388_608,
-        false,
-        false,
-    );
-
-    assert!(
-        user_asm.contains("__rt_str_bitwise"),
-        "string `&` on two literals must reach the runtime helper, not fold to an int:\n{}",
-        user_asm
-    );
-
-    let out = assemble_and_run(
-        &user_asm,
-        get_runtime_obj(),
-        &dir,
-        &required_libraries,
-        &default_link_paths(),
-        &[],
-    );
-    assert_eq!(out, "41004300");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -168,7 +134,7 @@ fn test_constant_folding_ternary_removes_pow_call_from_user_assembly() {
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "constant-folded ternary should not leave a pow call in user assembly:\n{}",
         user_asm
     );

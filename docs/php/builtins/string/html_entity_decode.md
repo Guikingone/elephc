@@ -2,21 +2,19 @@
 title: "html_entity_decode()"
 description: "Converts HTML entities in a string back into their corresponding characters."
 sidebar:
-  order: 382
+  order: 425
 ---
 
 ## html_entity_decode()
 
 ```php
-function html_entity_decode(string $string, int $flags = 11, string $encoding = null): string
+function html_entity_decode(string $string): string
 ```
 
 Converts HTML entities in a string back into their corresponding characters.
 
 **Parameters**:
 - `$string` (`string`)
-- `$flags` (`int`), default `11`, optional
-- `$encoding` (`string`), default `null`, optional
 
 **Returns**: `string`
 
@@ -26,12 +24,6 @@ Converts HTML entities in a string back into their corresponding characters.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/html_entity_decode.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/html_entity_decode.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

@@ -8,9 +8,8 @@
 //! - Returns persisted context options or an empty associative array.
 
 eval_builtin! {
-    name: "stream_context_get_options",
+    contract: "stream_context_get_options",
     area: Filesystem,
-    params: [context],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -49,6 +48,18 @@ pub(in crate::interpreter) fn eval_stream_context_get_options_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // php-src raises a catchable TypeError that names its own stub parameter —
+    // `$stream_or_context`, not `$stream` — and the VALUE's own type spelling. Reaching
+    // `eval_resource_payload()` with a non-resource used to die as an uncatchable runtime fatal.
+    if values.type_tag(stream_context)? != EVAL_TAG_RESOURCE {
+        let given = eval_stream_php_type_name(stream_context, values)?;
+        let message = format!(
+            "stream_context_get_options(): Argument #1 ($stream_or_context) must be of type \
+             resource, {} given",
+            given
+        );
+        return eval_stream_type_error(&message, context, values);
+    }
     let id = super::stream_context_set_option::eval_stream_context_resource_id(stream_context, values)?;
     match context.stream_resources().stream_context_options(id) {
         Some(options) => Ok(options),

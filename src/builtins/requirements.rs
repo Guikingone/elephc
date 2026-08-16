@@ -52,6 +52,12 @@ pub fn file_get_contents_requirements(
         {
             vec![BuiltinRequirement::Bridge("elephc_tls")]
         }
+        // A literal `zip://` URL reads through the bridge at RUN time, so — unlike a literal
+        // `phar://` URL, whose entry is extracted during lowering — it really does need the
+        // bridge linked in. It needs nothing else: a ZIP entry is inflated inside the bridge.
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("zip://") => {
+            vec![BuiltinRequirement::Bridge("elephc_phar")]
+        }
         Some(ExprKind::StringLiteral(_)) => Vec::new(),
         _ => vec![
             BuiltinRequirement::Bridge("elephc_tls"),
@@ -62,7 +68,11 @@ pub fn file_get_contents_requirements(
     }
 }
 
-/// Resolves PHAR libraries needed by `file_put_contents()` from its filename expression.
+/// Resolves PHAR and compression libraries needed by `file_put_contents()` from its filename.
+///
+/// A `compress.zlib://` filename compresses through libz exactly as `fopen()` does, so it needs
+/// the same `-lz` the fopen route already asks for. Without this the deflate symbols the write
+/// route emits reach the linker unresolved.
 pub fn file_put_contents_requirements(
     input: &BuiltinRequirementInput<'_>,
 ) -> Vec<BuiltinRequirement> {
@@ -71,6 +81,9 @@ pub fn file_put_contents_requirements(
             BuiltinRequirement::Bridge("elephc_phar"),
             BuiltinRequirement::Bridge("elephc_crypto"),
         ],
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("compress.zlib://") => {
+            vec![BuiltinRequirement::SystemLibrary("z")]
+        }
         Some(ExprKind::StringLiteral(_)) => Vec::new(),
         _ => vec![BuiltinRequirement::Bridge("elephc_phar")],
     }
@@ -80,7 +93,9 @@ pub fn file_put_contents_requirements(
 pub fn fopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filename)) = input.args.first().map(|arg| &arg.kind) else {
         return vec![
+            BuiltinRequirement::Bridge("elephc_tls"),
             BuiltinRequirement::Bridge("elephc_phar"),
+            BuiltinRequirement::Bridge("elephc_crypto"),
             BuiltinRequirement::SystemLibrary("z"),
             BuiltinRequirement::SystemLibrary("bz2"),
         ];
@@ -103,6 +118,12 @@ pub fn fopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinReq
     if filename.starts_with("phar://") && write_mode {
         requirements.push(BuiltinRequirement::Bridge("elephc_phar"));
         requirements.push(BuiltinRequirement::Bridge("elephc_crypto"));
+    }
+    // A literal `zip://` open reads its archive at run time through the bridge, in EVERY mode:
+    // the read modes to serve the entry, and the refused write modes because the lowering still
+    // publishes the bridge pointer before the runtime gate turns the open down.
+    if filename.starts_with("zip://") {
+        requirements.push(BuiltinRequirement::Bridge("elephc_phar"));
     }
     requirements
 }
@@ -198,6 +219,25 @@ mod tests {
         assert_eq!(
             stream_filter_requirements(&input(&zlib_filter)),
             vec![BuiltinRequirement::SystemLibrary("z")]
+        );
+    }
+
+    /// Verifies a runtime `fopen` path conservatively links every reachable wrapper dependency.
+    #[test]
+    fn dynamic_fopen_requirements_cover_tls_phar_crypto_and_compression() {
+        let dynamic = [Expr::new(
+            ExprKind::Variable("path".to_string()),
+            Span::dummy(),
+        )];
+        assert_eq!(
+            fopen_requirements(&input(&dynamic)),
+            vec![
+                BuiltinRequirement::Bridge("elephc_tls"),
+                BuiltinRequirement::Bridge("elephc_phar"),
+                BuiltinRequirement::Bridge("elephc_crypto"),
+                BuiltinRequirement::SystemLibrary("z"),
+                BuiltinRequirement::SystemLibrary("bz2"),
+            ]
         );
     }
 }

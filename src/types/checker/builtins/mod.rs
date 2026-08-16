@@ -11,38 +11,33 @@
 pub(crate) mod arrays;
 mod callables;
 pub(crate) mod catalog;
-mod intl;
 pub(crate) mod io;
-pub(crate) mod late_bound;
 mod language_constructs;
-mod mbstring;
-pub(crate) mod numeric;
-pub(crate) mod platform_constants;
-mod strings;
-mod system;
+pub(crate) mod out_params;
 pub(crate) mod spl;
 
 use crate::errors::CompileError;
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::Expr;
 use crate::types::{PhpType, TypeEnv};
 
 use super::Checker;
 
-pub(crate) use arrays::array_arg_is_gradually_acceptable;
 pub(crate) use catalog::{
-    canonical_builtin_function_name, is_php_visible_builtin_function,
-    is_prelude_overridable_builtin, is_supported_builtin_function, strict_php_hidden_builtin,
-    supported_builtin_function_names,
+    all_supported_builtin_function_names, canonical_builtin_function_name,
+    is_php_visible_builtin_function_for_profile, is_supported_builtin_function,
+    strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
 };
+#[cfg(test)]
+pub(crate) use catalog::is_php_visible_builtin_function;
 pub(crate) use callables::{
-    array_element_type, array_filter_callback_arg_types, callback_supports_complex_descriptor_env,
+    array_element_type, array_filter_callback_arg_types, array_key_type,
+    array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
     check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
-    check_callback_builtin_call, check_function_exists,
+    check_function_exists,
     check_preg_replace_callback_first_class_call,
+    contextual_callback_arg_positions,
     runtime_callable_array_type,
 };
-pub(crate) use late_bound::is_late_bound_undefined_function;
-pub(crate) use platform_constants::is_platform_conditional_constant;
 
 impl Checker {
     /// Records an external link library required on every target.
@@ -120,15 +115,10 @@ impl Checker {
         // validation, and result typing. Only compiler-resident language
         // constructs continue below this branch.
         if let Some(def) = crate::builtins::registry::lookup(name) {
-            // A spread argument (`f(...$xs)`) unpacks at runtime into a statically-unknown
-            // number of positional arguments, so the pre-expansion argument count is not the
-            // real arity. PHP validates the effective count at runtime; skip the compile-time
-            // arity gate when any argument is unpacked, matching that deferral (e.g. Symfony's
-            // `method_exists(...$controller)`). All other spec validation still runs.
-            let has_spread = args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_)));
-            if !has_spread {
-                crate::builtins::registry::check_arity(name, args.len(), span)?;
-            }
+            crate::builtins::registry::check_arity(name, args.len(), span)?;
+            // A by-reference output needs storage to write back into. Derived from the `ref(T)`
+            // declaration so the rule holds for every such builtin without being restated.
+            out_params::check_write_only_args(name, args)?;
             let requirement_input = crate::builtins::semantics::BuiltinRequirementInput {
                 args,
             };
@@ -156,8 +146,16 @@ impl Checker {
                 def.spec.semantics.validation,
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
+                // A write-only by-ref argument is a definition, not a use, so it is not read
+                // here; its type comes from the parameter's declaration. `Mixed` stands in for
+                // the argument type the shared validators see, matching PHP's pre-call `null`.
+                let write_only = out_params::write_only_variable_args(name, args);
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
+                for (idx, arg) in args.iter().enumerate() {
+                    if write_only.iter().any(|out| out.index == idx) {
+                        arg_types.push(PhpType::Mixed);
+                        continue;
+                    }
                     arg_types.push(self.infer_type(arg, env)?);
                 }
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
@@ -205,7 +203,18 @@ impl Checker {
                 unreachable!("non-checker builtin returned from semantic validation branch");
             };
             if !lazy {
-                for arg in args.iter() {
+                // A contextual callback position is deliberately left to the hook, which
+                // types the closure's unannotated parameters from the array element/key
+                // before checking its body. Pre-inferring it here would check that body
+                // once against the unhinted parameter fallback and reject valid PHP.
+                let contextual = contextual_callback_arg_positions(name);
+                // Likewise for a write-only by-ref position: reading it would reject the
+                // undeclared variable PHP's own out-parameter idiom passes there.
+                let write_only = out_params::write_only_variable_args(name, args);
+                for (idx, arg) in args.iter().enumerate() {
+                    if contextual.contains(&idx) || write_only.iter().any(|out| out.index == idx) {
+                        continue;
+                    }
                     self.infer_type(arg, env)?;
                 }
             }
@@ -222,24 +231,6 @@ impl Checker {
 
         if matches!(builtin_key.as_str(), "exit" | "die" | "empty" | "unset" | "isset") {
             return language_constructs::check(self, &builtin_key, args, span, env).map(Some);
-        }
-        if let Some(result) = mbstring::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = intl::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = numeric::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = strings::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = system::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = arrays::check_builtin(self, name, args, span, env)? {
-            return Ok(Some(result));
         }
         Ok(None)
     }

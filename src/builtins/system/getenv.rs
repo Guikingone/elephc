@@ -16,13 +16,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "getenv",
-    area: System,
-    params: [name: Str],
-    returns: Mixed,
+    contract: "getenv",
     check: check,
     semantics: getenv_semantics(),
-    summary: "Gets the value of an environment variable.",
 }
 
 /// Builds semantics whose EIR result matches the backend's string representation.

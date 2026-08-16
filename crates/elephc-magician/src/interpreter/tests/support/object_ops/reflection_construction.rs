@@ -54,7 +54,6 @@ impl FakeOps {
         constant_value: RuntimeCellHandle,
         backing_value: RuntimeCellHandle,
         constructor: RuntimeCellHandle,
-        parameter_count: u64,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         let class_name = match owner_kind {
             EVAL_REFLECTION_OWNER_CLASS => "ReflectionClass",
@@ -185,10 +184,8 @@ impl FakeOps {
         ) {
             let is_deprecated =
                 self.bool_value((flags & EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED) != 0)?;
-            let parameter_count_cell = self.int(parameter_count as i64)?;
             properties.push(("__parameters".to_string(), method_objects));
             properties.push(("__required_parameter_count".to_string(), modifiers_cell));
-            properties.push(("__parameter_count".to_string(), parameter_count_cell));
             properties.push(("__is_deprecated".to_string(), is_deprecated));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD {

@@ -14,7 +14,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::abi;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::{Arch, Target};
 use crate::codegen::{
     emit_box_current_value_as_mixed, emit_write_current_string_stderr, emit_write_literal_stderr,
@@ -27,6 +27,7 @@ use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::local_analysis::LocalSlotAnalysis;
+use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 const FRAME_FOOTER_BYTES: usize = 16;
@@ -73,34 +74,21 @@ pub(super) fn layout_for_function(
 
     let value_placement = value_placement::allocate(function);
     let local_analysis = LocalSlotAnalysis::new(function);
-    // A by-value parameter slot must also reserve room for the incoming ABI
-    // materialization shape, which the prologue spills before any Mixed-widening
-    // box. That shape can be wider than the (possibly Mixed-widened) local
-    // storage type: a `string`/`TaggedScalar` param spills a 16-byte pair even
-    // when its local is later boxed to an 8-byte Mixed cell. Undersizing the slot
-    // would let the second word (the length/tag) overwrite the adjacent slot.
-    // Parameters occupy the first slots as `LocalSlotId::from_raw(0..params.len())`,
-    // matching how the prologue stores them.
-    let param_abi_bytes: HashMap<LocalSlotId, usize> = function
-        .params
-        .iter()
-        .enumerate()
-        .filter(|(_, param)| !param.by_ref)
-        .map(|(index, param)| {
-            (
-                LocalSlotId::from_raw(index as u32),
-                param.php_type.codegen_repr().stack_size(),
-            )
-        })
-        .collect();
     let mut local_offsets = HashMap::new();
     let mut offset = value_placement.total_slot_bytes;
     for local in &function.locals {
-        let mut bytes = value_placement::bytes_for(local.ir_type)
-            .max(local.php_type.codegen_repr().stack_size());
-        if let Some(param_bytes) = param_abi_bytes.get(&local.id) {
-            bytes = bytes.max(*param_bytes);
-        }
+        // A parameter may be widened to Mixed storage after its signature has been fixed (for
+        // example, bindColumn() promotes a string parameter to a durable ref-cell). Reserve the
+        // larger of the local representation and the incoming ABI representation so saving a
+        // two-word string cannot overlap the preceding widened one-word local.
+        let incoming_param_bytes = function
+            .params
+            .get(local.id.as_raw() as usize)
+            .map(|param| param.php_type.codegen_repr().stack_size())
+            .unwrap_or(0);
+        let bytes = value_placement::bytes_for(local.ir_type)
+            .max(local.php_type.codegen_repr().stack_size())
+            .max(incoming_param_bytes);
         if bytes == 0 {
             continue;
         }
@@ -123,6 +111,17 @@ pub(super) fn layout_for_function(
     for reg in allocation.used_callee_saved() {
         offset += 8;
         callee_saved_offsets.push((*reg, offset));
+    }
+    // Method/callable dispatch hand-uses the reserved nested-call register
+    // (x19/r12) to hold a receiver across argument-lowering calls; it is
+    // callee-saved but outside the allocator's tracking, so reserve a save slot
+    // when the function needs it (issue #511).
+    if function_uses_nested_call_reg(function) {
+        let reg = nested_call_reg_name(target.arch);
+        if !callee_saved_offsets.iter().any(|(saved, _)| *saved == reg) {
+            offset += 8;
+            callee_saved_offsets.push((reg, offset));
+        }
     }
     offset += 8;
     let concat_base_offset = offset;
@@ -183,6 +182,47 @@ fn try_handler_tokens(function: &Function) -> Vec<i64> {
     tokens
 }
 
+/// Returns the reserved "nested call" scratch register for `arch` — the
+/// callee-saved register (`x19` / `r12`) that method- and callable-dispatch
+/// lowering hand-uses to hold a receiver or descriptor across argument-lowering
+/// calls. It lives outside the register allocator's pools, so a function that
+/// uses it must reserve its own save slot (see `layout_for_function`). Mirrors
+/// `abi::nested_call_reg`, which resolves the same register from an `Emitter`.
+fn nested_call_reg_name(arch: Arch) -> &'static str {
+    match arch {
+        Arch::AArch64 => "x19",
+        Arch::X86_64 => "r12",
+    }
+}
+
+/// Returns true when the function contains a method call whose receiver is
+/// dispatched through the reserved nested-call register: a union receiver or a
+/// receiver whose codegen representation is `Mixed`. `lower_mixed_method_call`
+/// and `lower_nullable_receiver_method_call` hand-use `nested_call_reg` to hold
+/// the unboxed object payload across argument-lowering calls, but that register
+/// is callee-saved and outside the allocator's tracking — without a reserved
+/// save slot the function silently clobbers the caller's value (issue #511: a
+/// `--web` handler calling a method on a `PDOStatement|bool` receiver corrupted
+/// the hyper worker's `x19`, freeing a garbage pointer during response flush).
+/// A plain single non-nullable object receiver uses direct dispatch and is
+/// excluded. Over-detection is harmless — an unused save/restore pair costs one
+/// store and one load — so the receiver test errs toward inclusion.
+fn function_uses_nested_call_reg(function: &Function) -> bool {
+    function.instructions.iter().any(|inst| {
+        if !matches!(inst.op, Op::MethodCall | Op::NullsafeMethodCall) {
+            return false;
+        }
+        let Some(receiver) = inst.operands.first() else {
+            return false;
+        };
+        let Some(value) = function.value(*receiver) else {
+            return false;
+        };
+        matches!(value.php_type, PhpType::Union(_))
+            || matches!(value.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    })
+}
+
 /// Emits the process-entry prologue for the EIR main function.
 pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     if ctx.emitter.target.arch == Arch::AArch64 {
@@ -195,14 +235,22 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
+    // Measure the stack only after argc/argv are safe in globals: the initializer is an
+    // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
+    // is never guarded — it is the root of every call chain and runs before the floor exists.
+    stack_guard::emit_stack_limit_init_call(ctx.emitter);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
     }
+    ctx.emitter.comment("initialize opaque resource registry");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_init");
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
-    zero_initialize_local_ref_ensure_main_slots(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
     store_argc_global_if_needed(ctx);
@@ -222,6 +270,12 @@ pub(super) fn emit_function_prologue_with_label(
     ctx.emitter.blank();
     ctx.emitter.label_global(entry_label);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The depth check runs before anything is written to the new frame and before the
+    // incoming arguments are spilled, so it only needs x9 (AArch64) / no register at all
+    // (x86_64) and cannot disturb the ABI. Placing it after the frame has been reserved
+    // means the compare already accounts for this function's own frame size.
+    let stack_ok_label = ctx.next_label("stack_ok");
+    stack_guard::emit_stack_limit_check(ctx.emitter, &stack_ok_label);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
 
@@ -262,7 +316,6 @@ pub(super) fn emit_function_prologue_with_label(
     zero_initialize_function_cleanup_locals(ctx);
     zero_initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
-    zero_initialize_local_ref_ensure_main_slots(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
     Ok(())
@@ -297,7 +350,6 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
-    ctx.emit_shutdown_functions_runner_call_if_present();
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -306,12 +358,19 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Deterministic resource shutdown, symmetric with the per-request reset the
+    // --web path already performs at frame.rs:420. Without it a CLI program leaks
+    // every request-owned resource still live at exit, most visibly the default
+    // stream context that the first stream open creates.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
+    // Then release the slot array itself. Only the CLI does this: a --web worker
+    // reuses one registry across requests, so it stops at the request reset above.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_teardown");
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
         emit_gc_stats(ctx);
     }
-    emit_ini_table_teardown(ctx);
     if ctx.heap_debug {
         ctx.emitter
             .comment("heap-debug: print allocator summary and leak report to stderr");
@@ -349,6 +408,10 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    // The CLI superglobals no longer need a release of their own: the prologue seeds only the
+    // ones the program NAMES, so the loop below — which walks exactly the named globals — is
+    // already their owner. While seeding was unconditional this loop could not see them, and
+    // five hashes leaked out of every program that never touched one.
     let globals = ctx.module.data.global_names.clone();
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
@@ -394,42 +457,6 @@ fn emit_static_symbol_value_cleanup(ctx: &mut FunctionContext<'_>, symbol: &str,
     }
 }
 
-/// Emits a guarded deep-free of the persistent ini directive table on CLI exit.
-///
-/// `ini_get`/`ini_set` build a process-persistent hash (`_rt_ini_table`) whose keys and
-/// values are heap-owned; without teardown `--heap-debug` would report them as leaks. The
-/// free is guarded on the `_rt_ini_table_init` seed marker so programs that never touched
-/// the ini table pay nothing, and the marker is cleared afterwards so a re-executed epilogue
-/// copy cannot double-free. This is emitted inline at each top-level `return`, but only one
-/// copy runs at runtime because the process exits immediately after.
-fn emit_ini_table_teardown(ctx: &mut FunctionContext<'_>) {
-    // A unique skip label per emission: the top-level epilogue is emitted inline at every
-    // `return`, so a fixed label would be defined more than once in the same program.
-    let skip_label = ctx.next_label("ini_teardown_skip");
-    ctx.emitter.comment("teardown: deep-free the persistent ini directive table (guarded)");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_rt_ini_table_init", 0);
-            ctx.emitter.instruction(&format!("cbz x9, {}", skip_label));        // skip when the ini table was never seeded
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x0", "_rt_ini_table", 0);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_free_deep");
-            ctx.emitter.instruction("mov x9, #0");                              // clear the seed marker after freeing the table
-            abi::emit_store_reg_to_symbol(ctx.emitter, "x9", "_rt_ini_table_init", 0);
-            ctx.emitter.label(&skip_label);
-        }
-        Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r11", "_rt_ini_table_init", 0);
-            ctx.emitter.instruction("test r11, r11");                           // was the ini table ever seeded?
-            ctx.emitter.instruction(&format!("jz {}", skip_label));             // skip when the ini table was never seeded
-            abi::emit_load_symbol_to_reg(ctx.emitter, "rax", "_rt_ini_table", 0);
-            abi::emit_call_label(ctx.emitter, "__rt_hash_free_deep");
-            ctx.emitter.instruction("xor r11d, r11d");                          // clear the seed marker after freeing the table
-            abi::emit_store_reg_to_symbol(ctx.emitter, "r11", "_rt_ini_table_init", 0);
-            ctx.emitter.label(&skip_label);
-        }
-    }
-}
-
 /// Emits the C-callable `--web` top-level handler prologue.
 ///
 /// Mirrors `emit_main_prologue` but labels the body `_elephc_web_handler` (a
@@ -452,12 +479,13 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
     // every function is emitted; the call here forward-references its label.
     ctx.emitter.comment("reset per-request persistent state");
     abi::emit_call_label(ctx.emitter, "__rt_web_reset");
+    ctx.emitter.comment("initialize opaque resource registry");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_init");
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
     zero_initialize_main_cleanup_locals(ctx);
     zero_initialize_ref_cell_state_slots(ctx);
     zero_initialize_ref_cell_owner_locals(ctx);
-    zero_initialize_local_ref_ensure_main_slots(ctx);
     zero_initialize_eval_context_locals(ctx);
     zero_initialize_eval_scope_locals(ctx);
 }
@@ -471,7 +499,16 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    // Drain still-active output buffers, for the same reason and in the same position
+    // as the CLI epilogue: PHP flushes whatever `ob_start()` left open at request
+    // shutdown, and user output handlers must run while locals and statics are alive.
+    // Without this a request that left a buffer open returned nothing AND swallowed
+    // every later request served by the same worker, because the level leaked.
+    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
+    ctx.emitter
+        .comment("close and invalidate abandoned request-owned resources");
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
     // Under `--web` the handler returns to the bridge server loop instead of
     // exiting, so the exit-based main epilogue (where `--gc-stats` normally
     // prints) is never reached. Emitting the counters here, once per request,
@@ -506,6 +543,20 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
+    // `--web` forks its workers from this process and each worker serves requests on its own
+    // main stack, so the floor measured here stays valid in every child. Measuring before the
+    // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
+    stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    // Enable the small-bin double-free guard for every --web worker process: a detected
+    // double free `_exit(1)`s the worker (the prefork master respawns it), containing
+    // corruption to one request. Cheap — a short bin-chain scan on free, with no
+    // per-allocation free-list validation. Set once here at worker startup, not per
+    // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
+    ctx.emitter.comment("enable web heap-guard flag");
+    abi::emit_enable_web_heap_guard_flag(ctx.emitter);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);
@@ -559,6 +610,11 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
                 || ctx.has_dynamic_ref_cell_state(local.id)
@@ -573,8 +629,8 @@ fn main_cleanup_locals(ctx: &FunctionContext<'_>) -> Vec<(String, LocalSlotId, P
             ctx.local_slot_has_store(local.id) || function_has_eval_scope(ctx.function)
         })
         .filter_map(|local| {
-            let ty = local.php_type.codegen_repr();
-            if !(matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()) {
+            let ty = cleanup_storage_type(&local.php_type);
+            if !cleanup_tracked_codegen_type(&ty) {
                 return None;
             }
             let offset = ctx.local_offset(local.id).ok()?;
@@ -617,109 +673,33 @@ fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
 }
 
-/// Zero-initializes the main (visible) slots of locals that receive an `Op::LocalRefEnsure` before
-/// any explicit `StoreLocal`. `__rt_ref_cell_ensure` reads the main slot word and dispatches on its
-/// heap kind (`cbz` → alloc owning null; heap-range + kind 6 → reuse; kind 5 → Mixed-box probe;
-/// otherwise alloc owning the value). An uninitialized (garbage) slot word can fall inside the
-/// managed heap window and be dereferenced as a heap object → SIGSEGV. The hoist in
-/// `lower_body_into_function` emits `LocalRefEnsure` at scope entry for locals promoted via
-/// `=&$local` mid-body; without a prior store, their main slots hold garbage at runtime. Promoted
-/// ref-cell main slots are excluded from the plain cleanup zeroing (they are released via the
-/// ref-cell owner cleanup), so this fills the gap: zero the `first` slot of every
-/// `LocalRefEnsure` at frame setup. For the original mid-body `=&$local` path the prior
-/// `StoreLocal` overwrites the zero, so this is observationally identical there.
-///
-/// PARAMETER slots are excluded: they can never hold garbage here because the prologue's Pass-1
-/// spill (`emit_store_incoming_param`) has already written the incoming argument (or the incoming
-/// reference address for a by-ref param) before this pass runs. Zeroing them would DROP the
-/// incoming value, so a hoisted entry-block ensure for `&$param` would wrap a cell owning null
-/// (every read then yields 0) instead of adopting the spilled argument — the same
-/// value-adoption `__rt_ref_cell_ensure` performs for main-scope locals with a live value.
-fn zero_initialize_local_ref_ensure_main_slots(ctx: &mut FunctionContext<'_>) {
-    let param_count = ctx.function.params.len() as u32;
-    let mut slots: Vec<(LocalSlotId, usize)> = Vec::new();
-    for inst in &ctx.function.instructions {
-        if inst.op != Op::LocalRefEnsure {
-            continue;
-        }
-        let Some(Immediate::LocalSlotPair { first, .. }) = inst.immediate else {
-            continue;
-        };
-        // Parameters occupy the first slots (`LocalSlotId::from_raw(0..params.len())`, see
-        // `compute_frame_layout`); their slots are always live post-spill — skip them.
-        if first.as_raw() < param_count {
-            continue;
-        }
-        let Ok(offset) = ctx.local_offset(first) else {
-            continue;
-        };
-        slots.push((first, offset));
-    }
-    slots.sort_by_key(|(_, offset)| *offset);
-    slots.dedup_by_key(|(slot, _)| *slot);
-    for (_, offset) in slots {
-        abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-    }
-}
-
 /// Releases a precomputed set of hidden ref-cell owner slots.
 fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
 ) {
-    for (name, slot, ty, offset) in owners {
+    for (name, _, ty, offset) in owners {
         ctx.emitter
             .comment(&format!("epilogue cleanup ref-cell owner ${}", name));
-        emit_ref_cell_owner_cleanup(ctx, slot, offset, &ty);
+        emit_ref_cell_owner_cleanup(ctx, offset, &ty);
     }
 }
 
 /// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
-/// Public entry used by mid-body ref-cell release sites in `lower_inst`.
-pub(super) fn release_ref_cell_owner_slot(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    offset: usize,
-    ty: &PhpType,
-) {
-    emit_ref_cell_owner_cleanup(ctx, slot, offset, ty)
-}
-
-/// Releases the owner slot's ref-cell pointer when it is non-null, then clears the owner.
-///
-/// An adopted owner (a shared kind-6 refcounted cell from `$x = &$arr[$k]`) is released with
-/// `__rt_ref_cell_decref` so the cell survives while other owners (the array slot, copies) still
-/// reference it; a raw single-owner cell uses the unconditional `emit_release_local_ref_cell`.
-fn emit_ref_cell_owner_cleanup(
-    ctx: &mut FunctionContext<'_>,
-    slot: LocalSlotId,
-    offset: usize,
-    ty: &PhpType,
-) {
-    let adopted = ctx.is_adopted_ref_cell_owner(slot);
+fn emit_ref_cell_owner_cleanup(ctx: &mut FunctionContext<'_>, offset: usize, ty: &PhpType) {
     let done = ctx.next_label("ref_cell_owner_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::load_at_offset_scratch(ctx.emitter, "x9", offset, "x11");
             ctx.emitter.instruction(&format!("cbz x9, {}", done));              // skip released or never-created fallback ref-cells
-            if adopted {
-                ctx.emitter.instruction("mov x0, x9");                          // pass the shared reference cell to the refcount-aware release
-                abi::emit_call_label(ctx.emitter, "__rt_ref_cell_decref");
-            } else {
-                abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
-            }
+            abi::emit_release_local_ref_cell(ctx.emitter, "x9", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
         Arch::X86_64 => {
             abi::load_at_offset_scratch(ctx.emitter, "r11", offset, "r10");
             ctx.emitter.instruction("test r11, r11");                           // check whether this owner still holds a fallback ref-cell
             ctx.emitter.instruction(&format!("je {}", done));                   // skip released or never-created fallback ref-cells
-            if adopted {
-                ctx.emitter.instruction("mov rax, r11");                        // pass the shared reference cell to the refcount-aware release
-                abi::emit_call_label(ctx.emitter, "__rt_ref_cell_decref");
-            } else {
-                abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
-            }
+            abi::emit_release_local_ref_cell(ctx.emitter, "r11", ty);
             abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
         }
     }
@@ -974,6 +954,11 @@ fn function_cleanup_locals(
         .locals
         .iter()
         .filter(|local| local_kind_needs_epilogue_cleanup(local.kind))
+        // Slots this frame only BORROWS (inliner-transplanted callee params, and slots whose
+        // ownership moved into a return value) must never be released here: the frame never
+        // acquired them. Releasing a borrow is a use-after-free, and it is what made a
+        // read-only `array` param in a loop die with `heap debug detected bad refcount`.
+        .filter(|local| !ctx.function.no_epilogue_cleanup_slots.contains(&local.id))
         .filter(|local| {
             !ctx.local_slot_ever_stores_ref_cell_pointer(local.id)
                 || ctx.has_dynamic_ref_cell_state(local.id)
@@ -989,7 +974,7 @@ fn function_cleanup_locals(
                 || function_has_eval_scope(ctx.function)
         })
         .filter_map(|local| {
-            let ty = local.php_type.codegen_repr();
+            let ty = cleanup_storage_type(&local.php_type);
             if !cleanup_tracked_codegen_type(&ty) {
                 return None;
             }
@@ -1005,7 +990,7 @@ fn function_cleanup_locals(
     locals
 }
 
-/// Returns whether a local slot is populated from the function's incoming parameter ABI.
+/// Returns whether a local slot belongs to a function parameter.
 fn local_slot_is_parameter(function: &Function, slot: LocalSlotId) -> bool {
     function.params.get(slot.as_raw() as usize).is_some()
 }
@@ -1037,12 +1022,35 @@ pub(super) fn emit_owned_local_cleanup(
     match ty {
         PhpType::Str => emit_main_string_cleanup(ctx, offset),
         PhpType::Callable => emit_main_refcounted_cleanup(ctx, offset, ty),
+        PhpType::Resource(_) => emit_resource_local_cleanup(ctx, offset),
         other if other.is_refcounted() => emit_main_refcounted_cleanup(ctx, offset, other),
         _ => {}
     }
     if let Some(done) = done {
         ctx.emitter.label(&done);
     }
+}
+
+/// Releases an opaque resource handle owned by a local slot exactly once.
+fn emit_resource_local_cleanup(ctx: &mut FunctionContext<'_>, offset: usize) {
+    let done = ctx.next_label("resource_local_cleanup_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, result_reg, offset);
+    abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", result_reg, done));          // skip an uninitialized or already-detached resource owner
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", result_reg, result_reg));   // is an opaque resource handle still owned by this slot?
+            ctx.emitter.instruction(&format!("jz {}", done));                   // skip an uninitialized or already-detached resource owner
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque handle to the registry release helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+    ctx.emitter.label(&done);
 }
 
 /// Returns whether a local kind can own values through ordinary `StoreLocal`.
@@ -1058,8 +1066,8 @@ fn local_kind_needs_epilogue_cleanup(kind: LocalKind) -> bool {
 
 /// Returns the local slot whose cleanup this return path must skip, if ownership is transferred.
 pub(super) fn return_cleanup_skip_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
-    let result_ty = function.value(value)?.php_type.codegen_repr();
-    let return_ty = function.return_php_type.codegen_repr();
+    let result_ty = cleanup_storage_type(&function.value(value)?.php_type);
+    let return_ty = cleanup_storage_type(&function.return_php_type);
     let mut visited = HashSet::new();
     return_cleanup_skip_slot_inner(function, value, &result_ty, &return_ty, &mut visited)
 }
@@ -1151,12 +1159,27 @@ fn local_codegen_type(function: &Function, slot: LocalSlotId) -> Option<PhpType>
         .locals
         .get(slot.as_raw() as usize)
         .filter(|local| local.id == slot)
-        .map(|local| local.php_type.codegen_repr())
+        .map(|local| cleanup_storage_type(&local.php_type))
 }
 
 /// Returns true when a codegen type carries refcounted ownership to release or transfer.
 fn cleanup_tracked_codegen_type(ty: &PhpType) -> bool {
-    matches!(ty, PhpType::Str | PhpType::Callable) || ty.is_refcounted()
+    matches!(
+        ty,
+        PhpType::Str | PhpType::Callable | PhpType::Resource(_)
+    ) || ty.is_refcounted()
+}
+
+/// Returns the runtime storage type used for local-owner cleanup.
+///
+/// Resources share an integer machine representation, but their local owner
+/// must remain distinguishable from scalar integers so the registry reference
+/// is released when the slot leaves scope.
+fn cleanup_storage_type(ty: &PhpType) -> PhpType {
+    match ty {
+        PhpType::Resource(kind) => PhpType::Resource(kind.clone()),
+        other => other.codegen_repr(),
+    }
 }
 
 /// Returns true when loading a local into an SSA result leaves the same owner in the result.

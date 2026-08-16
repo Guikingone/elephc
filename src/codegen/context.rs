@@ -9,18 +9,22 @@
 //! Key details:
 //! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
+//! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
+//!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
+//!   id — not the fragment — is what keeps two similarly named functions from colliding.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
-use crate::codegen_support::data_section::DataSection;
-use crate::codegen_support::emit::Emitter;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{
     BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
-    ValueDef, ValueId,
+    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::callable_reachability::CallableReachabilityAnalysis;
@@ -54,8 +58,6 @@ pub(crate) struct FunctionContext<'a> {
     callable_reachability: CallableReachabilityAnalysis,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
-    adopted_ref_cell_owners: HashSet<LocalSlotId>,
-    adopted_ref_cell_locals: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
@@ -65,7 +67,7 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
-    label_counter: usize,
+    block_labels: Vec<String>,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -83,6 +85,20 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let function_fragment = label_fragment(&function.name);
+        // Indexed by raw block id, matching `Function::block()`'s positional lookup.
+        let block_labels = function
+            .blocks
+            .iter()
+            .map(|block| {
+                format!(
+                    "_eir_{}_{}_{}",
+                    function_fragment,
+                    label_fragment(&block.name),
+                    shared.next_label_id()
+                )
+            })
+            .collect();
         Self {
             module,
             function,
@@ -98,8 +114,6 @@ impl<'a> FunctionContext<'a> {
             callable_reachability,
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
-            adopted_ref_cell_owners: HashSet::new(),
-            adopted_ref_cell_locals: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
@@ -109,20 +123,22 @@ impl<'a> FunctionContext<'a> {
             gc_stats,
             heap_debug,
             epilogue_label,
-            label_counter: 0,
+            block_labels,
         }
     }
 
-    /// Returns a unique local label with a readable prefix.
+    /// Returns a module-unique local label carrying a readable but lossy prefix.
+    ///
+    /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses
+    /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
+    /// keeps their labels apart.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
-        let label = format!(
+        format!(
             "_eir_{}_{}_{}",
             label_fragment(&self.function.name),
             label_fragment(prefix),
-            self.label_counter
-        );
-        self.label_counter += 1;
-        label
+            self.shared.next_label_id()
+        )
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -184,18 +200,16 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
-    /// Returns the assembly label for a non-entry EIR block.
-    pub(super) fn block_label(&self, block_name: &str, raw: u32) -> String {
-        format!("_eir_{}_{}_{}", label_fragment(&self.function.name), label_fragment(block_name), raw)
-    }
-
-    /// Returns the assembly label for a block id.
+    /// Returns the assembly label reserved for one EIR block.
+    ///
+    /// Block labels are minted once per block in `new()` from the module-wide label counter
+    /// rather than derived from the block name, which is not unique across functions. Lookup is
+    /// positional on the raw block id, exactly like `crate::ir::Function::block()`.
     pub(super) fn block_label_for_id(&self, block: BlockId) -> Result<String> {
-        let block = self
-            .function
-            .block(block)
-            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
-        Ok(self.block_label(&block.name, block.id.as_raw()))
+        self.block_labels
+            .get(block.as_raw() as usize)
+            .cloned()
+            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))
     }
 
     /// Returns a module function by PHP name using PHP's case-insensitive lookup.
@@ -246,6 +260,19 @@ impl<'a> FunctionContext<'a> {
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
+    /// Returns a function value's IR storage type.
+    ///
+    /// This is the ONLY reliable way to tell whether a value is a genuinely boxed `Mixed` CELL.
+    /// The PHP type lies here: `Op::IChecked*` (which is what `$i++` lowers to) reports a PHP type
+    /// of `Mixed` while its runtime value is a RAW INTEGER, not a heap cell. Unboxing that as a
+    /// pointer reads garbage.
+    pub(super) fn value_ir_type(&self, value: ValueId) -> Result<crate::ir::IrType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.ir_type)
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
     /// Returns a function value's source PHP metadata before codegen representation erasure.
     pub(super) fn raw_value_php_type(&self, value: ValueId) -> Result<PhpType> {
         self.function
@@ -289,9 +316,47 @@ impl<'a> FunctionContext<'a> {
             .map(|local| local.id)
     }
 
-    /// Returns whether this slot receives at least one ordinary EIR local store.
+    /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.has_store(slot)
+        self.local_analysis.has_store(slot) || self.openssl_encrypt_writes_local(slot)
+    }
+
+    /// Returns whether an `openssl_encrypt()` call writes its GCM tag into this local.
+    fn openssl_encrypt_writes_local(&self, slot: LocalSlotId) -> bool {
+        self.function.instructions.iter().any(|inst| {
+            let is_encrypt = matches!(
+                inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::OpensslEncrypt
+                )))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::OpensslEncrypt,
+                        ..
+                    }))
+            );
+            is_encrypt
+                && inst
+                    .operands
+                    .get(5)
+                    .and_then(|value| self.loaded_local_slot(*value))
+                    == Some(slot)
+        })
+    }
+
+    /// Resolves a value produced by `LoadLocal` to its source slot.
+    fn loaded_local_slot(&self, value: ValueId) -> Option<LocalSlotId> {
+        let value_ref = self.function.value(value)?;
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return None;
+        };
+        let inst = self.function.instruction(inst)?;
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+            return None;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return None;
+        };
+        Some(slot)
     }
 
     /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
@@ -333,50 +398,6 @@ impl<'a> FunctionContext<'a> {
     /// Returns whether this slot needs runtime raw-value/ref-cell discrimination at cleanup.
     pub(super) fn has_dynamic_ref_cell_state(&self, slot: LocalSlotId) -> bool {
         self.local_analysis.has_dynamic_ref_cell_state(slot)
-    }
-
-    /// Emits a direct call to the `register_shutdown_function` prelude's internal runner
-    /// (`shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME`) when that function exists in this
-    /// compilation unit, and does nothing otherwise. Shared by the top-level epilogue and
-    /// `exit()`/`die()` lowering — the two script-end points PHP's shutdown-function contract
-    /// covers that elephc models.
-    pub(super) fn emit_shutdown_functions_runner_call_if_present(&mut self) {
-        if self
-            .function_by_name(crate::shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME)
-            .is_some()
-        {
-            self.emitter
-                .comment("run registered shutdown functions (registration order)");
-            let symbol =
-                crate::names::function_symbol(crate::shutdown_prelude::RUN_SHUTDOWN_FUNCTIONS_NAME);
-            abi::emit_call_label(self.emitter, &symbol);
-        }
-    }
-
-    /// Marks a hidden owner slot as owning a shared kind-7 refcounted reference cell, so its
-    /// scope-exit cleanup uses `__rt_ref_cell_decref` (refcount-aware) instead of the raw
-    /// unconditional cell free used for single-owner cells.
-    pub(super) fn mark_adopted_ref_cell_owner(&mut self, owner_slot: LocalSlotId) {
-        self.adopted_ref_cell_owners.insert(owner_slot);
-    }
-
-    /// Returns true when a hidden owner slot owns a shared kind-7 refcounted reference cell.
-    pub(super) fn is_adopted_ref_cell_owner(&self, owner_slot: LocalSlotId) -> bool {
-        self.adopted_ref_cell_owners.contains(&owner_slot)
-    }
-
-    /// Marks a visible local slot as an adopted kind-7 reference cell (shared owner), so a
-    /// whole-value reassign routes through `__rt_ref_cell_store` (releasing the prior inner
-    /// value tag-gated and stamping the new inner tag) instead of the raw single-word store.
-    pub(super) fn mark_adopted_ref_cell_local(&mut self, slot: LocalSlotId) {
-        self.adopted_ref_cell_locals.insert(slot);
-    }
-
-    /// Returns true when a visible local slot is an adopted kind-7 reference cell (shared
-    /// owner). By-reference parameter slots and promoted-non-adopted foreach fallback cells
-    /// are NOT in this set, so they keep their existing single-owner / raw-store semantics.
-    pub(super) fn is_adopted_ref_cell_local(&self, slot: LocalSlotId) -> bool {
-        self.adopted_ref_cell_locals.contains(&slot)
     }
 
     /// Records at runtime that a path has changed this local slot to ref-cell representation.
@@ -602,6 +623,26 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Stores an SSA value into an addressable local slot, keeping the value's own reference.
+    ///
+    /// The ordinary store lets Mixed boxing CONSUME the source's owned reference, which is right
+    /// when the store is the value's last use. A mutating builtin whose receiver EIR still
+    /// releases after the call (the hash sort family: the receiver is loaded, published back, then
+    /// released) is not that case: consuming there releases the container twice and the write-back
+    /// leaves the slot pointing at freed storage.
+    pub(super) fn store_borrowed_value_to_local(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+    ) -> Result<()> {
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                self.store_value_to_raw_local_with_ownership(slot, value, false)
+            }
+            _ => self.store_value_to_local(slot, value),
+        }
+    }
+
     /// Stores an SSA value into an addressable local slot.
     pub(super) fn store_value_to_local(&mut self, slot: LocalSlotId, value: ValueId) -> Result<()> {
         match self.local_slot_representation(slot) {
@@ -663,10 +704,24 @@ impl<'a> FunctionContext<'a> {
         slot: LocalSlotId,
         value: ValueId,
     ) -> Result<()> {
+        self.store_value_to_raw_local_with_ownership(slot, value, true)
+    }
+
+    /// Stores an SSA value into a raw local slot, choosing whether Mixed boxing may consume it.
+    ///
+    /// `may_consume_source` is what separates a final store (the value's last use, so the box may
+    /// take over its owned reference) from a republish (`store_borrowed_value_to_local`), where the
+    /// EIR still holds and releases the same reference afterwards.
+    fn store_value_to_raw_local_with_ownership(
+        &mut self,
+        slot: LocalSlotId,
+        value: ValueId,
+        may_consume_source: bool,
+    ) -> Result<()> {
         let source_ty = self.load_value_to_result(value)?;
         let target_ty = self.local_php_type(slot)?;
         if target_ty == PhpType::Mixed && source_ty != PhpType::Mixed {
-            if self.value_can_own_mixed_box_source(value)? {
+            if may_consume_source && self.value_can_own_mixed_box_source(value)? {
                 emit_box_current_owned_value_as_mixed(self.emitter, &source_ty);
             } else {
                 emit_box_current_value_as_mixed(self.emitter, &source_ty);
@@ -742,6 +797,68 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Releases the value held by a string-producing by-reference output before overwriting it.
+    pub(super) fn release_local_before_string_writeback(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let ty = self.local_php_type(slot)?.codegen_repr();
+        if !matches!(ty, PhpType::Str | PhpType::Mixed) {
+            return Err(CodegenIrError::unsupported(format!(
+                "string writeback into PHP type {:?}",
+                ty
+            )));
+        }
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+            }
+            LocalSlotRepresentation::RefCell => self.release_ref_cell_value(slot, &ty)?,
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("string_writeback_release_ref_cell");
+                let done = self.next_label("string_writeback_release_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter
+                            .instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // release through the promoted ref-cell when active
+                    }
+                    Arch::X86_64 => {
+                        self.emitter
+                            .instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect the local's runtime representation
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));                  // release through the promoted ref-cell when active
+                    }
+                }
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.release_ref_cell_value(slot, &ty)?;
+                self.emitter.label(&done);
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases a string or Mixed payload stored through a local ref-cell pointer.
+    fn release_ref_cell_value(&mut self, slot: LocalSlotId, ty: &PhpType) -> Result<()> {
+        let offset = self.local_offset(slot)?;
+        let cell_reg = abi::symbol_scratch_reg(self.emitter);
+        let result_reg = abi::int_result_reg(self.emitter);
+        abi::load_at_offset(self.emitter, cell_reg, offset);
+        abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+        if *ty == PhpType::Str {
+            abi::emit_call_label(self.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(self.emitter, ty);
+        }
+        Ok(())
     }
 
     /// After an in-place hash/array mutation whose runtime helper returns the
@@ -932,13 +1049,6 @@ impl<'a> FunctionContext<'a> {
                         | PhpType::Iterable
                 ));
         }
-        // Ownership is decided solely by `value_can_transfer_ownership_to_consumer` above.
-        // A producer-opcode allowlist used to also grant consumption here, but an opcode says
-        // nothing about whether cleanup already owns the reference: `Op::Acquire` results that
-        // are `Owned` *and* carry an explicit `Op::Release` (SPL `CallbackFilterIterator::accept`
-        // is one) passed the allowlist, so Mixed boxing stole the very reference the release
-        // frees and `--heap-debug` aborted with "bad refcount". Anything not proven transferable
-        // is boxed by retaining instead.
         Ok(false)
     }
 
@@ -1125,12 +1235,4 @@ fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, r10");                                // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
-}
-
-/// Converts arbitrary names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
 }

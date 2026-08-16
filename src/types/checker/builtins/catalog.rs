@@ -11,25 +11,6 @@
 //!   dedicated syntax that cannot be represented by an ordinary registry call.
 //! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
 //!   hidden from `function_exists()` and first-class callable surfaces.
-//! - CATALOG MEMBERSHIP IS A `function_exists()` PROMISE THE BACKEND MAY NOT KEEP.
-//!   `is_php_visible_builtin_function` is what `crate::optimize::function_existence` folds
-//!   `function_exists()` on, and it accepts every `CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS` entry
-//!   regardless of whether any EIR lowering exists. A measured sweep (compiling one probe per
-//!   name against the release compiler) confirmed AT LEAST 73 of the 125 legacy names abort with
-//!   "unsupported EIR backend feature: builtin call <name>" — among them `stripos`, `strtr`,
-//!   `parse_url`, `parse_str`, `preg_quote`, `strip_tags`, `substr_compare`, `strncasecmp`,
-//!   `random_bytes`, `is_countable`, `pack`/`unpack`, `http_build_query`, `set_error_handler`,
-//!   `reset`/`current`/`key`, and the whole `mb_*`/`grapheme_*`/`iconv_*` families. See
-//!   `is_prelude_overridable_builtin` below for the one case where this is deliberate and
-//!   compensated (`trigger_error`, implemented by the web prelude in PHP).
-//!   Two consequences bind anyone extending this file:
-//!   1. Adding a name here to clear an "Undefined function" diagnostic RELOCATES the failure
-//!      into the backend rather than fixing it, and `--web` cannot see the relocation because
-//!      that run aborts at the checker. A name belongs here only once its lowering exists.
-//!   2. A `!function_exists('x')` polyfill/capability guard in user code reads `true` for all 73
-//!      and therefore does NOT fire, so PHP-level fallbacks that would have worked stay dead.
-//!   The `catalog_gap_tripwires` tests below pin the specific names a current campaign was
-//!   tempted to add; they are guard rails, not a claim that the rest of the list is sound.
 
 const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
     // `buffer_new` is a catalog-name-only entry: `buffer_new<T>(len)` is parsed as
@@ -48,146 +29,11 @@ const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
 
 const LANGUAGE_CONSTRUCT_FUNCTIONS: &[&str] = &["eval"];
 
-/// Campaign builtins still checked/lowered through the legacy per-category checker
-/// modules and legacy emitters, not yet migrated into the single-source `builtin!`
-/// registry. Recognized here so name resolution, `function_exists`, and metadata treat
-/// them as real builtins.
-const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
-    "addcslashes",
-    "assert",
-    "bindec",
-    "cli_set_process_title",
-    "connection_aborted",
-    "constant",
-    "ctype_upper",
-    "current",
-    "decbin",
-    "dechex",
-    "decoct",
-    "end",
-    "error_get_last",
-    "error_log",
-    "error_reporting",
-    "escapeshellarg",
-    "extension_loaded",
-    "filter_var",
-    "flush",
-    "func_get_arg",
-    "func_get_args",
-    "func_num_args",
-    "gc_collect_cycles",
-    "gc_disable",
-    "gc_enable",
-    "gc_enabled",
-    "gc_mem_caches",
-    "get_cfg_var",
-    "get_class_methods",
-    "get_debug_type",
-    "get_defined_constants",
-    "getmypid",
-    "grapheme_extract",
-    "grapheme_str_split",
-    "grapheme_stripos",
-    "grapheme_strlen",
-    "grapheme_strpos",
-    "grapheme_strripos",
-    "grapheme_strrpos",
-    "grapheme_substr",
-    "header_remove",
-    "headers_sent",
-    "hexdec",
-    "http_build_query",
-    "iconv",
-    "iconv_mime_decode",
-    "iconv_strlen",
-    "iconv_strpos",
-    "iconv_strrpos",
-    "iconv_substr",
-    "ignore_user_abort",
-    "ini_get",
-    "ini_set",
-    "is_countable",
-    "key",
-    "levenshtein",
-    "libxml_clear_errors",
-    "libxml_get_errors",
-    "libxml_use_internal_errors",
-    "mb_convert_case",
-    "mb_convert_encoding",
-    "mb_detect_encoding",
-    "mb_encode_numericentity",
-    "mb_internal_encoding",
-    "mb_ord",
-    "mb_str_split",
-    "mb_stripos",
-    "mb_stristr",
-    "mb_strpos",
-    "mb_strripos",
-    "mb_strrpos",
-    "mb_strstr",
-    "mb_strtolower",
-    "mb_strtoupper",
-    "mb_strwidth",
-    "mb_substr",
-    "normalizer_is_normalized",
-    "normalizer_normalize",
-    "octdec",
-    "pack",
-    "parse_str",
-    "parse_url",
-    "pcntl_alarm",
-    "pcntl_async_signals",
-    "pcntl_signal",
-    "pcntl_signal_get_handler",
-    "posix_kill",
-    "preg_grep",
-    "preg_last_error",
-    "preg_last_error_msg",
-    "preg_quote",
-    "proc_close",
-    "proc_open",
-    "random_bytes",
-    "reset",
-    "restore_error_handler",
-    "restore_exception_handler",
-    "sapi_windows_cp_conv",
-    "sapi_windows_cp_get",
-    "sapi_windows_cp_set",
-    "sapi_windows_vt100_support",
-    "set_error_handler",
-    "set_exception_handler",
-    "set_time_limit",
-    "setlocale",
-    "setproctitle",
-    "str_getcsv",
-    "strcspn",
-    "strip_tags",
-    "stripcslashes",
-    "stripos",
-    "strnatcasecmp",
-    "strnatcmp",
-    "strncasecmp",
-    "strncmp",
-    "strpbrk",
-    "strrchr",
-    "strripos",
-    "strspn",
-    "strtr",
-    "substr_compare",
-    "substr_count",
-    "trigger_deprecation",
-    "trigger_error",
-    "unpack",
-    "version_compare",
-];
-
-
 /// Checks if the exact (lowercase) name is in any callable-resolution builtin list.
 /// Does not perform case folding; use `is_supported_builtin_function` for case-insensitive lookup.
 fn is_supported_builtin_function_exact(name: &str) -> bool {
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&name)
         || LANGUAGE_CONSTRUCT_FUNCTIONS.contains(&name)
-        || CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS.contains(&name)
 }
 
 /// Returns true when `--strict-php` hides the (lowercase) name from user programs.
@@ -200,7 +46,15 @@ fn is_supported_builtin_function_exact(name: &str) -> bool {
 /// them and they are already invisible to user programs. `buffer_new` is the one
 /// catalog-name-only extension (its call form is dedicated syntax).
 pub(crate) fn strict_php_hidden_builtin(canonical: &str) -> bool {
-    if !crate::strict_php::is_enabled() {
+    strict_php_hidden_builtin_for_profile(canonical, crate::strict_php::is_enabled())
+}
+
+/// Returns whether one explicit visibility profile hides a canonical builtin name.
+pub(crate) fn strict_php_hidden_builtin_for_profile(
+    canonical: &str,
+    strict_php: bool,
+) -> bool {
+    if !strict_php {
         return false;
     }
     if canonical == "buffer_new" {
@@ -233,7 +87,6 @@ pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
             result.push(def.name);
         }
     }
-    result.extend_from_slice(CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS);
     result
 }
 
@@ -242,10 +95,20 @@ pub(crate) fn all_supported_builtin_function_names() -> Vec<&'static str> {
 /// Registry entries flagged as `internal` are excluded, mirroring the semantics
 /// of `is_php_visible_builtin_function`. Names present in both sources appear
 /// exactly once. Under `--strict-php`, extension builtins are excluded entirely.
+#[cfg(test)]
 pub(crate) fn supported_builtin_function_names() -> Vec<&'static str> {
+    supported_builtin_function_names_for_profile(crate::strict_php::is_enabled())
+}
+
+/// Returns builtin names visible under an explicit call-site strict-PHP profile.
+pub(crate) fn supported_builtin_function_names_for_profile(
+    strict_php: bool,
+) -> Vec<&'static str> {
     all_supported_builtin_function_names()
         .into_iter()
-        .filter(|name| !strict_php_hidden_builtin(&name.to_ascii_lowercase()))
+        .filter(|name| {
+            !strict_php_hidden_builtin_for_profile(&name.to_ascii_lowercase(), strict_php)
+        })
         .collect()
 }
 
@@ -267,30 +130,26 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
     }
 }
 
-/// Returns whether a recognized builtin may be (re)declared by user or prelude code
-/// without tripping the redeclare-builtin guard.
-///
-/// `trigger_error` is registered for recognition (`function_exists`, name resolution) but
-/// has no EIR backend lowering — the real implementation is supplied by the web prelude's
-/// web-SAPI stderr renderer (or by user code). Because the prelude declares
-/// `function trigger_error(...)`, the redeclaration check must treat it as overridable, or
-/// every `--web` compile fails with "Cannot redeclare built-in function: trigger_error".
-pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
-    matches!(canonical, "trigger_error")
-}
-
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).
 ///
 /// Checks both compiler-resident names and the builtin registry. Registry entries
 /// flagged as `internal` are excluded from the PHP-visible set, and `--strict-php`
 /// additionally excludes extension builtins.
+#[cfg(test)]
 pub(crate) fn is_php_visible_builtin_function(name: &str) -> bool {
+    is_php_visible_builtin_function_for_profile(name, crate::strict_php::is_enabled())
+}
+
+/// Returns PHP visibility for a builtin under an explicit call-site strict profile.
+pub(crate) fn is_php_visible_builtin_function_for_profile(
+    name: &str,
+    strict_php: bool,
+) -> bool {
     let canonical = name.to_ascii_lowercase();
-    if strict_php_hidden_builtin(&canonical) {
+    if strict_php_hidden_builtin_for_profile(&canonical, strict_php) {
         return false;
     }
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
-        || CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
         || crate::builtins::registry::lookup(&canonical)
             .map(|def| !def.spec.internal)
             .unwrap_or(false)
@@ -418,92 +277,5 @@ mod tests {
         assert!(is_php_visible_builtin_function("ptr_get"));
         assert!(canonical_builtin_function_name("buffer_new").is_some());
         assert!(supported_builtin_function_names().contains(&"buffer_new"));
-    }
-
-    /// Guard rails for the four core-PHP names a `--web` Symfony scan repeatedly surfaces as
-    /// "Undefined function" (`debug_backtrace`, `next`, `highlight_file`, `extract`).
-    ///
-    /// Catalog membership is only a `function_exists()` promise (see the module preamble): it
-    /// makes the checker stop reporting the name while doing nothing about the missing EIR
-    /// lowering, so adding one of these to clear the diagnostic simply moves the failure into the
-    /// backend where the `--web` run — which aborts at the checker — cannot observe it. Each
-    /// assertion below therefore fails LOUDLY the moment a name is registered, and the message
-    /// names the concrete prerequisite that must land first.
-    /// `crate::types::checker::builtins::late_bound`'s module doc carries the full evidence.
-    mod catalog_gap_tripwires {
-        use super::*;
-
-        /// `debug_backtrace()` must not become catalog-visible before elephc can attribute a
-        /// declaration to its source FILE. Every PHP frame carries `file`/`line`, and five of the
-        /// six Symfony call sites are built on those two keys; `Span` is line/col only, the
-        /// resolver inlines every include into one AST, and `scan_reflection_source_files` covers
-        /// the entry file alone.
-        #[test]
-        fn debug_backtrace_stays_absent_until_frames_are_real() {
-            assert!(
-                !is_supported_builtin_function("debug_backtrace"),
-                "debug_backtrace() needs a declaration->file map plus a real shadow stack before \
-                 it is registered; a catalog entry alone converts the checker diagnostic into an \
-                 invisible backend failure"
-            );
-        }
-
-        /// `next()` must not become catalog-visible while the array representation has no
-        /// internal pointer. Its siblings `reset`/`current`/`key` are already registered and
-        /// already fail in the backend, so `next` would clear one diagnostic and re-fail the very
-        /// same function (`Filesystem\Path::getLongestCommonBasePath()`) one floor down.
-        #[test]
-        fn next_stays_absent_while_internal_pointer_family_is_unlowered() {
-            assert!(
-                !is_supported_builtin_function("next"),
-                "next() needs an internal array pointer; registering it while reset()/current()/\
-                 key() still abort with 'unsupported EIR backend feature' only relocates the error"
-            );
-            for sibling in ["reset", "current", "key"] {
-                assert!(
-                    is_supported_builtin_function(sibling),
-                    "{sibling}() is expected to still be catalog-visible-but-unlowered; if it \
-                     gained a real lowering, re-measure the family before touching next()"
-                );
-            }
-        }
-
-        /// `highlight_file()` must not become catalog-visible before a runtime tokenizer exists.
-        /// `token_get_all` is late-bound for exactly that reason, and Symfony's
-        /// `HtmlErrorRenderer::fileExcerpt()` post-processes PHP's real `<span>` markup.
-        #[test]
-        fn highlight_file_stays_absent_until_a_runtime_tokenizer_exists() {
-            assert!(
-                !is_supported_builtin_function("highlight_file"),
-                "highlight_file() needs a runtime PHP tokenizer and PHP's exact colorized markup"
-            );
-        }
-
-        /// `extract()` must not become catalog-visible: it creates locals whose names are only
-        /// known at runtime, which elephc rejects by design (`$$name` is a compile error). This
-        /// is a refusal, not deferred work.
-        #[test]
-        fn extract_stays_absent_because_dynamic_locals_are_refused() {
-            assert!(
-                !is_supported_builtin_function("extract"),
-                "extract() requires runtime-named locals, which elephc rejects by design \
-                 (variable variables are a compile error)"
-            );
-        }
-
-        /// `proc_open` is the one legacy catalog name whose CALL the checker itself rejects (no
-        /// per-area `check_builtin` arm), while `function_exists('proc_open')` still folds true.
-        /// It stays registered because `by_ref_outputs` uses that registration to initialize the
-        /// `&$pipes` out-parameter its only call site reads; dropping it trades one diagnostic
-        /// for an "Undefined variable: $pipes".
-        #[test]
-        fn proc_open_stays_registered_for_its_by_ref_out_parameter() {
-            assert!(
-                is_php_visible_builtin_function("proc_open"),
-                "proc_open must stay catalog-visible: Console\\Terminal::readFromProcess() relies \
-                 on its by-ref $pipes out-parameter knowledge; only a real implementation clears \
-                 that call site without surfacing a new undefined-variable error"
-            );
-        }
     }
 }

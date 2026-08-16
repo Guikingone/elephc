@@ -14,20 +14,24 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "scandir",
-    area: Io,
-    params: [directory: Str, sorting_order: Int = crate::builtins::spec::DefaultSpec::Int(0), context: Mixed = crate::builtins::spec::DefaultSpec::Null],
-    returns: Mixed,
+    contract: "scandir",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Scandir,
     ),
-    summary: "Lists files and directories inside the specified path.",
-    php_manual: "function.scandir",
 }
 
-/// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.
+/// Returns `array|false`, the signature php documents.
+///
+/// `False`, not `Bool`: the member a `!== false` narrowing removes, following `fgetcsv`.
+/// The union is what lets the failure case exist at all — with a bare `Array<Str>` the
+/// runtime's `false` had no representation and a failed listing was indistinguishable from
+/// an empty directory. The array-taking consumers accept the union by unboxing at their own
+/// call sites.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    Ok(PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::False,
+    ]))
 }

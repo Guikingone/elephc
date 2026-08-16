@@ -2,19 +2,20 @@
 title: "unlink()"
 description: "Deletes a file."
 sidebar:
-  order: 158
+  order: 165
 ---
 
 ## unlink()
 
 ```php
-function unlink(string $filename): bool
+function unlink(string $filename, mixed $context = null): bool
 ```
 
 Deletes a file.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `bool`
 
@@ -24,12 +25,6 @@ Deletes a file.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/unlink.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
 
 ## Internals
 

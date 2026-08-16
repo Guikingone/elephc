@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_is_list",
-    area: Array,
-    params: [array: Mixed],
-    returns: Bool,
+    contract: "array_is_list",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayIsList,
     ),
-    summary: "Checks whether an array is a list (sequential 0-based integer keys).",
-    php_manual: "https://www.php.net/manual/en/function.array-is-list.php",
 }
 
 /// Returns `PhpType::Bool` for an `array_is_list` call, rejecting non-array arguments.
@@ -38,9 +33,10 @@ builtin! {
 /// it once for side effects, and arity (exactly 1) is pre-validated by the registry.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    // Gradual boundary: accept a concrete array, `Mixed`, or a union containing an
-    // array; a concretely non-array argument stays a compile error.
-    if !crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&ty) {
+    if !matches!(
+        ty,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
+    ) {
         return Err(CompileError::new(
             cx.span,
             "array_is_list() argument must be array",
