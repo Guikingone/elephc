@@ -16,7 +16,7 @@ builtin! {
     name: "stream_get_line",
     area: Io,
     params: [stream: Mixed, length: Int, ending: Str = DefaultSpec::Str("")],
-    returns: Str,
+    returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetLine,
@@ -25,7 +25,11 @@ builtin! {
     php_manual: "function.stream-get-line",
 }
 
-/// Validates the stream resource argument and returns `Str`.
+/// Validates the stream resource argument and returns php's `string|false`.
+///
+/// `false` is what EOF answers when nothing could be read — and it is genuinely distinct from
+/// the empty string a leading delimiter produces, measured on php-src 8.5.6: reading `"\nx"`
+/// gives `""`, then `"x"`, then `false`. Declaring a plain `Str` here collapsed the two.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -33,5 +37,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Str)
+    Ok(cx.checker.normalize_union_type(vec![PhpType::Str, PhpType::False]))
 }
