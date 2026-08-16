@@ -326,6 +326,8 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "getstreamindex"
                 | "setpassword"
                 | "getstatusstring"
+                | "extractto"
+                | "__elephczipcleanpath"
         ),
         "PharFileInfo" => matches!(
             method_key,

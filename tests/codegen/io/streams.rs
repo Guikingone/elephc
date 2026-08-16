@@ -5047,6 +5047,165 @@ $d->close();
     assert_eq!(out.stderr, "", "the read surface must be silent");
 }
 
+/// Verifies `ZipArchive::extractTo()` against `php -n` 8.5.6, selection and all.
+///
+/// ```text
+/// extractTo("ex1")                        => bool(true), the whole archive
+/// extractTo("ex2", "f.txt")               => bool(true), that one entry
+/// extractTo("ex3", ["f.txt","sub/n.txt"]) => bool(true), those two
+/// extractTo("/no/such/root/x")            => bool(false)  and NO warning
+/// extractTo("ex4", "nope.txt")            => bool(false)
+/// extractTo("ex4", [])                    => bool(false)
+/// extractTo("")                           => bool(false)
+/// ```
+///
+/// An existing file is overwritten, the extracted file carries the ENTRY's mtime
+/// rather than the extraction time, and a directory member (`dd/`) becomes a
+/// directory instead of an empty file.
+#[test]
+fn test_zip_archive_extract_to_matches_php() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_extract_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.zip"),
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("d.zip"),
+        build_zip_phar_container(&[("dd/", b"", false), ("dd/sub/x.txt", b"hi\n", false)]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{d}/a.zip");
+var_dump($z->extractTo("{d}/ex1"));
+var_dump($z->extractTo("{d}/ex2", "f.txt"));
+var_dump($z->extractTo("{d}/ex3", ["f.txt", "sub/n.txt"]));
+var_dump($z->extractTo("/no/such/root/x"));
+var_dump($z->extractTo("{d}/ex4", "nope.txt"));
+var_dump($z->extractTo("{d}/ex4", []));
+var_dump($z->extractTo(""));
+var_dump(file_get_contents("{d}/ex1/f.txt"));
+var_dump(strlen(file_get_contents("{d}/ex1/stored.txt")));
+var_dump(file_get_contents("{d}/ex1/sub/n.txt"));
+var_dump(file_exists("{d}/ex2/sub/n.txt"), file_exists("{d}/ex3/stored.txt"));
+var_dump(filemtime("{d}/ex1/f.txt") === $z->statName("f.txt")["mtime"]);
+$z->close();
+$dd = new ZipArchive();
+$dd->open("{d}/d.zip");
+var_dump($dd->extractTo("{d}/ex5"));
+var_dump(is_dir("{d}/ex5/dd"), is_dir("{d}/ex5/dd/sub"), file_get_contents("{d}/ex5/dd/sub/x.txt"));
+$dd->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(true)\n\
+         bool(false)\nbool(false)\nbool(false)\nbool(false)\n\
+         string(12) \"hello world\n\"\n\
+         int(200)\n\
+         string(20) \"nested content here\n\"\n\
+         bool(false)\nbool(false)\n\
+         bool(true)\n\
+         bool(true)\n\
+         bool(true)\nbool(true)\nstring(3) \"hi\n\"\n"
+    );
+    assert_eq!(out.stderr, "", "a failed extractTo is silent in php too");
+}
+
+/// Verifies an entry name cannot write outside the destination `extractTo()` was given.
+///
+/// php does not REJECT such a name, it NORMALIZES it, and the normalization is a
+/// plain path walk. Every case below was measured by extracting a real archive
+/// with `php -n` 8.5.6 and listing what appeared:
+///
+/// ```text
+/// "../up.txt"          => "up.txt"       "a/../b.txt"         => "b.txt"
+/// "a/b/../c.txt"       => "a/c.txt"      "a/b/../../../d.txt" => "d.txt"
+/// "./dot.txt"          => "dot.txt"      "/abs.txt"           => "abs.txt"
+/// "..//e.txt"          => "e.txt"        "x/./y.txt"          => "x/y.txt"
+/// "f..g.txt"           => "f..g.txt"     "a/..b/h.txt"        => "a/..b/h.txt"
+/// "..\\win.txt"        => "..\\win.txt"
+/// ```
+///
+/// `a/b/../c.txt` is the case that fixes the rule: `..` pops ONE segment, it does
+/// not reset the whole path. `a/b/../../../d.txt` is the case that fixes the other
+/// half: popping an empty stack is a no-op, never an escape. Only a WHOLE `..`
+/// segment counts, and a backslash is not a separator.
+#[test]
+fn test_zip_archive_extract_to_cannot_escape_the_destination() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_travers_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let names: &[&str] = &[
+        "../up.txt",
+        "a/../b.txt",
+        "a/b/../c.txt",
+        "a/b/../../../d.txt",
+        "./dot.txt",
+        "/abs.txt",
+        "..//e.txt",
+        "x/./y.txt",
+        "f..g.txt",
+        "a/..b/h.txt",
+        "..\\win.txt",
+    ];
+    let entries: Vec<(&str, &[u8], bool)> =
+        names.iter().map(|name| (*name, &b"x\n"[..], false)).collect();
+    std::fs::write(dir.join("t.zip"), build_zip_phar_container(&entries)).unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{d}/t.zip");
+var_dump($z->extractTo("{d}/out"));
+$found = [];
+$it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator("{d}/out", FilesystemIterator::SKIP_DOTS));
+foreach ($it as $file) {{ $found[] = substr($file->getPathname(), strlen("{d}/out/")); }}
+sort($found);
+foreach ($found as $one) {{ echo $one, "\n"; }}
+$z->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    let escaped = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "t.zip" && name != "out")
+        .collect::<Vec<_>>();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        escaped.is_empty(),
+        "an entry name wrote outside the destination: {escaped:?}"
+    );
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         ..\\win.txt\n\
+         a/..b/h.txt\n\
+         a/c.txt\n\
+         abs.txt\n\
+         b.txt\n\
+         d.txt\n\
+         dot.txt\n\
+         e.txt\n\
+         f..g.txt\n\
+         up.txt\n\
+         x/y.txt\n"
+    );
+}
+
 /// `Phar` and `PharData` expose a minimal OOP ArrayAccess surface that maps
 /// bracket reads/writes/isset to the existing runtime `phar://` reader/writer.
 #[test]

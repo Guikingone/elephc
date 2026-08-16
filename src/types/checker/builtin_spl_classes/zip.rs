@@ -320,7 +320,280 @@ fn zip_methods() -> Vec<ClassMethod> {
             Some(TypeExpr::Str),
             return_body(string_expr("No error")),
         ),
+        method_with_body(
+            "extractTo",
+            vec![
+                param("directory", TypeExpr::Str),
+                param_default("files", mixed_type(), null_expr()),
+            ],
+            Some(TypeExpr::Bool),
+            zip_extract_to_body(),
+        ),
+        // Compiler-internal: php has no such method, and the leading `__elephc`
+        // keeps it out of any name a program could reach.
+        method_with_body(
+            "__elephcZipCleanPath",
+            vec![param("name", TypeExpr::Str)],
+            Some(TypeExpr::Str),
+            zip_clean_path_body(),
+        ),
     ]
+}
+
+/// `extractTo($directory, $files = null)`.
+///
+/// Measured on `php -n` 8.5.6:
+///
+/// ```text
+/// extractTo("ex1")                       => bool(true), the whole archive
+/// extractTo("ex2", "f.txt")              => bool(true), that one entry
+/// extractTo("ex3", ["f.txt","sub/n.txt"])=> bool(true), those two
+/// extractTo("/no/such/root/x")           => bool(false)  and NO warning
+/// extractTo("ex4", "nope.txt")           => bool(false)
+/// extractTo("ex9", ["f.txt","nope.txt"]) => bool(false)
+/// extractTo("ex9", [])                   => bool(false)
+/// extractTo("")                          => bool(false)
+/// ```
+///
+/// An existing file is overwritten, and the extracted file carries the ENTRY's
+/// mtime, not the extraction time. A directory member (`dd/`) becomes a directory,
+/// not an empty file.
+fn zip_extract_to_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        if_stmt(
+            binary_expr(var_expr("directory"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
+        // `$files` is php's `array|string|null`: absent means the whole archive, a
+        // string means that one entry, an array means those.
+        typed_assign_stmt("wanted", array_type(), empty_array_expr()),
+        if_stmt(
+            binary_expr(var_expr("files"), BinOp::StrictEq, null_expr()),
+            vec![assign_stmt("wanted", property_access(this_expr(), "names"))],
+            // The array arm copies element by element rather than casting: it keeps
+            // `$wanted` a plain list of strings whatever the caller passed.
+            Some(vec![if_stmt(
+                function_call("is_array", vec![var_expr("files")]),
+                vec![foreach_stmt(
+                    var_expr("files"),
+                    None,
+                    "one",
+                    vec![array_push_stmt(
+                        "wanted",
+                        cast_expr(CastType::String, var_expr("one")),
+                    )],
+                )],
+                Some(vec![array_push_stmt(
+                    "wanted",
+                    cast_expr(CastType::String, var_expr("files")),
+                )]),
+            )]),
+        ),
+        if_stmt(
+            binary_expr(count_expr(var_expr("wanted")), BinOp::StrictEq, int_expr(0)),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
+        make_directory_guard("directory"),
+        foreach_stmt(
+            var_expr("wanted"),
+            None,
+            "requested",
+            vec![
+                assign_stmt(
+                    "index",
+                    method_call(
+                        this_expr(),
+                        "locateName",
+                        vec![cast_expr(CastType::String, var_expr("requested"))],
+                    ),
+                ),
+                // php bails on the FIRST name it cannot find, keeping whatever it
+                // already wrote.
+                missing_entry_guard("index"),
+                assign_stmt(
+                    "entry",
+                    array_access(property_access(this_expr(), "names"), var_expr("index")),
+                ),
+                assign_stmt(
+                    "clean",
+                    method_call(
+                        this_expr(),
+                        "__elephcZipCleanPath",
+                        vec![var_expr("entry")],
+                    ),
+                ),
+                assign_stmt(
+                    "target",
+                    binary_expr(
+                        binary_expr(var_expr("directory"), BinOp::Concat, string_expr("/")),
+                        BinOp::Concat,
+                        var_expr("clean"),
+                    ),
+                ),
+                if_stmt(
+                    binary_expr(var_expr("clean"), BinOp::StrictEq, string_expr("")),
+                    // A name that normalizes to nothing at all names no file to write.
+                    vec![assign_stmt("target", var_expr("directory"))],
+                    Some(vec![if_stmt(
+                        binary_expr(
+                            function_call(
+                                "substr",
+                                vec![var_expr("entry"), int_expr(-1)],
+                            ),
+                            BinOp::StrictEq,
+                            string_expr("/"),
+                        ),
+                        // A directory member becomes a DIRECTORY, not an empty file.
+                        vec![make_directory_guard("target")],
+                        Some(vec![
+                            assign_stmt(
+                                "parent",
+                                function_call("dirname", vec![var_expr("target")]),
+                            ),
+                            make_directory_guard("parent"),
+                            assign_stmt(
+                                "bytes",
+                                suppress_expr(function_call(
+                                    "file_get_contents",
+                                    vec![entry_url_expr(var_expr("entry"))],
+                                )),
+                            ),
+                            if_stmt(
+                                binary_expr(
+                                    var_expr("bytes"),
+                                    BinOp::StrictEq,
+                                    bool_expr(false),
+                                ),
+                                vec![return_stmt(bool_expr(false))],
+                                None,
+                            ),
+                            assign_stmt(
+                                "written",
+                                suppress_expr(function_call(
+                                    "file_put_contents",
+                                    vec![
+                                        var_expr("target"),
+                                        cast_expr(CastType::String, var_expr("bytes")),
+                                    ],
+                                )),
+                            ),
+                            if_stmt(
+                                binary_expr(
+                                    var_expr("written"),
+                                    BinOp::StrictEq,
+                                    bool_expr(false),
+                                ),
+                                vec![return_stmt(bool_expr(false))],
+                                None,
+                            ),
+                            // The extracted file carries the ENTRY's mtime.
+                            assign_stmt(
+                                "stat",
+                                method_call(this_expr(), "statIndex", vec![var_expr("index")]),
+                            ),
+                            expr_stmt(suppress_expr(function_call(
+                                "touch",
+                                vec![
+                                    var_expr("target"),
+                                    cast_expr(
+                                        CastType::Int,
+                                        array_access(var_expr("stat"), string_expr("mtime")),
+                                    ),
+                                ],
+                            ))),
+                        ]),
+                    )]),
+                ),
+            ],
+        ),
+        return_stmt(bool_expr(true)),
+    ]
+}
+
+/// `__elephcZipCleanPath($name)`: the path php actually extracts an entry to.
+///
+/// php refuses to let an archive write outside the destination, and it does so by
+/// NORMALIZING the stored name rather than by rejecting it. Measured on `php -n`
+/// 8.5.6 by extracting an archive whose entries carry these names:
+///
+/// ```text
+/// "../up.txt"           => "up.txt"
+/// "a/../b.txt"          => "b.txt"
+/// "a/b/../c.txt"        => "a/c.txt"      (`..` pops ONE segment, it does not reset)
+/// "a/b/../../../d.txt"  => "d.txt"        (popping an empty stack is a no-op)
+/// "./dot.txt"           => "dot.txt"
+/// "/abs.txt"            => "abs.txt"
+/// "..//e.txt"           => "e.txt"
+/// "x/./y.txt"           => "x/y.txt"
+/// "f..g.txt"            => "f..g.txt"     (only a WHOLE `..` segment counts)
+/// "a/..b/h.txt"         => "a/..b/h.txt"
+/// "..\\win.txt"         => "..\\win.txt"  (a backslash is not a separator here)
+/// ```
+///
+/// Every one of those landed inside the destination directory; not one escaped it.
+fn zip_clean_path_body() -> Vec<crate::parser::ast::Stmt> {
+    vec![
+        typed_assign_stmt("parts", array_type(), empty_array_expr()),
+        foreach_stmt(
+            function_call("explode", vec![string_expr("/"), var_expr("name")]),
+            None,
+            "segment",
+            vec![if_stmt(
+                binary_expr(
+                    binary_expr(var_expr("segment"), BinOp::StrictNotEq, string_expr("")),
+                    BinOp::And,
+                    binary_expr(var_expr("segment"), BinOp::StrictNotEq, string_expr(".")),
+                ),
+                vec![if_stmt(
+                    binary_expr(var_expr("segment"), BinOp::StrictEq, string_expr("..")),
+                    vec![
+                        assign_stmt("depth", count_expr(var_expr("parts"))),
+                        // Popping an empty stack is a no-op, which is why
+                        // `a/b/../../../d.txt` still lands at `d.txt`.
+                        if_stmt(
+                            binary_expr(var_expr("depth"), BinOp::Gt, int_expr(0)),
+                            vec![assign_stmt(
+                                "parts",
+                                function_call(
+                                    "array_slice",
+                                    vec![
+                                        var_expr("parts"),
+                                        int_expr(0),
+                                        binary_expr(var_expr("depth"), BinOp::Sub, int_expr(1)),
+                                    ],
+                                ),
+                            )],
+                            None,
+                        ),
+                    ],
+                    Some(vec![array_push_stmt("parts", var_expr("segment"))]),
+                )],
+                None,
+            )],
+        ),
+        return_stmt(function_call(
+            "implode",
+            vec![string_expr("/"), var_expr("parts")],
+        )),
+    ]
+}
+
+/// Creates the directory named by `$var` when it is not one already, or returns `false`.
+fn make_directory_guard(var: &str) -> crate::parser::ast::Stmt {
+    if_stmt(
+        not_expr(function_call("is_dir", vec![var_expr(var)])),
+        vec![if_stmt(
+            not_expr(suppress_expr(function_call(
+                "mkdir",
+                vec![var_expr(var), int_expr(0o777), bool_expr(true)],
+            ))),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        )],
+        None,
+    )
 }
 
 /// `open($filename, $flags = 0)`.

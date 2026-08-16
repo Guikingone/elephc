@@ -225,15 +225,28 @@ compression methods and the `EM_*` encryption methods), and exposes `filename`,
 | `getFromName()`, `getFromIndex()` | The entry bytes, or `false`. |
 | `getStream()`, `getStreamName()`, `getStreamIndex()` | A readable stream over the entry, or `false`. |
 | `setPassword()` | Arms the ZipCrypto password, so an encrypted entry becomes readable — the same password `PharData::setZipPassword()` uses. |
+| `extractTo($directory, $files = null)` | Extracts the whole archive, one named entry, or a list of them. `false` when the destination cannot be created, when a requested entry does not exist, or for an empty destination/selection. Existing files are overwritten, each extracted file carries the ENTRY's mtime, and a directory member becomes a directory. |
 
 Every accessor is SILENT on failure: only `open()` reports anything, and it does so
 through its return value. That matches PHP, where `getFromName("nope")` answers a
 bare `false` while `file_get_contents("zip://…#nope")` warns.
 
-Writing is not implemented: `addFile()`, `addFromString()`, `deleteName()`,
-`renameName()`, `setArchiveComment()` and `extractTo()` are absent rather than
-present and inert, so a program that needs them fails to compile instead of
-silently doing nothing.
+`extractTo()` cannot write outside the destination. PHP does not reject a hostile
+entry name, it normalizes it, and elephc reproduces that walk exactly: a `/`-split
+where an empty or `.` segment is dropped and a whole `..` segment pops one segment
+(popping nothing when there is nothing to pop). So `../up.txt` extracts to
+`up.txt`, `a/b/../c.txt` to `a/c.txt`, `a/b/../../../d.txt` to `d.txt`, and
+`/abs.txt` to `abs.txt` — all inside the destination. Only a whole `..` segment
+counts (`f..g.txt` and `a/..b/h.txt` are ordinary names) and a backslash is not a
+separator.
+
+Archive MUTATION is not implemented: `addFile()`, `addFromString()`,
+`deleteName()`, `deleteIndex()`, `renameName()`, `renameIndex()`,
+`setArchiveComment()`, `setCompressionName()` and the rest of the write API are
+absent rather than present and inert, so a program that needs them fails to
+compile instead of silently doing nothing. The single write PHP performs on the
+supported path IS implemented, because leaving it out would diverge silently: an
+archive opened with `OVERWRITE` and closed without additions is removed from disk.
 
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.
