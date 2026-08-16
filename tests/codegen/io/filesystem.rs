@@ -1047,3 +1047,97 @@ rmdir($base);
     );
     assert_eq!(out, "bool(true)\n");
 }
+
+/// `readdir()` / `rewinddir()` / `closedir()` refused php's OPTIONAL `$dir_handle`.
+///
+/// php's signature is `readdir(?resource $dir_handle = null)`: with no argument — or with an
+/// explicit `null` — it operates on the LAST directory stream opened by `opendir()` (or by
+/// `dir()`, which is built on it). `fopen()` does not participate. elephc required the argument,
+/// so this very ordinary shape failed to COMPILE.
+///
+/// MEASURED on `php -n` 8.5.6, stdout with the notices suppressed:
+///
+/// ```text
+/// bool(true)          the handle-less listing IS the handle's own listing
+/// int(3)
+/// bool(true)          readdir() after rewinddir(), both handle-less
+/// bool(true)          an intervening fopen() does NOT move the directory slot
+/// TypeError: No resource supplied      after the slot's stream was closed
+/// bool(true)          dir() feeds the same slot
+/// TypeError: No resource supplied      rewinddir(), slot closed by Directory::close()
+/// TypeError: No resource supplied      closedir(), same
+/// bool(true)          an explicit null takes the same route
+/// ```
+///
+/// Two wordings are pinned, both verbatim from php-src. The notice is `Deprecated: <fn>():
+/// Passing null is deprecated, instead the last opened directory stream should be provided`, and
+/// it fires when the argument is OMITTED just as much as when `null` is passed explicitly — php
+/// fills the default in before the deprecation check, so the two calls are indistinguishable. The
+/// refusal carries NO function prefix at all: it is the bare `No resource supplied`, which is why
+/// it cannot reuse the `<fn>(): Argument #1 ($stream) must be an open stream resource` text every
+/// other closed-handle guard emits.
+///
+/// `@` suppresses the notice, so the loop stays readable; one unsuppressed call at the end pins
+/// the wording.
+#[test]
+fn test_readdir_family_accepts_phps_optional_last_opened_directory_handle() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$base = "elephc_lastdir";
+@mkdir($base);
+file_put_contents("$base/a.txt", "x");
+
+$d = opendir($base);
+$viaSlot = [];
+while (($e = @readdir()) !== false) { $viaSlot[] = $e; }
+@rewinddir();
+$viaHandle = [];
+while (($e = readdir($d)) !== false) { $viaHandle[] = $e; }
+var_dump($viaSlot === $viaHandle);
+var_dump(count($viaSlot));
+
+@rewinddir();
+var_dump(@readdir() !== false);
+$f = fopen("$base/a.txt", "r");
+var_dump(@readdir() !== false);
+fclose($f);
+@closedir();
+try { @readdir(); } catch (Throwable $t) { echo get_class($t), ": ", $t->getMessage(), "\n"; }
+
+$o = dir($base);
+var_dump(@readdir() !== false);
+$o->close();
+try { @rewinddir(); } catch (Throwable $t) { echo get_class($t), ": ", $t->getMessage(), "\n"; }
+try { @closedir(); } catch (Throwable $t) { echo get_class($t), ": ", $t->getMessage(), "\n"; }
+
+$d2 = opendir($base);
+var_dump(readdir(null) !== false);
+closedir($d2);
+
+unlink("$base/a.txt");
+rmdir($base);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "bool(true)\n",
+            "int(3)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "TypeError: No resource supplied\n",
+            "bool(true)\n",
+            "TypeError: No resource supplied\n",
+            "TypeError: No resource supplied\n",
+            "bool(true)\n",
+        ),
+        "the handle-less family follows the last opendir()/dir(), and refuses once it closed"
+    );
+    assert_eq!(
+        out.stderr,
+        "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
+         directory stream should be provided\n",
+        "an explicit null is deprecated with php's own wording, and `@` silences the rest"
+    );
+}

@@ -9,7 +9,7 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`closedir()`](./io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`closedir()`](./io/closedir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`dir()`](./io/dir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | — |
 | [`diskfreespace()`](./io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -60,9 +60,9 @@ sidebar:
 | [`ob_list_handlers()`](./io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`ob_start()`](./io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
-| [`readdir()`](./io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
+| [`readdir()`](./io/readdir.md) | `(resource $dir_handle = null): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
-| [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`set_file_buffer()`](./io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`socket_get_status()`](./io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`socket_set_block()`](./io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |

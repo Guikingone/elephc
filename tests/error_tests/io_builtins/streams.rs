@@ -886,9 +886,18 @@ fn test_error_opendir_wrong_args() {
 }
 
 /// Verifies the invalid-call diagnostic for error readdir wrong args.
+///
+/// This test used to pin `readdir()` — the NO-argument form — as the refusal, which pinned a
+/// bug: php declares `readdir(?resource $dir_handle = null)` and runs the handle-less call
+/// against the last opened directory stream. The only arity php refuses is the second argument,
+/// with `ArgumentCountError: readdir() expects at most 1 argument, 2 given` (MEASURED on
+/// `php -n` 8.5.6); elephc says the same thing in its own house phrasing, at compile time.
 #[test]
 fn test_error_readdir_wrong_args() {
-    expect_error("<?php readdir();", "readdir() takes exactly 1 argument");
+    expect_error(
+        "<?php $h = opendir('.'); readdir($h, $h);",
+        "readdir() takes at most 1 argument",
+    );
 }
 
 /// Verifies the invalid-call diagnostic for error readdir requires resource.
@@ -904,9 +913,15 @@ fn test_error_closedir_requires_resource() {
 }
 
 /// Verifies the invalid-call diagnostic for error rewinddir wrong args.
+///
+/// `$dir_handle` is optional here too, so — as for `readdir()` — only a SECOND argument is out
+/// of range: `ArgumentCountError: rewinddir() expects at most 1 argument, 2 given`.
 #[test]
 fn test_error_rewinddir_wrong_args() {
-    expect_error("<?php rewinddir();", "rewinddir() takes exactly 1 argument");
+    expect_error(
+        "<?php $h = opendir('.'); rewinddir($h, $h);",
+        "rewinddir() takes at most 1 argument",
+    );
 }
 
 /// Verifies the invalid-call diagnostic for error stream select wrong args.

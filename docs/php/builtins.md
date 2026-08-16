@@ -174,7 +174,7 @@ sidebar:
 | [`touch()`](./builtins/filesystem/touch.md) | `(string $filename, int $mtime = null, int $atime = null): bool` | `bool` | ✓ | ✓ |
 | [`umask()`](./builtins/filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename, mixed $context = null): bool` | `bool` | ✓ | ✓ |
-| [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`dir()`](./builtins/io/dir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | — |
 | [`diskfreespace()`](./builtins/io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -225,9 +225,9 @@ sidebar:
 | [`ob_list_handlers()`](./builtins/io/ob_list_handlers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`ob_start()`](./builtins/io/ob_start.md) | `(mixed $callback = null, int $chunk_size = 0, int $flags = 112): bool` | `bool` | ✓ | ✓ |
 | [`opendir()`](./builtins/io/opendir.md) | `(string $directory, mixed $context = null): mixed` | `mixed` | ✓ | ✓ |
-| [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
+| [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle = null): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
-| [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
+| [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle = null): void` | `void` | ✓ | ✓ |
 | [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
 | [`socket_get_status()`](./builtins/io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`socket_set_block()`](./builtins/io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |

@@ -1311,6 +1311,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _stream_current_context_handle: borrowed handle selected by the active
     // stream opener for user-wrapper `$this->context` injection.
     out.push_str(&comm_directive("_stream_current_context_handle", 8, target));
+    // _last_dir_handle: the opaque registry handle of the directory stream most
+    // recently opened by `opendir()` — which `dir()` is built on, so it feeds the
+    // slot too. `readdir()`/`rewinddir()`/`closedir()` called with no argument, or
+    // with an explicit null, read it instead of an operand. It holds the HANDLE and
+    // never a borrowed resource box: the generation stamped into the handle is what
+    // makes a stale slot detectable, so no clearing is needed when the stream closes
+    // — `__rt_stream_fd` simply stops resolving it and the family raises php's
+    // `TypeError: No resource supplied`. `fopen()` deliberately does not write here.
+    out.push_str(&comm_directive("_last_dir_handle", 8, target));
     // _http_resp_header_end: byte offset of the body start within
     // _http_resp_buf, set by __rt_http_open after the CRLFCRLF scan.
     out.push_str(&comm_directive("_http_resp_header_end", 8, target));

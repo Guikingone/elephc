@@ -102,6 +102,20 @@ pub(super) fn begin_stream_close(
     function_name: &str,
 ) -> Result<()> {
     load_stream_handle_to_result(ctx, value, function_name)?;
+    begin_stream_close_from_result_handle(ctx, function_name);
+    Ok(())
+}
+
+/// The half of `begin_stream_close` that runs once the opaque handle is already in the
+/// integer result register.
+///
+/// `closedir()` with no argument sources its handle from `_last_dir_handle` rather than from an
+/// operand, and must still take the exact-once Closing transition and the 16-byte stash
+/// `finish_stream_close` reads back.
+pub(super) fn begin_stream_close_from_result_handle(
+    ctx: &mut FunctionContext<'_>,
+    function_name: &str,
+) {
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {}
@@ -146,7 +160,6 @@ pub(super) fn begin_stream_close(
     emit_closed_stream_type_error(ctx, function_name);
     ctx.emitter.label(&marked_label);
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    Ok(())
 }
 
 /// Publishes Closed for the handle stashed by `begin_stream_close`, preserving the PHP result.

@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function readdir(resource $dir_handle): mixed
+function readdir(resource $dir_handle = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 0–1 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

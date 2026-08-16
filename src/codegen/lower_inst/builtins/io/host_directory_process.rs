@@ -245,14 +245,153 @@ pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     load_string_to_result(ctx, path, "opendir path")?;
     abi::emit_call_label(ctx.emitter, "__rt_opendir");
     box_stream_fd_or_false_result_kind(ctx, "opendir", 4, true, true);
+    emit_publish_last_directory_handle(ctx);
     store_if_result(ctx, inst)
+}
+
+/// php's refusal when a handle-less directory call has no stream to work on.
+///
+/// The wording carries NO function prefix — php-src throws the bare string, so this cannot
+/// share `emit_closed_stream_type_error`'s `<fn>(): Argument #1 ($stream) ...` text. MEASURED
+/// on `php -n` 8.5.6: `Uncaught TypeError: No resource supplied`.
+const NO_DIRECTORY_RESOURCE_SUPPLIED: &str = "No resource supplied";
+
+/// Where `readdir()`/`rewinddir()`/`closedir()` take their directory stream from.
+///
+/// php's `$dir_handle` is `= null`, and an ABSENT argument is indistinguishable from a written
+/// `null`: the engine fills the default in before it looks, so both take the last-opened slot and
+/// both print the deprecation.
+enum DirectoryHandleSource {
+    /// A real handle was written.
+    Operand(ValueId),
+    /// Nothing usable was written: read `_last_dir_handle`.
+    LastOpened,
+}
+
+/// Classifies a directory builtin's first argument into a `DirectoryHandleSource`.
+fn directory_handle_source(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<DirectoryHandleSource> {
+    let Some(handle) = inst.operands.first().copied() else {
+        return Ok(DirectoryHandleSource::LastOpened);
+    };
+    // `PhpType::Void` IS elephc's `null`: a written `null` and an absent argument are the
+    // same call to php, and both must reach the last-opened slot.
+    if matches!(ctx.raw_value_php_type(handle)?, PhpType::Void) {
+        return Ok(DirectoryHandleSource::LastOpened);
+    }
+    Ok(DirectoryHandleSource::Operand(handle))
+}
+
+/// Publishes the just-boxed `opendir()` result into `_last_dir_handle`.
+///
+/// Only the opaque generation handle is stored, never the Mixed box: a borrowed box would have
+/// to be kept alive by the slot, and the slot has no owner. The handle needs no such care — once
+/// its stream closes, the generation stamped into it stops resolving and the handle-less family
+/// raises on its own. A failed open (tag 3, php `false`) leaves the previous slot standing, which
+/// is what php does.
+fn emit_publish_last_directory_handle(ctx: &mut FunctionContext<'_>) {
+    let done_label = ctx.next_label("last_dir_publish_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed opendir result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a failed open keeps the previous directory slot
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // read the opaque handle out of the Mixed payload
+            abi::emit_symbol_address(ctx.emitter, "x10", "_last_dir_handle");
+            ctx.emitter.instruction("str x9, [x10]");                           // publish it as php's last opened directory stream
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // a failed open keeps the previous directory slot
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // read the opaque handle out of the Mixed payload
+            abi::emit_symbol_address(ctx.emitter, "r9", "_last_dir_handle");
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // publish it as php's last opened directory stream
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
+/// Emits php's `E_DEPRECATED` for a handle-less directory call.
+fn emit_last_directory_deprecation(ctx: &mut FunctionContext<'_>, function_name: &str) {
+    let message = format!(
+        "Deprecated: {}(): Passing null is deprecated, instead the last opened directory \
+         stream should be provided\n",
+        function_name
+    );
+    let (label, len) = ctx.data.add_string(message.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                     // stderr, and `@` suppresses it
+}
+
+/// Loads php's last opened directory stream, validated open, into the integer result register.
+///
+/// The deprecation comes FIRST because php prints it before it looks for a stream at all: a
+/// program with nothing open gets the notice AND the refusal, which MEASURED on `php -n` 8.5.6.
+/// Two things can go wrong and both answer the same bare wording — an empty slot, and a slot
+/// whose stream has since been closed. The second needs no bookkeeping at close time: the
+/// registry generation in a stale handle simply stops resolving through `__rt_stream_fd`.
+fn emit_last_directory_handle_to_result(ctx: &mut FunctionContext<'_>, function_name: &str) {
+    emit_last_directory_deprecation(ctx, function_name);
+    let supplied_label = ctx.next_label("last_dir_supplied");
+    let open_label = ctx.next_label("last_dir_open");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_last_dir_handle");
+            ctx.emitter.instruction("ldr x0, [x9]");                            // recover the last opened directory handle
+            ctx.emitter
+                .instruction(&format!("cbnz x0, {}", supplied_label));          // zero means no directory was ever opened
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_last_dir_handle");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // recover the last opened directory handle
+            ctx.emitter.instruction("test rax, rax");                           // zero means no directory was ever opened
+            ctx.emitter.instruction(&format!("jnz {}", supplied_label));
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, NO_DIRECTORY_RESOURCE_SUPPLIED);
+    ctx.emitter.label(&supplied_label);
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque handle to descriptor validation
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // a closed slot no longer resolves to a backend
+            ctx.emitter.instruction(&format!("b.ge {}", open_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a closed slot no longer resolves to a backend
+            ctx.emitter.instruction(&format!("jns {}", open_label));
+        }
+    }
+    crate::codegen::lower_inst::exceptions::emit_type_error(ctx, NO_DIRECTORY_RESOURCE_SUPPLIED);
+    ctx.emitter.label(&open_label);
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
 }
 
 /// Lowers `readdir(dir_handle)` for libc, glob, and userspace-wrapper handles.
 pub(crate) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "readdir", 1)?;
-    let handle = expect_operand(inst, 0)?;
-    load_open_stream_handle_to_result(ctx, handle, "readdir")?;
+    super::super::ensure_arg_count_between(inst, "readdir", 0, 1)?;
+    match directory_handle_source(ctx, inst)? {
+        DirectoryHandleSource::Operand(handle) => {
+            load_open_stream_handle_to_result(ctx, handle, "readdir")?
+        }
+        DirectoryHandleSource::LastOpened => {
+            emit_last_directory_handle_to_result(ctx, "readdir")
+        }
+    }
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque directory handle to state resolution
     }
@@ -267,9 +406,16 @@ pub(crate) fn lower_readdir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
 /// Lowers `closedir(dir_handle)` for libc, glob, and userspace-wrapper handles.
 pub(crate) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "closedir", 1)?;
-    let handle = expect_operand(inst, 0)?;
-    begin_stream_close(ctx, handle, "closedir")?;
+    super::super::ensure_arg_count_between(inst, "closedir", 0, 1)?;
+    match directory_handle_source(ctx, inst)? {
+        DirectoryHandleSource::Operand(handle) => begin_stream_close(ctx, handle, "closedir")?,
+        DirectoryHandleSource::LastOpened => {
+            // The slot is validated with php's own wording BEFORE the close sequence, so a
+            // closed or empty slot never reaches `begin_stream_close`'s different diagnostic.
+            emit_last_directory_handle_to_result(ctx, "closedir");
+            begin_stream_close_from_result_handle(ctx, "closedir");
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the opaque handle after publishing Closing
@@ -288,9 +434,15 @@ pub(crate) fn lower_closedir(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 
 /// Lowers `rewinddir(dir_handle)` for libc, glob, and userspace-wrapper handles.
 pub(crate) fn lower_rewinddir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "rewinddir", 1)?;
-    let handle = expect_operand(inst, 0)?;
-    load_open_stream_handle_to_result(ctx, handle, "rewinddir")?;
+    super::super::ensure_arg_count_between(inst, "rewinddir", 0, 1)?;
+    match directory_handle_source(ctx, inst)? {
+        DirectoryHandleSource::Operand(handle) => {
+            load_open_stream_handle_to_result(ctx, handle, "rewinddir")?
+        }
+        DirectoryHandleSource::LastOpened => {
+            emit_last_directory_handle_to_result(ctx, "rewinddir")
+        }
+    }
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque directory handle to state resolution
     }

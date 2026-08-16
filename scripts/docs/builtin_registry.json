@@ -18706,11 +18706,11 @@
           "by_ref": false,
           "default": null,
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -18731,13 +18731,13 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -18822,9 +18822,9 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "resource"
         }
       ],
@@ -55401,11 +55401,11 @@
           "by_ref": false,
           "default": null,
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -55426,13 +55426,13 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -55517,9 +55517,9 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "resource"
         }
       ],
@@ -56771,11 +56771,11 @@
           "by_ref": false,
           "default": null,
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -56796,13 +56796,13 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -56887,9 +56887,9 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "dir_handle",
-          "optional": false,
+          "optional": true,
           "type": "resource"
         }
       ],

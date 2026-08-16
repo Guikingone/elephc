@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function rewinddir(resource $dir_handle): void
+function rewinddir(resource $dir_handle = null): void
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 0–1 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

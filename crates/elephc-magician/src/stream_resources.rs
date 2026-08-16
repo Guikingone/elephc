@@ -86,6 +86,13 @@ pub(crate) struct EvalStreamResources {
     /// read. The opener records it here rather than changing its signature, so the callers that
     /// only care about the result stay untouched.
     last_open_error: Option<String>,
+    /// The directory resource `readdir()`/`rewinddir()`/`closedir()` use when handed no handle.
+    ///
+    /// php keeps ONE such slot, fed by `opendir()` — and so by `dir()`, which is built on it —
+    /// and never by `fopen()`. It holds the id and not the resource, so a closed directory needs
+    /// no bookkeeping here: the id simply stops being live, and the family raises php's
+    /// `TypeError: No resource supplied` on its own.
+    last_directory: Option<i64>,
     process_children: HashMap<i64, Child>,
     socket_listeners: HashMap<i64, TcpListener>,
     socket_names: HashMap<i64, EvalSocketNames>,
