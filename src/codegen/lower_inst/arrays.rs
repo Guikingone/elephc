@@ -1966,9 +1966,20 @@ fn lower_mixed_array_set_x86_64(
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on AArch64.
+///
+/// THE SCALAR ARM WRITES ONE WORD UNLESS THE CALLER CELL HOLDS A STRING. It used to write two
+/// unconditionally, and a caller variable holding an `int`/`float`/`bool` occupies ONE, so the
+/// second store landed in the NEIGHBOURING caller slot. `function h(&...$v) { $v[0] = 1;
+/// $v[1] = 2; }` therefore answered `(0, 2)`: writing index 1 overwrote index 0's storage with
+/// the high half of the boxed value. Writing them in the other order, or to non-adjacent
+/// indexes, worked — which is what made it look like anything but a width bug.
+///
+/// The rule mirrors `runtime_callable_invoker`'s READ path, which already loads the high word
+/// only for runtime tag 1: a string is `(pointer, length)` and every other scalar is one word.
 fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
+    let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
     let done_label = ctx.next_label("mixed_array_set_done");
 
     ctx.emitter.instruction("cmp x1, #0");                                      // reject negative indexes before checking for by-reference markers
@@ -1986,10 +1997,13 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction("ldr x10, [x11, #8]");                              // load the caller ref-cell address from the marker payload
     ctx.emitter.instruction(&format!("cmp x12, #{}", runtime_value_tag(&PhpType::Mixed))); // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("b.eq {}", mixed_cell_label));             // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction("ldr x12, [x2, #8]");                               // load the replacement Mixed low payload word
-    ctx.emitter.instruction("str x12, [x10]");                                  // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("ldr x12, [x2, #16]");                              // load the replacement Mixed high payload word
-    ctx.emitter.instruction("str x12, [x10, #8]");                              // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction("ldr x9, [x2, #8]");                                // load the replacement Mixed low payload word
+    ctx.emitter.instruction("str x9, [x10]");                                   // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction(&format!("cmp x12, #{}", runtime_value_tag(&PhpType::Str))); // only a string caller cell is two words wide
+    ctx.emitter.instruction(&format!("b.ne {}", scalar_done_label));            // a one-word cell must not have its NEIGHBOUR overwritten
+    ctx.emitter.instruction("ldr x9, [x2, #16]");                               // load the replacement Mixed high payload word
+    ctx.emitter.instruction("str x9, [x10, #8]");                               // write the string length through the caller ref-cell
+    ctx.emitter.label(&scalar_done_label);
     ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
     ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
@@ -2006,9 +2020,13 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
 }
 
 /// Stores a fresh boxed-Mixed value through an invoker ref-cell marker on x86_64.
+///
+/// Carries the same one-word/two-word rule as the AArch64 body above, for the same reason: a
+/// caller cell holding a scalar is ONE word, and writing two overwrote the neighbouring slot.
 fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
+    let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
     let done_label = ctx.next_label("mixed_array_set_done");
 
     ctx.emitter.instruction("cmp rsi, 0");                                      // reject negative indexes before checking for by-reference markers
@@ -2026,10 +2044,13 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                    // load the caller ref-cell address from the marker payload
     ctx.emitter.instruction(&format!("cmp r11, {}", runtime_value_tag(&PhpType::Mixed))); // check whether the caller ref-cell stores a boxed Mixed handle
     ctx.emitter.instruction(&format!("je {}", mixed_cell_label));               // transfer boxed Mixed replacements as handles rather than payload words
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 8]");                    // load the replacement Mixed low payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10], r11");                        // write the replacement low word through the caller ref-cell
-    ctx.emitter.instruction("mov r11, QWORD PTR [rdx + 16]");                   // load the replacement Mixed high payload word
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r11");                    // write the replacement high word through the caller ref-cell
+    ctx.emitter.instruction("mov r9, QWORD PTR [rdx + 8]");                     // load the replacement Mixed low payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10], r9");                         // write the replacement low word through the caller ref-cell
+    ctx.emitter.instruction(&format!("cmp r11, {}", runtime_value_tag(&PhpType::Str))); // only a string caller cell is two words wide
+    ctx.emitter.instruction(&format!("jne {}", scalar_done_label));             // a one-word cell must not have its NEIGHBOUR overwritten
+    ctx.emitter.instruction("mov r9, QWORD PTR [rdx + 16]");                    // load the replacement Mixed high payload word
+    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // write the string length through the caller ref-cell
+    ctx.emitter.label(&scalar_done_label);
     abi::emit_push_reg(ctx.emitter, "rdi");
     ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
     abi::emit_call_label(ctx.emitter, "__rt_heap_free");
