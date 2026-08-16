@@ -310,6 +310,23 @@ pub(super) fn is_supported_builtin_spl_method(class_name: &str, method_key: &str
                 | "setzippassword"
                 | "delete"
         ),
+        "ZipArchive" => matches!(
+            method_key,
+            "open"
+                | "close"
+                | "count"
+                | "getnameindex"
+                | "locatename"
+                | "statindex"
+                | "statname"
+                | "getfromindex"
+                | "getfromname"
+                | "getstream"
+                | "getstreamname"
+                | "getstreamindex"
+                | "setpassword"
+                | "getstatusstring"
+        ),
         "PharFileInfo" => matches!(
             method_key,
             "__construct"

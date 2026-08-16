@@ -288,9 +288,9 @@ mod tests {
         }
 
         assert_eq!(eval_registry, 484);
-        assert_eq!(eval_internal, 39);
+        assert_eq!(eval_internal, 40);
         assert_eq!(eval_pending, 34);
-        assert_eq!(aot_registry, 542);
+        assert_eq!(aot_registry, 543);
         assert_eq!(aot_external, 11);
         assert_eq!(aot_unsupported, 4);
     }
@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 73);
+        assert_eq!(unsupported, 74);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

@@ -154,6 +154,7 @@ pub enum RuntimeFnId {
     ElephcPharSetZipPassword,
     ElephcPharSignHash,
     ElephcPharSignOpenssl,
+    ElephcZipStatEntries,
     Basename,
     Chdir,
     Chgrp,
@@ -659,6 +660,7 @@ impl RuntimeFnId {
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::ElephcZipStatEntries => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
             // A CSV row is `?string[]`: php answers `[null]` for a wholly empty subject, so the
@@ -1138,6 +1140,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharSetStub => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSetZipPassword => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignHash => &[BuiltinRequirement::Bridge("elephc_phar")],
+            RuntimeFnId::ElephcZipStatEntries => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::ElephcPharSignOpenssl => &[BuiltinRequirement::Bridge("elephc_phar")],
             RuntimeFnId::Gzcompress => &[BuiltinRequirement::SystemLibrary("z")],
             RuntimeFnId::Gzdeflate => &[BuiltinRequirement::SystemLibrary("z")],
@@ -1220,6 +1223,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::ElephcPharListEntries
+                | RuntimeFnId::ElephcZipStatEntries
                 | RuntimeFnId::ElephcPharGetMetadata
                 | RuntimeFnId::ElephcPharGetStub
                 | RuntimeFnId::ElephcPharSetMetadata
@@ -1576,6 +1580,7 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcPharGetStub => "__elephc_phar_get_stub",
             RuntimeFnId::ElephcPharGzipArchive => "__elephc_phar_gzip_archive",
             RuntimeFnId::ElephcPharListEntries => "__elephc_phar_list_entries",
+            RuntimeFnId::ElephcZipStatEntries => "__elephc_zip_stat_entries",
             RuntimeFnId::ElephcPharSetCompression => "__elephc_phar_set_compression",
             RuntimeFnId::ElephcPharSetFileMetadata => "__elephc_phar_set_file_metadata",
             RuntimeFnId::ElephcPharSetMetadata => "__elephc_phar_set_metadata",

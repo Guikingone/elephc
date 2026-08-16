@@ -207,6 +207,34 @@ Metadata persistence covers the same scalar+array subset as
 [`serialize()`/`unserialize()`](system-and-io.md#serialization); object metadata is not
 serialized.
 
+### `ZipArchive` (reading)
+
+`ZipArchive` reads plain ZIP archives through the same bridge the `zip://` wrapper
+uses. It implements `Countable`, publishes every `ZipArchive::*` constant PHP does
+(the open flags, the `ER_*` error codes, the `FL_*` lookup flags, the `CM_*`
+compression methods and the `EM_*` encryption methods), and exposes `filename`,
+`numFiles`, `status`, `statusSys`, `comment` and `lastId` as readable properties.
+
+| Member | Behaviour |
+|---|---|
+| `open($filename, $flags = 0)` | `true` on success. `ZipArchive::ER_NOENT` for a missing archive without `CREATE`/`OVERWRITE`, `ER_EXISTS` when `EXCL` meets an existing file, `ER_NOZIP` for a file that is not a ZIP. An empty `$filename` throws `ValueError`, as in PHP. |
+| `close()` | `true`; `numFiles` returns to `0` and `filename` to `""`. An archive opened with `OVERWRITE` and closed without additions is REMOVED, which is what libzip does with an archive that would hold nothing. |
+| `count()`, `numFiles` | The entry count, directory members included. |
+| `getNameIndex()`, `locateName()` | The stored name / its index, or `false`. `ZipArchive::FL_NOCASE` matches case-insensitively. |
+| `statIndex()`, `statName()` | PHP's eight keys in PHP's order — `name`, `index`, `crc`, `size`, `mtime`, `comp_size`, `comp_method`, `encryption_method` — or `false`. `mtime` is built from the entry's MS-DOS date/time in the PROCESS timezone, exactly as libzip's `mktime()` does. |
+| `getFromName()`, `getFromIndex()` | The entry bytes, or `false`. |
+| `getStream()`, `getStreamName()`, `getStreamIndex()` | A readable stream over the entry, or `false`. |
+| `setPassword()` | Arms the ZipCrypto password, so an encrypted entry becomes readable — the same password `PharData::setZipPassword()` uses. |
+
+Every accessor is SILENT on failure: only `open()` reports anything, and it does so
+through its return value. That matches PHP, where `getFromName("nope")` answers a
+bare `false` while `file_get_contents("zip://…#nope")` warns.
+
+Writing is not implemented: `addFile()`, `addFromString()`, `deleteName()`,
+`renameName()`, `setArchiveComment()` and `extractTo()` are absent rather than
+present and inert, so a program that needs them fails to compile instead of
+silently doing nothing.
+
 `file_get_contents($url)` recognizes runtime `http://`, `https://`, `ftp://`,
 and `ftps://` strings before falling back to `phar://`/filesystem handling.
 Because the scheme is not known statically, non-literal `file_get_contents()`

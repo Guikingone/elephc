@@ -4737,6 +4737,316 @@ var_dump(stream_get_contents(fopen($url, "r")));
     );
 }
 
+/// Verifies the `ZipArchive` read surface against `php -n` 8.5.6, method by method.
+///
+/// Measured on an archive holding `f.txt` (deflated, 12 bytes), `sub/n.txt`
+/// (deflated, 20) and `stored.txt` (stored, 200):
+///
+/// ```text
+/// $z->open("a.zip")                      => bool(true)
+/// $z->numFiles, status, statusSys        => int(3), int(0), int(0)
+/// $z->comment                            => string(0) ""
+/// getNameIndex(0) / (2)                  => "f.txt" / "stored.txt"
+/// getNameIndex(3) / (-1)                 => bool(false)   (out of range, silent)
+/// locateName("f.txt") / ("stored.txt")   => int(0) / int(2)
+/// locateName("nope") / ("F.TXT")         => bool(false)
+/// locateName("F.TXT", FL_NOCASE)         => int(0)
+/// statName("nope") / statIndex(99)       => bool(false)
+/// getFromName("f.txt")                   => string(12) "hello world\n"
+/// getFromName("nope")                    => bool(false)   (NO warning)
+/// getStream("f.txt")                     => a readable stream
+/// getStream("nope")                      => bool(false)   (NO warning)
+/// $z->close()                            => bool(true), and numFiles returns to int(0)
+/// ```
+///
+/// Every failing accessor is SILENT — only `open()` reports anything, through its
+/// return value — which is why the reads go through `@`-suppressed wrapper calls
+/// rather than bare ones.
+#[test]
+fn test_zip_archive_reads_entries_like_php() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_oop_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+var_dump($z->open("{p}"));
+var_dump($z->numFiles, $z->status, $z->statusSys, $z->comment);
+var_dump($z->getNameIndex(0), $z->getNameIndex(2), $z->getNameIndex(3), $z->getNameIndex(-1));
+var_dump($z->locateName("f.txt"), $z->locateName("stored.txt"), $z->locateName("nope"));
+var_dump($z->locateName("F.TXT"), $z->locateName("F.TXT", ZipArchive::FL_NOCASE));
+var_dump($z->statName("nope"), $z->statIndex(99));
+var_dump($z->getFromName("f.txt"), $z->getFromName("nope"));
+var_dump($z->getFromIndex(2) === str_repeat("x", 200), $z->getFromIndex(99));
+var_dump(stream_get_contents($z->getStream("f.txt")));
+var_dump($z->getStream("nope"));
+var_dump($z->count());
+var_dump($z->close());
+var_dump($z->numFiles, $z->filename);
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         int(3)\nint(0)\nint(0)\nstring(0) \"\"\n\
+         string(5) \"f.txt\"\nstring(10) \"stored.txt\"\nbool(false)\nbool(false)\n\
+         int(0)\nint(2)\nbool(false)\n\
+         bool(false)\nint(0)\n\
+         bool(false)\nbool(false)\n\
+         string(12) \"hello world\n\"\nbool(false)\n\
+         bool(true)\nbool(false)\n\
+         string(12) \"hello world\n\"\n\
+         bool(false)\n\
+         int(3)\n\
+         bool(true)\n\
+         int(0)\nstring(0) \"\"\n"
+    );
+    // Not one accessor may report a failure: php's do not.
+    assert_eq!(out.stderr, "", "the read surface must be silent");
+}
+
+/// Verifies `ZipArchive::statIndex()` reports php's eight keys, in php's order and values.
+///
+/// Measured on `php -n` 8.5.6 — the whole array for the first entry, plus the
+/// stored entry's method:
+///
+/// ```text
+/// statIndex(0) => ["name" => "f.txt", "index" => 0, "crc" => 2936552237,
+///                  "size" => 12, "mtime" => <unix>, "comp_size" => 14,
+///                  "comp_method" => 8, "encryption_method" => 0]
+/// statIndex(1)["comp_method"] => int(0)   (stored)
+/// statName("f.txt") == statIndex(0)
+/// ```
+///
+/// `crc` reads `0` here BECAUSE the shared fixture builder writes no CRC field —
+/// measured: php reports `int(0)` for exactly these bytes too, and
+/// `$s["crc"] === crc32("hello world\n")` is `bool(false)` on php as well. A real
+/// archive's CRC is pinned in the ZipCrypto test below, whose fixture is a genuine
+/// `zip(1)` archive.
+///
+/// `mtime` is asserted structurally rather than as a fixed number: php derives it
+/// from the entry's DOS date/time in the PROCESS timezone, so any literal here
+/// would pin the machine's timezone instead of the unpacking. The unpacking itself
+/// is pinned in the bridge's own unit test, and the exact value was differenced
+/// against `php -n` under both the local zone and `TZ=UTC`.
+#[test]
+fn test_zip_archive_stat_index_reports_php_fields() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_stat_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$z = new ZipArchive();
+$z->open("{p}");
+$s = $z->statIndex(0);
+var_dump(array_keys($s));
+var_dump($s["name"], $s["index"], $s["size"], $s["comp_method"], $s["encryption_method"]);
+var_dump($s["crc"]);
+var_dump($s["comp_size"] > 0, $s["comp_size"] < 200);
+var_dump($z->statIndex(1)["comp_method"], $z->statIndex(1)["comp_size"]);
+var_dump($z->statName("f.txt") === $s);
+var_dump(is_int($s["mtime"]), $s["mtime"] === $z->statIndex(1)["mtime"]);
+$z->close();
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "array(8) {\n  [0]=>\n  string(4) \"name\"\n  [1]=>\n  string(5) \"index\"\n  \
+         [2]=>\n  string(3) \"crc\"\n  [3]=>\n  string(4) \"size\"\n  [4]=>\n  \
+         string(5) \"mtime\"\n  [5]=>\n  string(9) \"comp_size\"\n  [6]=>\n  \
+         string(11) \"comp_method\"\n  [7]=>\n  string(17) \"encryption_method\"\n}\n\
+         string(5) \"f.txt\"\nint(0)\nint(12)\nint(8)\nint(0)\n\
+         int(0)\n\
+         bool(true)\nbool(true)\n\
+         int(0)\nint(200)\n\
+         bool(true)\n\
+         bool(true)\nbool(true)\n"
+    );
+}
+
+/// Verifies `ZipArchive::open()`'s flag matrix and its error codes, measured one by one.
+///
+/// On `php -n` 8.5.6, with `m.zip` an existing archive of three entries:
+///
+/// ```text
+/// open("m.zip")                  => bool(true),  numFiles 3
+/// open("ghost.zip")              => int(9)   ER_NOENT
+/// open("ghost.zip", RDONLY)      => int(9)   ER_NOENT
+/// open("n1.zip", CREATE)         => bool(true),  numFiles 0 — and NO file is created
+/// open("m.zip", CREATE)          => bool(true),  numFiles 3 — opens the existing one
+/// open("m.zip", CREATE|EXCL)     => int(10)  ER_EXISTS — EXCL wins over CREATE
+/// open("notzip.txt")             => int(19)  ER_NOZIP
+/// open("")                       => ValueError: ZipArchive::open(): Argument #1
+///                                   ($filename) must not be empty
+/// open("m.zip", OVERWRITE) then close() => the archive is DELETED, because libzip
+///                                   removes an archive that would hold nothing
+/// ```
+#[test]
+fn test_zip_archive_open_flag_matrix_matches_php() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_flags_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let archive = dir.join("m.zip");
+    let plain = dir.join("notzip.txt");
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+        ]),
+    )
+    .unwrap();
+    std::fs::write(&plain, b"not a zip\n").unwrap();
+    let src = format!(
+        r#"<?php
+function t(string $label, string $f, int $fl): void {{
+    $z = new ZipArchive();
+    $r = $z->open($f, $fl);
+    echo $label, ": ";
+    var_dump($r);
+    if ($r === true) {{ echo "  numFiles=", $z->numFiles, "\n"; var_dump($z->close()); }}
+}}
+t("existing", "{d}/m.zip", 0);
+t("missing", "{d}/ghost.zip", 0);
+t("missing RDONLY", "{d}/ghost.zip", ZipArchive::RDONLY);
+t("missing CREATE", "{d}/n1.zip", ZipArchive::CREATE);
+t("existing CREATE", "{d}/m.zip", ZipArchive::CREATE);
+t("existing EXCL", "{d}/m.zip", ZipArchive::CREATE | ZipArchive::EXCL);
+t("not a zip", "{d}/notzip.txt", 0);
+var_dump(file_exists("{d}/n1.zip"));
+try {{ $e = new ZipArchive(); $e->open(""); }} catch (ValueError $x) {{ echo $x->getMessage(), "\n"; }}
+$o = new ZipArchive();
+var_dump($o->open("{d}/m.zip", ZipArchive::OVERWRITE));
+var_dump($o->numFiles);
+var_dump($o->close());
+var_dump(file_exists("{d}/m.zip"));
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "existing: bool(true)\n  numFiles=3\nbool(true)\n\
+         missing: int(9)\n\
+         missing RDONLY: int(9)\n\
+         missing CREATE: bool(true)\n  numFiles=0\nbool(true)\n\
+         existing CREATE: bool(true)\n  numFiles=3\nbool(true)\n\
+         existing EXCL: int(10)\n\
+         not a zip: int(19)\n\
+         bool(false)\n\
+         ZipArchive::open(): Argument #1 ($filename) must not be empty\n\
+         bool(true)\n\
+         int(0)\n\
+         bool(true)\n\
+         bool(false)\n"
+    );
+}
+
+/// Verifies `ZipArchive` on a ZipCrypto archive and on directory entries.
+///
+/// The archive is the same real `zip --encrypt -P hunter2` fixture the PharData
+/// password test uses. Measured on `php -n` 8.5.6 against an equivalent archive:
+///
+/// ```text
+/// getFromName(...) before setPassword() => bool(false)   (and NO warning)
+/// setPassword("hunter2")                => bool(true)
+/// getFromName(...) after                => the plaintext
+/// statIndex(0) => ["crc" => 3275747770, "size" => 25, "comp_size" => 37,
+///                  "comp_method" => 0, "encryption_method" => 1]
+/// ```
+///
+/// That CRC is the one field the synthetic fixtures cannot pin: this archive is a
+/// genuine `zip(1)` one, so its central directory carries a real CRC-32 and
+/// `$s["crc"] === crc32("secret zipcrypto payload\n")` holds.
+///
+/// A directory member is a member like any other: `zip -r` writes `dd/` and
+/// `dd/sub/` entries, `numFiles` counts them, and reading one answers `""`.
+#[test]
+fn test_zip_archive_encrypted_and_directory_entries() {
+    let dir = std::env::temp_dir().join(format!("elephc_zip_enc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dirs = dir.join("d.zip");
+    std::fs::write(
+        &dirs,
+        build_zip_phar_container(&[
+            ("dd/", b"", false),
+            ("dd/sub/", b"", false),
+            ("dd/sub/x.txt", b"hi\n", false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$bytes = base64_decode("UEsDBAoACQAAACWR1Fy68T/DJQAAABkAAAAMABwAemNfcGxhaW4udHh0VVQJAAMluzZqJbs2anV4CwABBPUBAAAEAAAAAIX9cegIcalT/zcAGsBrKLo1vP/AI2DJ71z0w4OcxvSzLXaea0tQSwcIuvE/wyUAAAAZAAAAUEsBAh4DCgAJAAAAJZHUXLrxP8MlAAAAGQAAAAwAGAAAAAAAAQAAAKSBAAAAAHpjX3BsYWluLnR4dFVUBQADJbs2anV4CwABBPUBAAAEAAAAAFBLBQYAAAAAAQABAFIAAAB7AAAAAAA=");
+file_put_contents("{d}/enc.zip", $bytes);
+$e = new ZipArchive();
+var_dump($e->open("{d}/enc.zip"));
+var_dump($e->numFiles, $e->getNameIndex(0));
+$st = $e->statIndex(0);
+var_dump($st["crc"] === crc32("secret zipcrypto payload\n"));
+var_dump($st["size"], $st["comp_size"], $st["comp_method"], $st["encryption_method"]);
+var_dump($e->getFromName("zc_plain.txt"));
+var_dump($e->setPassword("hunter2"));
+var_dump($e->getFromName("zc_plain.txt"));
+$e->close();
+
+$d = new ZipArchive();
+var_dump($d->open("{d}/d.zip"));
+var_dump($d->numFiles);
+var_dump($d->getNameIndex(0), $d->getNameIndex(1), $d->getNameIndex(2));
+var_dump($d->statIndex(0)["size"]);
+var_dump($d->getFromName("dd/"), $d->getFromName("dd/sub/x.txt"));
+var_dump($d->locateName("DD/SUB/X.TXT"), $d->locateName("DD/SUB/X.TXT", ZipArchive::FL_NOCASE));
+$d->close();
+"#,
+        d = dir.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(true)\n\
+         int(1)\nstring(12) \"zc_plain.txt\"\n\
+         bool(true)\n\
+         int(25)\nint(37)\nint(0)\nint(1)\n\
+         bool(false)\n\
+         bool(true)\n\
+         string(25) \"secret zipcrypto payload\n\"\n\
+         bool(true)\n\
+         int(3)\n\
+         string(3) \"dd/\"\nstring(7) \"dd/sub/\"\nstring(12) \"dd/sub/x.txt\"\n\
+         int(0)\n\
+         string(0) \"\"\nstring(3) \"hi\n\"\n\
+         bool(false)\nint(2)\n"
+    );
+    // A locked entry answers `false`, it does not complain.
+    assert_eq!(out.stderr, "", "the read surface must be silent");
+}
+
 /// `Phar` and `PharData` expose a minimal OOP ArrayAccess surface that maps
 /// bracket reads/writes/isset to the existing runtime `phar://` reader/writer.
 #[test]

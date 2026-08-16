@@ -37,6 +37,7 @@ mod recursive_iterator_iterator_traversal;
 mod regex;
 mod registry;
 mod storage;
+mod zip;
 
 /// Injects builtin SPL classes into the compiler metadata registry.
 pub(crate) fn inject_builtin_spl_classes(
@@ -60,6 +61,7 @@ pub(crate) fn inject_builtin_spl_classes(
     heaps::insert_classes(class_map);
     object_storage::insert_class(class_map);
     phar::insert_classes(class_map);
+    zip::insert_classes(class_map);
 
     Ok(())
 }

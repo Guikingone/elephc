@@ -405,6 +405,15 @@ pub(super) fn publish_phar_list_entries_function_pointer(ctx: &mut FunctionConte
     publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
+/// Publishes the ZIP central-directory stat bridge used by `ZipArchive::open()`.
+pub(super) fn publish_zip_stat_entries_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[(
+        "elephc_zip_stat_entries",
+        "_elephc_zip_stat_entries_fn",
+    )];
+    publish_phar_bridge_entries(ctx, ENTRIES);
+}
+
 /// Publishes the archive global-metadata read bridge.
 pub(super) fn publish_phar_get_metadata_function_pointer(ctx: &mut FunctionContext<'_>) {
     const ENTRIES: &[(&str, &str)] =

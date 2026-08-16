@@ -46,6 +46,17 @@ pub(super) fn split_zip_url(url: &[u8]) -> Option<(&[u8], &[u8])> {
     (!archive_path.is_empty() && !entry.is_empty()).then_some((archive_path, entry))
 }
 
+/// Serializes every ZIP entry's `ZipArchive::statIndex()` fields for `archive_path`.
+///
+/// Returns `None` when the file cannot be read or is no ZIP at all — the two cases
+/// php's `ZipArchive::open()` answers with `ER_NOENT` and `ER_NOZIP`. See
+/// [`zip_stat_records`] for the wire shape.
+pub fn zip_stat_entries_bytes(archive_path: &[u8]) -> Option<Vec<u8>> {
+    let archive_path = std::str::from_utf8(archive_path).ok()?;
+    let archive = std::fs::read(archive_path).ok()?;
+    zip_stat_records(&archive)
+}
+
 /// Reads one entry out of the ZIP archive a `zip://archive#entry` URL names.
 ///
 /// Returns `None` for a missing archive, a missing entry, a `#`-less URL, and an

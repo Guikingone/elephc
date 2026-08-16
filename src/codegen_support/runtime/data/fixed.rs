@@ -930,6 +930,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _elephc_phar_list_entries_fn: indirect pointer to the elephc-phar archive
     // listing bridge used by Phar/PharData constructors to seed iteration.
     out.push_str(".p2align 3\n.globl _elephc_phar_list_entries_fn\n_elephc_phar_list_entries_fn:\n    .quad 0\n");
+    // _elephc_zip_stat_entries_fn: indirect pointer to the elephc-phar ZIP
+    // central-directory stat bridge used by ZipArchive::open() to seed its entries.
+    out.push_str(".p2align 3\n.globl _elephc_zip_stat_entries_fn\n_elephc_zip_stat_entries_fn:\n    .quad 0\n");
     // _elephc_phar_get/set_metadata_fn and _elephc_phar_get/set_stub_fn: indirect
     // pointers to the elephc-phar global-metadata and stub read/write bridges used
     // by the Phar/PharData metadata and stub accessors.
@@ -966,6 +969,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _phar_list_len: output-length scratch written by elephc_phar_list_entries
     // and consumed immediately while expanding serialized names into an array.
     out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
+    // _zip_stat_len: the same output-length scratch for elephc_zip_stat_entries. It is
+    // its OWN word rather than a shared one: a ZipArchive method body can list entries
+    // through both bridges, and one length must not overwrite the other's.
+    out.push_str(".p2align 3\n.globl _zip_stat_len\n_zip_stat_len:\n    .quad 0\n");
     // FTP's TLS sessions. PHP-visible streams keep theirs on the StreamState, reached
     // through the opaque handle; FTP's control and data sockets are INTERNAL — they are
     // never exposed as PHP resources, so adopting them into the registry would mint

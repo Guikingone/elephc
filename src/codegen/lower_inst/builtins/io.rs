@@ -199,6 +199,7 @@ pub(crate) use phar_metadata::{
     lower_elephc_phar_get_file_metadata, lower_elephc_phar_set_file_metadata, lower_elephc_phar_gzip_archive, lower_elephc_phar_bzip2_archive,
     lower_elephc_phar_decompress_archive, lower_elephc_phar_sign_openssl, lower_elephc_phar_sign_hash, lower_elephc_phar_set_zip_password,
     lower_elephc_phar_get_signature_hash, lower_elephc_phar_get_signature_type, lower_elephc_phar_list_entries,
+    lower_elephc_zip_stat_entries,
 };
 pub(crate) use filesystem_ops::{
     lower_file_exists, lower_unlink, lower_mkdir, lower_rmdir,
