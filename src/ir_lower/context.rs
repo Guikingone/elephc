@@ -2857,6 +2857,11 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         }
     }
 
+    /// Interns a PHP function name so a builtin lowering can emit `Op::Call` against it.
+    fn intern_function_name(&mut self, name: &str) -> crate::ir::DataId {
+        LoweringContext::intern_function_name(self, name)
+    }
+
     /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.
     fn emit_runtime_call(
         &mut self,

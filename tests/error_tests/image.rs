@@ -33,6 +33,7 @@ fn check_image(src: &str) -> Result<(), String> {
     let ast = elephc::image_prelude::inject_if_used(ast, false);
     let ast = elephc::dir_prelude::inject_if_used(ast);
     let ast = elephc::hash_prelude::inject_if_used(ast, false);
+    let ast = elephc::scanf_prelude::inject_if_used(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     types::check(&ast).map_err(|e| e.message.clone())?;

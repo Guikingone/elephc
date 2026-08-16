@@ -569,7 +569,7 @@ impl EvalValuesHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             }),
             Self::Sprintf => eval_sprintf_result(evaluated_args, values),
-            Self::Sscanf => eval_sscanf_values_result(evaluated_args, values),
+            Self::Sscanf => eval_sscanf_values_result(evaluated_args, context, values),
             Self::StringCase => one_arg(evaluated_args, values, |value, values| match name {
                 "lcfirst" => eval_lcfirst_result(value, values),
                 "strtolower" => eval_strtolower_result(value, values),

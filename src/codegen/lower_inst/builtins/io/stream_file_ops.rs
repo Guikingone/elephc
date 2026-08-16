@@ -398,37 +398,6 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fscanf(stream, format)` through `__rt_fgets` and `__rt_sscanf`.
-pub(crate) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "fscanf", 2, usize::MAX)?;
-    let stream = expect_operand(inst, 0)?;
-    let format = expect_operand(inst, 1)?;
-    load_open_stream_handle_to_result(ctx, stream, "fscanf")?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, #0");                              // fscanf() reads a whole line; zero is the helper's "no bound"
-            abi::emit_call_label(ctx.emitter, "__rt_fgets");
-            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            load_string_to_result(ctx, format, "fscanf format")?;
-            ctx.emitter.instruction("mov x3, x1");                              // pass the format pointer as the secondary string argument
-            ctx.emitter.instruction("mov x4, x2");                              // pass the format length as the secondary string argument
-            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque stream handle to fgets
-            ctx.emitter.instruction("xor esi, esi");                            // fscanf() reads a whole line; zero is the helper's "no bound"
-            abi::emit_call_label(ctx.emitter, "__rt_fgets");
-            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            load_string_to_result(ctx, format, "fscanf format")?;
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the format pointer as the secondary string argument
-            ctx.emitter.instruction("mov rsi, rdx");                            // pass the format length as the secondary string argument
-            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_sscanf");
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `fgets(stream)` through the shared line-read runtime helper.
 /// php-src's verbatim `ValueError` wording for `fgets()` with a non-positive `$length`.
 const FGETS_NON_POSITIVE_LENGTH_MESSAGE: &str =

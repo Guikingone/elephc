@@ -279,6 +279,14 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = crate::dir_prelude::inject_if_used(ast);
     timings.record_since("dir-prelude", phase_started);
 
+    // php's scanf engine, injected only when the program references `sscanf()`/`fscanf()`, whose
+    // registry lowerings call into it. Runs after include resolution so a scan inside an include
+    // is detected, and before name resolution so the emitted call resolves to a declared function.
+    crate::progress::phase("scanf-prelude");
+    let phase_started = Instant::now();
+    let ast = crate::scanf_prelude::inject_if_used(ast);
+    timings.record_since("scanf-prelude", phase_started);
+
     crate::progress::phase("web-prelude");
     let phase_started = Instant::now();
     let ast = web_prelude::inject_if_web(ast, web, php_version, &ini_overrides);

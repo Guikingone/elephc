@@ -49,9 +49,6 @@ pub(super) fn lower(
         RuntimeFnId::Sprintf => Some({
             crate::codegen::lower_inst::builtins::strings::lower_sprintf(ctx, inst)
         }),
-        RuntimeFnId::Sscanf => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_sscanf(ctx, inst)
-        }),
         RuntimeFnId::StrContains => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
         }),

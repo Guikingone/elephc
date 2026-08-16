@@ -97,7 +97,6 @@ mod hash_hmac;
 mod openssl_methods;
 mod openssl;
 mod digest_to_string;
-mod sscanf;
 mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
@@ -282,7 +281,6 @@ pub use hash_equals::emit_hash_equals;
 /// Emit timing-safe string-equality helper.
 pub use digest_to_string::emit_digest_to_string;
 /// Emit the shared raw-digest-to-PHP-string formatter used by hash/md5/sha1.
-pub use sscanf::emit_sscanf;
 /// Emit string scanf parsing helper.
 pub use rtrim_mask::emit_rtrim_mask;
 /// Emit right trim with custom mask helper.

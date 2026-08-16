@@ -248,7 +248,6 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_inet_ntop` / `__rt_inet_pton` | IPv4/IPv6 address ↔ packed-binary conversion | address | `x1`/`x2` |
 | `__rt_long2ip` / `__rt_ip2long` | Dotted-quad string ↔ integer conversion | `x0` or `x1`/`x2` | `x1`/`x2` or `x0` |
 | `__rt_vsprintf` | `vsprintf()` formatting with an argument array | format + array | `x1`/`x2` |
-| `__rt_sscanf` | Parse string with format | str + format | `x0` (array ptr) |
 
 ## Callable routines
 

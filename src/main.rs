@@ -50,6 +50,7 @@ mod pipeline;
 mod progress;
 mod resolver;
 mod runtime_cache;
+mod scanf_prelude;
 mod debug_info;
 mod source;
 mod source_map;

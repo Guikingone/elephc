@@ -243,6 +243,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::image_prelude::inject_if_used(resolved, false);
     let resolved = elephc::dir_prelude::inject_if_used(resolved);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false);
+    let resolved = elephc::scanf_prelude::inject_if_used(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");

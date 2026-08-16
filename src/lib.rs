@@ -73,6 +73,8 @@ pub mod pdo_prelude;
 pub mod php_profile;
 /// Resolution of includes.
 pub mod resolver;
+/// PHP `sscanf`/`fscanf` engine prelude injection.
+pub mod scanf_prelude;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
 /// Source span tracking.

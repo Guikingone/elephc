@@ -169,7 +169,6 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_base64_decode(emitter);
     strings::emit_sprintf(emitter);
     strings::emit_vsprintf(emitter);
-    strings::emit_sscanf(emitter);
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);

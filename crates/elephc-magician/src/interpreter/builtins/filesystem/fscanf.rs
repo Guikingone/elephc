@@ -75,5 +75,5 @@ pub(in crate::interpreter) fn eval_fscanf_result(
         return values.bool_value(false);
     };
     let input = values.string_bytes_value(&line)?;
-    eval_sscanf_result(input, format, values)
+    eval_sscanf_result(input, format, context, values)
 }
