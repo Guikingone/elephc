@@ -88,6 +88,16 @@ pub(crate) const PHP_FD_FORM: &str =
 /// only `operation failed`.
 pub(crate) const PHP_INVALID_URL_LINE: &str = "Warning: fopen(): Invalid php:// URL specified\n";
 
+/// The line php prints when an `ssl.peer_fingerprint` pin does not match the peer.
+///
+/// Whole and newline-terminated: php-src emits it with a direct `php_error_docref`
+/// from the crypto setup, before the `Failed to enable crypto` and
+/// `Failed to open stream: operation failed` lines the open then composes. elephc's
+/// runtime does not know which builtin is on the stack, so the `<callee>(): ` prefix
+/// php puts in front of the sentence is missing here; the sentence is verbatim.
+pub(crate) const PEER_FINGERPRINT_MISMATCH_LINE: &str =
+    "Warning: peer_fingerprint match failure\n";
+
 /// The reason a `glob://` open answers, whose wrapper has no `stream_opener` at all.
 pub(crate) const GLOB_NO_STREAM_OPEN: &str = "wrapper does not support stream open";
 

@@ -270,7 +270,8 @@ pub(crate) use open_failed_warning::{
 };
 #[allow(unused_imports)]
 pub(crate) use open_failed_warning::{
-    GLOB_NO_STREAM_OPEN, OPEN_OPERATION_FAILED, PHP_FD_FORM, PHP_INVALID_URL_LINE,
+    GLOB_NO_STREAM_OPEN, OPEN_OPERATION_FAILED, PEER_FINGERPRINT_MISMATCH_LINE, PHP_FD_FORM,
+    PHP_INVALID_URL_LINE,
 };
 pub(crate) use unknown_wrapper_warning::{
     emit_unknown_wrapper_warning, UNKNOWN_WRAPPER_MSG_CAPACITY,

@@ -208,10 +208,71 @@ override trust with `ssl.cafile` or `ssl.capath`, set `ssl.peer_name`, or relax
 verification with `ssl.verify_peer = "0"`, `ssl.allow_self_signed`, or
 `ssl.verify_peer_name = "0"`. Client certificates are supported when both
 `ssl.local_cert` and `ssl.local_pk` point at readable PEM files; encrypted keys
-and `ssl.passphrase` are not supported. `ssl.ciphers` and
-`ssl.security_level` are accepted as context options for source compatibility
-but are no-ops: rustls does not consume OpenSSL cipher-list strings and chooses
-its TLS 1.2/1.3 policy internally.
+and `ssl.passphrase` are not supported.
+
+`ssl.peer_fingerprint` pins the peer's leaf certificate. It is checked after the
+handshake, against the certificate the peer actually presented, so it composes
+with every trust setting above — relaxing chain verification with
+`verify_peer => "0"` does not relax the pin. As in PHP, a BARE hexadecimal string
+is matched by its LENGTH: 32 characters mean MD5 and 40 mean SHA-1, the
+comparison is case-insensitive, and any other length is a mismatch (a 64-character
+SHA-256 hex string written bare fails in PHP too — that digest is spelled through
+the array form). A mismatch prints `Warning: peer_fingerprint match failure` and
+the open returns `false`. Two divergences from PHP: elephc's runtime does not know
+which builtin is on the stack, so the `<callee>(): ` prefix PHP puts in front of
+that sentence is missing, and the array form `['sha256' => '…']` is not read yet —
+only the bare-string spelling is.
+
+### `ssl` context options rustls cannot honour
+
+elephc's TLS is rustls, not OpenSSL, so part of PHP's `ssl` context surface has
+no equivalent. Every option below is **accepted and ignored** — that is a
+deliberate choice, not an oversight, and the reason differs per group. PHP itself
+accepts unknown `ssl` options silently, so the accept-and-ignore shape is what a
+program sees either way; what changes is whether the option does anything.
+
+Options PHP itself accepts without any observable effect on a TLS 1.3 client
+connection (measured on `php -n` 8.5.6 against a public TLS 1.3 endpoint: each of
+them completes the request unchanged, including a deliberately invalid value):
+
+| Option | Why it is inert in PHP too |
+|---|---|
+| `disable_compression` | TLS compression is gone; TLS 1.3 has no compression to disable. |
+| `no_ticket` | Session-ticket policy, not part of a single-shot client handshake. |
+| `reneg_limit`, `reneg_window`, `reneg_limit_callback` | Renegotiation was removed in TLS 1.3; rustls never implemented it. |
+| `dh_param`, `single_dh_use`, `ecdh_curve`, `rsa_key_size` | Server-side key-exchange parameters. `ecdh_curve => 'not-a-curve'` still connects. |
+| `honor_cipher_order` | A server preference. |
+| `passphrase` | Decrypts an encrypted `local_pk`; `rustls-pemfile` reads unencrypted PEM keys only, so an encrypted key fails the connect instead. |
+| `ciphers`, `security_level` | rustls does not consume OpenSSL cipher-list strings and picks its TLS 1.2/1.3 policy internally. |
+
+Options PHP **does** enforce and elephc does not. These are real behavioural
+gaps: a program that relies on them is less strict under elephc than under PHP.
+
+| Option | Measured PHP behaviour | Status in elephc |
+|---|---|---|
+| `peer_fingerprint` (array form) | The array form `['sha256' => '…']` is matched case-insensitively, and is how SHA-256 is spelled. | Only the bare-string form is read; the array form is ignored. See above. |
+| `SNI_enabled` | Enforced. `false` suppresses SNI, and a host that requires SNI then fails the handshake. | Not checked; rustls `ClientConfig::enable_sni` would express it. |
+| `verify_depth` | Enforced. `verify_depth => 1` refuses a two-link chain. | Not checked; rustls' webpki verifier has a fixed internal path budget it does not expose. |
+| `min_proto_version`, `max_proto_version` | Enforced. `max_proto_version => STREAM_CRYPTO_PROTO_TLSv1_1` refuses a TLS 1.3 peer; `min_proto_version => STREAM_CRYPTO_PROTO_TLSv1_3` lets one through. | Not checked. rustls supports TLS 1.2 and 1.3 only, so a TLS 1.0/1.1 bound has no meaning; the 1.2/1.3 pair is expressible through `builder_with_protocol_versions`. |
+| `crypto_method` | Selects the method for `stream_socket_enable_crypto()`. On the `https://` wrapper it had no measured effect (`STREAM_CRYPTO_METHOD_TLSv1_2_CLIENT` still completed a TLS 1.3 request). | Not read. |
+| `alpn_protocols` | Sent on the wire; the negotiated protocol surfaces in `stream_get_meta_data()['crypto']['alpn_protocol']`. | Not sent. rustls supports ALPN natively, but elephc's `stream_get_meta_data()` has no `crypto` key to report it through. |
+| `capture_peer_cert`, `capture_peer_cert_chain`, `peer_certificate`, `peer_certificate_chain` | The certificate is written back into the context as an `OpenSSLCertificate` object. | Not captured. rustls exposes the peer chain as DER, but elephc has no `OpenSSLCertificate` value to hand back. |
+
+### `http` and `ftp` context options
+
+`http.auto_decode` is **not** an `http` wrapper option in PHP. Measured on
+`php -n` 8.5.6 against a local server that answers `Content-Encoding: gzip`, the
+body comes back still gzip-compressed with the option set to `true`, to `false`,
+to `1`, and with the option absent — PHP's `http` wrapper never decodes a
+compressed response. elephc behaves the same way, so no work is owed here.
+
+`ftp.overwrite` governs FTP *writes*. elephc's `ftp://` wrapper is read-only
+(`RETR` only), so the option has nothing to act on and is ignored.
+
+`ftp.proxy` **is** honoured by PHP: with `['ftp' => ['proxy' => 'tcp://host:port']]`
+the connect target changes to the proxy (measured — the failure moves from
+`operation failed` to `Connection refused` at the proxy address). elephc ignores
+it and always connects to the URL's host. Only `ftp.resume_pos` is read.
 
 ## Stream contexts
 
@@ -229,8 +290,15 @@ its TLS 1.2/1.3 policy internally.
 
 Active stream-context consumers:
 
-- `fopen("http://...")` reads `http.method`, `http.header`, and `http.content`.
-- `fopen("https://...")` reads the `ssl` trust and peer-name options.
+- `fopen("http://...")` reads `http.method`, `http.header`, `http.content`,
+  `http.user_agent`, `http.protocol_version`, `http.request_fulluri`,
+  `http.ignore_errors`, `http.proxy`, `http.follow_location`,
+  `http.max_redirects`, and `http.timeout`. `http.timeout` follows PHP's
+  documented FLOAT contract: `2`, `2.5`, `"2.5"` and `true` are all read, the
+  sub-second part survives as microseconds, `0` fails the open immediately, and a
+  negative value means "wait forever".
+- `fopen("https://...")` reads the `ssl` trust and peer-name options, plus
+  `ssl.peer_fingerprint`.
 - `fopen("ftp://...")` reads `ftp.resume_pos`.
 - `file_get_contents()` over `https://` reads the same `ssl` options; over
   `ftp://` or `ftps://` it reads `ftp.resume_pos`.
@@ -238,7 +306,9 @@ Active stream-context consumers:
 - `stream_socket_enable_crypto()` reads TLS peer and client-certificate options.
   `ssl.peer_name` becomes the SNI the handshake sends and the name the certificate
   is checked against; without it the connection host is used, and a host that is an
-  IP address means no SNI is sent at all.
+  IP address means no SNI is sent at all. `ssl.peer_fingerprint` is read by the
+  `https://` wrapper only — an fd promoted to TLS through
+  `stream_socket_enable_crypto()` is not pinned.
 
 Contexts are independent values: creating or modifying one does not disturb another.
 `fopen()`, `file_get_contents()` and `readfile()` publish their own `$context` for the

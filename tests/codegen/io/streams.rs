@@ -6844,6 +6844,86 @@ echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
     assert_eq!(out, "[fgc over local https]");
 }
 
+/// Returns the SHA-1 of the test server's leaf certificate DER, lowercase hex.
+///
+/// This is the value a program would write as a bare `ssl.peer_fingerprint`
+/// string: php-src infers the digest from the string's LENGTH, and 40 hex
+/// characters means SHA-1.
+fn test_https_cert_sha1_hex() -> String {
+    let mut reader = TEST_HTTPS_CERT_PEM.as_bytes();
+    let der = rustls_pemfile::certs(&mut reader)
+        .next()
+        .expect("fingerprint test: a certificate in the fixture")
+        .expect("fingerprint test: parse the fixture certificate");
+    let mut hasher = <sha1::Sha1 as sha1::Digest>::new();
+    sha1::Digest::update(&mut hasher, der.as_ref());
+    let digest = sha1::Digest::finalize(hasher);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Verifies `ssl.peer_fingerprint` pins the peer's leaf certificate.
+///
+/// MEASURED on `php -n` 8.5.6: a matching pin lets the request through, and a
+/// mismatch prints `peer_fingerprint match failure` and then fails the open.
+/// A BARE string is matched by length — 32 hex is MD5 and 40 is SHA-1 — so the
+/// 40-character SHA-1 below is the spelling php recognizes without an array.
+///
+/// The pin is checked after the handshake, against the certificate the peer
+/// actually presented, which is why it composes with `verify_peer => "0"`:
+/// relaxing chain verification must not relax the pin.
+#[test]
+fn test_https_peer_fingerprint_pins_the_peer_certificate() {
+    let sha1 = test_https_cert_sha1_hex();
+    assert_eq!(sha1.len(), 40, "a SHA-1 hex digest is 40 characters");
+    let (_server, port) = spawn_https_server(b"pinned body");
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{sha1}");
+echo "[" . file_get_contents("https://127.0.0.1:{port}/page.txt") . "]";
+"#
+    ));
+    assert_eq!(out, "[pinned body]");
+}
+
+/// Verifies a WRONG `ssl.peer_fingerprint` refuses the connection.
+///
+/// Without this the option was accepted and never checked, which is the worst
+/// shape a security control can take: the program reads as pinned and is not.
+#[test]
+fn test_https_peer_fingerprint_mismatch_fails_the_open() {
+    let (_server, port) = spawn_https_server(b"never delivered");
+    let wrong = "0".repeat(40);
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{wrong}");
+echo (@file_get_contents("https://127.0.0.1:{port}/page.txt") === false) ? "refused" : "served";
+"#
+    ));
+    assert_eq!(out, "refused");
+}
+
+/// Verifies a bare 64-character SHA-256 pin is refused, as it is in php.
+///
+/// php-src recognizes only two BARE lengths (32 = MD5, 40 = SHA-1); a 64-hex
+/// string has no inferred algorithm and fails the match even when it is the
+/// correct SHA-256 of the peer certificate — MEASURED on `php -n` 8.5.6 against
+/// a public endpoint whose SHA-256 had been captured through `capture_peer_cert`.
+#[test]
+fn test_https_peer_fingerprint_bare_sha256_is_refused_like_php() {
+    let (_server, port) = spawn_https_server(b"never delivered");
+    let sha256_shaped = "a".repeat(64);
+    let out = compile_and_run(&format!(
+        r#"<?php
+stream_context_set_option(stream_context_get_default(), "ssl", "verify_peer", "0");
+stream_context_set_option(stream_context_get_default(), "ssl", "peer_fingerprint", "{sha256_shaped}");
+echo (@file_get_contents("https://127.0.0.1:{port}/page.txt") === false) ? "refused" : "served";
+"#
+    ));
+    assert_eq!(out, "refused");
+}
+
 /// `file_get_contents($url)` also succeeds when the runtime string uses
 /// `https://`, covering the non-literal dynamic URL dispatcher.
 #[test]

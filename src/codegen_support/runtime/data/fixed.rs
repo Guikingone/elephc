@@ -820,6 +820,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_elephc_tls_write_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_read_fn", 8, target));
     out.push_str(&comm_directive("_elephc_tls_close_fn", 8, target));
+    // _elephc_tls_peer_fingerprint_matches_fn: dispatched for ssl.peer_fingerprint
+    // once the handshake has produced a peer certificate. A null slot means the
+    // bridge is absent, and the pin then fails CLOSED — a fingerprint that cannot
+    // be checked must never look like one that matched.
+    out.push_str(&comm_directive(
+        "_elephc_tls_peer_fingerprint_matches_fn",
+        8,
+        target,
+    ));
     // _elephc_tls_attach_fd_fn: indirect pointer to elephc_tls_attach_fd,
     // used by stream_socket_enable_crypto to promote an existing TCP fd to
     // a TLS session without re-establishing the TCP connection. Same
@@ -1012,6 +1021,17 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(
         ".globl _ssl_verify_peer_name_key_str\n_ssl_verify_peer_name_key_str:\n    .ascii \"verify_peer_name\"\n",
     );
+    out.push_str(
+        ".globl _ssl_peer_fingerprint_key_str\n_ssl_peer_fingerprint_key_str:\n    .ascii \"peer_fingerprint\"\n",
+    );
+    // php-src's `php_openssl_capture_peer_certs` prints this exact sentence through
+    // `php_error_docref` when the pin does not match. elephc's runtime does not know
+    // which builtin is on the stack, so the `<callee>(): ` prefix php puts in front
+    // of it is missing; the sentence itself is verbatim.
+    out.push_str(&format!(
+        ".globl _diag_peer_fingerprint_mismatch\n_diag_peer_fingerprint_mismatch:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PEER_FINGERPRINT_MISMATCH_LINE
+    ));
     // Key literals + request fragments used by __rt_http_build_request.
     out.push_str(".globl _http_key_str\n_http_key_str:\n    .ascii \"http\"\n");
     out.push_str(

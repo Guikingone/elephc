@@ -690,6 +690,89 @@ unsafe fn attach_fd_inner(
     id
 }
 
+/// Reports whether the peer's leaf certificate matches an `ssl.peer_fingerprint`
+/// expectation written as a BARE hexadecimal string.
+///
+/// php-src infers the digest from the string's LENGTH, not from its content: 32
+/// hex characters mean MD5 and 40 mean SHA-1, and nothing else is recognized — a
+/// 64-character SHA-256 hex string written bare fails the match in php too
+/// (MEASURED on `php -n` 8.5.6; the array form `['sha256' => …]` is how SHA-256
+/// is spelled). The comparison is case-insensitive, also measured.
+///
+/// Returns `1` on a match, `0` on a mismatch, an unrecognized length, a missing
+/// peer certificate, or an unknown handle. Every non-`1` answer is php's
+/// "peer_fingerprint match failure", so the caller does not need to tell them
+/// apart.
+///
+/// # Safety
+///
+/// `hex_ptr` must point to `hex_len` readable bytes for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_peer_fingerprint_matches(
+    handle_id: i64,
+    hex_ptr: *const u8,
+    hex_len: usize,
+) -> i32 {
+    if hex_ptr.is_null() {
+        return 0;
+    }
+    let expected = std::slice::from_raw_parts(hex_ptr, hex_len);
+    let mut guard = handles().lock().unwrap();
+    let Some(entry) = guard.get_mut(&handle_id) else {
+        return 0;
+    };
+    // `elephc_tls_connect*` returns as soon as the TCP connection is up and
+    // leaves the handshake to the first read/write, so there is no peer
+    // certificate to hash yet. Drive it here — a pin has to be judged before the
+    // request goes out, and a handshake that cannot complete is not a match.
+    while entry.conn.is_handshaking() {
+        if entry.conn.complete_io(&mut entry.sock).is_err() {
+            return 0;
+        }
+    }
+    let Some(chain) = entry.conn.peer_certificates() else {
+        return 0;
+    };
+    let Some(leaf) = chain.first() else {
+        return 0;
+    };
+    let actual = match hex_len {
+        32 => {
+            use md5::Digest as _;
+            let mut hasher = md5::Md5::new();
+            hasher.update(leaf.as_ref());
+            hex_lower(hasher.finalize().as_slice())
+        }
+        40 => {
+            use sha1::Digest as _;
+            let mut hasher = sha1::Sha1::new();
+            hasher.update(leaf.as_ref());
+            hex_lower(hasher.finalize().as_slice())
+        }
+        // php recognizes no other bare-string length, so neither does this.
+        _ => return 0,
+    };
+    if actual.len() != expected.len() {
+        return 0;
+    }
+    let matches = actual
+        .as_bytes()
+        .iter()
+        .zip(expected.iter())
+        .all(|(a, b)| *a == b.to_ascii_lowercase());
+    i32::from(matches)
+}
+
+/// Formats a digest as lowercase hexadecimal.
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from_digit((byte >> 4) as u32, 16).unwrap_or('0'));
+        out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap_or('0'));
+    }
+    out
+}
+
 /// Send a TLS close_notify, drop the underlying socket, and remove the
 /// session from the handle table.
 #[no_mangle]
