@@ -83,21 +83,15 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
     let fwrite_label = ctx.next_label("zlib_deflate_fwrite");
     let close_label = ctx.next_label("zlib_deflate_close");
     let skip_label = ctx.next_label("zlib_deflate_skip_helpers");
+    let shape = crate::codegen::stream_filters::zlib::filter_shape(
+        &fwrite_label,
+        &close_label,
+        &skip_label,
+        level,
+    );
     match ctx.emitter.target.arch {
-        Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(
-            ctx.emitter,
-            &fwrite_label,
-            &close_label,
-            &skip_label,
-            level,
-        ),
-        Arch::X86_64 => crate::codegen::stream_filters::zlib::emit_x86_64(
-            ctx.emitter,
-            &fwrite_label,
-            &close_label,
-            &skip_label,
-            level,
-        ),
+        Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(ctx.emitter, shape),
+        Arch::X86_64 => crate::codegen::stream_filters::zlib::emit_x86_64(ctx.emitter, shape),
     }
     store_if_result(ctx, inst)
 }
@@ -125,6 +119,7 @@ pub(super) fn emit_zlib_inflate_attach_in_place(ctx: &mut FunctionContext<'_>) {
                 ctx.next_label("zlib_inflate_slurped"),
                 ctx.next_label("zlib_inflate_zero"),
                 ctx.next_label("zlib_inflate_zeroed"),
+                ctx.next_label("zlib_inflate_raw"),
                 ctx.next_label("zlib_inflate_write"),
                 ctx.next_label("zlib_inflate_written"),
             ];
@@ -140,6 +135,7 @@ pub(super) fn emit_zlib_inflate_attach_in_place(ctx: &mut FunctionContext<'_>) {
                 ctx.next_label("zlib_inflate_sized"),
                 ctx.next_label("zlib_inflate_zero"),
                 ctx.next_label("zlib_inflate_zeroed"),
+                ctx.next_label("zlib_inflate_raw"),
                 ctx.next_label("zlib_inflate_write"),
                 ctx.next_label("zlib_inflate_written"),
             ];
@@ -262,23 +258,184 @@ fn emit_adopt_attached_compress_descriptor(ctx: &mut FunctionContext<'_>) {
     box_stream_fd_or_false_result(ctx, "compress_adopt");
 }
 
-/// Opens `underlying` read-only through `__rt_fopen` and attaches the matching
-/// decompressor so subsequent reads see plain bytes, boxing the filtered
-/// descriptor as a resource. An empty path, or a failed open, boxes PHP false —
-/// matching PHP's `compress.zlib://` / `compress.bzip2://` wrapper behavior.
+/// What a `compress.*://` open does with the mode it was handed.
+///
+/// php's wrapper looks at the FIRST character only and refuses any `+`. MEASURED on
+/// `php -n` 8.5.6: `r`/`rb`/`rt`/`rw` read, `w`/`wb`/`a`/`ab` write, and `r+`/`w+`/`a+`/`x`/`c`
+/// all answer `false` — `rw` reads because its first character is `r`, and `c`, which the
+/// plain-file wrapper accepts, is refused here.
+#[derive(Clone, Copy, PartialEq)]
+enum CompressWrapperDirection {
+    /// Attach the decompressor: later reads see plain bytes.
+    Read,
+    /// Attach the compressor: later writes are deflated on the way out.
+    Write,
+    /// php refuses the mode outright and `fopen()` answers `false`.
+    Refused,
+}
+
+/// Classifies a `compress.*://` open mode the way php-src's zlib wrapper does.
+fn compress_wrapper_direction(mode: &str) -> CompressWrapperDirection {
+    if mode.contains('+') {
+        return CompressWrapperDirection::Refused;
+    }
+    match mode.as_bytes().first() {
+        Some(b'r') => CompressWrapperDirection::Read,
+        Some(b'w') | Some(b'a') => CompressWrapperDirection::Write,
+        _ => CompressWrapperDirection::Refused,
+    }
+}
+
+/// php's default `zlib.level`, and zlib's own `Z_DEFAULT_COMPRESSION`.
+const ZLIB_DEFAULT_LEVEL: i64 = -1;
+/// The highest level `deflateInit2_` accepts.
+const ZLIB_MAX_LEVEL: i64 = 9;
+
+/// Reads `zlib.level` out of the open's stream context and publishes it, clamped.
+///
+/// php reads this option in `ext/zlib/zlib_fopen_wrapper.c` and hands it straight to
+/// `deflateInit2_`. The value only exists as a live hash — `stream_context_create(['zlib' =>
+/// ['level' => 9]])` is never inspected at compile time — so the walk happens here, inside the
+/// context scope `begin_fopen_context_scope` has already published.
+///
+/// The clamp is a DELIBERATE divergence, taken for safety rather than fidelity: php passes an
+/// out-of-range level through, `deflateInit2_` refuses it, and the resulting stream writes zero
+/// bytes (MEASURED: `zlib.level => 12` leaves a 0-byte file and `fwrite()` answers 0). elephc's
+/// deflate helpers loop until zlib consumes the input, so a stream whose `state` never
+/// initialized would spin forever instead. Clamping keeps the absurd input producing a correct
+/// file; every level php actually accepts, -1 through 9, passes through untouched.
+fn emit_publish_zlib_wrapper_level(ctx: &mut FunctionContext<'_>) {
+    let (wrapper_label, wrapper_len) = ctx.data.add_string(b"zlib");
+    let (option_label, option_len) = ctx.data.add_string(b"level");
+    let capped_label = ctx.next_label("zlib_level_capped");
+    let clamped_label = ctx.next_label("zlib_level_clamped");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", ZLIB_DEFAULT_LEVEL);
+            ctx.emitter.instruction("str x9, [sp, #0]");                        // a missing option keeps Z_DEFAULT_COMPRESSION
+            abi::emit_symbol_address(ctx.emitter, "x0", &wrapper_label);
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", wrapper_len));             // strlen("zlib")
+            abi::emit_symbol_address(ctx.emitter, "x2", &option_label);
+            ctx.emitter
+                .instruction(&format!("mov x3, #{}", option_len));              // strlen("level")
+            ctx.emitter.instruction("add x4, sp, #0");                          // out address for the resolved level
+            abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+            // The level rides in x11, NOT x9: `emit_store_reg_to_symbol` takes x9 for the
+            // symbol address, so storing FROM x9 publishes the ADDRESS instead of the value —
+            // which `deflateInit2_` rejects, leaving a stream whose write loop never finishes.
+            ctx.emitter.instruction("ldr x11, [sp, #0]");                       // the level the context named, or the default
+            ctx.emitter
+                .instruction(&format!("cmp x11, #{}", ZLIB_MAX_LEVEL));         // above zlib's ceiling?
+            ctx.emitter
+                .instruction(&format!("b.le {}", capped_label));
+            abi::emit_load_int_immediate(ctx.emitter, "x11", ZLIB_MAX_LEVEL);
+            ctx.emitter.label(&capped_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x10", ZLIB_DEFAULT_LEVEL);
+            ctx.emitter.instruction("cmp x11, x10");                            // below zlib's floor?
+            ctx.emitter
+                .instruction(&format!("b.ge {}", clamped_label));
+            ctx.emitter.instruction("mov x11, x10");                            // clamp back to Z_DEFAULT_COMPRESSION
+            ctx.emitter.label(&clamped_label);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "x11", "_zlib_wrapper_level", 0);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rax", ZLIB_DEFAULT_LEVEL);
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // a missing option keeps Z_DEFAULT_COMPRESSION
+            abi::emit_symbol_address(ctx.emitter, "rdi", &wrapper_label);
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", wrapper_len));             // strlen("zlib")
+            abi::emit_symbol_address(ctx.emitter, "rdx", &option_label);
+            ctx.emitter
+                .instruction(&format!("mov rcx, {}", option_len));              // strlen("level")
+            ctx.emitter.instruction("mov r8, rsp");                             // out address for the resolved level
+            abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // the level the context named, or the default
+            ctx.emitter
+                .instruction(&format!("cmp rax, {}", ZLIB_MAX_LEVEL));          // above zlib's ceiling?
+            ctx.emitter
+                .instruction(&format!("jle {}", capped_label));
+            ctx.emitter
+                .instruction(&format!("mov rax, {}", ZLIB_MAX_LEVEL));
+            ctx.emitter.label(&capped_label);
+            ctx.emitter
+                .instruction(&format!("cmp rax, {}", ZLIB_DEFAULT_LEVEL));      // below zlib's floor?
+            ctx.emitter
+                .instruction(&format!("jge {}", clamped_label));
+            ctx.emitter
+                .instruction(&format!("mov rax, {}", ZLIB_DEFAULT_LEVEL));      // clamp back to Z_DEFAULT_COMPRESSION
+            ctx.emitter.label(&clamped_label);
+            abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_zlib_wrapper_level", 0);
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+}
+
+/// Attaches the gzip deflate transform to the descriptor already in the result register.
+///
+/// php's `compress.zlib://` is `gzopen`-backed, so what lands on disk is a GZIP member — header,
+/// deflate body and CRC/ISIZE trailer — not the raw deflate the `zlib.deflate` FILTER writes.
+/// Everything else is shared with that filter: the same inline `fwrite`/close helpers, the same
+/// per-descriptor `_zstream_handles` slot, and the same `_stream_write_filters` id, so
+/// `fwrite()` and `fclose()` need no new dispatch.
+pub(super) fn emit_zlib_deflate_wrapper_attach_in_place(ctx: &mut FunctionContext<'_>) {
+    let fwrite_label = ctx.next_label("zlib_gz_fwrite");
+    let close_label = ctx.next_label("zlib_gz_close");
+    let skip_label = ctx.next_label("zlib_gz_skip_helpers");
+    let shape = crate::codegen::stream_filters::zlib::DeflateShape {
+        fwrite_label: &fwrite_label,
+        close_label: &close_label,
+        skip_label: &skip_label,
+        level: crate::codegen::stream_filters::zlib::DeflateLevel::Slot("_zlib_wrapper_level"),
+        window_bits: 31,
+        sync_flush_on_close: true,
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(ctx.emitter, shape),
+        Arch::X86_64 => crate::codegen::stream_filters::zlib::emit_x86_64(ctx.emitter, shape),
+    }
+}
+
+/// Opens `underlying` through `__rt_fopen` and attaches the transform its DIRECTION selects,
+/// boxing the filtered descriptor as a resource.
+///
+/// An empty path, a failed open, or a mode php's wrapper refuses all box PHP false. The write
+/// direction exists for `compress.zlib://` only: `compress.bzip2://` stays read-only, which is
+/// a measured gap and not an oversight.
 pub(super) fn emit_literal_compress_wrapper_fopen_result(
     ctx: &mut FunctionContext<'_>,
     underlying: &str,
     full_uri: &str,
     kind: CompressWrapper,
+    mode: &str,
 ) -> Result<()> {
-    if underlying.is_empty() {
+    let mut direction = compress_wrapper_direction(mode);
+    if direction == CompressWrapperDirection::Write && matches!(kind, CompressWrapper::Bzip2) {
+        // bzip2 has no write wrapper here yet; keep the pre-existing read attach rather than
+        // silently writing plain bytes through a `compress.bzip2://` handle.
+        direction = CompressWrapperDirection::Read;
+    }
+    if underlying.is_empty() || direction == CompressWrapperDirection::Refused {
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen");
         return Ok(());
     }
+    let writing = direction == CompressWrapperDirection::Write;
+    if writing {
+        // The level has to be read BEFORE the open: `__rt_fopen` returns the descriptor in the
+        // very register the option walk would clobber, and the context scope is live either way.
+        emit_publish_zlib_wrapper_level(ctx);
+    }
     let (path_label, path_len) = ctx.data.add_string(underlying.as_bytes());
-    let (mode_label, mode_len) = ctx.data.add_string(b"r");
+    let open_mode: &[u8] = if !writing {
+        b"r"
+    } else if mode.starts_with('a') {
+        b"a"
+    } else {
+        b"w"
+    };
+    let (mode_label, mode_len) = ctx.data.add_string(open_mode);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &path_label);
@@ -314,7 +471,11 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
     // `emit_runtime_fopen_literal_result`'s box-then-record order.
     match kind {
         CompressWrapper::Zlib => {
-            emit_zlib_inflate_attach_in_place(ctx);
+            if writing {
+                emit_zlib_deflate_wrapper_attach_in_place(ctx);
+            } else {
+                emit_zlib_inflate_attach_in_place(ctx);
+            }
             emit_adopt_attached_compress_descriptor(ctx);
             emit_record_stream_meta_after_boxed_literal(ctx, 8, full_uri);
         }

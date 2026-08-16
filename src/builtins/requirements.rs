@@ -62,7 +62,11 @@ pub fn file_get_contents_requirements(
     }
 }
 
-/// Resolves PHAR libraries needed by `file_put_contents()` from its filename expression.
+/// Resolves PHAR and compression libraries needed by `file_put_contents()` from its filename.
+///
+/// A `compress.zlib://` filename compresses through libz exactly as `fopen()` does, so it needs
+/// the same `-lz` the fopen route already asks for. Without this the deflate symbols the write
+/// route emits reach the linker unresolved.
 pub fn file_put_contents_requirements(
     input: &BuiltinRequirementInput<'_>,
 ) -> Vec<BuiltinRequirement> {
@@ -71,6 +75,9 @@ pub fn file_put_contents_requirements(
             BuiltinRequirement::Bridge("elephc_phar"),
             BuiltinRequirement::Bridge("elephc_crypto"),
         ],
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("compress.zlib://") => {
+            vec![BuiltinRequirement::SystemLibrary("z")]
+        }
         Some(ExprKind::StringLiteral(_)) => Vec::new(),
         _ => vec![BuiltinRequirement::Bridge("elephc_phar")],
     }

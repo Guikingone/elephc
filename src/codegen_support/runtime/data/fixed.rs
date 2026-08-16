@@ -1311,6 +1311,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _stream_current_context_handle: borrowed handle selected by the active
     // stream opener for user-wrapper `$this->context` injection.
     out.push_str(&comm_directive("_stream_current_context_handle", 8, target));
+    // _zlib_wrapper_level: the `zlib.level` the active `compress.zlib://` open read
+    // out of its stream context, clamped to zlib's -1..9. The deflate initialization
+    // is emitted inline with the descriptor already in the result register and no
+    // frame of its own, so a run-time level cannot travel in a register or a stack
+    // slot; the opener publishes it here and the initialization loads it.
+    out.push_str(&comm_directive("_zlib_wrapper_level", 8, target));
     // _last_dir_handle: the opaque registry handle of the directory stream most
     // recently opened by `opendir()` — which `dir()` is built on, so it feeds the
     // slot too. `readdir()`/`rewinddir()`/`closedir()` called with no argument, or

@@ -22,6 +22,15 @@ pub(crate) fn lower_file_put_contents(
         if path_literal.starts_with("phar://") {
             return lower_literal_phar_file_put_contents(ctx, inst, path_literal, data);
         }
+        if let Some(underlying) = path_literal.strip_prefix("compress.zlib://") {
+            return lower_literal_compress_zlib_file_put_contents(
+                ctx,
+                inst,
+                path_literal,
+                underlying,
+                data,
+            );
+        }
     }
     let helper = if path_literal.is_none() {
         publish_dynamic_phar_write_function_pointer(ctx);
@@ -50,6 +59,97 @@ pub(crate) fn lower_file_put_contents(
     }
     // php answers `int|false`, and the runtime's -1 is the failure sentinel; the box is what
     // lets `file_put_contents($p, $d) === false` — the manual's own failure test — fire.
+    box_negative_int_or_false_result(ctx, "fpc");
+    store_if_result(ctx, inst)
+}
+
+/// Writes a `compress.zlib://` filename as the gzip member php's wrapper produces.
+///
+/// The one-shot `__rt_file_put_contents` writer has nowhere to attach a deflate stream, so it
+/// used to create a file literally NAMED `compress.zlib://out.gz` — the scheme was never
+/// recognised here at all. This route is the same open/write/close php performs internally,
+/// reusing the wrapper open the `fopen()` path already grew: the gzip framing, the context's
+/// `zlib.level`, and the sync-flushed tail all come from that one place, so the two entry points
+/// cannot drift.
+///
+/// php answers the INPUT byte count, not the compressed one (MEASURED on `php -n` 8.5.6: 1160
+/// for a 1160-byte payload that lands as 66 bytes), which is exactly what `__rt_fwrite` returns
+/// through the deflate helper. A failed open leaves -1 for the shared negative-int-or-false
+/// boxing, so `file_put_contents(...) === false` still fires.
+///
+/// `$flags` is read for `FILE_APPEND` the same way the plain writer reads it, but only when it
+/// is a compile-time constant; php appends a SECOND gzip member in that case, which is what
+/// opening the underlying file in `a` produces.
+fn lower_literal_compress_zlib_file_put_contents(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    uri: &str,
+    underlying: &str,
+    data: ValueId,
+) -> Result<()> {
+    let appending = match inst.operands.get(2).copied() {
+        Some(flags) => optional_const_i64_operand(ctx, flags)?.is_some_and(|f| f & 8 != 0),
+        None => false,
+    };
+    let mode = if appending { "a" } else { "w" };
+    let done = ctx.next_label("fpc_zlib_done");
+    let failed = ctx.next_label("fpc_zlib_failed");
+    begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
+    emit_literal_compress_wrapper_fopen_result(ctx, underlying, uri, CompressWrapper::Zlib, mode)?;
+    finish_fopen_context_scope(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", failed));               // a failed open answers php false
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // the opaque stream handle
+            ctx.emitter.instruction("sub sp, sp, #32");
+            ctx.emitter.instruction("str x9, [sp, #0]");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the handle; the payload is already in x1/x2
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // deflates through _stream_write_filters
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // php reports the INPUT byte count
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the deflate tail is keyed by DESCRIPTOR
+            super::close_crypto_arch::emit_zlib_flush_on_close_for_current_fd(ctx);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("ldr x0, [sp, #8]");                        // the count is this route's raw result
+            ctx.emitter.instruction("add sp, sp, #32");
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov x0, #-1");                             // the shared failure sentinel
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", failed));                // a failed open answers php false
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // the opaque stream handle
+            ctx.emitter.instruction("sub rsp, 32");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r9");
+            load_string_to_result(ctx, data, "file_put_contents data")?;
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the handle
+            ctx.emitter.instruction("mov rsi, rax");                            // the data pointer; the length is already in rdx
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite");                   // deflates through _stream_write_filters
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // php reports the INPUT byte count
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // the deflate tail is keyed by DESCRIPTOR
+            super::close_crypto_arch::emit_zlib_flush_on_close_for_current_fd(ctx);
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the count is this route's raw result
+            ctx.emitter.instruction("add rsp, 32");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&failed);
+            ctx.emitter.instruction("mov rax, -1");                             // the shared failure sentinel
+            ctx.emitter.label(&done);
+        }
+    }
     box_negative_int_or_false_result(ctx, "fpc");
     store_if_result(ctx, inst)
 }

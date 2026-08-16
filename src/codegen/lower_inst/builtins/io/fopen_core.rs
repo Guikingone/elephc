@@ -21,18 +21,26 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         if path.starts_with("php://filter/") {
             emit_literal_php_filter_fopen_result(ctx, open_mode, path, "fopen")?;
         } else if let Some(underlying) = path.strip_prefix("compress.zlib://") {
+            // A mode that is not a compile-time literal reads: it is the overwhelmingly common
+            // open, and it is also what this branch did before it knew about `$mode` at all.
+            let mode_text =
+                optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
                 underlying,
                 path,
                 CompressWrapper::Zlib,
+                &mode_text,
             )?;
         } else if let Some(underlying) = path.strip_prefix("compress.bzip2://") {
+            let mode_text =
+                optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
                 underlying,
                 path,
                 CompressWrapper::Bzip2,
+                &mode_text,
             )?;
         } else {
             emit_literal_fopen_result(ctx, open_mode, path)?;

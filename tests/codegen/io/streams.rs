@@ -2619,6 +2619,227 @@ fclose($r);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `compress.zlib://` was READ-ONLY: an open in `w` mode silently wrote plain bytes.
+///
+/// php's wrapper is `gzopen`-backed and writes in BOTH directions. `fopen(..., 'w')` +
+/// `fwrite()` produces a real GZIP member — header, deflate body, CRC/ISIZE trailer — that
+/// `gzdecode()` and `gunzip` both read. elephc opened the underlying file read-only whatever the
+/// mode said, attached the DEcompressor, and let the writes through untouched, so the file was
+/// never compressed at all and the `.gz` name was a lie.
+///
+/// MEASURED on `php -n` 8.5.6, writing `"abc"` through the wrapper:
+///
+/// ```text
+/// bin2hex(substr($raw, 0, 4))     1f8b0800
+/// bin2hex(substr($raw, 9, 1))     13          <- the OS byte, PLATFORM-dependent
+/// bin2hex(substr($raw, 10))       4a4c4a06000000ffff0300c241243503000000
+/// strlen($raw)                    29
+/// gzinflate(substr($raw, 10, -8)) "abc"
+/// fwrite("ab") + fwrite("c")      byte-identical to the single write
+/// fopen("compress.zlib://…","r+") false
+/// fopen("compress.zlib://…","x")  false
+/// ```
+///
+/// The assertion deliberately skips bytes 4..10. Four of them are MTIME and one is zlib's
+/// `OS_CODE`, which is `0x13` on Apple and `0x03` on Linux — pinning the whole header would pass
+/// on the macOS shards and fail on the x86 ones for a reason that has nothing to do with this
+/// change. Everything that carries meaning is pinned: the magic, the deflate body, and the
+/// CRC32/ISIZE trailer.
+///
+/// The body hex is worth reading. `4a4c4a0600` is `gzdeflate("abc")` with BFINAL clear (`0x4a`
+/// where `gzdeflate` has `0x4b`), then `0000ffff` is a `Z_SYNC_FLUSH` marker, then `0300` is the
+/// empty final block from `Z_FINISH`. php's wrapper flushes twice like that, which is why its
+/// output is six bytes longer than `gzencode()` of the same payload — and why the close helper
+/// grew a sync pass that the `zlib.deflate` FILTER must not have. The filter's own output stays
+/// `4b4c4a0600`, measured, and its test above still pins it.
+///
+/// The mode rule is php's own: the wrapper reads the FIRST character only and refuses any `+`,
+/// so `rw` READS and `x`/`c` are refused outright.
+///
+/// The read half had to move for the round trip to close: elephc's attach inflated with raw
+/// windowBits, which cannot read a gzip header, so a file this very test writes was unreadable
+/// through the wrapper that wrote it. The attach now picks its framing from the payload's two
+/// magic bytes, which keeps the `zlib.deflate` pairing above working unchanged.
+#[test]
+fn test_compress_zlib_wrapper_writes_a_real_gzip_member() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("compress.zlib://czw.gz", "w");
+var_dump($h !== false);
+var_dump(fwrite($h, "abc"));
+fclose($h);
+$raw = file_get_contents("czw.gz");
+echo "head=", bin2hex(substr($raw, 0, 4)), "\n";
+echo "body=", bin2hex(substr($raw, 10)), "\n";
+var_dump(strlen($raw));
+var_dump(gzinflate(substr($raw, 10, -8)) === "abc");
+
+$m = fopen("compress.zlib://czm.gz", "w");
+fwrite($m, "ab");
+fwrite($m, "c");
+fclose($m);
+var_dump(file_get_contents("czm.gz") === $raw);
+
+$r = fopen("compress.zlib://czw.gz", "r");
+var_dump(stream_get_contents($r) === "abc");
+fclose($r);
+
+var_dump(@fopen("compress.zlib://czw.gz", "r+"));
+var_dump(@fopen("compress.zlib://czx.gz", "x"));
+unlink("czw.gz");
+unlink("czm.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\n",
+            "int(3)\n",
+            "head=1f8b0800\n",
+            "body=4a4c4a06000000ffff0300c241243503000000\n",
+            "int(29)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+        ),
+        "the wrapper writes php's own gzip bytes, and reads them back through itself"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `compress.zlib://` wrapper ignored the stream context's `zlib.level`.
+///
+/// php reads it in `ext/zlib/zlib_fopen_wrapper.c` and hands it straight to `deflateInit2_`, so
+/// the option is observable in the output SIZE. MEASURED on `php -n` 8.5.6 over
+/// `str_repeat("The quick brown fox jumps over the lazy dog. ", 200)`:
+///
+/// ```text
+/// zlib.level => 1     147 bytes
+/// zlib.level => 9     113 bytes
+/// no context          113 bytes    (Z_DEFAULT_COMPRESSION, -1, which is level 6's tree here)
+/// ```
+///
+/// The level is only knowable at RUN time: `stream_context_create(['zlib' => ['level' => 9]])`
+/// builds a live hash that the compiler never reads, and the `$context` reaching
+/// `file_put_contents()` is a variable. The opener walks the context and publishes the answer to
+/// `_zlib_wrapper_level`, which the inline deflate initialization loads.
+///
+/// An out-of-range level is a DELIBERATE divergence: php passes it through, `deflateInit2_`
+/// refuses it, and the stream then writes nothing at all (measured: `level => 12` leaves a
+/// 0-byte file and `fwrite()` answers 0). elephc's deflate helpers loop until zlib consumes
+/// their input, so an uninitialized stream would spin forever instead of writing zero bytes.
+/// Clamping to -1..9 keeps the absurd input producing a correct file; every level php accepts
+/// passes through untouched, which is what the two sizes above prove.
+#[test]
+fn test_compress_zlib_wrapper_honours_the_context_zlib_level() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("The quick brown fox jumps over the lazy dog. ", 200);
+$fast = stream_context_create(["zlib" => ["level" => 1]]);
+$best = stream_context_create(["zlib" => ["level" => 9]]);
+
+$h = fopen("compress.zlib://lvl1.gz", "w", false, $fast);
+fwrite($h, $data);
+fclose($h);
+$h = fopen("compress.zlib://lvl9.gz", "w", false, $best);
+fwrite($h, $data);
+fclose($h);
+$h = fopen("compress.zlib://lvld.gz", "w");
+fwrite($h, $data);
+fclose($h);
+
+var_dump(filesize("lvl1.gz"));
+var_dump(filesize("lvl9.gz"));
+var_dump(filesize("lvld.gz"));
+
+$r = fopen("compress.zlib://lvl1.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+$r = fopen("compress.zlib://lvl9.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+
+unlink("lvl1.gz"); unlink("lvl9.gz"); unlink("lvld.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(147)\n",
+            "int(113)\n",
+            "int(113)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+        ),
+        "level 1 and level 9 disagree by php's own byte counts, and both still read back"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `file_put_contents("compress.zlib://out.gz", …)` created a file NAMED after the URL.
+///
+/// The one-shot writer never recognised the scheme, so the wrapper prefix became part of the
+/// filename and the bytes landed uncompressed. php opens the wrapper, deflates through it and
+/// closes, answering the INPUT byte count — not the compressed one.
+///
+/// MEASURED on `php -n` 8.5.6:
+///
+/// ```text
+/// file_put_contents("compress.zlib://fpc.gz", $data)   1175   <- strlen($data)
+/// bin2hex(substr($raw, 0, 4))                          1f8b0800
+/// gzinflate(substr($raw, 10, -8)) === $data            true
+/// stream_get_contents(fopen("compress.zlib://…","r"))  === $data
+/// zlib.level => 1 / => 9                               147 / 113 bytes
+/// file_put_contents("compress.zlib://nodir/x.gz", "x") false
+/// ```
+///
+/// The route deliberately reuses the `fopen()` wrapper open rather than growing a second
+/// compressor: the framing, the context's `zlib.level` and the sync-flushed tail all come from
+/// one place, so the two entry points cannot drift apart.
+#[test]
+fn test_file_put_contents_writes_through_the_compress_zlib_wrapper() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("elephc file_put_contents through compress.zlib\n", 25);
+var_dump(file_put_contents("compress.zlib://fpc.gz", $data));
+$raw = file_get_contents("fpc.gz");
+echo "head=", bin2hex(substr($raw, 0, 4)), "\n";
+var_dump(strlen($raw) < strlen($data));
+var_dump(gzinflate(substr($raw, 10, -8)) === $data);
+$r = fopen("compress.zlib://fpc.gz", "r");
+var_dump(stream_get_contents($r) === $data);
+fclose($r);
+
+$ctx1 = stream_context_create(["zlib" => ["level" => 1]]);
+$ctx9 = stream_context_create(["zlib" => ["level" => 9]]);
+$big = str_repeat("The quick brown fox jumps over the lazy dog. ", 200);
+file_put_contents("compress.zlib://f1.gz", $big, 0, $ctx1);
+file_put_contents("compress.zlib://f9.gz", $big, 0, $ctx9);
+var_dump(filesize("f1.gz"));
+var_dump(filesize("f9.gz"));
+var_dump(@file_put_contents("compress.zlib://nodir/x.gz", "x"));
+unlink("fpc.gz"); unlink("f1.gz"); unlink("f9.gz");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(1175)\n",
+            "head=1f8b0800\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "int(147)\n",
+            "int(113)\n",
+            "bool(false)\n",
+        ),
+        "the one-shot writer now goes through the wrapper, level and all"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for compress bzip2 wrapper decompresses file.
 #[test]
 fn test_compress_bzip2_wrapper_decompresses_file() {
