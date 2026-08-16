@@ -29,7 +29,7 @@ use crate::parser::ast::{
 };
 
 /// The PHP functions whose lowering needs the scanf prelude.
-const SCANF_FUNCTIONS: &[&str] = &["sscanf", "fscanf"];
+pub(crate) const SCANF_FUNCTIONS: &[&str] = &["sscanf", "fscanf"];
 
 /// Returns whether any top-level statement references `sscanf`/`fscanf`, so the prelude
 /// must be injected ahead of user code.
@@ -54,6 +54,20 @@ fn literal_is_scanf(value: &str) -> bool {
     SCANF_FUNCTIONS
         .iter()
         .any(|candidate| value.eq_ignore_ascii_case(candidate))
+}
+
+/// Returns whether a METHOD name is one the scanf engine serves.
+///
+/// `SplFileObject::fscanf()` is compiled from a synthetic body the CHECKER materializes, long
+/// after this walk runs, and that body calls `sscanf()`. Detecting only the free-function
+/// syntax therefore left `$file->fscanf(...)` compiling a call to an engine that was never
+/// injected — which is a jump to an absent symbol, not a diagnostic. Matching the method name
+/// here is deliberately coarse: an unrelated class with its own `fscanf()` method only pays for
+/// a few hundred lines of unreachable PHP.
+fn method_is_scanf(method: &str) -> bool {
+    SCANF_FUNCTIONS
+        .iter()
+        .any(|candidate| method.eq_ignore_ascii_case(candidate))
 }
 
 /// Returns whether a first-class-callable target references a scanf builtin via a function
@@ -143,9 +157,19 @@ fn expr_refs_scanf(expr: &Expr) -> bool {
         ExprKind::FunctionCall { name, args } => {
             name_is_scanf(name) || args.iter().any(expr_refs_scanf)
         }
-        ExprKind::MethodCall { object, args, .. }
-        | ExprKind::NullsafeMethodCall { object, args, .. } => {
-            expr_refs_scanf(object) || args.iter().any(expr_refs_scanf)
+        ExprKind::MethodCall {
+            object,
+            method,
+            args,
+            ..
+        }
+        | ExprKind::NullsafeMethodCall {
+            object,
+            method,
+            args,
+            ..
+        } => {
+            method_is_scanf(method) || expr_refs_scanf(object) || args.iter().any(expr_refs_scanf)
         }
         ExprKind::NullsafeDynamicMethodCall {
             object,
@@ -154,7 +178,9 @@ fn expr_refs_scanf(expr: &Expr) -> bool {
         } => {
             expr_refs_scanf(object) || expr_refs_scanf(method) || args.iter().any(expr_refs_scanf)
         }
-        ExprKind::StaticMethodCall { args, .. } => args.iter().any(expr_refs_scanf),
+        ExprKind::StaticMethodCall { method, args, .. } => {
+            method_is_scanf(method) || args.iter().any(expr_refs_scanf)
+        }
         ExprKind::FirstClassCallable(target) => callable_target_refs_scanf(target),
 
         ExprKind::BinaryOp { left, right, .. } => expr_refs_scanf(left) || expr_refs_scanf(right),

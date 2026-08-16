@@ -3858,6 +3858,11 @@ unlink("stream.txt");
 }
 
 /// Verifies `SplFileObject` lightweight state getters and byte reads lower to EIR.
+///
+/// The `fgetc()` pair reads `bb`, not `aa`: `getCurrentLine()` is php's ALIAS of `fgets()`
+/// and CONSUMES the first line. This assertion read `aa` while elephc answered the cached
+/// current line without advancing the stream — measured on `php -n` 8.5.6, this exact
+/// program prints `aa\n|bb|FE|8|7|`.
 #[test]
 fn ir_backend_handles_spl_file_object_state_helpers() {
     let source = r#"<?php
@@ -3884,7 +3889,7 @@ unlink("meta.txt");
 "#;
     assert_eq!(
         compile_and_run_ir_backend("spl_file_object_state_helpers", source),
-        "aa\n|aa|FE|8|7|"
+        "aa\n|bb|FE|8|7|"
     );
 }
 

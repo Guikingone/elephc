@@ -696,3 +696,109 @@ unlink("ctl.csv");
     assert_eq!(out, "[\"a\",\"b\",\"c\"]|[\"a\",\"b\",\"c\"]|[\"a;b;c\"]\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `SplFileObject::fscanf()` scans one line through php's scanf engine.
+///
+/// The method did not exist: `$f->fscanf('%d %s')` was `Undefined method`. It reads a line the
+/// way `fgets()` does and hands it to the shared engine, so a `%d` field comes back as an INT.
+///
+/// The LINE NUMBER rule is php's own and is NOT `fgets()`'s: measured on `php -n` 8.5.6, the
+/// FIRST `fscanf()` of a fresh object leaves `key()` where it was and only later reads advance
+/// it, so on a three-line file the keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the
+/// two shows it is the first READ that is special rather than the method.
+#[test]
+fn test_spl_file_object_fscanf_scans_one_line_per_call() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("scan.txt", "1 a\n2 b\n3 c\n");
+$f = new SplFileObject("scan.txt", "r");
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+echo json_encode($f->fscanf("%d %s")), " key=", $f->key(), "\n";
+$g = new SplFileObject("scan.txt", "r");
+$g->fgets();
+echo "after fgets key=", $g->key(), "\n";
+$g->fscanf("%d %s");
+echo "after fscanf key=", $g->key(), "\n";
+unlink("scan.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "[1,\"a\"] key=0\n[2,\"b\"] key=1\n[3,\"c\"] key=2\nnull key=3\n\
+         after fgets key=1\nafter fscanf key=2\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a file object at end of file ANSWERS an empty line once, then refuses.
+///
+/// `SplFileObject::fgets()` never returns `false` in php: measured on `php -n` 8.5.6 over
+/// `"a\nbb\n"`, it answers `'a\n'`, `'bb\n'`, then `''` — `key()` advancing each time, `eof()`
+/// true after the empty one — and only the call AFTER that throws
+/// `RuntimeException: Cannot read from file <path>`. elephc answered `false` for ever and
+/// stopped counting, so a `!== false` loop terminated where php's throws.
+///
+/// The empty-line step exists because `feof()` only becomes true once a read has hit the end,
+/// which is also why the guard fires on the following call rather than this one.
+#[test]
+fn test_spl_file_object_read_past_eof_answers_empty_then_throws() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("eof.txt", "a\nbb\n");
+$f = new SplFileObject("eof.txt", "r");
+for ($i = 0; $i < 4; $i++) {
+    try {
+        $line = $f->fgets();
+    } catch (\RuntimeException $e) {
+        echo $i, ": THROW ", $e->getMessage(), "\n";
+        continue;
+    }
+    echo $i, ": ", json_encode($line), " key=", $f->key(), " eof=", json_encode($f->eof()), "\n";
+}
+unlink("eof.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "0: \"a\\n\" key=1 eof=false\n\
+         1: \"bb\\n\" key=2 eof=false\n\
+         2: \"\" key=3 eof=true\n\
+         3: THROW Cannot read from file eof.txt\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `getCurrentLine()` is php's ALIAS of `fgets()` and therefore CONSUMES the line.
+///
+/// elephc answered the cached current line and left the stream where it was, so
+/// `getCurrentLine()` followed by `fgetc()` read the FIRST line's bytes twice. Measured on
+/// `php -n` 8.5.6 over `"aa\nbb\n"`: the line comes back, `key()` advances, the next read
+/// starts at the second line, and once `feof()` holds the call throws like `fgets()` does.
+#[test]
+fn test_spl_file_object_get_current_line_is_an_alias_of_fgets() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("cur.txt", "aa\nbb\n");
+$f = new SplFileObject("cur.txt", "r");
+echo json_encode($f->getCurrentLine()), " key=", $f->key(), "\n";
+echo json_encode($f->fgetc()), $f->fgetc(), "\n";
+$g = new SplFileObject("cur.txt", "r");
+$g->getCurrentLine();
+$g->getCurrentLine();
+echo json_encode($g->getCurrentLine()), " key=", $g->key(), "\n";
+try {
+    $g->getCurrentLine();
+} catch (\RuntimeException $e) {
+    echo "THROW ", $e->getMessage(), "\n";
+}
+unlink("cur.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "\"aa\\n\" key=1\n\"b\"b\n\"\" key=3\nTHROW Cannot read from file cur.txt\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

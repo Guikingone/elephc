@@ -9660,7 +9660,11 @@ echo function_exists("sprintf"); echo is_callable("printf"); echo function_exist
     );
 }
 
-/// Verifies eval `sscanf()` returns indexed string matches through direct and callable paths.
+/// Verifies eval `sscanf()` returns php-typed matches through direct and callable paths.
+///
+/// `-2.5e3` reads back as `-2500`, not as the matched text: `%f` yields a FLOAT, so echoing
+/// it prints php's float rendering. The old assertion held the scanned SLICE, which is what
+/// the interpreter's scanf subset used to answer — `php -n` (8.5.6) gives `float(-2500)`.
 #[test]
 fn test_eval_dispatches_sscanf_builtin_call() {
     let out = compile_and_run(
@@ -9676,7 +9680,7 @@ echo $spread[0] . ":";
 echo function_exists("sscanf");');
 "#,
     );
-    assert_eq!(out, "John:1.5:30:-25:-2.5e3:ok:1");
+    assert_eq!(out, "John:1.5:30:-25:-2500:ok:1");
 }
 
 /// Verifies eval `min()` and `max()` select numeric values directly and through callables.

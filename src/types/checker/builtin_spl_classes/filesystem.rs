@@ -13,7 +13,8 @@
 use std::collections::HashMap;
 
 use crate::parser::ast::{
-    BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr, Visibility,
+    BinOp, CastType, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, TypeExpr,
+    Visibility,
 };
 use crate::types::traits::FlattenedClass;
 
@@ -248,6 +249,13 @@ fn spl_file_object_properties() -> Vec<ClassProperty> {
         // (with DROP_NEW_LINE) steps OVER those without renumbering the rest, so the flag is
         // recorded per record rather than the record being dropped.
         protected_storage_property("csvBlank", array_type()),
+        // Whether any line has been consumed through `fgets()`/`fscanf()` yet. It exists for
+        // `fscanf()` alone: measured on `php -n` 8.5.6, the FIRST `fscanf()` of a fresh object
+        // leaves `key()` at 0 while every later one advances it, so on a three-line file the
+        // keys run 0, 1, 2 where `fgets()` gives 1, 2, 3. Mixing the two confirms it is the
+        // first READ that is special and not the method: `fgets()` then `fscanf()` gives 1
+        // then 2.
+        protected_storage_property("hasReadLine", TypeExpr::Bool),
     ]
 }
 
@@ -403,7 +411,18 @@ fn spl_file_object_methods() -> Vec<ClassMethod> {
         method_with_body("valid", Vec::new(), Some(TypeExpr::Bool), spl_file_object_valid_body()),
         method_with_body("eof", Vec::new(), Some(TypeExpr::Bool), return_body(function_call("feof", vec![file_stream_expr()]))),
         method_with_body("fgets", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
-        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), return_body(file_current_line_expr())),
+        method_with_body(
+            "fscanf",
+            vec![param("format", TypeExpr::Str)],
+            Some(mixed_type()),
+            spl_file_object_fscanf_body(),
+        ),
+        // php documents `getCurrentLine()` as an ALIAS of `fgets()`, and it behaves like one:
+        // measured on `php -n` 8.5.6 over `"aa\nbb\n"`, it CONSUMES the line, advances
+        // `key()`, and throws once `feof()` holds. Answering the cached current line instead
+        // left the stream where it was, so `getCurrentLine()` then `fgetc()` read `a` where
+        // php reads `b`.
+        method_with_body("getCurrentLine", Vec::new(), Some(mixed_type()), spl_file_object_fgets_body()),
         method_with_body("fgetc", Vec::new(), Some(mixed_type()), return_body(function_call("fgetc", vec![file_stream_expr()]))),
         method_with_body(
             "fread",
@@ -855,6 +874,7 @@ fn spl_file_object_construct_body_with_backing(path: Expr, backing_path: Expr, m
         property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
         property_assign_stmt(this_expr(), "flags", int_expr(0)),
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
@@ -898,6 +918,7 @@ fn spl_temp_file_object_construct_body() -> Vec<Stmt> {
         property_assign_stmt(this_expr(), "fileClass", string_expr("SplFileObject")),
         property_assign_stmt(this_expr(), "infoClass", string_expr("SplFileInfo")),
         property_assign_stmt(this_expr(), "lineNumber", int_expr(0)),
+        property_assign_stmt(this_expr(), "hasReadLine", bool_expr(false)),
         property_assign_stmt(this_expr(), "flags", int_expr(0)),
         property_assign_stmt(this_expr(), "delimiter", string_expr(",")),
         property_assign_stmt(this_expr(), "enclosure", string_expr("\"")),
@@ -1658,19 +1679,83 @@ fn spl_file_object_valid_body() -> Vec<Stmt> {
 
 /// Builds SplFileObject fgets().
 fn spl_file_object_fgets_body() -> Vec<Stmt> {
-    vec![
-        assign_stmt("line", function_call("fgets", vec![file_stream_expr()])),
-        if_stmt(
-            binary_expr(function_call("gettype", vec![var_expr("line")]), BinOp::StrictEq, string_expr("string")),
-            vec![property_assign_stmt(
-                this_expr(),
-                "lineNumber",
-                binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
-            )],
-            None,
+    let mut body = vec![spl_file_object_read_guard_stmt()];
+    body.extend(spl_file_object_read_line_stmts());
+    body.push(property_assign_stmt(
+        this_expr(),
+        "lineNumber",
+        binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+    ));
+    body.push(property_assign_stmt(this_expr(), "hasReadLine", bool_expr(true)));
+    body.push(return_stmt(var_expr("line")));
+    body
+}
+
+/// Builds the read that both `fgets()` and `fscanf()` perform, into `$line`.
+///
+/// A read that comes back `false` becomes `""`. php's own reader answers the EMPTY STRING for
+/// the read that first reaches end of file — measured on `php -n` 8.5.6, `fgets()` on
+/// `"a\nbb\n"` gives `'a\n'`, `'bb\n'`, then `''`, and only the call AFTER that one fails. The
+/// `false` this backend used to return is not a value php ever produces here.
+///
+/// The `(string)` cast carries that rule AND the representation: it makes `$line` a STRING
+/// rather than `string|false`, and `(string) false` is `""` — php's own answer. Keeping the
+/// union instead left `fscanf()` handing a boxed Mixed to `sscanf()`'s declared `string`
+/// parameter.
+fn spl_file_object_read_line_stmts() -> Vec<Stmt> {
+    vec![assign_stmt(
+        "line",
+        cast_expr(
+            CastType::String,
+            function_call("fgets", vec![file_stream_expr()]),
         ),
-        return_stmt(var_expr("line")),
-    ]
+    )]
+}
+
+/// Builds php's refusal to read a file object already positioned at end of file.
+///
+/// `php -n` 8.5.6 throws `RuntimeException: Cannot read from file <path>` — the path as the
+/// constructor received it — from `fgets()` and `fscanf()` once `feof()` holds. `feof()` only
+/// becomes true after a read has hit the end, which is why the empty-string read above happens
+/// FIRST and this guard fires on the call after it.
+fn spl_file_object_read_guard_stmt() -> Stmt {
+    if_stmt(
+        function_call("feof", vec![file_stream_expr()]),
+        vec![throw_stmt(new_object_expr(
+            "RuntimeException",
+            vec![binary_expr(
+                string_expr("Cannot read from file "),
+                BinOp::Concat,
+                file_path_expr(),
+            )],
+        ))],
+        None,
+    )
+}
+
+/// Builds SplFileObject fscanf().
+///
+/// One line through the shared scanf engine, so the method and the free function cannot drift.
+/// The line-number rule is php's, and it is not `fgets()`'s: the FIRST read of a fresh object
+/// leaves `key()` where it was, and only later reads advance it.
+fn spl_file_object_fscanf_body() -> Vec<Stmt> {
+    let mut body = vec![spl_file_object_read_guard_stmt()];
+    body.extend(spl_file_object_read_line_stmts());
+    body.push(if_stmt(
+        property_access(this_expr(), "hasReadLine"),
+        vec![property_assign_stmt(
+            this_expr(),
+            "lineNumber",
+            binary_expr(file_line_number_expr(), BinOp::Add, int_expr(1)),
+        )],
+        None,
+    ));
+    body.push(property_assign_stmt(this_expr(), "hasReadLine", bool_expr(true)));
+    body.push(return_stmt(function_call(
+        "sscanf",
+        vec![var_expr("line"), var_expr("format")],
+    )));
+    body
 }
 
 /// Builds SplFileObject fwrite().
