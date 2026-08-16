@@ -15,7 +15,11 @@
 //! - A third output reports whether ANY byte was consumed. PHP returns `false` only when
 //!   the call found nothing at all; a delimiter sitting at the read position yields an
 //!   empty string, so the stripped length alone cannot tell the two apart.
+//! - A stream carrying a read-filter chain sources its bytes from `__rt_fread` instead of the
+//!   descriptor, exactly as `__rt_fgets` does. Only the byte SOURCE moves: the delimiter scan
+//!   and the byte budget stay one copy of the code, so the filtered and raw paths cannot drift.
 
+use crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET;
 use crate::codegen_support::{abi, abi::emit_symbol_address, emit::Emitter, platform::Arch};
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
@@ -35,8 +39,9 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_get_line");
 
     // Frame: [0..16) regs, [16) handle, [24) length, [32) ending ptr, [40) ending
-    //        len, [48) result start, [56) running total, [64) backend fd.
-    emitter.instruction("sub sp, sp, #80");                                     // frame for saved regs and parse state
+    //        len, [48) result start, [56) running total, [64) backend fd,
+    //        [80) read-filter chain head.
+    emitter.instruction("sub sp, sp, #96");                                     // frame for saved regs and parse state
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #16]");                                   // save the opaque stream handle
@@ -46,13 +51,41 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction("str x0, [sp, #64]");                                   // preserve the resolved backend descriptor
 
+    // -- does the stream carry a read-filter chain? --
+    // Probed once, up front: the answer picks the byte source for every iteration below.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // resolve the stable stream state
+    emitter.instruction("cbz x0, __rt_sgl_unfiltered");                         // no state: nothing can be attached to it
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
+    emitter.instruction("str x9, [sp, #80]");                                   // remember whether the chain exists
+    emitter.instruction("b __rt_sgl_filter_probed");                            // continue with the reservation
+    emitter.label("__rt_sgl_unfiltered");
+    emitter.instruction("str xzr, [sp, #80]");                                  // an unfiltered stream keeps the descriptor path
+    emitter.label("__rt_sgl_filter_probed");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the state lookup clobbered the budget register
+
     emitter.instruction("mov x0, x1");                                          // the line can never exceed the caller's byte budget
     emitter.instruction("cmp x0, #0");                                          // is the requested budget non-positive?
     emitter.instruction("csel x0, xzr, x0, lt");                                // a negative budget reserves nothing at all
+    emitter.instruction("str x0, [sp, #88]");                                   // remember the clamped budget: the filtered path claims exactly it
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the whole budget
     emitter.instruction("str x0, [sp, #48]");                                   // save the result start pointer
     emitter.instruction("str xzr, [sp, #56]");                                  // running total starts at zero
     emitter.instruction("str xzr, [sp, #72]");                                  // nothing consumed yet: the caller sees PHP false
+
+    // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
+    // The reservation above is NOT claimed on the raw path, because nothing nested allocates
+    // from the scratch there. `__rt_fread` does, so the filtered path has to claim the whole
+    // window first or the byte it hands back would land on top of the line being built.
+    // `__rt_concat_publish` writes an absolute offset, so the shrink at `_done` still lands
+    // on the bytes actually read.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // the read-direction chain head
+    emitter.instruction("cbz x9, __rt_sgl_backend_probe");                      // unfiltered: leave the scratch cursor alone
+    emitter.instruction("ldr x1, [sp, #48]");                                   // the reserved result window
+    emitter.instruction("ldr x2, [sp, #88]");                                   // for the whole clamped budget
+    emitter.instruction("bl __rt_concat_publish");                              // claim it so nested filtered reads append after it
+    emitter.instruction("b __rt_stream_get_line_loop");                         // filtered: the loop reads through the chain
+    emitter.label("__rt_sgl_backend_probe");
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
     emitter.instruction("ldr x0, [sp, #64]");                                   // reload the backend descriptor
@@ -73,6 +106,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x11");                                        // reached the byte budget?
     emitter.instruction("b.ge __rt_stream_get_line_done");                      // stop at the maximum length
 
+    emitter.instruction("ldr x9, [sp, #80]");                                   // the read-direction chain head
+    emitter.instruction("cbnz x9, __rt_sgl_filtered_byte");                     // filtered: take the byte from the chain
     emitter.instruction("ldr x1, [sp, #48]");                                   // reserved result start pointer
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
     emitter.instruction("add x1, x1, x10");                                     // single-byte write pointer inside the reservation
@@ -93,6 +128,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_line_read_ok");
     emitter.instruction("cbz x0, __rt_stream_get_line_eof");                    // a zero-byte read means EOF
 
+    emitter.label("__rt_sgl_byte_counted");
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
     emitter.instruction("add x10, x10, #1");                                    // count the new byte
     emitter.instruction("str x10, [sp, #56]");                                  // store the running total
@@ -125,6 +161,25 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("sub x10, x10, x3");                                    // drop the delimiter from the result
     emitter.instruction("str x10, [sp, #56]");                                  // store the stripped total
     emitter.instruction("b __rt_stream_get_line_done");                         // a delimiter match is not EOF
+
+    // -- filtered byte source: one byte at a time out of the chain's buffered output --
+    // `__rt_fread` is the only helper that runs the chain, so a one-byte request is what
+    // makes this loop see filtered bytes. The byte is copied into the claimed window before
+    // the chunk is released, and the delimiter scan below is the same code the raw path runs.
+    emitter.label("__rt_sgl_filtered_byte");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle, not the descriptor
+    emitter.instruction("mov x1, #1");                                          // one filtered byte
+    emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
+    emitter.instruction("cbz x2, __rt_stream_get_line_eof");                    // the chain is drained and flushed: EOF
+    emitter.instruction("ldrb w13, [x1]");                                      // the filtered byte
+    emitter.instruction("ldr x12, [sp, #48]");                                  // the claimed result window
+    emitter.instruction("ldr x10, [sp, #56]");                                  // running total
+    emitter.instruction("strb w13, [x12, x10]");                                // append it to the line
+    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
+    emitter.instruction("bl __rt_concat_publish");                              // hand this byte's scratch window back before the next read
+    emitter.instruction("mov x0, x1");                                          // chunk ptr for release
+    emitter.instruction("bl __rt_decref_any");                                  // release the chunk before continuing the line
+    emitter.instruction("b __rt_sgl_byte_counted");                             // join the shared count and delimiter scan
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may
@@ -193,7 +248,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("ldr x0, [sp, #72]");                                   // report whether ANY byte was consumed, after the publish call
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the frame
+    emitter.instruction("add sp, sp, #96");                                     // release the frame
     emitter.instruction("ret");                                                 // return the line slice
 }
 
@@ -204,10 +259,12 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_get_line");
 
     // Frame: [rbp-8) handle, [rbp-16) length, [rbp-24) ending ptr, [rbp-32) ending
-    //        len, [rbp-40) result start, [rbp-48) running total, [rbp-56) backend fd.
+    //        len, [rbp-40) result start, [rbp-48) running total, [rbp-56) backend fd,
+    //        [rbp-72) read-filter chain head, [rbp-80) clamped budget,
+    //        [rbp-88) filtered chunk pointer.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // frame for the parse state
+    emitter.instruction("sub rsp, 96");                                         // frame for the parse state
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the maximum length
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the ending-delimiter pointer
@@ -215,14 +272,39 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the resolved backend descriptor
 
-    emitter.instruction("mov rax, rsi");                                        // the line can never exceed the caller's byte budget
+    // -- does the stream carry a read-filter chain? --
+    // See the AArch64 counterpart: probed once, because the answer picks the byte source.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // rax = the stable stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sgl_unfiltered_x86");                          // no state: nothing can be attached to it
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // remember whether the chain exists
+    emitter.instruction("jmp __rt_sgl_filter_probed_x86");                      // continue with the reservation
+    emitter.label("__rt_sgl_unfiltered_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // an unfiltered stream keeps the descriptor path
+    emitter.label("__rt_sgl_filter_probed_x86");
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // the line can never exceed the caller's byte budget
     emitter.instruction("xor r8d, r8d");                                        // a negative budget reserves nothing at all
     emitter.instruction("cmp rax, 0");                                          // is the requested budget non-positive?
     emitter.instruction("cmovl rax, r8");                                       // clamp a negative budget to a zero-byte reservation
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // remember the clamped budget for the filtered claim
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the whole budget
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // nothing consumed yet: the caller sees PHP false
+
+    // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
+    // See the AArch64 counterpart: the filtered path has to CLAIM the reservation, because
+    // `__rt_fread` allocates from the same scratch and would otherwise hand back a pointer
+    // on top of the line being built.
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // the read-direction chain head
+    emitter.instruction("je __rt_sgl_backend_probe_x86");                       // unfiltered: leave the scratch cursor alone
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // claim the whole clamped budget
+    emitter.instruction("call __rt_concat_publish");                            // so nested filtered reads append after it
+    emitter.instruction("jmp __rt_stream_get_line_loop_x86");                   // filtered: the loop reads through the chain
+    emitter.label("__rt_sgl_backend_probe_x86");
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the backend descriptor
@@ -241,6 +323,8 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
 
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // the read-direction chain head
+    emitter.instruction("jne __rt_sgl_filtered_byte_x86");                      // filtered: take the byte from the chain
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reserved result start pointer
     emitter.instruction("add rsi, QWORD PTR [rbp - 48]");                       // single-byte write pointer inside the reservation
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the resolved backend descriptor
@@ -250,6 +334,25 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_stream_get_line_read_ok_x86");                 // positive byte count: publish the appended byte
     emitter.instruction("jl __rt_stream_get_line_read_failed_x86");             // negative result: inspect errno before setting EOF
     emitter.instruction("jmp __rt_stream_get_line_eof_x86");                    // zero-byte read means real EOF
+
+    // -- filtered byte source: one byte at a time out of the chain's buffered output --
+    // See the AArch64 counterpart. The byte is copied into the claimed window before the
+    // chunk is released, and the delimiter scan below is the same code the raw path runs.
+    emitter.label("__rt_sgl_filtered_byte_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle, not the descriptor
+    emitter.instruction("mov esi, 1");                                          // one filtered byte
+    emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_stream_get_line_eof_x86");                     // the chain is drained and flushed: EOF
+    emitter.instruction("mov QWORD PTR [rbp - 88], rax");                   // save the chunk ptr across the release calls
+    emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // the filtered byte
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // the claimed result window
+    emitter.instruction("add r10, QWORD PTR [rbp - 48]");                       // the byte's destination inside it
+    emitter.instruction("mov BYTE PTR [r10], cl");                              // append it to the line
+    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
+    emitter.instruction("call __rt_concat_publish");                            // hand this byte's scratch window back before the next read
+    emitter.instruction("mov rax, QWORD PTR [rbp - 88]");                   // chunk ptr for release
+    emitter.instruction("call __rt_decref_any");                                // release the chunk before continuing the line
 
     emitter.label("__rt_stream_get_line_read_ok_x86");
     emitter.instruction("inc QWORD PTR [rbp - 48]");                            // count the new byte
@@ -355,7 +458,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // return the bytes read
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // report whether ANY byte was consumed, after the publish call
-    emitter.instruction("add rsp, 64");                                         // release the frame
+    emitter.instruction("add rsp, 96");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the line slice
 }

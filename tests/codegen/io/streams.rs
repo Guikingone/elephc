@@ -3132,6 +3132,197 @@ unlink($f);
     assert_eq!(out, "APPENDED|rb-read|");
 }
 
+/// Verifies every reader pulls through the read-filter chain, not past it.
+#[test]
+fn test_line_readers_apply_the_read_filter_chain() {
+    // php attaches a read filter to the STREAM, so every reader that pulls
+    // bytes out of it sees the filtered output: php-src `php_stream_read`
+    // drains `readfilters` into `readbuf`, and `php_stream_get_line`,
+    // `php_stream_getc`, `php_stream_passthru` and the CSV reader all consume
+    // that same buffer.
+    //
+    // elephc had exactly one filtered reader. `__rt_fread` went through
+    // `fread_filtered.rs`, so `fread`, `fgetc` and `stream_get_contents` were
+    // right; `__rt_fgets` and `__rt_stream_get_line` issued their own
+    // one-byte `read()` against the descriptor and `__rt_fpassthru` its own
+    // chunked `read()`, so all of them handed back the RAW bytes. `fgetcsv`
+    // and `fscanf` are built on `__rt_fgets` and inherited the same gap.
+    // Nothing warned: the bytes were simply unfiltered.
+    //
+    // `feof()` came out wrong for the same reason. `__rt_stream_eof_get`
+    // holds a filtered stream not-at-EOF until the chain has had its closing
+    // dispatch, and only `__rt_fread` ever runs that dispatch — so a stream
+    // drained purely by `fgets()` reported `false` forever.
+    //
+    // php 8.5.6 on this exact program:
+    //   AB,CD
+    //   |6|EF,GH
+    //   |12|false|true|AB;CD|6|EF;GH|AB,CD|6|EF,GH|AB,CD
+    //   EF,GH
+    //   12|12|AB,CD|6|AB|2|
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flg");
+file_put_contents($f, "ab,cd\nef,gh\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|", ftell($s), "|", fgets($s), "|", ftell($s), "|";
+echo var_export(fgets($s), true), "|", var_export(feof($s), true), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo implode(";", fgetcsv($s, 0, ",", "\"", "")), "|", ftell($s), "|";
+echo implode(";", fgetcsv($s, 0, ",", "\"", "")), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|", ftell($s), "|", stream_get_line($s, 100, "\n"), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fpassthru($s), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo implode(";", fscanf($s, "%s")), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgetc($s), fgetc($s), "|", ftell($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        "AB,CD\n|6|EF,GH\n|12|false|true|AB;CD|6|EF;GH|AB,CD|6|EF,GH|AB,CD\nEF,GH\n12|12|AB,CD|6|AB|2|"
+    );
+}
+
+/// Verifies a filtered line reader's position counts bytes SERVED, not consumed.
+#[test]
+fn test_filtered_line_reader_position_counts_bytes_served() {
+    // `string.toupper` emits one byte per byte, so it cannot tell the two
+    // rules apart: reading the descriptor and counting what the caller got
+    // agree. `convert.base64-encode` does not — 8 input bytes become 12 —
+    // and there php reports 12, the bytes it HANDED BACK.
+    //
+    // That is the rule `__rt_fread` already follows through
+    // `STREAM_FILTERED_POS_OFFSET`. `fgets()` and `stream_get_line()` agreed
+    // with php only by accident, because they read the descriptor directly;
+    // routing them through the chain has to move them onto the same counter
+    // or the accident becomes a divergence.
+    //
+    // The caller's `$length` bound still applies to the FILTERED bytes.
+    //
+    // php 8.5.6 on this exact program: `b25lCnR3bwo=|12|true|b25lCnR3bwo=|12|ON|2|E\n|4|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flp");
+file_put_contents($f, "one\ntwo\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "convert.base64-encode", STREAM_FILTER_READ);
+echo fgets($s), "|", ftell($s), "|", var_export(feof($s), true), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "convert.base64-encode", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|", ftell($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s, 3), "|", ftell($s), "|", fgets($s), "|", ftell($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "b25lCnR3bwo=|12|true|b25lCnR3bwo=|12|ON|2|E\n|4|");
+}
+
+/// Verifies a filtered `fgets()` respects chain order, direction and attach time.
+#[test]
+fn test_filtered_fgets_honours_chain_order_direction_and_attach_time() {
+    // Three properties that a reader which merely "applies the filter" can
+    // still get wrong, and that the `fread` path already holds:
+    //   - the chain runs head-to-tail, so `one` uppercases to `ONE` and then
+    //     rot13s to `BAR`, never the other way round;
+    //   - a filter attached with STREAM_FILTER_WRITE is not on the read chain
+    //     and must leave reads untouched;
+    //   - a filter appended after bytes were already read applies from that
+    //     point on, so line one stays `one` while line two becomes `TWO`.
+    //
+    // php 8.5.6 on this exact program: `BAR\n|GJB\n|one\n|one\n|TWO\n|`.
+    let out = compile_and_run(
+        r#"<?php
+$f = tempnam(sys_get_temp_dir(), "flc");
+file_put_contents($f, "one\ntwo\n");
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+stream_filter_append($s, "string.rot13", STREAM_FILTER_READ);
+echo fgets($s), "|", fgets($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_WRITE);
+echo fgets($s), "|";
+fclose($s);
+$s = fopen($f, "r");
+echo fgets($s), "|";
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|";
+fclose($s);
+unlink($f);
+"#,
+    );
+    assert_eq!(out, "BAR\n|GJB\n|one\n|one\n|TWO\n|");
+}
+
+/// Verifies a read filter on a USERSPACE-WRAPPER stream reaches the line readers too.
+#[test]
+fn test_read_filter_applies_to_a_userspace_wrapper_stream() {
+    // A filter chain belongs to the stream, not to its backend, so it has to
+    // outrank the backend when a reader picks where to pull bytes from. Each
+    // line reader had a wrapper branch that read through `stream_read` and a
+    // native branch that read the descriptor, and neither ran the chain: the
+    // filtered branch has to be chosen FIRST, and then `__rt_fread_raw`
+    // resolves descriptor-versus-wrapper underneath it.
+    //
+    // The unfiltered wrapper read is in here on purpose: routing filtered
+    // streams away from the wrapper branch must not take the plain wrapper
+    // reads with them.
+    //
+    // php 8.5.6 on this exact program: `ONE\n|TWO\n|one\n|ONE|ONE\nTWO\n8|`.
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public $context;
+    public $pos = 0;
+    public $data = "one\ntwo\n";
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { $r = substr($this->data, $this->pos, $n); $this->pos += strlen($r); return $r; }
+    public function stream_eof() { return $this->pos >= strlen($this->data); }
+    public function stream_stat() { return []; }
+    public function stream_tell() { return $this->pos; }
+}
+stream_wrapper_register("wtst", "W");
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fgets($s), "|", fgets($s), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+echo fgets($s), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo stream_get_line($s, 100, "\n"), "|";
+fclose($s);
+$s = fopen("wtst://x", "r");
+stream_filter_append($s, "string.toupper", STREAM_FILTER_READ);
+echo fpassthru($s), "|";
+fclose($s);
+"#,
+    );
+    assert_eq!(out, "ONE\n|TWO\n|one\n|ONE|ONE\nTWO\n8|");
+}
+
 /// Verifies compiled PHP output for stream filter dechunk parses chunked encoding.
 #[test]
 fn test_stream_filter_dechunk_parses_chunked_encoding() {

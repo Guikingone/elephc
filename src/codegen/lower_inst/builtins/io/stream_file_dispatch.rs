@@ -10,6 +10,12 @@
 use super::*;
 
 /// Emits native or userspace-wrapper streaming for a loaded `fpassthru()` handle.
+///
+/// Three byte sources, one drain loop. A native descriptor with no read filter streams through
+/// `__rt_fpassthru`, which `read()`s the descriptor straight into the output sink. Anything the
+/// descriptor cannot answer for — a userspace wrapper, or a stream carrying a read-filter chain
+/// — goes through `__rt_fread` instead, because that is the only helper that runs the chain.
+/// Reading the descriptor on a filtered stream passed the RAW bytes through, silently.
 pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
     let wrapper_label = ctx.next_label("fpt_wrapper");
     let loop_label = ctx.next_label("fpt_loop");
@@ -17,9 +23,29 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
     let wrapper_done_label = ctx.next_label("fpt_done");
     let done_label = ctx.next_label("fpt_after");
     let native_label = ctx.next_label("fpt_native");
+    let drain_label = ctx.next_label("fpt_drain");
+    let probed_label = ctx.next_label("fpt_probed");
+    let unfiltered_label = ctx.next_label("fpt_unfiltered");
+    let head = crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
+            // The push reserves 16 bytes for one value, so its high half is free: park the
+            // read-filter answer there rather than probe again after the descriptor lookup.
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction(&format!("cbz x0, {}", unfiltered_label));  // no state: nothing can be attached to it
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{head}]"));         // read-direction chain head
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // remember whether the chain exists
+            ctx.emitter.instruction(&format!("b {}", probed_label));
+            ctx.emitter.label(&unfiltered_label);
+            ctx.emitter.instruction("str xzr, [sp, #8]");                       // an unfiltered stream may use the descriptor
+            ctx.emitter.label(&probed_label);
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // the read-direction chain head
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the opaque handle
+            // The chain is asked about BEFORE the backend, because it outranks it: a filtered
+            // stream drains through `__rt_fread` whether its backend is a descriptor or a
+            // userspace wrapper, and `__rt_fread_raw` resolves that difference itself.
+            ctx.emitter.instruction(&format!("cbnz x9, {}", native_label));     // filtered: the handle is its own read handle
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
             ctx.emitter.instruction("mov w9, #0x4000");                         // materialize the high half of USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
@@ -30,20 +56,24 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp x0, x10");                             // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));        // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
-            abi::emit_pop_reg(ctx.emitter, "x0");                               // hand __rt_fpassthru the opaque handle
-            abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the wrapper read loop after native streaming
-            ctx.emitter.label(&wrapper_label);
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // the read-direction chain head
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // the opaque handle feeds either path
             abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction(&format!("cbnz x9, {}", drain_label));      // filtered: drain through the chain, not the descriptor
+            abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the drain loop after native streaming
+            ctx.emitter.label(&wrapper_label);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // x0 = the synthetic wrapper fd, its own read handle
+            ctx.emitter.label(&drain_label);
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve fd, byte total, and chunk scratch storage
-            ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the synthetic wrapper fd
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the read handle
             ctx.emitter.instruction("str xzr, [sp, #8]");                       // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
-            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for EOF probing
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the read handle for EOF probing
             abi::emit_call_label(ctx.emitter, "__rt_feof");
             ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper_done_label)); // stop streaming when stream_eof reports EOF
-            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the wrapper fd for reading
-            ctx.emitter.instruction("mov x1, #4096");                           // request a bounded wrapper read chunk
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the read handle for reading
+            ctx.emitter.instruction("mov x1, #4096");                           // request a bounded read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
             ctx.emitter.instruction(&format!("cbz x2, {}", release_eof_label)); // stop defensively on empty wrapper reads
             ctx.emitter.instruction("str x1, [sp, #16]");                       // preserve the owned chunk pointer for release
@@ -64,7 +94,23 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque handle to backend descriptor lookup
+            // See the AArch64 counterpart: the push slot's high half carries the read-filter
+            // answer across the descriptor lookup, so the state is resolved exactly once.
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque handle to the state lookup
+            abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", unfiltered_label));       // no state: nothing can be attached to it
+            ctx.emitter.instruction(&format!("mov r9, QWORD PTR [rax + {head}]")); // read-direction chain head
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");             // remember whether the chain exists
+            ctx.emitter.instruction(&format!("jmp {}", probed_label));
+            ctx.emitter.label(&unfiltered_label);
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // an unfiltered stream may use the descriptor
+            ctx.emitter.label(&probed_label);
+            // See the AArch64 counterpart: the chain outranks the backend, so it is asked first.
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // the read-direction chain head
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jnz {}", native_label));          // filtered: the handle is its own read handle
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // the opaque handle again
             abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rax, r9");                             // test whether this stream is a userspace-wrapper handle
@@ -74,21 +120,26 @@ pub(super) fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp rax, r10");                            // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("jb {}", wrapper_label));          // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
-            abi::emit_pop_reg(ctx.emitter, "rax");                              // hand __rt_fpassthru the opaque handle
-            abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the wrapper read loop after native streaming
-            ctx.emitter.label(&wrapper_label);
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // the read-direction chain head
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // the opaque handle feeds either path
             abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jnz {}", drain_label));           // filtered: drain through the chain, not the descriptor
+            abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the drain loop after native streaming
+            ctx.emitter.label(&wrapper_label);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // rax = the synthetic wrapper fd, its own read handle
+            ctx.emitter.label(&drain_label);
             ctx.emitter.instruction("sub rsp, 32");                             // reserve fd, byte total, and chunk scratch storage
-            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the synthetic wrapper fd
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the read handle
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], 0");              // initialize copied byte total to zero
             ctx.emitter.label(&loop_label);
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the wrapper fd for EOF probing
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the read handle for EOF probing
             abi::emit_call_label(ctx.emitter, "__rt_feof");
             ctx.emitter.instruction("test rax, rax");                           // test whether stream_eof reported EOF
             ctx.emitter.instruction(&format!("jnz {}", wrapper_done_label));    // stop streaming when stream_eof reports EOF
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the wrapper fd for reading
-            ctx.emitter.instruction("mov rsi, 4096");                           // request a bounded wrapper read chunk
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the read handle for reading
+            ctx.emitter.instruction("mov rsi, 4096");                           // request a bounded read chunk
             abi::emit_call_label(ctx.emitter, "__rt_fread");
             ctx.emitter.instruction("test rdx, rdx");                           // test whether the wrapper returned an empty chunk
             ctx.emitter.instruction(&format!("jz {}", release_eof_label));      // stop defensively on empty wrapper reads

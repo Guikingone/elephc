@@ -12,9 +12,16 @@
 //!   `__rt_concat_reserve` window that doubles through `__rt_concat_grow` whenever it fills.
 //!   A line longer than the 64 KiB concat scratch therefore produces owned heap storage
 //!   instead of running past `_concat_buf` into the adjacent BSS globals.
+//! - A stream carrying a read-filter chain sources its bytes from `__rt_fread` instead of the
+//!   descriptor. A filter is attached to the STREAM, so every reader must pull through it;
+//!   reading the descriptor handed back the RAW bytes, and left the chain without the closing
+//!   dispatch that `__rt_stream_eof_get` waits on before it will report `feof()` true.
+//!   Only the byte SOURCE changes: the newline scan, the caller's bound and the growth of the
+//!   line window are the same code on both paths, so the two cannot drift apart.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
+use crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET;
 
 /// Initial reserved line capacity, in bytes. Long enough that ordinary text lines never grow,
 /// small enough that a `while (fgets($f))` loop still stays inside the shared concat scratch.
@@ -49,7 +56,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- set up stack frame --
     // Frame: [0]=opaque stream handle [8]=line length [16]=line buffer pointer
     //        [24]=line capacity [32]=wrapper byte scratch [40]=backend descriptor
-    //        [48]=caller's length bound (0 = unbounded)
+    //        [48]=caller's length bound (0 = unbounded) [56]=read-filter chain head
     emitter.instruction("sub sp, sp, #80");                                     // allocate the frame plus the bound slot
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
@@ -61,6 +68,21 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction("str x0, [sp, #40]");                                   // preserve the resolved backend descriptor
+
+    // -- does the stream carry a read-filter chain? --
+    // Probed once, up front: the answer picks the byte source for every iteration of the
+    // loop below, and re-resolving the state per byte would put a call in the hot path.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // resolve the stable stream state
+    emitter.instruction("cbz x0, __rt_fgets_unfiltered");                       // no state: nothing can be attached to it
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
+    emitter.instruction("str x9, [sp, #56]");                                   // remember whether the chain exists
+    emitter.instruction("b __rt_fgets_filter_probed");                          // continue with the descriptor check
+    emitter.label("__rt_fgets_unfiltered");
+    emitter.instruction("str xzr, [sp, #56]");                                  // an unfiltered stream keeps the descriptor path
+    emitter.label("__rt_fgets_filter_probed");
+
+    emitter.instruction("ldr x0, [sp, #40]");                                   // reload the resolved backend descriptor
     emitter.instruction("cmp x0, #0");                                          // did descriptor resolution succeed?
     emitter.instruction("b.ge __rt_fgets_fd_ok");                               // continue for a valid backend descriptor
     emitter.instruction("mov x1, #0");                                          // return empty string: null pointer
@@ -78,6 +100,12 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // publish the full reserved capacity
     emitter.instruction("bl __rt_concat_publish");                              // claim the whole window so nested reads append after it
     emitter.instruction("str xzr, [sp, #8]");                                   // the line starts empty
+
+    // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
+    // `__rt_fread_raw` resolves the wrapper range itself, so the filtered branch below serves
+    // a userspace-wrapper stream exactly as it serves a native one.
+    emitter.instruction("ldr x9, [sp, #56]");                                   // the read-direction chain head
+    emitter.instruction("cbnz x9, __rt_fgets_loop");                            // filtered: the loop reads through the chain
 
     // -- user-wrapper fd: read the line through stream_read instead of read() --
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the backend descriptor
@@ -123,6 +151,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_grow");                                 // move the accumulated line into a larger owned buffer
     emitter.instruction("str x0, [sp, #16]");                                   // save the grown line buffer pointer
     emitter.label("__rt_fgets_have_room");
+    emitter.instruction("ldr x9, [sp, #56]");                                   // the read-direction chain head
+    emitter.instruction("cbnz x9, __rt_fgets_filtered_byte");                   // filtered: take the byte from the chain
     emitter.instruction("ldr x1, [sp, #16]");                                   // line buffer base pointer
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
     emitter.instruction("add x1, x1, x10");                                     // buf pointer for read syscall
@@ -141,8 +171,30 @@ pub fn emit_fgets(emitter: &mut Emitter) {
         emitter.instruction("b.cs __rt_fgets_read_failed");                     // macOS: if carry set, inspect errno before setting EOF
         emitter.instruction("cbz x0, __rt_fgets_eof");                          // if 0 bytes read, we hit EOF
     }
+    emitter.instruction("b __rt_fgets_byte_ready");                             // join the shared newline scan
+
+    // -- filtered byte source: one byte at a time out of the chain's buffered output --
+    // `__rt_fread` is the only helper that runs the chain, caps the result at the requested
+    // length and keeps the remainder on the stream, so asking it for a single byte is what
+    // makes this loop see filtered bytes at all. The reservation it hands back is released
+    // immediately: the byte is copied into the line window first, exactly as the userspace
+    // wrapper loop below does with its own chunks.
+    emitter.label("__rt_fgets_filtered_byte");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle, not the descriptor
+    emitter.instruction("mov x1, #1");                                          // one filtered byte
+    emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
+    emitter.instruction("cbz x2, __rt_fgets_eof");                              // the chain is drained and flushed: EOF
+    emitter.instruction("ldrb w13, [x1]");                                      // the filtered byte
+    emitter.instruction("ldr x11, [sp, #16]");                                  // line buffer base pointer
+    emitter.instruction("ldr x12, [sp, #8]");                                   // current line length
+    emitter.instruction("strb w13, [x11, x12]");                                // append it to the line
+    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
+    emitter.instruction("bl __rt_concat_publish");                              // hand this byte's scratch window back before the next read
+    emitter.instruction("mov x0, x1");                                          // chunk ptr for release
+    emitter.instruction("bl __rt_decref_any");                                  // release the chunk before continuing the line
 
     // -- count the byte just appended to the line --
+    emitter.label("__rt_fgets_byte_ready");
     emitter.instruction("ldr x11, [sp, #16]");                                  // line buffer base pointer
     emitter.instruction("ldr x13, [sp, #8]");                                   // offset of byte just read
     emitter.instruction("ldrb w14, [x11, x13]");                                // load the byte we just read
@@ -235,7 +287,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     // Frame: [rbp-8]=handle [rbp-16]=line length [rbp-24]=line pointer [rbp-32]=wrapper
     //        chunk pointer [rbp-40]=line capacity [rbp-48]=byte scratch [rbp-56]=descriptor
-    //        [rbp-64]=caller's length bound (0 = unbounded)
+    //        [rbp-64]=caller's length bound (0 = unbounded) [rbp-72]=read-filter chain head
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fgets() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved handle and line metadata
     emitter.instruction("sub rsp, 80");                                         // reserve the read-loop temporaries plus the bound slot
@@ -246,6 +298,22 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the caller's length bound
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the resolved backend descriptor
+
+    // -- does the stream carry a read-filter chain? --
+    // See the AArch64 counterpart: probed once, because the answer picks the byte source for
+    // every iteration of the loop and re-resolving the state per byte would cost a call.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // rax = the stable stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fgets_unfiltered_x86");                        // no state: nothing can be attached to it
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
+    emitter.instruction("mov QWORD PTR [rbp - 72], r9");                        // remember whether the chain exists
+    emitter.instruction("jmp __rt_fgets_filter_probed_x86");                    // continue with the descriptor check
+    emitter.label("__rt_fgets_unfiltered_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 72], 0");                         // an unfiltered stream keeps the descriptor path
+    emitter.label("__rt_fgets_filter_probed_x86");
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the resolved backend descriptor
     emitter.instruction("test rax, rax");                                       // did descriptor resolution succeed?
     emitter.instruction("jns __rt_fgets_fd_ok_x86");                            // continue for a valid backend descriptor
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer for an invalid stream
@@ -260,6 +328,11 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // publish the full reserved capacity
     emitter.instruction("call __rt_concat_publish");                            // claim the whole window so nested reads append after it
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // the line starts empty
+
+    // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
+    // See the AArch64 counterpart: `__rt_fread_raw` resolves the wrapper range itself.
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // the read-direction chain head
+    emitter.instruction("jne __rt_fgets_loop_x86");                             // filtered: the loop reads through the chain
 
     // -- user-wrapper fd: read the line through stream_read instead of read() --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the backend descriptor
@@ -303,6 +376,8 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_grow");                               // move the accumulated line into a larger owned buffer
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the grown line buffer pointer
     emitter.label("__rt_fgets_have_room_x86");
+    emitter.instruction("cmp QWORD PTR [rbp - 72], 0");                         // the read-direction chain head
+    emitter.instruction("jne __rt_fgets_filtered_byte_x86");                    // filtered: take the byte from the chain
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // line buffer base pointer
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // compute the address where libc read() should append the next byte
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // pass the resolved backend descriptor as the first libc read() argument
@@ -312,6 +387,26 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jg __rt_fgets_read_ok_x86");                           // positive byte count: publish the appended byte
     emitter.instruction("jl __rt_fgets_read_failed_x86");                       // negative result: inspect errno before setting EOF
     emitter.instruction("jmp __rt_fgets_eof_x86");                              // zero-byte read means real EOF
+
+    // -- filtered byte source: one byte at a time out of the chain's buffered output --
+    // See the AArch64 counterpart: `__rt_fread` is the only helper that runs the chain and
+    // keeps the remainder on the stream, so a one-byte request is what makes this loop see
+    // filtered bytes. The byte is copied into the line window before the chunk is released.
+    emitter.label("__rt_fgets_filtered_byte_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle, not the descriptor
+    emitter.instruction("mov esi, 1");                                          // one filtered byte
+    emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_fgets_eof_x86");                               // the chain is drained and flushed: EOF
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the chunk ptr across the release calls
+    emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // the filtered byte
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // line buffer base pointer
+    emitter.instruction("add r10, QWORD PTR [rbp - 16]");                       // the byte's destination inside the line
+    emitter.instruction("mov BYTE PTR [r10], cl");                              // append it to the line
+    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
+    emitter.instruction("call __rt_concat_publish");                            // hand this byte's scratch window back before the next read
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // chunk ptr for release
+    emitter.instruction("call __rt_decref_any");                                // release the chunk before continuing the line
 
     emitter.label("__rt_fgets_read_ok_x86");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // line buffer base pointer
