@@ -54,6 +54,7 @@ pub(super) fn emit_mixed_runtime(
         // The `foreach` dispatch warns through WASI for a value PHP will not iterate, so it is
         // a command-module rule like every other diagnostic-producing one.
         wm.add_raw_func(RT_MIXED_ITER_START);
+        wm.add_raw_func(RT_ITERABLE_ITER_START);
         wm.add_raw_func(RT_MIXED_ITER_NEXT);
         wm.add_raw_func(RT_MIXED_ITER_KEY);
         wm.add_raw_func(RT_MIXED_ITER_VALUE);
@@ -1197,6 +1198,27 @@ const RT_MIXED_ITER_START: &str = r#"(func $__rt_mixed_iter_start (param $cell i
     (then (return (i32.wrap_i64 (local.get $lo)) (i64.const -2) (i32.const 1))))
   (call $__rt_warn_foreach_non_iterable (local.get $tag) (local.get $lo))
   (i32.const 0) (i64.const 0) (i32.const 2))                      ;; nothing to walk
+"#;
+
+/// `__rt_iterable_iter_start`: opens a `foreach` over an `iterable`-typed CONTAINER POINTER.
+///
+/// The pointer twin of `__rt_mixed_iter_start`, answering the same `(source, cursor, kind)`
+/// triple so both feed the identical advance and read helpers. An `iterable` parameter is a
+/// raw pointer rather than a boxed cell, so the storage question is settled by the heap
+/// header's kind byte — 2 for an indexed array, 3 for a hash — instead of a cell tag.
+///
+/// A null pointer walks zero times rather than trapping: `iterable` is a declared type the
+/// checker enforces, so an unset slot reaching here is a defensive case, not a php one.
+const RT_ITERABLE_ITER_START: &str = r#"(func $__rt_iterable_iter_start (param $p i32) (result i32) (result i64) (result i32)
+  (local $kind i64)
+  (if (i32.eqz (local.get $p))
+    (then (return (i32.const 0) (i64.const 0) (i32.const 2))))
+  (local.set $kind (i64.and (i64.load (i32.sub (local.get $p) (i32.const 8))) (i64.const 255)))
+  (if (i64.eq (local.get $kind) (i64.const 2))                    ;; heap kind 2 = indexed array
+    (then (return (local.get $p) (i64.const -1) (i32.const 0))))
+  (if (i64.eq (local.get $kind) (i64.const 3))                    ;; heap kind 3 = hash
+    (then (return (local.get $p) (i64.const -2) (i32.const 1))))
+  (local.get $p) (i64.const 0) (i32.const 2))                     ;; nothing to walk
 "#;
 
 /// `__rt_mixed_iter_next`: advances a dynamic `foreach` cursor, answering whether the body runs.

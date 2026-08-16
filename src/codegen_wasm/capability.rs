@@ -2924,6 +2924,15 @@ fn iter_start_shape_issue(
         {
             None
         }
+        // An `iterable` PARAMETER is the same runtime question asked of a container POINTER:
+        // the heap header's kind byte separates an indexed array from a hash, and the advance
+        // and read helpers are the boxed source's own — they box whatever the container's
+        // `value_type` holds, so no element contract applies here either.
+        (IrType::Heap(IrHeapKind::Iterable), PhpType::Iterable)
+            if module.functions.iter().any(|candidate| candidate.flags.is_main) =>
+        {
+            None
+        }
         (ir_type, php_type) => Some(format!(
             "foreach requires a concrete indexed or associative array, got {ir_type:?}/{php_type:?}"
         )),

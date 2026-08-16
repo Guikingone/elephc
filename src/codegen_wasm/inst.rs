@@ -5231,7 +5231,7 @@ fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 fn iter_start_metadata(
     ctx: &FnCtx,
     inst: &Instruction,
-) -> Result<(ValueId, ValueId, PhpType, bool, bool)> {
+) -> Result<(ValueId, ValueId, PhpType, bool, bool, bool)> {
     let iter = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("iter_start without a result".to_string()))?;
@@ -5240,18 +5240,23 @@ fn iter_start_metadata(
         .function
         .value(source)
         .map(|v| v.php_type.codegen_repr());
-    let (elem, is_hash, dynamic) = match src_php {
-        Some(PhpType::Array(inner)) => (inner.codegen_repr(), false, false),
-        Some(PhpType::AssocArray { value, .. }) => (value.codegen_repr(), true, false),
+    let (elem, is_hash, dynamic, from_pointer) = match src_php {
+        Some(PhpType::Array(inner)) => (inner.codegen_repr(), false, false, false),
+        Some(PhpType::AssocArray { value, .. }) => (value.codegen_repr(), true, false, false),
         // A BOXED source: only the cell's tag says whether this is an indexed array, a hash, or
         // something PHP will not iterate at all, so the storage question is answered at runtime.
-        Some(PhpType::Mixed) => (PhpType::Mixed, false, true),
+        Some(PhpType::Mixed) => (PhpType::Mixed, false, true, false),
+        // An `iterable` PARAMETER is the same question asked of a raw container pointer: the
+        // heap header's kind byte separates an indexed array from a hash. The element type is
+        // Mixed because the advance and read helpers box whatever the container's own
+        // `value_type` holds, so a raw `array<int>` walks without being widened first.
+        Some(PhpType::Iterable) => (PhpType::Mixed, false, true, true),
         Some(other) => {
             return Err(WasmError::Unsupported(format!("foreach over {:?}", other)))
         }
         None => return Err(WasmError::Unsupported("iter_start source has no type".to_string())),
     };
-    Ok((iter, source, elem, is_hash, dynamic))
+    Ok((iter, source, elem, is_hash, dynamic, from_pointer))
 }
 
 /// Reserves locals for every iterator before block bodies are lowered.
@@ -5270,8 +5275,8 @@ pub(super) fn reserve_iterators(ctx: &mut FnCtx) -> Result<()> {
         .cloned()
         .collect();
     for inst in starts {
-        let (iter, _, elem, is_hash, dynamic) = iter_start_metadata(ctx, &inst)?;
-        ctx.iter_reserve(iter, elem, is_hash, dynamic);
+        let (iter, _, elem, is_hash, dynamic, from_pointer) = iter_start_metadata(ctx, &inst)?;
+        ctx.iter_reserve(iter, elem, is_hash, dynamic, from_pointer);
     }
     Ok(())
 }
@@ -5279,7 +5284,7 @@ pub(super) fn reserve_iterators(ctx: &mut FnCtx) -> Result<()> {
 /// Lowers `Op::IterStart` by initializing the iterator locals reserved in the
 /// function prepass.
 fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let (iter, source, _, _, _) = iter_start_metadata(ctx, inst)?;
+    let (iter, source, _, _, _, _) = iter_start_metadata(ctx, inst)?;
     ctx.iter_initialize(iter, source)
 }
 

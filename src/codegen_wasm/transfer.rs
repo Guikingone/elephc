@@ -176,6 +176,20 @@ fn reprs_match_for_copy(
             {
                 return true;
             }
+            // An array or a hash handed to an `iterable` parameter is the SAME pointer: the
+            // heap header already names which container it is, and that is exactly what the
+            // callee's `foreach` reads. Widening the elements first would be both wasteful and
+            // wrong — `foreach` over an `iterable` boxes each value as it goes, from the
+            // container's own `value_type`, so `array<int>` walks without being rebuilt.
+            if dest_ir == IrType::Heap(IrHeapKind::Iterable)
+                && *dest_php == PhpType::Iterable
+                && matches!(
+                    source_ir,
+                    IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash | IrHeapKind::Iterable)
+                )
+            {
+                return true;
+            }
             source_ir == dest_ir && source_php == dest_php
         }
         _ => false,

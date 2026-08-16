@@ -17469,6 +17469,105 @@ echo $u->name, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an `iterable` parameter walks every container shape a caller can hand it.
+///
+/// `iterable` names no storage: the value arrives as a raw container POINTER, and only the
+/// heap header's kind byte separates an indexed array from a hash. The walk therefore
+/// dispatches at runtime — the same machinery a boxed source already used, asked a different
+/// question — and the element read boxes whatever the container's own `value_type` holds, so
+/// a raw `array<int>` iterates without being widened into cells first. That is what the
+/// eleven rows below are for: raw int/float/string/bool slots, a heterogeneous (boxed) array,
+/// both hash flavours, integer hash keys, and the empty list whose body must run zero times.
+#[test]
+fn test_cli_wasm_iterable_parameter_walks_every_container() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_iterable");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function walk(iterable $items, string $label): void {
+    echo $label, ":";
+    foreach ($items as $key => $value) {
+        echo " ", $key, "=", $value;
+    }
+    echo "\n";
+}
+walk([10, 20, 30], "ints");
+walk([1.5, -0.25], "floats");
+walk(["a", "b"], "strings");
+walk([true, false], "bools");
+walk([1, "two", 3.5], "mixed");
+walk([], "empty-list");
+walk(["first" => 1, "second" => 2], "hash-int");
+walk(["x" => "X", "y" => "Y"], "hash-str");
+walk(["k" => 1, "j" => "two"], "hash-mixed");
+walk([5 => "five", 9 => "nine"], "hash-intkeys");
+echo is_iterable([1]) ? "iterable\n" : "not iterable\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the iterable probe to WASM");
+    assert!(
+        output.status.success(),
+        "iterable parameters failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the iterable probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "ints: 0=10 1=20 2=30\n",
+            "floats: 0=1.5 1=-0.25\n",
+            "strings: 0=a 1=b\n",
+            "bools: 0=1 1=\n",
+            "mixed: 0=1 1=two 2=3.5\n",
+            "empty-list:\n",
+            "hash-int: first=1 second=2\n",
+            "hash-str: x=X y=Y\n",
+            "hash-mixed: k=1 j=two\n",
+            "hash-intkeys: 5=five 9=nine\n",
+            "iterable\n",
+        ),
+        "php -n's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `abs(int)` answers php's `int|float` on wasm32-wasi.
 ///
 /// `abs` is the one direct builtin whose result type is not decided by its argument type

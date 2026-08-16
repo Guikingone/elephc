@@ -55,6 +55,10 @@ pub(super) struct IterSlots {
     /// `None` for a source whose EIR type already settles it, which keeps every statically typed
     /// `foreach` on exactly the code it had before.
     pub(super) dynamic_kind: Option<String>,
+    /// Whether a dynamic source is a raw CONTAINER POINTER (an `iterable` parameter) rather
+    /// than a boxed cell. Both are dynamic — only the heap header versus the cell tag answers
+    /// which storage it is — so they share every helper except the one that opens the walk.
+    pub(super) dynamic_from_pointer: bool,
 }
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
@@ -273,6 +277,7 @@ impl<'a> FnCtx<'a> {
         elem: PhpType,
         is_hash: bool,
         dynamic: bool,
+        dynamic_from_pointer: bool,
     ) {
         let n = self.temp_counter;
         self.temp_counter += 1;
@@ -288,6 +293,7 @@ impl<'a> FnCtx<'a> {
                 elem,
                 is_hash,
                 dynamic_kind,
+                dynamic_from_pointer,
             },
         );
     }
@@ -307,11 +313,21 @@ impl<'a> FnCtx<'a> {
         // cursor seed and the kind all come from one runtime call — which also carries PHP's
         // warning for a value it will not iterate.
         if let Some(kind_local) = slots.dynamic_kind.clone() {
+            let from_pointer = slots.dynamic_from_pointer;
             self.emit_load_value(source)?;
-            self.fb.ins(
-                "call $__rt_mixed_iter_start",
-                "open a foreach over a boxed value",
-            );
+            // Same triple either way; only the question differs. A boxed value is asked its
+            // cell TAG, an `iterable` pointer its heap KIND word.
+            if from_pointer {
+                self.fb.ins(
+                    "call $__rt_iterable_iter_start",
+                    "open a foreach over an iterable container pointer",
+                );
+            } else {
+                self.fb.ins(
+                    "call $__rt_mixed_iter_start",
+                    "open a foreach over a boxed value",
+                );
+            }
             self.fb
                 .ins(&format!("local.set {}", kind_local), "runtime container kind");
             self.fb
