@@ -145,7 +145,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #0");                                         // index of the mode byte under inspection
     emitter.label("__rt_fopen_plus_scan");
     emitter.instruction("cmp x10, x4");                                         // scanned the whole mode string?
-    emitter.instruction("b.ge __rt_fopen_do_open");                             // no '+' present: keep the base flags
+    emitter.instruction("b.ge __rt_fopen_check_cloexec");                       // no '+' present: keep the base flags
     emitter.instruction("ldrb w11, [x3, x10]");                                 // load one mode byte
     emitter.instruction("cmp w11, #0x2B");                                      // compare with '+'
     emitter.instruction("b.eq __rt_fopen_plus_found");                          // upgrade the access mode
@@ -155,6 +155,25 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- upgrade to O_RDWR: clear O_RDONLY/O_WRONLY bits, set O_RDWR --
     emitter.instruction("and x1, x1, #0xFFFFFFFFFFFFFFFC");                     // clear lowest 2 bits (O_RDONLY/O_WRONLY)
     emitter.instruction("orr x1, x1, #0x2");                                    // set O_RDWR flag
+
+    // -- an 'e' anywhere in the mode asks for a descriptor that does not survive exec --
+    // php-src's plain-files wrapper adds O_CLOEXEC for it, and searches the WHOLE mode the same
+    // way it searches for '+', so `rbe` and `a+e` count. The bit changes nothing this process
+    // can see — only what a child of `proc_open()` inherits — which is why it is pinned by an
+    // assertion on the emitted assembly rather than by running a program.
+    emitter.label("__rt_fopen_check_cloexec");
+    emitter.instruction("mov x10, #0");                                         // index of the mode byte under inspection
+    emitter.label("__rt_fopen_cloexec_scan");
+    emitter.instruction("cmp x10, x4");                                         // scanned the whole mode string?
+    emitter.instruction("b.ge __rt_fopen_do_open");                             // no 'e' present: keep the flags as they are
+    emitter.instruction("ldrb w11, [x3, x10]");                                 // load one mode byte
+    emitter.instruction("cmp w11, #0x65");                                      // compare with 'e'
+    emitter.instruction("b.eq __rt_fopen_cloexec_found");                       // add the close-on-exec flag
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next mode byte
+    emitter.instruction("b __rt_fopen_cloexec_scan");                           // keep scanning
+    emitter.label("__rt_fopen_cloexec_found");
+    emitter.instruction(&format!("mov x12, #0x{:X}", emitter.platform.o_cloexec())); // O_CLOEXEC
+    emitter.instruction("orr x1, x1, x12");                                     // set it alongside the access mode
 
     // -- perform the open syscall --
     emitter.label("__rt_fopen_do_open");
@@ -487,7 +506,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_plus_scan_x86");
     emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load one mode byte
     emitter.instruction("test al, al");                                         // reached the terminator?
-    emitter.instruction("jz __rt_fopen_do_open_x86");                           // no '+' present: keep the base flags
+    emitter.instruction("jz __rt_fopen_check_cloexec_x86");                     // no '+' present: keep the base flags
     emitter.instruction("cmp al, 0x2B");                                        // does the mode string request the read-write '+' fopen() upgrade?
     emitter.instruction("je __rt_fopen_plus_found_x86");                        // upgrade the access mode
     emitter.instruction("inc r11");                                             // advance to the next mode byte
@@ -495,6 +514,20 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fopen_plus_found_x86");
     emitter.instruction("and esi, 0xFFFFFFFC");                                 // clear the low access-mode bits before upgrading the Linux fopen() flags to O_RDWR
     emitter.instruction("or esi, 0x2");                                         // set O_RDWR so 'r+'/'w+'/'a+' open the file for both reading and writing
+
+    // See the AArch64 counterpart: an 'e' anywhere in the mode adds O_CLOEXEC.
+    emitter.label("__rt_fopen_check_cloexec_x86");
+    emitter.instruction("mov r11, r10");                                        // walk the null-terminated C mode string again
+    emitter.label("__rt_fopen_cloexec_scan_x86");
+    emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load one mode byte
+    emitter.instruction("test al, al");                                         // reached the terminator?
+    emitter.instruction("jz __rt_fopen_do_open_x86");                           // no 'e' present: keep the flags as they are
+    emitter.instruction("cmp al, 0x65");                                        // does the mode ask for a close-on-exec descriptor?
+    emitter.instruction("je __rt_fopen_cloexec_found_x86");                     // add the close-on-exec flag
+    emitter.instruction("inc r11");                                             // advance to the next mode byte
+    emitter.instruction("jmp __rt_fopen_cloexec_scan_x86");                     // keep scanning
+    emitter.label("__rt_fopen_cloexec_found_x86");
+    emitter.instruction(&format!("or esi, 0x{:X}", emitter.platform.o_cloexec())); // set O_CLOEXEC alongside the access mode
 
     emitter.label("__rt_fopen_do_open_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the converted C pathname as the first libc open() argument

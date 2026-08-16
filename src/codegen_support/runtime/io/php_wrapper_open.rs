@@ -123,13 +123,13 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_pwo_fd_form");                               // php has its own sentence for this one
     emitter.instruction("mov x14, #0");                                         // digit index
     emitter.instruction("mov x0, #0");                                          // accumulated descriptor
-    emitter.instruction("mov x17, #0");                                         // negative flag
+    emitter.instruction("mov x11, #0");                                         // negative flag (x11 held the action byte, which is spent)
     emitter.instruction("ldrb w15, [x13]");                                     // the byte a sign would occupy
     emitter.instruction("cmp w15, #0x2B");                                      // '+'
     emitter.instruction("b.eq __rt_pwo_fd_sign");
     emitter.instruction("cmp w15, #0x2D");                                      // '-'
     emitter.instruction("b.ne __rt_pwo_fd_digit");                              // no sign: the first byte is a digit
-    emitter.instruction("mov x17, #1");                                         // remember to negate the result
+    emitter.instruction("mov x11, #1");                                         // remember to negate the result
     emitter.label("__rt_pwo_fd_sign");
     emitter.instruction("add x14, x14, #1");                                    // the sign is consumed, not accumulated
     emitter.instruction("cmp x14, x12");                                        // a lone sign parses no number at all
@@ -150,7 +150,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     // The descriptor goes to the opener that words php's two refusals, not to the bare `dup`
     // the fixed descriptors use: those always exist, and this one may not.
     emitter.label("__rt_pwo_fd_ready");
-    emitter.instruction("cbz x17, __rt_pwo_fd_open");                           // no sign to apply
+    emitter.instruction("cbz x11, __rt_pwo_fd_open");                           // no sign to apply
     emitter.instruction("neg x0, x0");                                          // php's strtol reads the sign as part of the number
     emitter.label("__rt_pwo_fd_open");
     emitter.instruction("ldr x1, [sp, #24]");                                   // the URI, whole, for the refusal line

@@ -405,6 +405,51 @@ fn test_context_option_readers_fall_back_to_the_default_context_on_every_target(
     }
 }
 
+/// Pins that an `fopen()` mode carrying an `e` adds `O_CLOEXEC`, on every target.
+///
+/// php-src's plain-files wrapper searches the WHOLE mode for `e` and ORs `O_CLOEXEC` into the
+/// `open()` flags. Nothing inside the process can observe the bit — it changes only what a child
+/// of `proc_open()` inherits, and elephc has no `proc_open()` — so an executing fixture passes
+/// whether or not the flag is set. The guard is therefore on the emitted runtime, the same way
+/// the context-reader fallback above is guarded.
+///
+/// The value is per-platform: `0x1000000` on macOS, `0x80000` on Linux. Getting it from the
+/// wrong platform would set some unrelated flag, so each target is checked against its own.
+///
+/// The reach is checked as well as the presence: the `e` scan has to be on the path from the
+/// `+` scan, not a block nothing branches into.
+#[test]
+fn test_fopen_mode_suffix_e_sets_o_cloexec_on_every_target() {
+    for (target, cloexec, set_flag) in [
+        ("linux-x86_64", 0x0008_0000u32, "or esi, 0x80000"),
+        ("linux-aarch64", 0x0008_0000u32, "mov x12, #0x80000"),
+        ("macos-aarch64", 0x0100_0000u32, "mov x12, #0x1000000"),
+    ] {
+        let parsed = Target::parse(target).expect("supported target");
+        let runtime = elephc::codegen::generate_runtime(8_388_608, parsed);
+        let body = context_reader_body(&runtime, "__rt_fopen");
+        assert!(
+            body.contains(set_flag),
+            "{target}: fopen never sets O_CLOEXEC ({cloexec:#x}) for an `e` mode:\n{body}"
+        );
+        let plus_scan = body
+            .find("__rt_fopen_plus_scan")
+            .unwrap_or_else(|| panic!("{target}: fopen lost its '+' scan"));
+        let cloexec_scan = body
+            .find("__rt_fopen_check_cloexec")
+            .unwrap_or_else(|| panic!("{target}: fopen never scans the mode for 'e'"));
+        assert!(
+            cloexec_scan > plus_scan,
+            "{target}: the 'e' scan must follow the '+' scan, which is what reaches it"
+        );
+        // A mode with no `e` must still open: the scan has to fall through to the syscall.
+        assert!(
+            body[cloexec_scan..].contains("__rt_fopen_do_open"),
+            "{target}: a mode without 'e' never reaches the open"
+        );
+    }
+}
+
 /// Returns one runtime helper's assembly, from its label to the next helper's comment banner.
 fn context_reader_body<'a>(runtime: &'a str, label: &str) -> &'a str {
     let marker = format!("{label}:");

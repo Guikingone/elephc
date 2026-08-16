@@ -76,6 +76,20 @@ impl Platform {
         }
     }
 
+    /// `O_CLOEXEC` open flag bit — the value differs between macOS and Linux.
+    ///
+    /// php-src's plain-files wrapper sets it for an `fopen()` mode carrying an `e`
+    /// (`ext/standard/plain_wrapper.c`), which is the only way PHP code can ask for a descriptor
+    /// that does NOT survive `exec`. Nothing inside the process can observe the bit — it changes
+    /// only what a child sees — so the flag is pinned by asserting on the emitted assembly.
+    pub fn o_cloexec(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0100_0000,
+            Platform::Linux => 0x0008_0000,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `ioctl` request that reads terminal attributes — `TIOCGETA` on macOS,
     /// `TCGETS` on Linux. `stream_isatty()` issues it to detect a terminal.
     pub fn tty_get_request(&self) -> u32 {
