@@ -29,7 +29,7 @@ sidebar:
 | [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
 | [`fputs()`](./io/fputs.md) | `(mixed $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): mixed` | `mixed` | ✓ | ✓ |
-| [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
 | [`fstat()`](./io/fstat.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`fsync()`](./io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |

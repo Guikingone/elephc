@@ -194,7 +194,7 @@ sidebar:
 | [`fputcsv()`](./builtins/io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
 | [`fputs()`](./builtins/io/fputs.md) | `(mixed $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`fread()`](./builtins/io/fread.md) | `(resource $stream, int $length): mixed` | `mixed` | ✓ | ✓ |
-| [`fscanf()`](./builtins/io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`fscanf()`](./builtins/io/fscanf.md) | `(resource $stream, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`fseek()`](./builtins/io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
 | [`fstat()`](./builtins/io/fstat.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`fsync()`](./builtins/io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -462,7 +462,7 @@ sidebar:
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`sha1()`](./builtins/string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./builtins/string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
-| [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`sscanf()`](./builtins/string/sscanf.md) | `(string $string, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`str_contains()`](./builtins/string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_ends_with()`](./builtins/string/str_ends_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_getcsv()`](./builtins/string/str_getcsv.md) | `(string $string, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array` | `array` | ✓ | ✓ |

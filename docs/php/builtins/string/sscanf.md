@@ -8,7 +8,7 @@ sidebar:
 ## sscanf()
 
 ```php
-function sscanf(string $string, string $format, ...$vars): array
+function sscanf(string $string, string $format, ...$vars): mixed
 ```
 
 Parses a string according to a format.
@@ -18,7 +18,7 @@ Parses a string according to a format.
 - `$format` (`string`)
 - `...$vars` — variadic: collects excess arguments into `$vars`.
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

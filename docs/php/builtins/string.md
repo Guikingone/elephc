@@ -62,7 +62,7 @@ sidebar:
 | [`rtrim()`](./string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`sha1()`](./string/sha1.md) | `(string $string, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`sprintf()`](./string/sprintf.md) | `(string $format, ...$values): string` | `string` | ✓ | ✓ |
-| [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
+| [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`str_contains()`](./string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_ends_with()`](./string/str_ends_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_getcsv()`](./string/str_getcsv.md) | `(string $string, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array` | `array` | ✓ | ✓ |
