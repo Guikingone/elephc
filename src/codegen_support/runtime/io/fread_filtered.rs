@@ -27,7 +27,7 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_EOF_OFFSET, STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET,
     STREAM_FILTERED_BUF_POS_OFFSET, STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
-    STREAM_READ_FILTER_HEAD_OFFSET,
+    STREAM_FILTERED_POS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET,
 };
 
 /// Bytes pulled from the backend per dispatch while the filter is still withholding output.
@@ -245,6 +245,13 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [x1, #{STREAM_FILTERED_BUF_LEN_OFFSET}]")); // and reuse the buffer from its base
     emitter.label("__rt_freadb_keep");
     emitter.instruction(&format!("str x10, [x1, #{STREAM_FILTERED_BUF_POS_OFFSET}]")); // publish the cursor
+    // php's `ftell()` counts the bytes HANDED TO THE CALLER, never the ones pulled from the
+    // descriptor: this loop reads whole chunks so the filter has something to work on, so the
+    // descriptor is far ahead of what the reader has seen. The cursor above cannot stand in for
+    // it — it rewinds every time the buffer drains.
+    emitter.instruction(&format!("ldr x12, [x1, #{STREAM_FILTERED_POS_OFFSET}]")); // the position php reports
+    emitter.instruction("add x12, x12, x11");                                   // advance it by the bytes just served
+    emitter.instruction(&format!("str x12, [x1, #{STREAM_FILTERED_POS_OFFSET}]")); // publish php's position
     emitter.instruction("ldr x1, [sp, #32]");                                         // return the caller's storage
     emitter.instruction("ldr x2, [sp, #24]");                                   // and the served count
     emitter.instruction("mov x0, #1");                                          // served bytes are a real result
@@ -460,6 +467,12 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rcx + {STREAM_FILTERED_BUF_LEN_OFFSET}], 0")); // and reuse the buffer from its base
     emitter.label("__rt_freadb_keep_x");
     emitter.instruction(&format!("mov QWORD PTR [rcx + {STREAM_FILTERED_BUF_POS_OFFSET}], r10")); // publish the cursor
+    // See the AArch64 counterpart: php's `ftell()` counts the bytes handed to the caller, and the
+    // cursor above rewinds every time the buffer drains, so it cannot stand in for that number.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // the bytes just served
+    emitter.instruction(&format!(
+        "add QWORD PTR [rcx + {STREAM_FILTERED_POS_OFFSET}], r9"
+    ));                                                                         // advance the position php reports
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the caller's storage
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // and the served count
     emitter.instruction("mov ecx, 1");                                          // served bytes are a real result

@@ -133,6 +133,27 @@ pub(crate) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "ftell", 1)?;
     let stream = expect_operand(inst, 0)?;
+    // A filtered read pulls AHEAD: the buffered wrapper reads whole chunks so the filter has
+    // something to work on and parks what `fread($h, $n)` did not ask for. php advances its
+    // position by the bytes RETURNED TO THE CALLER, so the descriptor probe below reports where
+    // the read-ahead stopped — `26` on a 26-byte file where php answers `3`. The helper answers
+    // -1 for every stream that never engaged that buffer, which keeps the probe for all of them.
+    let filtered_label = ctx.next_label("ftell_filtered_position");
+    load_stream_handle_to_result(ctx, stream, "ftell")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // the handle owns the filtered position
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // is the filtered position tracked for this stream?
+            ctx.emitter.instruction(&format!("b.ne {}", filtered_label));       // tracked: php reports the bytes handed to the caller
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // is the filtered position tracked for this stream?
+            ctx.emitter.instruction(&format!("jne {}", filtered_label));        // tracked: php reports the bytes handed to the caller
+        }
+    }
     load_stream_fd_to_result(ctx, stream, "ftell")?;
     let wrapper_label = ctx.next_label("ftell_user_wrapper");
     let after_dispatch_label = ctx.next_label("ftell_after_dispatch");
@@ -168,6 +189,7 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
     }
     emit_subtract_append_skip(ctx, stream)?;
+    ctx.emitter.label(&filtered_label);
     store_if_result(ctx, inst)
 }
 

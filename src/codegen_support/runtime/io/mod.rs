@@ -272,7 +272,8 @@ pub(crate) use unknown_wrapper_warning::{
 };
 pub(crate) use errno_warning::emit_errno_warning;
 pub(crate) use append_position::{
-    emit_stream_append_skip, emit_stream_clear_append_skip, emit_stream_wrapper_pos,
+    emit_stream_append_skip, emit_stream_clear_append_skip, emit_stream_filtered_pos,
+    emit_stream_filtered_pos_set, emit_stream_wrapper_pos,
     emit_dynamic_context_deprecation, emit_stream_wrapper_pos_advance,
     emit_stream_wrapper_pos_set,
 };

@@ -210,6 +210,22 @@ pub(crate) const STREAM_APPEND_SKIP_OFFSET: i64 = 216;
 /// wrapper feels like rather than where the stream is.
 pub(crate) const STREAM_WRAPPER_POS_OFFSET: i64 = 224;
 
+/// Byte offset of the position PHP reports for a stream whose reads go through a read filter.
+///
+/// php maintains `stream->position` itself and advances it by the bytes each read RETURNED TO THE
+/// CALLER — never by the bytes it pulled from the descriptor. A filtered read pulls ahead: the
+/// buffered wrapper reads whole 8192-byte chunks so the filter has something to work on, caps the
+/// result at what `fread($h, $n)` asked for, and parks the rest. Reporting `lseek(SEEK_CUR)` there
+/// answered where the READ-AHEAD stopped: two `fread($f, 3)` through `string.toupper` on a 26-byte
+/// file answered `26` and `26` where php answers `3` and `6`. An expanding filter settles what the
+/// number counts: through `convert.base64-encode`, two `fread($f, 4)` answer `4` and `8` — the
+/// FILTERED bytes handed out, not the source bytes consumed to make them.
+///
+/// The field is only authoritative once the buffered path has actually run, which
+/// `STREAM_FILTERED_BUF_PTR_OFFSET` reports: a filtered stream read only through `fgets()` never
+/// engages the buffer, and its descriptor offset is still the right answer.
+pub(crate) const STREAM_FILTERED_POS_OFFSET: i64 = 232;
+
 /// Transport value for a TCP endpoint, which php-src names after the ssl-capable transport.
 pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1;
 
@@ -343,6 +359,8 @@ const _: () = {
     assert!(STREAM_APPEND_SKIP_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(STREAM_WRAPPER_POS_OFFSET == STREAM_APPEND_SKIP_OFFSET + 8);
     assert!(STREAM_WRAPPER_POS_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    assert!(STREAM_FILTERED_POS_OFFSET == STREAM_WRAPPER_POS_OFFSET + 8);
+    assert!(STREAM_FILTERED_POS_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

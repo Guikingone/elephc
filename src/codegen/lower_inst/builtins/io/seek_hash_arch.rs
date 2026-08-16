@@ -44,6 +44,13 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction("mov x0, #-1");                                     // fseek returns -1 when lseek fails
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip EOF reset after a failed seek
     ctx.emitter.label(done_label);
+    // php's position restarts from wherever the seek landed: `fread($f,3)`, `fseek($f,10)`,
+    // `fread($f,4)` through a read filter answers 3, 10, 14. lseek's own result IS that offset,
+    // and the EOF clear below discards the bytes the filter had read ahead.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // the absolute offset lseek moved to
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("ldr x1, [sp, #24]");                               // the offset the filtered position restarts from
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
     ctx.emitter.instruction("mov x1, #0");                                      // clear the EOF state after repositioning
     abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
@@ -96,6 +103,11 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov rax, -1");                                     // fseek returns -1 when lseek fails
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip EOF reset after a failed seek
     ctx.emitter.label(done_label);
+    // See the AArch64 counterpart: php's position restarts from the offset lseek landed on.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // the absolute offset lseek moved to
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");                   // the offset the filtered position restarts from
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
     ctx.emitter.instruction("xor esi, esi");                                    // clear the EOF state after repositioning
     abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
@@ -145,6 +157,9 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction("mov x0, #0");                                      // rewind returns false when lseek fails
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip EOF reset after a failed rewind
     ctx.emitter.label(done_label);
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");                                      // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");          // php's position restarts from there too
     ctx.emitter.instruction("ldr x0, [sp, #0]");                                // reload the opaque stream handle
     ctx.emitter.instruction("mov x1, #0");                                      // clear the EOF state after rewinding
     abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");
@@ -197,6 +212,9 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction("xor eax, eax");                                    // rewind returns false when lseek fails
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip EOF reset after a failed rewind
     ctx.emitter.label(done_label);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
+    ctx.emitter.instruction("xor esi, esi");                                    // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_filtered_pos_set");          // php's position restarts from there too
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // reload the opaque stream handle
     ctx.emitter.instruction("xor esi, esi");                                    // clear the EOF state after rewinding
     abi::emit_call_label(ctx.emitter, "__rt_stream_eof_set");

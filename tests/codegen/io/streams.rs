@@ -8442,6 +8442,113 @@ fclose($f);
     assert_eq!(out, "[xyz]");
 }
 
+/// Regression: `ftell()` on a filtered read stream reported the READ-AHEAD position.
+///
+/// php advances `stream->position` by the bytes each read RETURNED TO THE CALLER, never by the
+/// bytes it pulled from the descriptor. elephc's filtered `fread()` reads whole 8192-byte chunks
+/// so the filter has something to work on, caps the result at what was asked for, and parks the
+/// rest — and `ftell()` probed `lseek(SEEK_CUR)`, which reports where that read-ahead stopped.
+/// Measured with `php -n` (8.5.6) on a 26-byte file through `string.toupper`: three reads of 3, 3
+/// and 5 answer `3`, `6`, `11`; elephc answered `26`, `26`, `26` — the whole file, every time.
+/// An unfiltered control and a `fgets()` read are in the same program: neither engages the
+/// buffered path, and both must keep the descriptor probe.
+#[test]
+fn test_ftell_on_a_filtered_read_counts_the_bytes_handed_to_the_caller() {
+    let base = std::env::temp_dir().join(format!("elephc_ftellf_{}", std::process::id()));
+    let base = base.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$p = "{base}_a";
+@unlink($p);
+file_put_contents($p, "abcdefghijklmnopqrstuvwxyz");
+$f = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+echo "start:", ftell($f), "\n";
+echo "r1:", fread($f, 3), ":", ftell($f), "\n";
+echo "r2:", fread($f, 3), ":", ftell($f), "\n";
+echo "r3:", fread($f, 5), ":", ftell($f), "\n";
+while (!feof($f)) {{ fread($f, 4); }}
+echo "drained:", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+fread($f, 3);
+echo "plain:", ftell($f), "\n";
+fclose($f);
+$q = "{base}_b";
+@unlink($q);
+file_put_contents($q, "one\ntwo\n");
+$f = fopen($q, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+fgets($f);
+echo "fgets1:", ftell($f), "\n";
+fgets($f);
+echo "fgets2:", ftell($f), "\n";
+fclose($f);
+@unlink($p);
+@unlink($q);
+"#
+    ));
+    assert_eq!(
+        out,
+        "start:0\nr1:ABC:3\nr2:DEF:6\nr3:GHIJK:11\ndrained:26\nplain:3\nfgets1:4\nfgets2:8\n"
+    );
+}
+
+/// Pins what the filtered position COUNTS, and where it restarts.
+///
+/// An expanding filter settles the first question: through `convert.base64-encode`, two
+/// `fread($f, 4)` answer `4` and `8` — the FILTERED bytes handed out, not the source bytes
+/// consumed to make them, so the number cannot be derived from the descriptor at all. `fseek()`
+/// and `rewind()` settle the second: php's position restarts from wherever the seek landed and
+/// advances from there, so `fread(3)`, `fseek(10)`, `fread(4)` answers `3`, `10`, `14`. Two
+/// filtered streams open at once pin that the count lives on the stream, not in a global.
+/// Measured with `php -n` (8.5.6).
+#[test]
+fn test_filtered_ftell_counts_filtered_bytes_and_restarts_at_a_seek() {
+    let path = std::env::temp_dir().join(format!("elephc_ftellf2_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+$p = "{path}";
+@unlink($p);
+file_put_contents($p, "abcdefghijklmnopqrstuvwxyz");
+$f = fopen($p, "r");
+stream_filter_append($f, "convert.base64-encode", STREAM_FILTER_READ);
+echo "b64:", fread($f, 4), ":", ftell($f), "\n";
+echo "b64:", fread($f, 4), ":", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+echo "r:", fread($f, 3), ":", ftell($f), "\n";
+fseek($f, 10);
+echo "seek:", ftell($f), "\n";
+echo "r:", fread($f, 4), ":", ftell($f), "\n";
+rewind($f);
+echo "rewind:", ftell($f), "\n";
+echo "r:", fread($f, 2), ":", ftell($f), "\n";
+fclose($f);
+$f = fopen($p, "r");
+$g = fopen($p, "r");
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+stream_filter_append($g, "string.rot13", STREAM_FILTER_READ);
+fread($f, 3);
+fread($g, 7);
+echo "two:", ftell($f), ":", ftell($g), "\n";
+fread($f, 2);
+echo "two:", ftell($f), ":", ftell($g), "\n";
+fclose($f);
+fclose($g);
+@unlink($p);
+"#
+    ));
+    assert_eq!(
+        out,
+        "b64:YWJj:4\nb64:ZGVm:8\n\
+         r:ABC:3\nseek:10\nr:KLMN:14\nrewind:0\nr:AB:2\n\
+         two:3:7\ntwo:5:7\n"
+    );
+}
+
 /// Regression: `fclose()` ran no closing flush, so a buffering WRITE filter's bytes were lost.
 ///
 /// php gives every attached filter one last `filter($in, $out, &$consumed, $closing = true)` call
