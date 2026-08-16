@@ -19,8 +19,18 @@ pub(crate) fn union_member_is_countable_array(ty: &PhpType) -> bool {
     // produce exactly that union. Accepting it was a wrong answer waiting to happen until the
     // runtime raised php's TypeError for the false payload rather than answering 0; it does now,
     // so the refusal no longer protects anything.
+    //
+    // `Void` is the same case one value over. `sscanf()` answers `array|null` — `null` when the
+    // scan reaches end of input before assigning anything — and php compiles `count($parsed)`
+    // against it, deciding at run time: `count(null)` is
+    // `TypeError: count(): Argument #1 ($value) must be of type Countable|array, null given`,
+    // the same shape it words for `false`. Refusing the union statically rejected php that runs.
     matches!(
         ty,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::False
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::False
+            | PhpType::Void
     )
 }
