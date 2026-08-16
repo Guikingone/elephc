@@ -284,17 +284,40 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_pwo_fd_form_x");                               // php has its own sentence for this one
     emitter.instruction("xor rdx, rdx");                                        // digit index
     emitter.instruction("xor rdi, rdi");                                        // accumulated descriptor
+    emitter.instruction("xor r11, r11");                                        // negative flag (the action byte is spent)
+    emitter.instruction("movzx eax, BYTE PTR [r8]");                            // the byte a sign would occupy
+    emitter.instruction("cmp eax, 0x2B");                                       // '+'
+    emitter.instruction("je __rt_pwo_fd_sign_x");
+    emitter.instruction("cmp eax, 0x2D");                                       // '-'
+    emitter.instruction("jne __rt_pwo_fd_digit_x");                             // no sign: the first byte is a digit
+    emitter.instruction("mov r11, 1");                                          // remember to negate the result
+    emitter.label("__rt_pwo_fd_sign_x");
+    emitter.instruction("add rdx, 1");                                          // the sign is consumed, not accumulated
+    emitter.instruction("cmp rdx, rcx");                                        // a lone sign parses no number at all
+    emitter.instruction("jae __rt_pwo_fd_form_x");
     emitter.label("__rt_pwo_fd_digit_x");
     emitter.instruction("cmp rdx, rcx");                                        // consumed every byte?
-    emitter.instruction("jae __rt_pwo_dup_x");                                  // the number is complete
+    emitter.instruction("jae __rt_pwo_fd_ready_x");                             // the number is complete
     emitter.instruction("movzx eax, BYTE PTR [r8 + rdx]");                      // one candidate digit
     emitter.instruction("sub eax, 48");                                         // fold ASCII '0' to zero
     emitter.instruction("cmp eax, 9");                                          // is it actually a digit?
-    emitter.instruction("ja __rt_pwo_unknown_x");                               // a non-digit makes the URL meaningless
+    emitter.instruction("ja __rt_pwo_fd_form_x");                               // a leftover byte reads as no number
     emitter.instruction("imul rdi, rdi, 10");                                   // shift the accumulator one decimal place
     emitter.instruction("add rdi, rax");                                        // and add the new digit
     emitter.instruction("add rdx, 1");                                          // advance the digit index
     emitter.instruction("jmp __rt_pwo_fd_digit_x");                             // keep parsing
+
+    // The descriptor goes to the opener that words php's two refusals, not to the bare `dup`
+    // the fixed descriptors use: those always exist, and this one may not.
+    emitter.label("__rt_pwo_fd_ready_x");
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_pwo_fd_open_x");                               // no sign to apply
+    emitter.instruction("neg rdi");                                             // php's strtol reads the sign as part of the number
+    emitter.label("__rt_pwo_fd_open_x");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // the URI, whole, for the refusal line
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_php_fd_open");                               // rax = the copy, or -1 after saying why
+    emitter.instruction("jmp __rt_pwo_done_x");
 
     emitter.label("__rt_pwo_dup_x");
     emitter.bl_c("dup");                                                        // hand out a copy, never the process's own descriptor
