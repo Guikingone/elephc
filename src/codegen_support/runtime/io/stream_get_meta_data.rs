@@ -24,6 +24,12 @@ const WRAPPER_ID_PHP: u64 = 6;
 /// Wrapper id 7 is `data:`, which answers no metadata API at all.
 const WRAPPER_ID_DATA: u64 = 7;
 
+/// Wrapper id 1 is `http://`, one of the two that carry a response under `wrapper_data`.
+const WRAPPER_ID_HTTP: u64 = 1;
+
+/// Wrapper id 2 is `https://`, the other one.
+const WRAPPER_ID_HTTPS: u64 = 2;
+
 /// stream_get_meta_data: build the metadata hash for an opaque stream handle.
 /// Input:  AArch64 x0 = handle / x86_64 rdi = handle
 /// Output: pointer to a `{string => mixed}` hash table
@@ -185,6 +191,13 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_meta_data_uri_params");
     emitter.instruction("str x0, [sp, #8]");                                    // persist any post-grow hash pointer
     emitter.label("__rt_sgmd_not_data");
+    // -- wrapper_data: the response header lines, for the wrappers that HAVE a response --
+    // php-src's `php_stream_url_wrap_http` stores the same `zval` it publishes as
+    // `$http_response_header` into `stream->wrapperdata`, and `_php_stream_get_metadata` copies
+    // it under `wrapper_data` — status line first, then every header, in the order received, and
+    // written BEFORE `wrapper_type`. elephc published the global and stopped there, so the key
+    // was simply absent. Measured on `php -n` 8.5.6 against a local server.
+    emit_set_wrapper_data_aarch64(emitter);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_aarch64(emitter);
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
@@ -484,6 +497,33 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     emit_hash_put_aarch64(emitter, "_meta_key_wrapper_type", 12);
 }
 
+/// Inserts `wrapper_data`, the response header lines, for the wrappers that receive a response.
+///
+/// The array comes from `__rt_get_http_response_headers`, the SAME source that fills
+/// `$http_response_header` — php-src publishes one `zval` into both places, so the two can never
+/// disagree about what the server said. It is built fresh on each call, which is what the hash
+/// needs: a value under a mixed-typed key is released when the entry is replaced or the array is
+/// freed, so it must not be anything else's allocation.
+///
+/// Only `http` and `https` reach it. Every other wrapper leaves `wrapper_data` out entirely
+/// rather than reporting an empty array, which is what php does — `data:` and `php://memory`
+/// have no `wrapperdata` at all.
+fn emit_set_wrapper_data_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x6, [sp, #80]");                                   // the stable StreamState pointer
+    emitter.instruction(&format!("ldr x7, [x6, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!("cmp x7, #{WRAPPER_ID_HTTP}"));
+    emitter.instruction("b.eq __rt_sgmd_wrapper_data");
+    emitter.instruction(&format!("cmp x7, #{WRAPPER_ID_HTTPS}"));
+    emitter.instruction("b.ne __rt_sgmd_no_wrapper_data");                      // no response, so no key
+    emitter.label("__rt_sgmd_wrapper_data");
+    emitter.instruction("bl __rt_get_http_response_headers");                   // x0 = a fresh indexed array
+    emitter.instruction("mov x3, x0");                                          // value_lo = the array
+    emitter.instruction("mov x4, #0");                                          // value_hi unused for arrays
+    emitter.instruction("mov x5, #4");                                          // value tag = indexed array
+    emit_hash_put_aarch64(emitter, "_meta_key_wrapper_data", 12);
+    emitter.label("__rt_sgmd_no_wrapper_data");
+}
+
 /// Reads the StreamState URI pointer/length pair and loads it into
 /// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
 /// Fallback (ptr == 0) → empty string.
@@ -722,6 +762,9 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_meta_data_uri_params");
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // persist any post-grow hash pointer
     emitter.label("__rt_sgmd_not_data_x86");
+    // See the AArch64 counterpart: `wrapper_data` carries the response headers, before
+    // `wrapper_type` and only for a wrapper that had a response.
+    emit_set_wrapper_data_x86(emitter);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_x86(emitter);
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
@@ -736,6 +779,25 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 96");                                         // release the metadata spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the metadata hash pointer
+}
+
+/// The x86_64 counterpart of [`emit_set_wrapper_data_aarch64`].
+fn emit_set_wrapper_data_x86(emitter: &mut Emitter) {
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov r11, QWORD PTR [r10 + {STREAM_WRAPPER_ID_OFFSET}]"
+    ));                                                                         // which wrapper opened it
+    emitter.instruction(&format!("cmp r11, {WRAPPER_ID_HTTP}"));
+    emitter.instruction("je __rt_sgmd_wrapper_data_x86");
+    emitter.instruction(&format!("cmp r11, {WRAPPER_ID_HTTPS}"));
+    emitter.instruction("jne __rt_sgmd_no_wrapper_data_x86");                   // no response, so no key
+    emitter.label("__rt_sgmd_wrapper_data_x86");
+    emitter.instruction("call __rt_get_http_response_headers");                 // rax = a fresh indexed array
+    emitter.instruction("mov rcx, rax");                                        // value_lo = the array
+    emitter.instruction("xor r8d, r8d");                                        // value_hi unused for arrays
+    emitter.instruction("mov r9, 4");                                           // value tag = indexed array
+    emit_hash_put_x86(emitter, "_meta_key_wrapper_data", 12);
+    emitter.label("__rt_sgmd_no_wrapper_data_x86");
 }
 
 /// Emit one `__rt_hash_set` with the value already staged in rcx/r8/r9.

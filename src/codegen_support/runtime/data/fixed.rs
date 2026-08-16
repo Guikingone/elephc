@@ -1596,6 +1596,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_key_mode\n_meta_key_mode:\n    .ascii \"mode\"\n");
     out.push_str(".globl _meta_key_seekable\n_meta_key_seekable:\n    .ascii \"seekable\"\n");
     out.push_str(".globl _meta_key_uri\n_meta_key_uri:\n    .ascii \"uri\"\n");
+    // The response header lines an `http://` stream carries, the same array php publishes as
+    // `$http_response_header`.
+    out.push_str(".globl _meta_key_wrapper_data\n_meta_key_wrapper_data:\n    .ascii \"wrapper_data\"\n");
     // A `data:` URI contributes its own metadata keys: the media type, every `name=value`
     // parameter under its own name, and `base64` — which php emits even when it is false.
     out.push_str(".globl _meta_key_mediatype\n_meta_key_mediatype:\n    .ascii \"mediatype\"\n");

@@ -85,6 +85,11 @@ pub fn emit_get_http_response_headers(emitter: &mut Emitter) {
     // -- found \r\n: push the line from line_start to scan_index --
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload line start
     emitter.instruction("sub x2, x1, x3");                                      // line length = scan_index - line_start
+    // The header region ENDS one byte past the CRLFCRLF, so the blank line that closes it is
+    // inside the scan and used to be pushed as a seventh, empty entry. php-src stops there:
+    // `php_stream_url_wrap_http` adds a line only while one has bytes, so `$http_response_header`
+    // and the `wrapper_data` metadata key both hold exactly the status line and the headers.
+    emitter.instruction("cbz x2, __rt_http_headers_done");                      // the blank line closes the headers
     abi::emit_symbol_address(emitter, "x4", "_http_resp_buf");
     emitter.instruction("add x1, x4, x3");                                      // line pointer = _http_resp_buf + line_start
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
@@ -103,6 +108,7 @@ pub fn emit_get_http_response_headers(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #24]");                                   // reload line start
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload header_end
     emitter.instruction("sub x2, x2, x3");                                      // line length = header_end - line_start
+    emitter.instruction("cbz x2, __rt_http_headers_done");                      // a truncated tail contributes nothing
     abi::emit_symbol_address(emitter, "x4", "_http_resp_buf");
     emitter.instruction("add x1, x4, x3");                                      // line pointer = _http_resp_buf + line_start
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload array pointer
@@ -188,20 +194,17 @@ fn emit_get_http_response_headers_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_http_headers_advance_x86");                    // no → \r without \n
 
     // -- found \r\n: push the line from line_start to scan_index --
+    // `__rt_array_push_str` takes rdi = array, rsi = pointer, rdx = length.
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                        // reload line start
-    emitter.instruction("sub rsi, rcx");                                        // line length = scan_index - line_start
-    emitter.instruction("sub rsi, rdx");                                        // (fix: rsi = scan - line_start)
-    // Actually: need rsi = scan_index - line_start. Let me compute properly.
-    emitter.instruction("mov rsi, rcx");                                        // scan_index
-    emitter.instruction("sub rsi, rdx");                                        // rsi = scan_index - line_start = line length
     abi::emit_symbol_address(emitter, "r10", "_http_resp_buf");
     emitter.instruction("lea rsi, [r10 + rdx]");                                // rsi = _http_resp_buf + line_start
-    // Oops, I need both ptr and len. Let me use the correct registers.
-    // __rt_array_push_str takes: rdi=array, rsi=ptr, rdx=len
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload array pointer
     emitter.instruction("mov rdx, rcx");                                        // scan_index
     emitter.instruction("sub rdx, QWORD PTR [rbp - 32]");                       // rdx = scan_index - line_start = line length
-    // rsi already = _http_resp_buf + line_start (set above by lea)
+    // See the AArch64 counterpart: the blank line that closes the header block is inside the
+    // scanned region, and php-src does not turn it into an entry.
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_http_headers_done_x86");                        // the blank line closes the headers
     emitter.instruction("call __rt_array_push_str");                            // push the line; rax = updated array
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the updated array pointer
 
@@ -216,6 +219,8 @@ fn emit_get_http_response_headers_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                        // reload line start
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                        // reload header_end
     emitter.instruction("sub rcx, rdx");                                        // rcx = header_end - line_start = line length
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_http_headers_done_x86");                        // a truncated tail contributes nothing
     abi::emit_symbol_address(emitter, "r10", "_http_resp_buf");
     emitter.instruction("lea rsi, [r10 + rdx]");                                // rsi = _http_resp_buf + line_start
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload array pointer

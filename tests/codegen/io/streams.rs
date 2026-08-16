@@ -6461,6 +6461,53 @@ fclose($f);
     assert_eq!(out, "body delivered over http");
 }
 
+/// Verifies `stream_get_meta_data()` on an `http://` stream carries `wrapper_data`.
+///
+/// php-src's `php_stream_url_wrap_http` stores the response header lines in
+/// `stream->wrapperdata` and `_php_stream_get_metadata` copies them out under `wrapper_data` —
+/// the SAME array it publishes as `$http_response_header`, status line first, in the order the
+/// server sent them, written after the three fallback flags and before `wrapper_type`. Measured
+/// on `php -n` 8.5.6 against a local server:
+///
+/// ```text
+/// [timed_out] =>            [wrapper_data] => Array
+/// [blocked] => 1                ( [0] => HTTP/1.1 200 OK
+/// [eof] =>                        [1] => Host: 127.0.0.1:8933
+///                                 [2] => Date: …
+///                                 [5] => Content-Length: 11 )
+/// [wrapper_type] => http    [stream_type] => tcp_socket/ssl    [mode] => r
+/// ```
+///
+/// RED before the fix: elephc published the global and left the metadata key out entirely, and
+/// the global itself carried a SEVENTH, empty entry — the blank line that closes the header
+/// block sits inside the scanned region and was being pushed as a header of its own.
+#[test]
+fn test_http_meta_data_carries_the_response_headers() {
+    let (_server, port) = spawn_http_server(b"metabody");
+    let out = compile_and_run(&format!(
+        r#"<?php
+$f = fopen("http://127.0.0.1:{port}/page.txt", "r");
+$m = stream_get_meta_data($f);
+echo implode(",", array_keys($m)) . "\n";
+echo count($m["wrapper_data"]) . "\n";
+echo $m["wrapper_data"][0] . "\n";
+echo $m["wrapper_data"][2] . "\n";
+echo count($http_response_header) . "\n";
+$plain = stream_get_meta_data(fopen("php://memory", "r+"));
+echo array_key_exists("wrapper_data", $plain) ? "leaked" : "absent";
+"#
+    ));
+    assert_eq!(
+        out,
+        "timed_out,blocked,eof,wrapper_data,wrapper_type,stream_type,mode,unread_bytes,seekable,uri\n\
+         3\n\
+         HTTP/1.0 200 OK\n\
+         Content-Length: 8\n\
+         3\n\
+         absent"
+    );
+}
+
 /// `file_get_contents("http://...")` opens the `http://` wrapper, slurps the
 /// whole response body (headers stripped) into an owned string, and returns it
 /// — equivalent to `fopen()` + `stream_get_contents()` + `fclose()` on the URL.

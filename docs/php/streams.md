@@ -421,7 +421,7 @@ wrapper exposes glob matches through the same directory-stream API.
 | `stream_isatty()` | `stream_isatty(resource $stream): bool` | Report whether the stream is connected to an interactive terminal. |
 | `stream_is_local()` | `stream_is_local(resource\|string $stream): bool` | Return `true` for local streams. |
 | `stream_supports_lock()` | `stream_supports_lock(resource $stream): bool` | Return `true` when a stream supports `flock()`. |
-| `stream_get_meta_data()` | `stream_get_meta_data(resource $stream): array` | Return metadata keys `timed_out`, `blocked`, `eof`, `unread_bytes`, `stream_type`, `wrapper_type`, `mode`, `seekable`, and `uri`. |
+| `stream_get_meta_data()` | `stream_get_meta_data(resource $stream): array` | Return metadata keys `timed_out`, `blocked`, `eof`, `unread_bytes`, `stream_type`, `wrapper_type`, `mode`, `seekable`, and `uri`, in PHP's insertion order. A stream opened over `http://` or `https://` also carries `wrapper_data`, the response header lines — the same array `$http_response_header` holds. |
 
 Closing a handle changes its reported type but not its id. After `fclose()`,
 `pclose()` or `closedir()`, `get_resource_type($handle)` returns `"Unknown"` and
