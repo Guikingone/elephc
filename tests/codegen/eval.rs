@@ -4680,7 +4680,7 @@ fn test_eval_null_argument_is_empty_fragment() {
 fn test_eval_integer_argument_is_coerced_then_parse_checked() {
     let err = compile_and_run_expect_failure("<?php eval(123);");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }
@@ -5465,7 +5465,7 @@ echo $x;
 "#,
     );
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
          refuses it; stderr was: {err}"
     );
@@ -9345,8 +9345,61 @@ fn test_eval_missing_dynamic_constant_fetch_fails() {
 fn test_eval_parse_error_reports_eval_parse_diagnostic() {
     let err = compile_and_run_expect_failure("<?php eval('if (');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse-error diagnostic: {err}"
+    );
+}
+
+/// Verifies an `eval()` parse error carries php's LOCATION and php's exit status.
+///
+/// Measured on `php -n` 8.5.6, for a file whose fourth line is `eval("1 +");`:
+///
+/// ```text
+/// \nParse error: syntax error, unexpected end of file in /tmp/ev.php(4) : eval()'d code on line 1\n
+/// ```
+/// with status 255. elephc printed `Parse error: eval() fragment is invalid` and exited 1 —
+/// neither the location nor the status, and a wording that appears nowhere in php.
+///
+/// The line INSIDE the fragment is asserted on a THREE-line fragment as well, because that is
+/// the case a fixed `1` would get wrong: php reports an unterminated fragment against the end
+/// of input, which is the empty fourth line, not the last line carrying code.
+///
+/// What is deliberately NOT asserted is php's syntactic complaint. php words at least five
+/// (`unexpected end of file`, `… expecting "("`, `unexpected token ";"`, `Unclosed '('`,
+/// `Unmatched '}'`); the bridge answers a status code, so elephc always writes the first.
+#[test]
+fn test_eval_parse_error_carries_phps_location_and_exit_status() {
+    let single = compile_and_run_capture("<?php\necho \"kept\";\neval('1 +');\n");
+    assert!(!single.success, "an unparsable fragment must be fatal");
+    assert_eq!(single.exit_code, Some(255), "stderr={}", single.stderr);
+    assert_eq!(single.stdout, "kept");
+    assert!(
+        single
+            .stderr
+            .contains(") : eval()'d code on line 1\n"),
+        "the eval location tail is missing, got stderr={}",
+        single.stderr
+    );
+    assert!(
+        single
+            .stderr
+            .starts_with("\nParse error: syntax error, unexpected end of file in "),
+        "the parse error lost php's opening, got stderr={:?}",
+        single.stderr
+    );
+    assert!(
+        single.stderr.contains(".php(3) : eval()'d code"),
+        "the host file and the eval() call line are missing, got stderr={}",
+        single.stderr
+    );
+
+    let multi = compile_and_run_capture("<?php\neval(\"\\$a = 1;\\n\\$b = 2;\\n1 +\\n\");\n");
+    assert!(!multi.success, "an unparsable fragment must be fatal");
+    assert_eq!(multi.exit_code, Some(255), "stderr={}", multi.stderr);
+    assert!(
+        multi.stderr.contains(".php(2) : eval()'d code on line 4\n"),
+        "the fragment's own line was not measured, got stderr={}",
+        multi.stderr
     );
 }
 
@@ -9365,7 +9418,7 @@ fn assert_eval_failure_contains(source: &str, expected: &str) -> String {
 fn test_eval_error_contract_reports_parse_failure() {
     let stderr = assert_eval_failure_contains(
         "<?php eval('if (');",
-        "Parse error: eval() fragment is invalid",
+        "Parse error: syntax error, unexpected end of file",
     );
     assert_no_rust_panic_leaked(&stderr);
 }
@@ -9420,7 +9473,7 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
     for (source, expected) in [
         (
             "<?php eval('if (');",
-            "Parse error: eval() fragment is invalid",
+            "Parse error: syntax error, unexpected end of file",
         ),
         (
             "<?php eval('clamp(5, 10, 0);');",
@@ -28746,7 +28799,7 @@ echo $x;
 fn test_eval_fragment_with_php_opening_tag_reports_parse_error() {
     let err = compile_and_run_expect_failure("<?php eval('<?php echo 1;');");
     assert!(
-        err.contains("Parse error: eval() fragment is invalid"),
+        err.contains("Parse error: syntax error, unexpected end of file"),
         "stderr did not contain eval parse diagnostic: {err}"
     );
 }

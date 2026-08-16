@@ -1034,6 +1034,9 @@ pub(crate) struct ProgramOutput {
     pub(crate) stderr: String,
     // true if the process exited with a successful (zero) exit code.
     pub(crate) success: bool,
+    // The exit code itself, or None when a signal ended the process. php distinguishes its
+    // statuses — 255 for a fatal, 1 for `exit(1)` — so `success` alone cannot pin one.
+    pub(crate) exit_code: Option<i32>,
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1066,6 +1069,7 @@ pub(crate) fn assemble_and_run_capture(
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
+        exit_code: output.status.code(),
     }
 }
 
