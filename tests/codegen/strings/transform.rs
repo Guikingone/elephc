@@ -260,6 +260,139 @@ echo implode(",", eval('return [];')), "|\n";
     assert_eq!(out, "a,b|\n1,a|\n|\n");
 }
 
+/// Regression: `implode()` over an array of FLOATS had no renderer at all.
+///
+/// A statically `array<float>` operand was refused at codegen with "implode array element PHP type
+/// Float", and the same array behind a `Mixed` operand (runtime value_type tag 2) reached
+/// `__rt_implode`, which read the 8-byte doubles as 16-byte string `{ptr,len}` pairs and SIGSEGVed
+/// (exit 139). `__rt_implode_float` renders each element through `__rt_ftoa`, PHP's `precision=14`
+/// / `zend_gcvt` spelling. Measured with `php -n` (8.5.6):
+/// `implode(",", [1.5, 2.0, 1e20, 0.1+0.2, -0.0, INF])` is `1.5,2,1.0E+20,0.3,-0,INF`, and
+/// `implode(",", [1/3, 1e-7, 1e15])` is `0.33333333333333,1.0E-7,1.0E+15`.
+#[test]
+fn test_implode_float_elements() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", [1.5, 2.5]), "|\n";
+echo implode(",", [1.5, 2.0, 1e20, 0.1 + 0.2, -0.0, INF]), "|\n";
+echo implode(",", [1/3, 1e-7, 1e15]), "|\n";
+echo implode(",", [-1.5, -INF]), "|\n";
+echo implode(",", [2.0]), "|\n";
+echo join(",", [1.5, 2.5]), "|\n";
+echo implode([1.5, 2.5]), "|\n";
+$r = eval('return [1.5, 2.5];');
+echo implode(",", $r), "|\n";
+function h(): mixed { return [1.25, 2.75, 3.0]; }
+echo implode("-", h()), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5|\n\
+         1.5,2,1.0E+20,0.3,-0,INF|\n\
+         0.33333333333333,1.0E-7,1.0E+15|\n\
+         -1.5,-INF|\n\
+         2|\n\
+         1.5,2.5|\n\
+         1.52.5|\n\
+         1.5,2.5|\n\
+         1.25-2.75-3|\n"
+    );
+}
+
+/// Guard: the float renderer must publish the LIVE concat cursor before every conversion.
+///
+/// `__rt_ftoa` formats into `_concat_buf` at `_concat_off` and advances the offset by the bytes it
+/// actually wrote — unlike `__rt_itoa`, which always reserves a fixed 21-byte scratch. Leaving
+/// `_concat_off` parked at the implode result START made the second element's conversion overwrite
+/// the glue already copied, so a glue LONGER than the rendered element is what exposes it. The
+/// trailing concat and `strlen` pin the other half: the ABSOLUTE end offset must be stamped on
+/// completion, or the next string written reuses the joined bytes. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_float_publishes_concat_cursor() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode("XXXXXXXXXXXXXXXXXXXXXXXXXXXX", [1.5, 2.5, 3.5]), "|\n";
+echo implode(",", [1.5, 2.5]) . "TAIL", "|\n";
+echo strlen(implode(",", [1.5, 2.0, 1e20])), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX2.5XXXXXXXXXXXXXXXXXXXXXXXXXXXX3.5|\n\
+         1.5,2.5TAIL|\n\
+         13|\n"
+    );
+}
+
+/// Regression: `implode()` over a HASH held in a `Mixed` operand SIGSEGVed for every value type.
+///
+/// A statically `AssocArray` operand was already flattened into a temporary indexed array of its
+/// values, but a `Mixed` operand carries no compile-time storage kind, so hash storage reached
+/// `__rt_implode`, which read the entry table as 16-byte string slots and died (exit 139) — for
+/// int, float, string, bool, null and heterogeneous values alike. The call site now probes
+/// `__rt_heap_kind` and flattens kind 3 the same way, flagging the temporary so only IT is freed.
+/// Measured with `php -n` (8.5.6): php's `implode()` reads only the VALUES, in insertion order.
+#[test]
+fn test_implode_mixed_operand_hash_storage() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1.5, "j" => 2.0];')), "|\n";
+echo implode(",", eval('return ["k" => "aa", "j" => "bb"];')), "|\n";
+echo implode(",", eval('return ["k" => true, "j" => false];')), "|\n";
+echo implode(",", eval('return ["k" => null, "j" => null];')), "|\n";
+echo implode(",", eval('return ["k" => 1, "j" => "two", "l" => 3.5, "m" => true, "n" => null];')), "|\n";
+echo implode(",", eval('return [5 => 10, 9 => 13];')), "|\n";
+echo implode(",", eval('return ["k" => 1];')), "|\n";
+echo join("-", eval('return ["k" => 10, "j" => 13];')), "|\n";
+echo implode(eval('return ["k" => 10, "j" => 13];')), "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "10,13|\n1.5,2|\naa,bb|\n1,|\n,|\n1,two,3.5,1,|\n10,13|\n1|\n10-13|\n1013|\n"
+    );
+}
+
+/// Guard: only the MATERIALIZED temporary may be freed, never the caller's own array.
+///
+/// The `Mixed` arm decides at runtime whether it handed the renderer a temporary (hash storage) or
+/// the caller's own indexed array, so an unconditional deep-free would destroy a live operand.
+/// Both storage kinds are joined twice and read afterwards. Measured with `php -n` (8.5.6).
+#[test]
+fn test_implode_mixed_operand_does_not_free_borrowed_array() {
+    let out = compile_and_run(
+        r#"<?php
+$r = eval('return [1.5, 2.5, 3.5];');
+echo implode(",", $r), "|", implode("-", $r), "|", count($r), "|\n";
+$h = eval('return ["a" => 1.5, "b" => "two", "c" => 3];');
+echo implode(",", $h), "|", implode("-", $h), "|", count($h), "|", $h["b"], "|\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.5,2.5,3.5|1.5-2.5-3.5|3|\n1.5,two,3|1.5-two-3|3|two|\n"
+    );
+}
+
+/// Regression: a statically `array<string, float>` hash had no `implode()` renderer.
+///
+/// `emit_loaded_assoc_array_values` stamps the values array with value_type tag 2 and appends the
+/// raw f64 payloads as 8-byte words, so the float renderer reads it directly; before this the
+/// lowering refused with "implode hash value PHP type Float". Measured with `php -n` (8.5.6):
+/// `implode(",", ["x" => 1.5, "y" => 2.0])` is `1.5,2`.
+#[test]
+fn test_implode_hash_float_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", ["x" => 1.5, "y" => 2.0]), "|\n";
+echo implode("-", ["x" => 1e20, "y" => 0.1 + 0.2, "z" => -0.0]), "|\n";
+"#,
+    );
+    assert_eq!(out, "1.5,2|\n1.0E+20-0.3--0|\n");
+}
+
 /// Verifies explode followed by implode produces the expected string transformation.
 #[test]
 fn test_explode_implode_roundtrip() {

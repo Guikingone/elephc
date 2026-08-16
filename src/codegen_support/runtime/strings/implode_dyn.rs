@@ -7,27 +7,30 @@
 //! - Selected by `implode_runtime_label` in `crate::codegen::lower_inst::builtins::strings::split`.
 //!
 //! Key details:
-//! - The three element renderers (`__rt_implode`, `__rt_implode_int`, `__rt_implode_bool`) share
-//!   ONE ABI — AArch64 `x1`/`x2` = glue ptr/len, `x3` = array ptr → `x1`/`x2` = result ptr/len;
-//!   x86_64 `rdi`/`rsi` = glue ptr/len, `rdx` = array ptr → `rax`/`rdx` = result ptr/len — so this
-//!   dispatcher is a pure TAIL BRANCH: it never builds a frame and never touches the operands.
+//! - The four element renderers (`__rt_implode`, `__rt_implode_int`, `__rt_implode_bool`,
+//!   `__rt_implode_float`) share ONE ABI — AArch64 `x1`/`x2` = glue ptr/len, `x3` = array ptr →
+//!   `x1`/`x2` = result ptr/len; x86_64 `rdi`/`rsi` = glue ptr/len, `rdx` = array ptr →
+//!   `rax`/`rdx` = result ptr/len — so this dispatcher is a pure TAIL BRANCH: it never builds a
+//!   frame and never touches the operands.
 //! - A `Mixed` operand carries no compile-time element type, but the indexed-array heap header
 //!   does: the packed kind word at `[array - 8]` holds the runtime `value_type` tag in bits 8..15.
-//!   Tag 0 is int (the unstamped default, which an empty array also carries), 1 is string, 3 is
-//!   bool, 7 is boxed Mixed. `__rt_implode` reads 16-byte string pointer/length slots for every
-//!   tag that is not 7, so sending it an INT array made it dereference the payload `1` as a
-//!   string pointer — a SIGSEGV — and sending it a BOOL array made it read an 8-byte payload as a
-//!   16-byte pair, rendering `implode(",", [true,false])` as `","` instead of PHP's `"1,"`.
+//!   Tag 0 is int (the unstamped default, which an empty array also carries), 1 is string, 2 is
+//!   float, 3 is bool, 7 is boxed Mixed. `__rt_implode` reads 16-byte string pointer/length slots
+//!   for every tag that is not 7, so sending it an INT or FLOAT array made it dereference the
+//!   payload as a string pointer — a SIGSEGV — and sending it a BOOL array made it read an 8-byte
+//!   payload as a 16-byte pair, rendering `implode(",", [true,false])` as `","` instead of PHP's
+//!   `"1,"`.
 //! - Only the whole-operand-`Mixed` case routes here. A statically typed operand still selects its
 //!   renderer directly, so no existing call site changes shape.
 //! - The heap kind byte is checked BEFORE the element tag: hash storage (kind 3) stamps a
 //!   value_type too, so classifying it as an indexed array turned `implode(",", $hashInMixed)`
 //!   from a segfault into SILENT garbage (`"10,13"` for `["k"=>1,"j"=>2]`). Non-indexed storage is
 //!   therefore routed straight to `__rt_implode`, exactly where it went before this dispatcher.
-//! - REMAINING GAP (measured, unchanged by this dispatcher): a `Mixed` operand holding a FLOAT
-//!   array (tag 2) or HASH storage still reaches `__rt_implode` and still crashes. There is no
-//!   `__rt_implode_float` renderer to tail-branch to, and hash storage needs the values
-//!   materialization that only the call site can emit (`implode_array_is_hash`).
+//!   That fallback is now unreachable from `implode()` itself: the call site flattens hash storage
+//!   into a temporary indexed array of boxed Mixed cells before branching here
+//!   (`emit_dynamic_implode_hash_values_*`), because the values walk needs an emitted loop that no
+//!   frameless tail-branch dispatcher can host. It is kept as a defensive arm for any other heap
+//!   kind a `Mixed` operand can hold.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -62,6 +65,11 @@ pub fn emit_implode_dyn(emitter: &mut Emitter) {
     emitter.instruction("b __rt_implode_bool");                                 // PHP renders true as "1" and false as the empty string, which only this renderer does
 
     emitter.label("__rt_implode_dyn_not_bool");
+    emitter.instruction("cmp x12, #2");                                         // are the elements raw 8-byte IEEE-754 doubles?
+    emitter.instruction("b.ne __rt_implode_dyn_not_float");                     // fall through to the remaining layouts when the elements are not floats
+    emitter.instruction("b __rt_implode_float");                                // doubles need PHP's precision=14 __rt_ftoa spelling, not a string pair read
+
+    emitter.label("__rt_implode_dyn_not_float");
     emitter.instruction("cbnz x12, __rt_implode_dyn_not_int");                  // tag 0 is the unstamped int layout that an empty array also carries
     emitter.instruction("b __rt_implode_int");                                  // 8-byte int payloads must be rendered through __rt_itoa, never as string pairs
 
@@ -93,6 +101,11 @@ fn emit_implode_dyn_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_implode_bool");                               // PHP renders true as "1" and false as the empty string, which only this renderer does
 
     emitter.label("__rt_implode_dyn_not_bool");
+    emitter.instruction("cmp r10, 2");                                          // are the elements raw 8-byte IEEE-754 doubles?
+    emitter.instruction("jne __rt_implode_dyn_not_float");                      // fall through to the remaining layouts when the elements are not floats
+    emitter.instruction("jmp __rt_implode_float");                              // doubles need PHP's precision=14 __rt_ftoa spelling, not a string pair read
+
+    emitter.label("__rt_implode_dyn_not_float");
     emitter.instruction("test r10, r10");                                       // tag 0 is the unstamped int layout that an empty array also carries
     emitter.instruction("jnz __rt_implode_dyn_not_int");                        // string and boxed Mixed layouts skip the integer renderer
     emitter.instruction("jmp __rt_implode_int");                                // 8-byte int payloads must be rendered through __rt_itoa, never as string pairs
