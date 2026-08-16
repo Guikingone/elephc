@@ -89,6 +89,7 @@ mod http_build_request;
 mod apply_socket_opts;
 mod stream_context_get_int_option;
 mod stream_context_get_string_option;
+mod stream_context_get_usec_option;
 mod stream_context_merge_options;
 mod stream_context_set_option_4;
 mod stream_copy_to_stream;
@@ -239,6 +240,7 @@ pub(crate) use apply_socket_opts::{
 };
 pub(crate) use stream_context_get_int_option::emit_get_int_context_option;
 pub(crate) use stream_context_get_string_option::emit_get_string_context_option;
+pub(crate) use stream_context_get_usec_option::emit_get_usec_context_option;
 pub(crate) use stream_context_merge_options::emit_stream_context_merge_options;
 pub(crate) use stream_context_set_option_4::emit_stream_context_set_option_4;
 pub(crate) use stream_copy_to_stream::emit_stream_copy_to_stream;

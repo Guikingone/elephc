@@ -1094,9 +1094,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     //                                0 = fail-open behavior (default in PHP).
     //   _http_active_max_redirects : count of remaining hops for
     //                                follow_location loops (0 disables).
+    //   _http_active_timeout_set   : 1 = [http][timeout] was present, so the
+    //                                read must not block past the deadline;
+    //                                0 = no deadline (PHP's default).
+    //   _http_active_timeout_seconds / _http_active_timeout_usec : the deadline
+    //                                split into a `timeval`. PHP documents the
+    //                                option as a FLOAT, so the sub-second part
+    //                                has to survive as microseconds.
     out.push_str(&comm_directive("_http_active_ignore_errors", 8, target));
     out.push_str(&comm_directive("_http_active_max_redirects", 8, target));
+    out.push_str(&comm_directive("_http_active_timeout_set", 8, target));
     out.push_str(&comm_directive("_http_active_timeout_seconds", 8, target));
+    out.push_str(&comm_directive("_http_active_timeout_usec", 8, target));
     // Proxy override for __rt_http_open: when non-zero, used as the TCP
     // connect target instead of the host extracted from the URL. Value
     // shape is "tcp://proxyhost:port" — the same format

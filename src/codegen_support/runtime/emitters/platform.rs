@@ -87,6 +87,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_context_set_option_4(emitter);
     io::emit_get_string_context_option(emitter);
     io::emit_get_int_context_option(emitter);
+    io::emit_get_usec_context_option(emitter);
     io::emit_apply_socket_client_opts(emitter);
     io::emit_apply_socket_server_opts(emitter);
     io::emit_socket_backlog(emitter);

@@ -450,6 +450,175 @@ fn test_fopen_mode_suffix_e_sets_o_cloexec_on_every_target() {
     }
 }
 
+/// Starts a server that accepts, drains the request, and then never answers.
+///
+/// Returns the listener alongside the port so the caller keeps the accepted
+/// connection alive for the whole test; dropping it would send a FIN and let a
+/// broken timeout look like a working one.
+fn spawn_http_silent_server() -> (std::sync::mpsc::Sender<()>, u16) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("timeout test: bind port");
+    let port = listener
+        .local_addr()
+        .expect("timeout test: local address")
+        .port();
+    let (stop, wait) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            let Ok(socket) = stream else { break };
+            held.push(socket);
+            if wait.try_recv().is_ok() {
+                break;
+            }
+        }
+        drop(held);
+    });
+    (stop, port)
+}
+
+/// Starts a server that answers with full headers plus a partial body, then stalls.
+fn spawn_http_partial_body_server() -> (std::sync::mpsc::Sender<()>, u16) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("timeout test: bind port");
+    let port = listener
+        .local_addr()
+        .expect("timeout test: local address")
+        .port();
+    let (stop, wait) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            let Ok(mut socket) = stream else { break };
+            let _ = socket.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while socket.read(&mut byte).unwrap_or(0) == 1 {
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            // Content-Length promises 20 bytes and only 4 arrive: the deadline is
+            // what ends the read, not the peer.
+            let _ = socket
+                .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nHEAD");
+            held.push(socket);
+            if wait.try_recv().is_ok() {
+                break;
+            }
+        }
+        drop(held);
+    });
+    (stop, port)
+}
+
+/// Verifies `[http][timeout]` is honoured in every PHP spelling of the option.
+///
+/// Measured against `php -n` 8.5.6 with a server that accepts and never answers:
+/// `0.5` (float), `"0.5"` (string), `1` (int) and `"1"` all return `false` after
+/// their own deadline, and `0` returns `false` without waiting at all — php's
+/// `timeout` is a FLOAT it casts from whatever the context holds, and a zero
+/// deadline is "fail now", not "wait forever".
+///
+/// Before the fix elephc read the option only as a STRING and only in whole
+/// base-10 seconds, so `0.5` and `1` never armed anything; the read loop then
+/// treated the macOS `EAGAIN` return (a POSITIVE errno with the carry flag set)
+/// as "35 bytes were read" and spun forever.
+#[test]
+fn test_http_timeout_accepts_every_php_spelling_and_fails_the_open() {
+    let (stop, port) = spawn_http_silent_server();
+    let out = compile_and_run(
+        &r#"<?php
+$url = "http://127.0.0.1:PHP_TEST_PORT/x";
+$float = @file_get_contents($url, false, stream_context_create(["http" => ["timeout" => 0.5]]));
+echo $float === false ? "float-false" : "float-body", "|";
+$text = @file_get_contents($url, false, stream_context_create(["http" => ["timeout" => "0.25"]]));
+echo $text === false ? "string-false" : "string-body", "|";
+$int = @file_get_contents($url, false, stream_context_create(["http" => ["timeout" => 1]]));
+echo $int === false ? "int-false" : "int-body";
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    let _ = stop.send(());
+    assert_eq!(out, "float-false|string-false|int-false");
+}
+
+/// Verifies `[http][timeout] => 0` fails the open immediately.
+///
+/// `php -n` 8.5.6 answers `false` with `Failed to open stream: Operation timed
+/// out` even against an instantly-responding server. elephc used to read 0 as
+/// "no timeout configured" and blocked instead, and `setsockopt(0, 0)` means
+/// exactly that to the kernel, so the zero deadline needs its own branch.
+#[test]
+fn test_http_timeout_zero_fails_the_open_without_waiting() {
+    let (server, port) = spawn_http_method_server(1);
+    let out = compile_and_run(
+        &r#"<?php
+$ctx = stream_context_create(["http" => ["timeout" => 0]]);
+$body = @file_get_contents("http://127.0.0.1:PHP_TEST_PORT/x", false, $ctx);
+echo $body === false ? "timed-out" : "served";
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    let _ = server.join();
+    assert_eq!(out, "timed-out");
+}
+
+/// Verifies a deadline that expires mid-response keeps what already arrived, and
+/// that arming the deadline does not redirect the request to stdout.
+///
+/// `php -n` 8.5.6 returns the partial body `'HEAD'` here rather than `false`:
+/// the open already succeeded, so only the read is cut short. The stdout half of
+/// this test is the real regression — `__rt_stream_set_timeout` answers 0/1 in
+/// the SAME register that holds the socket descriptor, so an armed timeout used
+/// to `write()` the HTTP request to fd 1 and the server never saw a request.
+#[test]
+fn test_http_timeout_keeps_a_partial_response_and_still_reaches_the_socket() {
+    let (stop, port) = spawn_http_partial_body_server();
+    let out = compile_and_run(
+        &r#"<?php
+$ctx = stream_context_create(["http" => ["timeout" => 0.5]]);
+$body = @file_get_contents("http://127.0.0.1:PHP_TEST_PORT/x", false, $ctx);
+echo $body === false ? "false" : $body;
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    let _ = stop.send(());
+    assert_eq!(out, "HEAD");
+}
+
+/// Pins that the duration reader resolves int, float, string and bool options on
+/// every supported target, so `[http][timeout]` is not string-only anywhere.
+#[test]
+fn test_timeout_option_reader_handles_every_value_shape_on_every_target() {
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64"] {
+        let parsed = Target::parse(target).expect("supported target");
+        let runtime = elephc::codegen::generate_runtime(8_388_608, parsed);
+        let body = context_reader_body(&runtime, "__rt_get_usec_context_option");
+        for (needle, shape) in [
+            ("_from_int", "int and bool"),
+            ("_from_float", "float"),
+            ("_from_string", "string"),
+        ] {
+            assert!(
+                body.contains(needle),
+                "{target}: the timeout reader has no {shape} path:\n{body}"
+            );
+        }
+        let build = context_reader_body(&runtime, "__rt_http_build_request");
+        assert!(
+            build.contains("__rt_get_usec_context_option"),
+            "{target}: http_build_request still resolves [http][timeout] without the duration reader"
+        );
+        let open = context_reader_body(&runtime, "__rt_http_open");
+        assert!(
+            open.contains("_http_active_timeout_usec"),
+            "{target}: http_open drops the sub-second half of the deadline"
+        );
+    }
+}
+
 /// Returns one runtime helper's assembly, from its label to the next helper's comment banner.
 fn context_reader_body<'a>(runtime: &'a str, label: &str) -> &'a str {
     let marker = format!("{label}:");
