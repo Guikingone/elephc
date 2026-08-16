@@ -109,6 +109,11 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_pwo_done");                                     // it is already ours to hand out
 
     // php://fd/N: the digits sit right after the matched name.
+    //
+    // php-src reads them with `ZEND_STRTOL(start, &end, 10)` and refuses the URL with the FORM
+    // sentence when nothing parsed or a byte is left over — NOT with the unknown-target pair,
+    // which is what a non-digit used to reach here. A sign parses, so `php://fd/-1` is a NUMBER
+    // and gets the range sentence `__rt_php_fd_open` words instead.
     emitter.label("__rt_pwo_fd_number");
     emitter.instruction("ldr x13, [sp, #0]");                                   // the sub-scheme bytes
     emitter.instruction("ldr x12, [sp, #8]");                                   // its length
@@ -118,18 +123,40 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_pwo_fd_form");                               // php has its own sentence for this one
     emitter.instruction("mov x14, #0");                                         // digit index
     emitter.instruction("mov x0, #0");                                          // accumulated descriptor
+    emitter.instruction("mov x17, #0");                                         // negative flag
+    emitter.instruction("ldrb w15, [x13]");                                     // the byte a sign would occupy
+    emitter.instruction("cmp w15, #0x2B");                                      // '+'
+    emitter.instruction("b.eq __rt_pwo_fd_sign");
+    emitter.instruction("cmp w15, #0x2D");                                      // '-'
+    emitter.instruction("b.ne __rt_pwo_fd_digit");                              // no sign: the first byte is a digit
+    emitter.instruction("mov x17, #1");                                         // remember to negate the result
+    emitter.label("__rt_pwo_fd_sign");
+    emitter.instruction("add x14, x14, #1");                                    // the sign is consumed, not accumulated
+    emitter.instruction("cmp x14, x12");                                        // a lone sign parses no number at all
+    emitter.instruction("b.hs __rt_pwo_fd_form");
     emitter.label("__rt_pwo_fd_digit");
     emitter.instruction("cmp x14, x12");                                        // consumed every byte?
-    emitter.instruction("b.hs __rt_pwo_dup");                                   // the number is complete
+    emitter.instruction("b.hs __rt_pwo_fd_ready");                              // the number is complete
     emitter.instruction("ldrb w15, [x13, x14]");                                // one candidate digit
     emitter.instruction("sub w15, w15, #48");                                   // fold ASCII '0' to zero
     emitter.instruction("cmp w15, #9");                                         // is it actually a digit?
-    emitter.instruction("b.hi __rt_pwo_unknown");                               // a non-digit makes the URL meaningless
+    emitter.instruction("b.hi __rt_pwo_fd_form");                               // a leftover byte reads as no number
     emitter.instruction("mov x16, #10");
     emitter.instruction("mul x0, x0, x16");                                     // shift the accumulator one decimal place
     emitter.instruction("add x0, x0, x15");                                     // and add the new digit
     emitter.instruction("add x14, x14, #1");                                    // advance the digit index
     emitter.instruction("b __rt_pwo_fd_digit");                                 // keep parsing
+
+    // The descriptor goes to the opener that words php's two refusals, not to the bare `dup`
+    // the fixed descriptors use: those always exist, and this one may not.
+    emitter.label("__rt_pwo_fd_ready");
+    emitter.instruction("cbz x17, __rt_pwo_fd_open");                           // no sign to apply
+    emitter.instruction("neg x0, x0");                                          // php's strtol reads the sign as part of the number
+    emitter.label("__rt_pwo_fd_open");
+    emitter.instruction("ldr x1, [sp, #24]");                                   // the URI, whole, for the refusal line
+    emitter.instruction("ldr x2, [sp, #32]");
+    emitter.instruction("bl __rt_php_fd_open");                                 // x0 = the copy, or -1 after saying why
+    emitter.instruction("b __rt_pwo_done");
 
     emitter.label("__rt_pwo_dup");
     emitter.bl_c("dup");                                                        // hand out a copy, never the process's own descriptor

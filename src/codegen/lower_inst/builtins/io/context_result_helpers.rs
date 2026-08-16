@@ -482,6 +482,25 @@ pub(super) fn emit_dup_fd_result(ctx: &mut FunctionContext<'_>, fd: i64) {
     ctx.emitter.bl_c("dup");                                                    // hand out a copy, never the process's own descriptor
 }
 
+/// Emits the `php://fd/N` open, which is a `dup()` that SAYS why it failed.
+///
+/// The three standard streams reach [`emit_dup_fd_result`] instead: their descriptors always
+/// exist, so php has no refusal to word for them. A descriptor the URL names is different —
+/// php checks it against `getdtablesize()` and reports a failed `dup()` with the errno NUMBER
+/// as well as its text — and neither the bound nor the errno is known at compile time, so the
+/// whole open goes through the runtime helper and the URL travels with it for the message.
+pub(super) fn emit_php_fd_open_result(ctx: &mut FunctionContext<'_>, fd: i64, path: &str) {
+    let (path_symbol, path_len) = ctx.data.add_string(path.as_bytes());
+    let (fd_reg, url_reg, len_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx"),
+    };
+    abi::emit_load_int_immediate(ctx.emitter, fd_reg, fd);
+    abi::emit_symbol_address(ctx.emitter, url_reg, &path_symbol);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, path_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_php_fd_open");
+}
+
 /// Emits a boolean scalar as the current integer result.
 pub(super) fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
     abi::emit_load_int_immediate(
@@ -537,8 +556,42 @@ pub(super) fn php_standard_stream_fd(path: &str) -> Option<i64> {
 
 /// Recognizes `php://fd/N` URLs and returns the descriptor embedded in the URL.
 pub(super) fn php_fd_stream(path: &str) -> Option<i64> {
-    let suffix = path.strip_prefix("php://fd/")?;
-    suffix.parse::<i64>().ok()
+    php_fd_number(path.strip_prefix("php://fd/")?)
+}
+
+/// Reads the descriptor php-src's `php_stream_url_wrap_php` reads out of a `php://fd/` URL.
+///
+/// php-src runs `ZEND_STRTOL(start, &end, 10)` and refuses the URL with its own FORM sentence
+/// when `end == start` or `*end != '\0'`; anything that DOES parse — including a negative number
+/// and a leading-zero spelling — goes on to the range check, which words its refusal differently.
+/// Measured on `php -n` 8.5.6: `php://fd/abc` and `php://fd/12abc` get the form sentence,
+/// `php://fd/-1` gets the range sentence, and `php://fd/099` is descriptor 99.
+///
+/// `strtol` also skips leading whitespace, so php opens `php://fd/ 1`; this reader does not, and
+/// answers the FORM sentence for it. The run-time dispatch in `__rt_php_fd_open`'s caller reads
+/// the same shape, so the two agree with each other — which is the property that matters more
+/// here than a space inside a URL.
+///
+/// The accumulation wraps rather than saturating, for the same reason: the assembly parser
+/// multiplies and adds without an overflow check, and a URL spelling thirty digits should not
+/// mean two different things depending on which dispatch saw it.
+pub(super) fn php_fd_number(text: &str) -> Option<i64> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.first() {
+        Some(b'-') => (true, &bytes[1..]),
+        Some(b'+') => (false, &bytes[1..]),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut value: i64 = 0;
+    for byte in digits {
+        value = value
+            .wrapping_mul(10)
+            .wrapping_add(i64::from(byte - b'0'));
+    }
+    Some(if negative { value.wrapping_neg() } else { value })
 }
 
 /// Recognizes in-memory `php://` stream URLs backed by the temp-file helper.

@@ -27,6 +27,7 @@ mod fopen;
 mod data_stream_dynamic;
 mod php_filter_dynamic;
 mod php_wrapper_open;
+mod php_fd_open;
 mod fputcsv;
 mod fread;
 mod fread_filtered;
@@ -279,6 +280,9 @@ pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use socket_errno::emit_socket_strerror;
 pub(crate) use php_wrapper_open::emit_php_wrapper_open;
+pub(crate) use php_fd_open::{
+    emit_php_fd_open, PHP_FD_DUP_HEAD, PHP_FD_DUP_MIDDLE, PHP_FD_DUP_TAIL, PHP_FD_RANGE_HEAD,
+};
 pub(crate) use php_filter_dynamic::{
     PHP_FILTER_OPEN_DEPTH_MAX, PHP_FILTER_PENDING_FRAME_SLOTS, PHP_FILTER_PENDING_MAX,
     emit_php_filter_dynamic,

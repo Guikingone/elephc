@@ -1648,6 +1648,117 @@ var_dump(fopen($v, "r"));
     );
 }
 
+/// Verifies `php://fd/N` says WHY it could not open the descriptor, the three ways php does.
+///
+/// This is the only diagnostic in php that prints an errno NUMBER in brackets AND its `strerror`
+/// text; every other failed open prints the text alone. Measured on `php -n` 8.5.6, with
+/// `getdtablesize()` answering 61440 on the measuring host:
+///
+/// ```text
+/// fopen("php://fd/99")     Error duping file descriptor 99; possibly it doesn't exist:
+///                          [9]: Bad file descriptor
+/// fopen("php://fd/-1")     The file descriptors must be non-negative numbers smaller than 61440
+/// fopen("php://fd/61440")  the same sentence: the bound is exclusive
+/// fopen("php://fd/abc")    php://fd/ stream must be specified in the form php://fd/<orig fd>
+/// ```
+///
+/// The bound itself is asserted only as a PREFIX: it is `getdtablesize()`, a property of the
+/// running process, and the number differs between this host and CI.
+///
+/// RED before the fix: elephc answered a silent `false` for the first three and reported the
+/// filesystem's `No such file or directory` for `abc`, about a path nothing had looked for.
+/// Both dispatches are covered — a literal URL is opened during lowering, a run-time one inside
+/// `__rt_php_wrapper_open` — because they parse the descriptor by different means.
+#[test]
+fn test_php_fd_refusals_carry_phps_two_sentences() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(fopen("php://fd/99", "r"));
+var_dump(fopen("php://fd/-1", "r"));
+var_dump(fopen("php://fd/abc", "r"));
+$a = "php://fd/99";
+var_dump(fopen($a, "r"));
+$b = "php://fd/-1";
+var_dump(fopen($b, "r"));
+$c = "php://fd/abc";
+var_dump(fopen($c, "r"));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n".repeat(6));
+    assert_eq!(
+        out.stderr
+            .matches(
+                "Warning: fopen(php://fd/99): Failed to open stream: \
+                 Error duping file descriptor 99; possibly it doesn't exist: \
+                 [9]: Bad file descriptor"
+            )
+            .count(),
+        2,
+        "the duping refusal is missing on one of the two dispatches, got stderr={}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr
+            .matches(
+                "Warning: fopen(php://fd/-1): Failed to open stream: \
+                 The file descriptors must be non-negative numbers smaller than "
+            )
+            .count(),
+        2,
+        "the range refusal is missing on one of the two dispatches, got stderr={}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stderr
+            .matches(
+                "Warning: fopen(php://fd/abc): Failed to open stream: \
+                 php://fd/ stream must be specified in the form php://fd/<orig fd>"
+            )
+            .count(),
+        2,
+        "a descriptor that is not a number lost php's form sentence, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("No such file or directory"),
+        "a php://fd/ URL reached the file opener, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("Invalid php:// URL specified"),
+        "php://fd/abc was reported as an unknown php:// target, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies a `php://fd/N` naming a descriptor that DOES exist still opens, and says nothing.
+///
+/// The refusal wording above is only correct if it stays off the ordinary path: php duplicates
+/// the descriptor and hands the copy out, so writing to `php://fd/1` reaches standard output and
+/// no diagnostic is printed. Measured on `php -n` 8.5.6.
+#[test]
+fn test_php_fd_opens_an_existing_descriptor_quietly() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://fd/1", "w");
+var_dump($h !== false);
+fwrite($h, "literal\n");
+$u = "php://fd/1";
+$g = fopen($u, "w");
+var_dump($g !== false);
+fwrite($g, "runtime\n");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nliteral\nbool(true)\nruntime\n");
+    assert!(
+        !out.stderr.contains("Warning"),
+        "a descriptor that exists warned about itself, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies `fopen("glob://…")` is refused for the reason php gives, with no filesystem consulted.
 ///
 /// php-src registers `glob` with NO `stream_opener`, so the generic caller reports the absence

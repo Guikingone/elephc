@@ -666,6 +666,26 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _diag_mode_not_valid_tail\n_diag_mode_not_valid_tail:\n    .ascii {:?}\n",
         crate::codegen_support::runtime::io::BAD_MODE_TAIL
     ));
+    // The fragments of php's two `php://fd/N` refusals. Neither is a plain REASON: both carry a
+    // number that is only known while the program runs — the descriptor and its `errno` for the
+    // first, `getdtablesize()` for the second — so `__rt_php_fd_open` writes them in pieces
+    // rather than through the reason composer, and each fragment stops where a number begins.
+    out.push_str(&format!(
+        ".globl _diag_php_fd_dup_head\n_diag_php_fd_dup_head:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PHP_FD_DUP_HEAD
+    ));
+    out.push_str(&format!(
+        ".globl _diag_php_fd_dup_middle\n_diag_php_fd_dup_middle:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PHP_FD_DUP_MIDDLE
+    ));
+    out.push_str(&format!(
+        ".globl _diag_php_fd_dup_tail\n_diag_php_fd_dup_tail:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PHP_FD_DUP_TAIL
+    ));
+    out.push_str(&format!(
+        ".globl _diag_php_fd_range_head\n_diag_php_fd_range_head:\n    .ascii {:?}\n",
+        crate::codegen_support::runtime::io::PHP_FD_RANGE_HEAD
+    ));
     out.push_str(".globl _diag_open_failed_fopen_prefix\n_diag_open_failed_fopen_prefix:\n    .ascii \"Warning: fopen(\"\n");
     out.push_str(".globl _diag_open_failed_fgc_prefix\n_diag_open_failed_fgc_prefix:\n    .ascii \"Warning: file_get_contents(\"\n");
     out.push_str(".globl _diag_open_failed_fpc_prefix\n_diag_open_failed_fpc_prefix:\n    .ascii \"Warning: file_put_contents(\"\n");

@@ -800,6 +800,8 @@ impl LiteralOpenMode {
 ///                            Warning: fopen(php://bogus): Failed to open stream: operation failed
 /// fopen("php://fd/","r")     Warning: fopen(php://fd/): Failed to open stream:
 ///                                     php://fd/ stream must be specified in the form php://fd/<orig fd>
+/// fopen("php://fd/abc","r")  the same sentence: php-src refuses anything `strtol` does not
+///                            consume WHOLE, so a trailing byte reads like no number at all
 /// fopen("glob://*.php","r")  Warning: fopen(glob://*.php): Failed to open stream:
 ///                                     wrapper does not support stream open
 /// ```
@@ -822,12 +824,15 @@ fn literal_wrapper_refusal(path: &str) -> Option<Vec<String>> {
             "stdin" | "stdout" | "stderr" | "input" | "output" | "memory" | "temp"
         ) || target.starts_with("temp/")
             || target.starts_with("filter/")
-            // `php://fd/` with no number is refused, but with its OWN sentence.
-            || (target.starts_with("fd/") && target.len() > 3);
+            // `php://fd/` names a stream only when a NUMBER follows; the descriptor it names
+            // may still be refused, but by the run-time opener and in php's other wording.
+            || target
+                .strip_prefix("fd/")
+                .is_some_and(|number| php_fd_number(number).is_some());
         if known {
             return None;
         }
-        if target == "fd/" {
+        if target.starts_with("fd/") {
             return Some(vec![format!(
                 "Warning: fopen({path}): Failed to open stream: \
                  php://fd/ stream must be specified in the form php://fd/<orig fd>\n"
@@ -854,8 +859,14 @@ pub(super) fn emit_literal_fopen_result(
     mode: LiteralOpenMode,
     path: &str,
 ) -> Result<()> {
-    if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
+    if let Some(fd) = php_standard_stream_fd(path) {
         emit_dup_fd_result(ctx, fd);
+        box_stream_fd_or_false_result(ctx, "fopen");
+        emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
+        return Ok(());
+    }
+    if let Some(fd) = php_fd_stream(path) {
+        emit_php_fd_open_result(ctx, fd, path);
         box_stream_fd_or_false_result(ctx, "fopen");
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());
