@@ -8442,6 +8442,180 @@ fclose($f);
     assert_eq!(out, "[xyz]");
 }
 
+/// Regression: `fclose()` ran no closing flush, so a buffering WRITE filter's bytes were lost.
+///
+/// php gives every attached filter one last `filter($in, $out, &$consumed, $closing = true)` call
+/// before the stream goes away. A filter that answered `PSFS_FEED_ME` until then has been
+/// ACCUMULATING, and that dispatch is the only chance its payload has to reach the file.
+/// `_user_filter_closing` was raised on the read path and by `stream_filter_remove()`, never on
+/// close. Measured with `php -n` (8.5.6): the file is EMPTY before `fclose()` and holds
+/// `[hello world]` after it; elephc left it empty in both places.
+#[test]
+fn test_write_filter_is_flushed_when_the_stream_is_closed() {
+    let path = std::env::temp_dir().join(format!("elephc_wclose_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class HoldUntilCloseW extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }}
+        if (!$closing) {{
+            return PSFS_FEED_ME;
+        }}
+        stream_bucket_append($out, stream_bucket_new($this->stream, "[" . $this->buf . "]"));
+        return PSFS_PASS_ON;
+    }}
+}}
+stream_filter_register("hold.until.close.w", "HoldUntilCloseW");
+$p = "{path}";
+@unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "hold.until.close.w", STREAM_FILTER_WRITE);
+fwrite($h, "hello ");
+fwrite($h, "world");
+echo "before:[", (file_exists($p) ? file_get_contents($p) : "?"), "]\n";
+fclose($h);
+echo "after:[", file_get_contents($p), "]\n";
+@unlink($p);
+"#
+    ));
+    assert_eq!(out, "before:[]\nafter:[[hello world]]\n");
+}
+
+/// Guard: the closing flush must not add bytes where php adds none, on any other filter shape.
+///
+/// An unfiltered stream, a pass-through write filter that already emitted on every dispatch, a
+/// READ-only filter on a stream that is also written, a built-in write filter, a two-node chain
+/// and a `STREAM_FILTER_ALL` node all keep exactly the bytes php writes. `STREAM_FILTER_ALL`
+/// matters most: the node sits in BOTH chains, and flushing per chain would emit its payload
+/// twice. Measured with `php -n` (8.5.6).
+#[test]
+fn test_close_flush_leaves_other_filter_shapes_byte_identical() {
+    let base = std::env::temp_dir().join(format!("elephc_wcf_{}", std::process::id()));
+    let base = base.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class PassThroughW extends php_user_filter {{
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }}
+        return PSFS_PASS_ON;
+    }}
+}}
+class BufferingW extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }}
+        if ($closing) {{
+            stream_bucket_append($out, stream_bucket_new($this->stream, "<" . $this->buf . ">"));
+            return PSFS_PASS_ON;
+        }}
+        return PSFS_FEED_ME;
+    }}
+}}
+stream_filter_register("pt.w", "PassThroughW");
+stream_filter_register("buf.w", "BufferingW");
+
+$p = "{base}_1"; @unlink($p);
+$h = fopen($p, "w"); fwrite($h, "plain"); fclose($h);
+echo "nofilter:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_2"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "pt.w", STREAM_FILTER_WRITE);
+fwrite($h, "abc"); fwrite($h, "def"); fclose($h);
+echo "passthru:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_3"; @unlink($p);
+file_put_contents($p, "seed");
+$h = fopen($p, "a");
+stream_filter_append($h, "buf.w", STREAM_FILTER_READ);
+fwrite($h, "+tail"); fclose($h);
+echo "readonly:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_4"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+fwrite($h, "mixed Case"); fclose($h);
+echo "builtin:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_5"; @unlink($p);
+$h = fopen($p, "w");
+stream_filter_append($h, "buf.w", STREAM_FILTER_WRITE);
+stream_filter_append($h, "pt.w", STREAM_FILTER_WRITE);
+fwrite($h, "one"); fclose($h);
+echo "chained:[", file_get_contents($p), "]\n"; @unlink($p);
+
+$p = "{base}_6"; @unlink($p);
+$h = fopen($p, "w+");
+stream_filter_append($h, "buf.w", STREAM_FILTER_ALL);
+fwrite($h, "both"); fclose($h);
+echo "all:[", file_get_contents($p), "]\n"; @unlink($p);
+"#
+    ));
+    assert_eq!(
+        out,
+        "nofilter:[plain]\n\
+         passthru:[ABCDEF]\n\
+         readonly:[seed+tail]\n\
+         builtin:[MIXED CASE]\n\
+         chained:[<ONE>]\n\
+         all:[<both>]\n"
+    );
+}
+
+/// Regression: `stream_filter_remove()` ran the closing flush but THREW ITS BYTES AWAY.
+///
+/// `__rt_filter_node_closing_flush` observed only the PSFS code the filter answered with and
+/// dropped the pair `__rt_user_filter_brigade_invoke` returned, so a filter that accumulated until
+/// `$closing` lost its whole payload at removal — and `fclose()` afterwards could not recover it,
+/// because the node was already off the chain. php's `php_stream_filter_remove(…, call_dtor)`
+/// hands the flushed buckets to the stream. Measured with `php -n` (8.5.6): `<xy>`, written once.
+#[test]
+fn test_stream_filter_remove_writes_the_bytes_its_flush_produced() {
+    let path = std::env::temp_dir().join(format!("elephc_wrm_{}.txt", std::process::id()));
+    let path = path.display().to_string();
+    let out = compile_and_run(&format!(
+        r#"<?php
+class BufferingRm extends php_user_filter {{
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {{
+        while ($b = stream_bucket_make_writeable($in)) {{
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }}
+        if ($closing) {{
+            stream_bucket_append($out, stream_bucket_new($this->stream, "<" . $this->buf . ">"));
+            return PSFS_PASS_ON;
+        }}
+        return PSFS_FEED_ME;
+    }}
+}}
+stream_filter_register("buf.rm", "BufferingRm");
+$p = "{path}";
+@unlink($p);
+$h = fopen($p, "w");
+$f = stream_filter_append($h, "buf.rm", STREAM_FILTER_WRITE);
+fwrite($h, "xy");
+var_dump(stream_filter_remove($f));
+fclose($h);
+echo "after:[", file_get_contents($p), "]\n";
+@unlink($p);
+"#
+    ));
+    assert_eq!(out, "bool(true)\nafter:[<xy>]\n");
+}
+
 /// Verifies `php_user_filter` declares the properties PHP declares.
 ///
 /// Only `$params` existed, so the manual's own filter idiom — building an output bucket

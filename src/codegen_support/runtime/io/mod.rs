@@ -139,6 +139,7 @@ mod path_is_wrapper;
 mod readfile_wrapper;
 mod user_filter;
 mod user_filter_brigade;
+mod user_filter_close_flush;
 mod stash_connect_host;
 mod touch_meta_array;
 mod user_wrapper;
@@ -316,6 +317,7 @@ pub(crate) use user_filter::{
     emit_user_filter_release_fd,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
+pub(crate) use user_filter_close_flush::emit_stream_write_chain_close_flush;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
     emit_user_wrapper_fflush, emit_user_wrapper_flock, emit_user_wrapper_fread,

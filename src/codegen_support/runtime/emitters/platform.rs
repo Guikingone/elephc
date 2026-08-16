@@ -131,6 +131,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_filter_attach_user(emitter);
     io::emit_apply_user_stream_filter(emitter);
     io::emit_user_filter_brigade_invoke(emitter);
+    io::emit_stream_write_chain_close_flush(emitter);
     io::emit_user_filter_release_fd(emitter);
     io::emit_var_dump_array_int(emitter);
     io::emit_var_dump_array_str(emitter);

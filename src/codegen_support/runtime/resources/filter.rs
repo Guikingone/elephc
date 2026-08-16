@@ -952,6 +952,12 @@ const _: () = {
 ///
 /// Nodes with nothing to flush — a built-in, a class without `filter()`, or the simple
 /// `filter(string)` form, which has no closing dispatch — answer `PSFS_PASS_ON`.
+///
+/// The bytes the flush produces are WRITTEN BACK to the node's own stream when the node sits on
+/// the write chain. php's `php_stream_filter_remove(…, call_dtor)` hands the flushed buckets to
+/// the stream rather than dropping them, and a filter that accumulated until `$closing` has all
+/// of its payload in exactly that call: `stream_filter_remove()` on a buffering write filter
+/// leaves php's file holding `<xy>` where elephc's stayed EMPTY — measured with `php -n` (8.5.6).
 fn emit_filter_node_closing_flush(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: closing flush for one filter node ---");
@@ -959,10 +965,15 @@ fn emit_filter_node_closing_flush(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emitter.instruction("push rbp");                                        // preserve the caller frame pointer
         emitter.instruction("mov rbp, rsp");                                    // establish the helper frame
-        emitter.instruction("sub rsp, 16");                                     // room for the obj and method pointers
+        emitter.instruction("sub rsp, 48");                                     // obj, method, node handle, direction, flushed pair
+        emitter.instruction("mov QWORD PTR [rbp - 24], rdi");                   // preserve the node handle for the write-back
         emitter.instruction("call __rt_filter_state");                          // rax = FilterState or 0
         emitter.instruction("test rax, rax");
         emitter.instruction("jz __rt_fncf_pass_x");                             // a stale node has nothing to flush
+        emitter.instruction(&format!(
+            "mov r10, QWORD PTR [rax + {FILTER_DIRECTION_OFFSET}]"
+        ));                                                                     // which chain(s) this node sits on
+        emitter.instruction("mov QWORD PTR [rbp - 32], r10");                   // only a write-side node writes its flush back
         emitter.instruction(&format!(
             "mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]"
         ));                                                                     // the php_user_filter instance
@@ -986,8 +997,11 @@ fn emit_filter_node_closing_flush(emitter: &mut Emitter) {
         emitter.instruction("xor edx, edx");                                    // length 0
         emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                   // method pointer
         emitter.instruction("call __rt_user_filter_brigade_invoke");
+        emitter.instruction("mov QWORD PTR [rbp - 40], rax");                   // preserve the flushed payload pointer
+        emitter.instruction("mov QWORD PTR [rbp - 48], rdx");                   // preserve the flushed payload length
         abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
         emitter.instruction("mov QWORD PTR [r10], 0");                          // lower the flag again immediately
+        emit_filter_node_flush_write_back_x86_64(emitter);
         abi::emit_symbol_address(emitter, "r10", "_user_filter_last_psfs");
         emitter.instruction("mov rax, QWORD PTR [r10]");                        // the code filter() answered with
         emitter.instruction("jmp __rt_fncf_done_x");
@@ -998,11 +1012,14 @@ fn emit_filter_node_closing_flush(emitter: &mut Emitter) {
         emitter.instruction("ret");                                             // return the PSFS code
         return;
     }
-    emitter.instruction("sub sp, sp, #32");                                     // helper frame
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
+    emitter.instruction("sub sp, sp, #48");                                     // helper frame: node handle, direction, flushed pair
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the node handle for the write-back
     emitter.instruction("bl __rt_filter_state");                                // x0 = FilterState or 0
     emitter.instruction("cbz x0, __rt_fncf_pass");                              // a stale node has nothing to flush
+    emitter.instruction(&format!("ldr x9, [x0, #{FILTER_DIRECTION_OFFSET}]"));  // which chain(s) this node sits on
+    emitter.instruction("str x9, [sp, #8]");                                    // only a write-side node writes its flush back
     emitter.instruction(&format!("ldr x0, [x0, #{FILTER_OBJECT_OFFSET}]"));     // the php_user_filter instance
     emitter.instruction("cbz x0, __rt_fncf_pass");                              // a built-in node has nothing to flush
     emitter.instruction("ldr x6, [x0]");                                        // class_id at the obj head
@@ -1019,17 +1036,83 @@ fn emit_filter_node_closing_flush(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // length 0
     emitter.instruction("mov x3, x8");                                          // method pointer
     emitter.instruction("bl __rt_user_filter_brigade_invoke");                  // x0 still holds $this
+    emitter.instruction("str x1, [sp, #16]");                                   // preserve the flushed payload pointer
+    emitter.instruction("str x2, [sp, #24]");                                   // preserve the flushed payload length
     abi::emit_symbol_address(emitter, "x10", "_user_filter_closing");
     emitter.instruction("str xzr, [x10]");                                      // lower the flag again immediately
+    emit_filter_node_flush_write_back_aarch64(emitter);
     abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
     emitter.instruction("ldr x0, [x9]");                                        // the code filter() answered with
     emitter.instruction("b __rt_fncf_done");
     emitter.label("__rt_fncf_pass");
     emitter.instruction("mov x0, #2");                                          // PSFS_PASS_ON: nothing refused the flush
     emitter.label("__rt_fncf_done");
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // release the helper frame
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the PSFS code
+}
+
+/// Writes a node's closing-flush bytes to its own stream (AArch64).
+///
+/// Reads the node handle from `[sp, #0]`, the direction bits from `[sp, #8]` and the flushed pair
+/// from `[sp, #16]`/`[sp, #24]`. Only a node on the WRITE chain writes: a read-side flush feeds
+/// php's read buffer, never the file. Synthetic descriptors (user wrappers, phar writes) are
+/// skipped — they are not descriptors the write syscall can reach.
+fn emit_filter_node_flush_write_back_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldr x2, [sp, #24]");                                   // the flushed payload length
+    emitter.instruction("cbz x2, __rt_fncf_no_writeback");                      // PSFS_FEED_ME and an empty flush write nothing
+    emitter.instruction("ldr x9, [sp, #8]");                                    // the node's direction bits
+    emitter.instruction("tst x9, #2");                                          // STREAM_FILTER_WRITE
+    emitter.instruction("b.eq __rt_fncf_no_writeback");                         // a read-side flush never reaches the file
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the node handle
+    emitter.instruction("bl __rt_filter_state");                                // re-resolve: the dispatch clobbered everything
+    emitter.instruction("cbz x0, __rt_fncf_no_writeback");                      // the node died during its own flush
+    emitter.instruction(&format!("ldr x0, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]")); // the stream this node is attached to
+    emitter.instruction("cbz x0, __rt_fncf_no_writeback");                      // a detached node has nowhere to write
+    emitter.instruction("bl __rt_stream_fd");                                   // x0 = the backend descriptor
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_fncf_no_writeback");                         // a failed open left no descriptor
+    emitter.instruction("mov w9, #0x4000");                                     // high half of the first synthetic descriptor
+    emitter.instruction("lsl w9, w9, #16");                                     // form the synthetic descriptor base
+    emitter.instruction("cmp x0, x9");
+    emitter.instruction("b.ge __rt_fncf_no_writeback");                         // synthetic descriptors own their own write path
+    emitter.instruction("ldr x1, [sp, #16]");                                   // the flushed payload pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // the flushed payload length
+    emitter.syscall(4);                                                         // write(fd, ptr, len)
+    emitter.label("__rt_fncf_no_writeback");
+}
+
+/// x86_64 counterpart of [`emit_filter_node_flush_write_back_aarch64`].
+///
+/// Reads the node handle from `[rbp - 24]`, the direction bits from `[rbp - 32]` and the flushed
+/// pair from `[rbp - 40]`/`[rbp - 48]`.
+fn emit_filter_node_flush_write_back_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // the flushed payload length
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_fncf_no_writeback_x");                         // PSFS_FEED_ME and an empty flush write nothing
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the node's direction bits
+    emitter.instruction("test r10, 2");                                         // STREAM_FILTER_WRITE
+    emitter.instruction("jz __rt_fncf_no_writeback_x");                         // a read-side flush never reaches the file
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // the node handle
+    emitter.instruction("call __rt_filter_state");                              // re-resolve: the dispatch clobbered everything
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fncf_no_writeback_x");                         // the node died during its own flush
+    emitter.instruction(&format!(
+        "mov rdi, QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}]"
+    ));                                                                         // the stream this node is attached to
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_fncf_no_writeback_x");                         // a detached node has nowhere to write
+    emitter.instruction("call __rt_stream_fd");                                 // rax = the backend descriptor
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_fncf_no_writeback_x");                         // a failed open left no descriptor
+    emitter.instruction("mov r10, 0x40000000");                                 // the first synthetic descriptor value
+    emitter.instruction("cmp rax, r10");
+    emitter.instruction("jge __rt_fncf_no_writeback_x");                        // synthetic descriptors own their own write path
+    emitter.instruction("mov rdi, rax");                                        // the descriptor
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // the flushed payload pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // the flushed payload length
+    emitter.instruction("call write");                                          // write(fd, ptr, len) through libc
+    emitter.label("__rt_fncf_no_writeback_x");
 }
 
 /// `__rt_filter_node_close_obj(handle)`: fire `onClose()` for one chain node.

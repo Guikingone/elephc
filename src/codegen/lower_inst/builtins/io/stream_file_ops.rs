@@ -24,6 +24,12 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // php gives every attached filter one last `filter(..., $closing = true)` call before
+            // the stream goes away, and a filter that answered PSFS_FEED_ME until then has been
+            // ACCUMULATING: that dispatch is the only chance its bytes have to reach the file.
+            // It runs BEFORE the teardown below, which detaches the chains it has to walk.
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the handle the closing flush walks
+            abi::emit_call_label(ctx.emitter, "__rt_stream_write_chain_close_flush");
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
             // PHP invalidates attached filter resources at fclose(), not when the
@@ -54,6 +60,10 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
             abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
+            // See the AArch64 counterpart: php's closing flush must run before the teardown
+            // below detaches the very chains it walks.
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the handle the closing flush walks
+            abi::emit_call_label(ctx.emitter, "__rt_stream_write_chain_close_flush");
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
             // PHP invalidates attached filter resources at fclose(), not when the
