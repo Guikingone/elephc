@@ -10064,6 +10064,93 @@ echo file_exists("no_such_elephc_probe.txt") ? "Y" : "N";
     assert_eq!(out, "YNYN");
 }
 
+/// Pins how many times the stat family reaches a userspace wrapper's `url_stat()`.
+///
+/// php keeps a ONE-entry stat cache keyed by the exact path string, so consecutive stat-family
+/// calls on the same path cost a single `url_stat()`. elephc has no such cache and re-asks every
+/// time. MEASURED on `php -n` 8.5.6, against what elephc answers today:
+///
+/// ```text
+///                                                       php   elephc
+/// file_exists($p); file_exists($p);                      1      2
+/// file_exists($p); filesize($p); is_file($p);            1      3
+/// file_exists($p); clearstatcache(); file_exists($p);    2      2
+/// is_file($p);                                           1      1
+/// file_exists($e); file_exists($f); file_exists($e);     3      3
+/// ```
+///
+/// Only the first two rows diverge, and only because php's cache HITS there. The last three
+/// agree by construction: with no cache, elephc always pays N calls, which is what php also pays
+/// whenever its single entry misses — after `clearstatcache()`, for a lone call, and for any
+/// alternation that keeps evicting the one slot.
+///
+/// This is a DELIBERATE gap, pinned so it stays visible. php's cache is invalidated by very
+/// nearly everything: MEASURED, a stat of ANY other path evicts it, and `touch`, `unlink`,
+/// `rename`, `chmod`, `mkdir`, `rmdir`, `file_put_contents`, `file_get_contents`, a bare
+/// `fopen()`/`fclose()` pair and even `shell_exec()` all clear it outright, while only pure
+/// computation and `opendir()`/`closedir()` leave it standing. `clearstatcache()` clears it in
+/// ALL FOUR argument shapes — `clearstatcache(true, '/other/path')` included, because php-src
+/// drops `CurrentStatFile`/`CurrentLStatFile` whatever filename it was handed.
+///
+/// Reproducing that by enumerating invalidation points is the wrong shape of risk: missing ONE
+/// of them returns a stale stat silently, which is strictly worse than the extra syscall it
+/// saves, and the win is observable only through a wrapper that counts its own `url_stat()`
+/// calls. The safe shape is the opposite default — an intra-block reuse that treats every call
+/// it cannot prove pure as an invalidation, so a miss costs a lost optimisation rather than a
+/// wrong answer. Until that exists, `clearstatcache()` correctly stays the ordered no-op it is
+/// today (`lower_clearstatcache`), because there is nothing to clear; it has to grow teeth in
+/// the same change that grows the cache.
+#[test]
+fn test_stat_family_url_stat_call_counts() {
+    let out = compile_and_run(
+        r#"<?php
+class W {
+    public $context;
+    public static int $n = 0;
+    public function url_stat(string $path, int $flags) {
+        W::$n = W::$n + 1;
+        return ['dev'=>0,'ino'=>0,'mode'=>33188,'nlink'=>1,'uid'=>0,'gid'=>0,
+                'rdev'=>0,'size'=>7,'atime'=>0,'mtime'=>0,'ctime'=>0,
+                'blksize'=>4096,'blocks'=>1];
+    }
+}
+stream_wrapper_register("cnt", "W");
+
+W::$n = 0;
+file_exists("cnt://a");
+file_exists("cnt://a");
+echo "same=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://b");
+filesize("cnt://b");
+is_file("cnt://b");
+echo "three=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://c");
+clearstatcache();
+file_exists("cnt://c");
+echo "cleared=", W::$n, "\n";
+
+W::$n = 0;
+is_file("cnt://d");
+echo "single=", W::$n, "\n";
+
+W::$n = 0;
+file_exists("cnt://e");
+file_exists("cnt://f");
+file_exists("cnt://e");
+echo "alternating=", W::$n, "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "same=2\nthree=3\ncleared=2\nsingle=1\nalternating=3\n",
+        "elephc re-asks where php's one-entry cache would have answered; php gives 1/1/2/1/3"
+    );
+}
+
 /// Verifies compiled PHP output for filesize and is file dispatch to wrapper url stat.
 #[test]
 fn test_filesize_and_is_file_dispatch_to_wrapper_url_stat() {
