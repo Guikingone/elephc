@@ -12,6 +12,7 @@ mod itoa;
 mod concat;
 mod concat_scratch;
 mod ftoa;
+mod nan_string_coercion_warning;
 mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
@@ -110,6 +111,9 @@ pub use itoa::emit_itoa;
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
 pub use ftoa::{emit_ftoa, emit_ftoa_repr};
+pub use nan_string_coercion_warning::{
+    emit_nan_string_coercion_warning, NAN_STRING_COERCION_MESSAGES,
+};
 pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;

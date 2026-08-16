@@ -733,6 +733,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    // -- PHP 8.5's NAN-to-string coercion warning, shared with `__rt_warn_nan_coerced_string` --
+    // Unconditional for the same reason as the bool literal above: the `.data` layout must not
+    // depend on the version gate that lives on the CALL site inside `__rt_ftoa`.
+    for (label, message) in
+        crate::codegen_support::runtime::strings::NAN_STRING_COERCION_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");

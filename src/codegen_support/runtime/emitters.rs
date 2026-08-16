@@ -76,6 +76,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_http_open_url(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_php_num_scan(emitter);
+    strings::emit_nan_string_coercion_warning(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
