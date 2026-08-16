@@ -422,6 +422,20 @@ wrapper exposes glob matches through the same directory-stream API.
 | `stream_is_local()` | `stream_is_local(resource\|string $stream): bool` | Return `true` for local streams. |
 | `stream_supports_lock()` | `stream_supports_lock(resource $stream): bool` | Return `true` when a stream supports `flock()`. |
 | `stream_get_meta_data()` | `stream_get_meta_data(resource $stream): array` | Return metadata keys `timed_out`, `blocked`, `eof`, `unread_bytes`, `stream_type`, `wrapper_type`, `mode`, `seekable`, and `uri`, in PHP's insertion order. A stream opened over `http://` or `https://` also carries `wrapper_data`, the response header lines — the same array `$http_response_header` holds. |
+| `http_get_last_response_headers()` | `http_get_last_response_headers(): ?array` | PHP 8.4's replacement for `$http_response_header`. Returns the last HTTP response's header lines, status line first, or `null` when no request has been made yet. |
+| `http_clear_last_response_headers()` | `http_clear_last_response_headers(): void` | Drop the buffered response so the getter answers `null` again. It clears engine state only: an already-populated `$http_response_header` keeps its value, matching PHP. |
+
+From `--php-version 8.5` on, naming `$http_response_header` emits
+`Deprecated: The predefined locally scoped $http_response_header variable is
+deprecated, call http_get_last_response_headers() instead`. PHP raises the same
+notice while *compiling* a file that mentions the variable, so it fires once per
+program and before any output, even when the mentioning statement never runs;
+elephc emits it from the program prologue for the same reason. Programs that use
+`http_get_last_response_headers()` instead stay quiet.
+
+`$http_response_header` itself is published by `fopen()` over `http://`/`https://`.
+`file_get_contents()` does not publish it (`http_get_last_response_headers()` does
+answer after a `file_get_contents()` request), which is a known divergence from PHP.
 
 Closing a handle changes its reported type but not its id. After `fclose()`,
 `pclose()` or `closedir()`, `get_resource_type($handle)` returns `"Unknown"` and

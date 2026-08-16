@@ -2,7 +2,7 @@
 title: "bcscale() — internals"
 description: "Compiler internals for bcscale(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 288
+  order: 290
 ---
 
 ## `bcscale()` — internals

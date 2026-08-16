@@ -2,7 +2,7 @@
 title: "ob_start() — internals"
 description: "Compiler internals for ob_start(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 215
 ---
 
 ## `ob_start()` — internals

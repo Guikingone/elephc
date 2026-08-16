@@ -177,3 +177,31 @@ pub(crate) fn lower_stream_get_filters(
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_filters");
     store_if_result(ctx, inst)
 }
+
+/// Lowers php 8.4's `http_get_last_response_headers()` to its runtime wrapper.
+///
+/// The result is `?array`, so it comes back boxed: the helper answers a Mixed
+/// `null` while no response has been buffered and a Mixed indexed array once one
+/// has. That is a real distinction in php — `NULL` before the first request, not
+/// an empty array.
+pub(crate) fn lower_http_get_last_response_headers(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "http_get_last_response_headers", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_http_get_last_response_headers");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers php 8.4's `http_clear_last_response_headers()` to its runtime wrapper.
+///
+/// php's return type is `void`; the helper writes nothing back, so there is no
+/// result to store beyond whatever the caller's void handling wants.
+pub(crate) fn lower_http_clear_last_response_headers(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::super::ensure_arg_count(inst, "http_clear_last_response_headers", 0)?;
+    abi::emit_call_label(ctx.emitter, "__rt_http_clear_last_response_headers");
+    store_if_result(ctx, inst)
+}

@@ -2,7 +2,7 @@
 title: "is_bool() — internals"
 description: "Compiler internals for is_bool(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 500
+  order: 502
 ---
 
 ## `is_bool()` — internals

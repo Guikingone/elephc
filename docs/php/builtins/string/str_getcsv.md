@@ -2,7 +2,7 @@
 title: "str_getcsv()"
 description: "Parse a CSV string into an array."
 sidebar:
-  order: 455
+  order: 457
 ---
 
 ## str_getcsv()

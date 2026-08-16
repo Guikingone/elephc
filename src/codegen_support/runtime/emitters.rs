@@ -51,6 +51,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_get_filters(emitter);
     io::emit_stream_get_wrappers(emitter);
     io::emit_get_http_response_headers(emitter);
+    io::emit_http_get_last_response_headers(emitter);
+    io::emit_http_clear_last_response_headers(emitter);
     io::emit_stream_record_meta(emitter);
     io::emit_stream_record_mode(emitter);
     io::emit_stream_record_transport(emitter);

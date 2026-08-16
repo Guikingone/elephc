@@ -2,7 +2,7 @@
 title: "is_finite() — internals"
 description: "Compiler internals for is_finite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 307
+  order: 309
 ---
 
 ## `is_finite()` — internals

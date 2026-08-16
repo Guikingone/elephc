@@ -2,7 +2,7 @@
 title: "set_file_buffer() — internals"
 description: "Compiler internals for set_file_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 220
 ---
 
 ## `set_file_buffer()` — internals

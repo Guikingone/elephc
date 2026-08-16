@@ -2,7 +2,7 @@
 title: "ob_end_flush() — internals"
 description: "Compiler internals for ob_end_flush(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 203
+  order: 205
 ---
 
 ## `ob_end_flush()` — internals

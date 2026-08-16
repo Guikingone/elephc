@@ -2,7 +2,7 @@
 title: "bcround() — internals"
 description: "Compiler internals for bcround(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## `bcround()` — internals

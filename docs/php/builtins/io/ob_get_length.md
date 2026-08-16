@@ -2,7 +2,7 @@
 title: "ob_get_length()"
 description: "Returns the length of the output buffer."
 sidebar:
-  order: 208
+  order: 210
 ---
 
 ## ob_get_length()

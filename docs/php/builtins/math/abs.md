@@ -2,7 +2,7 @@
 title: "abs()"
 description: "Absolute value."
 sidebar:
-  order: 271
+  order: 273
 ---
 
 ## abs()

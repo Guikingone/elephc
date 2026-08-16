@@ -2,7 +2,7 @@
 title: "base_convert() — internals"
 description: "Compiler internals for base_convert(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 276
+  order: 278
 ---
 
 ## `base_convert()` — internals

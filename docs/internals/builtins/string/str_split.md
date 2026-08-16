@@ -2,7 +2,7 @@
 title: "str_split() — internals"
 description: "Compiler internals for str_split(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 460
+  order: 462
 ---
 
 ## `str_split()` — internals

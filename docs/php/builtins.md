@@ -209,6 +209,8 @@ sidebar:
 | [`getservbyname()`](./builtins/io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./builtins/io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_file()`](./builtins/io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
+| [`http_clear_last_response_headers()`](./builtins/io/http_clear_last_response_headers.md) | `(): void` | `void` | ✓ | — |
+| [`http_get_last_response_headers()`](./builtins/io/http_get_last_response_headers.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`ob_clean()`](./builtins/io/ob_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_clean()`](./builtins/io/ob_end_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_flush()`](./builtins/io/ob_end_flush.md) | `(): bool` | `bool` | ✓ | ✓ |

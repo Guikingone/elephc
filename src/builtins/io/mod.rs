@@ -105,6 +105,8 @@ pub mod getservbyname;
 pub mod getservbyport;
 pub mod glob;
 pub mod hash_file;
+pub mod http_clear_last_response_headers;
+pub mod http_get_last_response_headers;
 pub mod is_dir;
 pub mod is_executable;
 pub mod is_file;

@@ -2,7 +2,7 @@
 title: "rewind() — internals"
 description: "Compiler internals for rewind(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 216
+  order: 218
 ---
 
 ## `rewind()` — internals

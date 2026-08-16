@@ -2,7 +2,7 @@
 title: "stream_isatty()"
 description: "Checks if a stream is a TTY."
 sidebar:
-  order: 243
+  order: 245
 ---
 
 ## stream_isatty()

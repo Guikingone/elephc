@@ -2,7 +2,7 @@
 title: "bcpowmod()"
 description: "Returns an arbitrary-precision integral modular power."
 sidebar:
-  order: 286
+  order: 288
 ---
 
 ## bcpowmod()

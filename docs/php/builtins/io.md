@@ -44,6 +44,8 @@ sidebar:
 | [`getservbyname()`](./io/getservbyname.md) | `(string $service, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`getservbyport()`](./io/getservbyport.md) | `(int $port, string $protocol): mixed` | `mixed` | ✓ | ✓ |
 | [`hash_file()`](./io/hash_file.md) | `(string $algo, string $filename, bool $binary = false): mixed` | `mixed` | ✓ | ✓ |
+| [`http_clear_last_response_headers()`](./io/http_clear_last_response_headers.md) | `(): void` | `void` | ✓ | — |
+| [`http_get_last_response_headers()`](./io/http_get_last_response_headers.md) | `(): mixed` | `mixed` | ✓ | — |
 | [`ob_clean()`](./io/ob_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_clean()`](./io/ob_end_clean.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`ob_end_flush()`](./io/ob_end_flush.md) | `(): bool` | `bool` | ✓ | ✓ |

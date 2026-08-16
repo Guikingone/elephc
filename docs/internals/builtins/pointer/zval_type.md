@@ -2,7 +2,7 @@
 title: "zval_type() — internals"
 description: "Compiler internals for zval_type(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 362
+  order: 364
 ---
 
 ## `zval_type()` — internals

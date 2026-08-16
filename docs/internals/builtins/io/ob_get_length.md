@@ -2,7 +2,7 @@
 title: "ob_get_length() — internals"
 description: "Compiler internals for ob_get_length(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 208
+  order: 210
 ---
 
 ## `ob_get_length()` — internals

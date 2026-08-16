@@ -229,6 +229,11 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     // dispatch of its own, the way `hash_init()` needed one for `HashContext`.
     "dir",
     "hexdec",
+    // php 8.4's response-header pair reads engine state the interpreter does not own: the
+    // compiler answers both from `_http_resp_header_end` / `_http_resp_buf`, which are
+    // host-runtime symbols the eval value model has no cell kind for.
+    "http_clear_last_response_headers",
+    "http_get_last_response_headers",
     "join",
     "octdec",
     "serialize",
@@ -284,8 +289,8 @@ mod tests {
 
         assert_eq!(eval_registry, 484);
         assert_eq!(eval_internal, 39);
-        assert_eq!(eval_pending, 32);
-        assert_eq!(aot_registry, 540);
+        assert_eq!(eval_pending, 34);
+        assert_eq!(aot_registry, 542);
         assert_eq!(aot_external, 11);
         assert_eq!(aot_unsupported, 4);
     }
@@ -334,7 +339,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463);
-        assert_eq!(unsupported, 71);
+        assert_eq!(unsupported, 73);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

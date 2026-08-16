@@ -2,7 +2,7 @@
 title: "sqrt()"
 description: "Returns the square root of a number."
 sidebar:
-  order: 325
+  order: 327
 ---
 
 ## sqrt()

@@ -2,7 +2,7 @@
 title: "acos() — internals"
 description: "Compiler internals for acos(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 272
+  order: 274
 ---
 
 ## `acos()` — internals

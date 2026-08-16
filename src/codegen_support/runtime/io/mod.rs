@@ -249,7 +249,10 @@ pub(crate) use stream_get_line::emit_stream_get_line;
 pub(crate) use stream_get_meta_data::emit_stream_get_meta_data;
 pub(crate) use stream_get_filters::emit_stream_get_filters;
 pub(crate) use stream_get_wrappers::emit_stream_get_wrappers;
-pub(crate) use http_response_headers::emit_get_http_response_headers;
+pub(crate) use http_response_headers::{
+    emit_get_http_response_headers, emit_http_clear_last_response_headers,
+    emit_http_get_last_response_headers,
+};
 pub(crate) use stream_record_meta::emit_stream_record_meta;
 pub(crate) use socket_connect_warning::{
     emit_socket_connect_warning, SOCKET_WARNING_CLIENT, SOCKET_WARNING_FSOCKOPEN,

@@ -2,7 +2,7 @@
 title: "gzinflate()"
 description: "Inflate a deflated string."
 sidebar:
-  order: 412
+  order: 414
 ---
 
 ## gzinflate()

@@ -2,7 +2,7 @@
 title: "ptr_read8() — internals"
 description: "Compiler internals for ptr_read8(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 352
+  order: 354
 ---
 
 ## `ptr_read8()` — internals

@@ -6714,6 +6714,108 @@ echo "[" . file_get_contents("http://127.0.0.1:{port}/page.txt") . "]";
     assert_eq!(out, "[fgc over http body]");
 }
 
+/// Verifies php 8.4's `http_get_last_response_headers()` / `http_clear_last_response_headers()`.
+///
+/// MEASURED on `php -n` 8.5.6 against a local server: the getter answers `NULL`
+/// before any request, the response's header lines (status line first) after one,
+/// and `NULL` again after a clear. The `NULL` is the point — it is a different
+/// answer from the empty array the shared header builder produces, which is why
+/// the getter is a wrapper and not the builder itself.
+#[test]
+fn test_http_get_last_response_headers_is_null_around_the_request() {
+    let (_server, port) = spawn_http_server(b"lastheaders");
+    let out = compile_and_run(&format!(
+        r#"<?php
+var_dump(http_get_last_response_headers());
+$f = fopen("http://127.0.0.1:{port}/page.txt", "r");
+$h = http_get_last_response_headers();
+echo is_array($h) ? "array" : "not-array", "\n";
+echo count($h), "\n";
+echo $h[0], "\n";
+http_clear_last_response_headers();
+var_dump(http_get_last_response_headers());
+fclose($f);
+"#
+    ));
+    assert_eq!(
+        out,
+        "NULL\n\
+         array\n\
+         3\n\
+         HTTP/1.0 200 OK\n\
+         NULL\n"
+    );
+}
+
+/// Verifies php 8.5's `$http_response_header` deprecation is version-gated.
+///
+/// php raises it while COMPILING a file that names the variable, so it fires once
+/// per file and before any script output — MEASURED on `php -n` 8.5.6, including
+/// for a mention inside `if (false)`. elephc emits it from the main prologue for
+/// the same reason, and only when the program actually names the variable, so a
+/// program that uses `http_get_last_response_headers()` instead stays quiet.
+#[test]
+fn test_http_response_header_deprecation_is_gated_on_php_85() {
+    use std::fs;
+    for (version, expected) in [("8.4", false), ("8.5", true)] {
+        let dir = make_cli_test_dir("elephc_http_response_header_dep");
+        let php_path = dir.join("main.php");
+        fs::write(
+            &php_path,
+            r#"<?php
+$f = fopen("http://127.0.0.1:9/page.txt", "r");
+if ($f !== false) { echo count($http_response_header); }
+echo "done";
+"#,
+        )
+        .unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--php-version")
+            .arg(version)
+            .arg("--emit-asm")
+            .arg(&php_path)
+            .output()
+            .expect("failed to emit assembly for the deprecation gate");
+        assert!(
+            output.status.success(),
+            "{version}: --emit-asm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(dir.join("main.s")).expect("emitted assembly");
+        let present = asm.contains("locally scoped $http_response_header variable is deprecated");
+        assert_eq!(
+            present, expected,
+            "{version}: the $http_response_header deprecation must be emitted only from 8.5"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // A program that never names the variable must not carry the notice at all.
+    let dir = make_cli_test_dir("elephc_http_response_header_quiet");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+var_dump(http_get_last_response_headers());
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--php-version")
+        .arg("8.5")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit assembly for the quiet case");
+    assert!(output.status.success());
+    let asm = fs::read_to_string(dir.join("main.s")).expect("emitted assembly");
+    assert!(
+        !asm.contains("locally scoped $http_response_header variable is deprecated"),
+        "the replacement function must not drag the deprecation in"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// `file_get_contents($url)` routes a runtime string beginning with `http://`
 /// through the HTTP wrapper instead of the plain filesystem reader.
 #[test]

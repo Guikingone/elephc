@@ -894,6 +894,7 @@ fn emit_main_function(
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
     }
+    emit_http_response_header_deprecation(&mut ctx);
     // Enum cases are NOT initialized here any more: each case now materializes on
     // its first evaluation through `super::enum_singletons`, so a case that user
     // code never touches allocates nothing and burns no object handle — which is
@@ -912,6 +913,55 @@ fn emit_main_function(
         frame::emit_web_entry_stub(&mut ctx);
     }
     Ok(())
+}
+
+/// php-src's `E_DEPRECATED` text for naming `$http_response_header`.
+///
+/// MEASURED on `php -n` 8.5.6, where the notice reads `The predefined locally
+/// scoped $http_response_header variable is deprecated, call
+/// http_get_last_response_headers() instead`. elephc's diagnostic channel does
+/// not carry the `in %s on line %d` suffix php appends, matching every other
+/// runtime notice this backend emits.
+const HTTP_RESPONSE_HEADER_DEPRECATION: &str =
+    "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, \
+     call http_get_last_response_headers() instead\n";
+
+/// Emits php 8.5's `$http_response_header` deprecation once, before any user output.
+///
+/// php raises this notice while COMPILING a file that names the variable, so it
+/// fires once per file, before the script produces anything, and even when the
+/// naming statement never runs (`if (false) { echo $http_response_header; }` still
+/// prints it — MEASURED). elephc's equivalent of "the file names it" is the
+/// variable reaching `module.data.global_names`, and its equivalent of "before
+/// any output" is the main prologue, so the notice lands there — once, whatever
+/// the number of mentions, which is also what php does.
+fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::compile_php_version() < crate::php_version::PhpVersion::Php85 {
+        return;
+    }
+    if !ctx
+        .module
+        .data
+        .global_names
+        .iter()
+        .any(|name| name == "http_response_header")
+    {
+        return;
+    }
+    let (label, len) = ctx
+        .data
+        .add_string(HTTP_RESPONSE_HEADER_DEPRECATION.as_bytes());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdi", &label);
+            abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // stderr, and `@` suppresses it
 }
 
 /// Returns true when a function is the process entry function.

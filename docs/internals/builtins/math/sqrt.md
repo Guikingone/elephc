@@ -2,7 +2,7 @@
 title: "sqrt() — internals"
 description: "Compiler internals for sqrt(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 325
+  order: 327
 ---
 
 ## `sqrt()` — internals

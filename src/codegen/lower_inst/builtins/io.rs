@@ -155,6 +155,7 @@ pub(crate) use stream_context::{
 pub(crate) use stream_copy_queries::{
     lower_stream_copy_to_stream, lower_stream_get_line, lower_stream_get_meta_data, lower_stream_get_wrappers,
     lower_stream_get_transports, lower_stream_get_filters,
+    lower_http_get_last_response_headers, lower_http_clear_last_response_headers,
 };
 pub(crate) use stream_filters::{
     lower_stream_filter_register, lower_stream_filter_attach, lower_stream_filter_remove,
