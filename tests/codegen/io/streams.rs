@@ -2499,7 +2499,7 @@ fclose($f);
 /// Verifies compiled PHP output for fscanf float via shared sscanf engine.
 #[test]
 fn test_fscanf_float_via_shared_sscanf_engine() {
-    // fscanf shares __rt_sscanf, so the new %f branch must work through it too.
+    // fscanf shares the injected scanf prelude, so %f must work through it too.
     let out = compile_and_run(
         r#"<?php
 $g = fopen("php://temp", "r+");
@@ -5053,7 +5053,7 @@ $d->close();
 /// extractTo("ex1")                        => bool(true), the whole archive
 /// extractTo("ex2", "f.txt")               => bool(true), that one entry
 /// extractTo("ex3", ["f.txt","sub/n.txt"]) => bool(true), those two
-/// extractTo("/no/such/root/x")            => bool(false)  and NO warning
+/// extractTo("a.zip/x")                    => bool(false)  and NO warning
 /// extractTo("ex4", "nope.txt")            => bool(false)
 /// extractTo("ex4", [])                    => bool(false)
 /// extractTo("")                           => bool(false)
@@ -5062,6 +5062,12 @@ $d->close();
 /// An existing file is overwritten, the extracted file carries the ENTRY's mtime
 /// rather than the extraction time, and a directory member (`dd/`) becomes a
 /// directory instead of an empty file.
+///
+/// THE UNCREATABLE DESTINATION IS A PATH THROUGH A FILE, not an unwritable root.
+/// `/no/such/root/x` is only uncreatable for an unprivileged user: CI's linux shards run
+/// inside a container as root, where `mkdir -p /no/such/root/x` SUCCEEDS and the case flips
+/// to `true`. A component that is a regular file is `ENOTDIR` for every user, root included,
+/// and `php -n` 8.5.6 answers `false` for it just the same.
 #[test]
 fn test_zip_archive_extract_to_matches_php() {
     let dir = std::env::temp_dir().join(format!("elephc_zip_extract_{}", std::process::id()));
@@ -5087,7 +5093,7 @@ $z->open("{d}/a.zip");
 var_dump($z->extractTo("{d}/ex1"));
 var_dump($z->extractTo("{d}/ex2", "f.txt"));
 var_dump($z->extractTo("{d}/ex3", ["f.txt", "sub/n.txt"]));
-var_dump($z->extractTo("/no/such/root/x"));
+var_dump($z->extractTo("{d}/a.zip/x"));
 var_dump($z->extractTo("{d}/ex4", "nope.txt"));
 var_dump($z->extractTo("{d}/ex4", []));
 var_dump($z->extractTo(""));
