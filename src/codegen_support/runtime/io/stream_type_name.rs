@@ -30,11 +30,81 @@ const WRAPPER_ID_PHP: u64 = 6;
 /// Wrapper id 7 is `data:`, which php-src names after the RFC that defines it.
 const WRAPPER_ID_DATA: u64 = 7;
 
+/// Wrapper id 12 is `zip://`, php's twelfth and last built-in wrapper.
+///
+/// Measured on `php -n` 8.5.6: `stream_get_meta_data(fopen("zip://a.zip#f.txt","r"))`
+/// reports `wrapper_type` `"zip wrapper"` and `stream_type` `"zip"`. The id is the
+/// entry's position in the built-in wrapper-name table, so it is fixed by
+/// `STREAM_WRAPPERS` and by the `_meta_wrapper_*` list this file's sibling walks.
+pub(crate) const WRAPPER_ID_ZIP: u64 = 12;
+
 /// Emits `__rt_stream_type_name(handle) -> ptr, len`, or `0` when the stream has no recorded name.
 pub fn emit_stream_type_name(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_stream_type_name_aarch64(emitter),
         Arch::X86_64 => emit_stream_type_name_x86_64(emitter),
+    }
+    emit_stream_seek_unsupported(emitter);
+}
+
+/// Emits `__rt_stream_seek_unsupported(handle) -> 1` when the WRAPPER has no seek op.
+///
+/// php-src builds a stream from a set of ops, and a wrapper that leaves `seek` NULL makes
+/// `php_stream_seek` refuse before any descriptor is touched. `ext/zip`'s entry ops are such a
+/// set, so on `php -n` 8.5.6:
+///
+/// ```text
+/// $h = fopen("zip://a.zip#f.txt", "r"); fread($h, 3);
+/// rewind($h);          => Warning: rewind(): Stream does not support seeking   + bool(false)
+/// ftell($h);           => int(3)      (the refused seek moved nothing)
+/// fseek($h, 0, SEEK_SET) => Warning: fseek(): Stream does not support seeking  + int(-1)
+/// ```
+///
+/// elephc serves a zip entry from a regular temp file, which seeks perfectly well, so the
+/// refusal has to come from the recorded wrapper identity rather than from the backend.
+fn emit_stream_seek_unsupported(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: does this stream's WRAPPER refuse to seek at all ---");
+    emitter.label_global("__rt_stream_seek_unsupported");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #16");                             // frame for the saved linkage
+            emitter.instruction("stp x29, x30, [sp, #0]");                      // save frame pointer and return address
+            emitter.instruction("mov x29, sp");                                 // establish the helper frame pointer
+            emitter.instruction("bl __rt_stream_state");                        // resolve the owning stream state
+            emitter.instruction("cbz x0, __rt_ssu_no");                         // a stale handle refuses nothing here
+            emitter.instruction(&format!(
+                "ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]"
+            ));                                                                 // which wrapper opened it
+            emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_ZIP}"));         // the zip wrapper, whose ops have no seek?
+            emitter.instruction("cset x0, eq");                                 // 1 only for a wrapper that cannot seek
+            emitter.instruction("b __rt_ssu_ret");                              // return the verdict
+            emitter.label("__rt_ssu_no");
+            emitter.instruction("mov x0, #0");                                  // every other stream seeks normally
+            emitter.label("__rt_ssu_ret");
+            emitter.instruction("ldp x29, x30, [sp, #0]");                      // restore frame pointer and return address
+            emitter.instruction("add sp, sp, #16");                             // release the helper frame
+            emitter.instruction("ret");                                         // report whether seeking is refused
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            emitter.instruction("call __rt_stream_state");                      // resolve the owning stream state
+            emitter.instruction("test rax, rax");                               // a stale handle refuses nothing here
+            emitter.instruction("jz __rt_ssu_no_x86");                          // branch when the checked value is zero or equal
+            emitter.instruction(&format!(
+                "mov r10, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
+            ));                                                                 // which wrapper opened it
+            emitter.instruction(&format!("cmp r10, {WRAPPER_ID_ZIP}"));         // the zip wrapper, whose ops have no seek?
+            emitter.instruction("sete al");                                     // 1 only for a wrapper that cannot seek
+            emitter.instruction("movzx rax, al");                               // widen the verdict to a full word
+            emitter.instruction("jmp __rt_ssu_ret_x86");                        // return the verdict
+            emitter.label("__rt_ssu_no_x86");
+            emitter.instruction("xor eax, eax");                                // every other stream seeks normally
+            emitter.label("__rt_ssu_ret_x86");
+            emitter.instruction("pop rbp");                                     // restore the caller frame pointer
+            emitter.instruction("ret");                                         // report whether seeking is refused
+        }
     }
 }
 
@@ -72,6 +142,8 @@ fn emit_stream_type_name_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
     emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_DATA}"));
     emitter.instruction("b.eq __rt_stn_rfc2397");
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_ZIP}"));
+    emitter.instruction("b.eq __rt_stn_zip");                                   // php names a zip entry stream "zip"
     emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
     emitter.instruction("b.ne __rt_stn_unknown");                               // every other wrapper keeps the fallback
 
@@ -98,6 +170,7 @@ fn emit_stream_type_name_aarch64(emitter: &mut Emitter) {
     emit_named_type_aarch64(emitter, "__rt_stn_dir", "_meta_stype_dir", 3);
     emit_named_type_aarch64(emitter, "__rt_stn_glob", "_meta_stype_glob", 4);
     emit_named_type_aarch64(emitter, "__rt_stn_rfc2397", "_meta_wrapper_data", 7);
+    emit_named_type_aarch64(emitter, "__rt_stn_zip", "_meta_stype_zip", 3);
     emit_named_type_aarch64(emitter, "__rt_stn_stdio", "_meta_stype_stdio", 5);
     emit_named_type_aarch64(emitter, "__rt_stn_tcp", "_meta_stype_tcp", 14);
     emit_named_type_aarch64(emitter, "__rt_stn_udp", "_meta_stype_udp", 10);
@@ -161,6 +234,8 @@ fn emit_stream_type_name_x86_64(emitter: &mut Emitter) {
     ));                                                                         // which wrapper opened it
     emitter.instruction(&format!("cmp r10, {WRAPPER_ID_DATA}"));
     emitter.instruction("je __rt_stn_rfc2397_x86");
+    emitter.instruction(&format!("cmp r10, {WRAPPER_ID_ZIP}"));
+    emitter.instruction("je __rt_stn_zip_x86");                                 // php names a zip entry stream "zip"
     emitter.instruction(&format!("cmp r10, {WRAPPER_ID_PHP}"));
     emitter.instruction("jne __rt_stn_unknown_x86");                            // every other wrapper keeps the fallback
 
@@ -185,6 +260,7 @@ fn emit_stream_type_name_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_stn_input_x86");
     emitter.instruction("jmp __rt_stn_stdio_x86");                              // stdin, stdout, stderr, fd and filter
 
+    emit_named_type_x86_64(emitter, "__rt_stn_zip_x86", "_meta_stype_zip", 3);
     emit_named_type_x86_64(emitter, "__rt_stn_memory_x86", "_meta_stype_memory", 6);
     emit_named_type_x86_64(emitter, "__rt_stn_temp_x86", "_meta_stype_temp", 4);
     emit_named_type_x86_64(emitter, "__rt_stn_output_x86", "_meta_stype_output", 6);

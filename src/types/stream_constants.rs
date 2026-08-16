@@ -19,8 +19,10 @@
 /// The wrappers `stream_get_wrappers()` advertises, in php-src's own
 /// registration order (measured on php 8.5.6).
 ///
-/// php's twelfth entry is `zip`, which elephc has no wrapper for: advertising a
-/// scheme `fopen()` cannot open would move the lie rather than remove it.
+/// `zip` is last, exactly where php-src registers it. It is advertised only
+/// because `fopen("zip://archive.zip#entry")` and `file_get_contents()` now
+/// really read the entry through the elephc-phar bridge — advertising a scheme
+/// `fopen()` cannot open would move the lie rather than remove it.
 pub(crate) const STREAM_WRAPPERS: &[&str] = &[
     "https",
     "ftps",
@@ -33,6 +35,7 @@ pub(crate) const STREAM_WRAPPERS: &[&str] = &[
     "http",
     "ftp",
     "phar",
+    "zip",
 ];
 
 /// The transports `stream_get_transports()` advertises, in php-src's own order.
@@ -275,8 +278,8 @@ mod tests {
     /// Verifies the published surfaces stay in php-src's own order.
     ///
     /// Measured on php 8.5.6 with `var_export(stream_get_wrappers())` and
-    /// `var_export(stream_get_filters())`; php's twelfth wrapper is `zip`, which
-    /// elephc has no wrapper for and therefore does not advertise.
+    /// `var_export(stream_get_filters())`; php's twelfth and last wrapper is
+    /// `zip`, which elephc now reads through the elephc-phar bridge.
     #[test]
     fn published_surfaces_follow_php_order() {
         assert_eq!(
@@ -293,6 +296,7 @@ mod tests {
                 "http",
                 "ftp",
                 "phar",
+                "zip",
             ]
         );
         assert_eq!(

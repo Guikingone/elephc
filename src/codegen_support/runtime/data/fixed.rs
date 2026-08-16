@@ -1665,6 +1665,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_stype_output\n_meta_stype_output:\n    .ascii \"Output\"\n");
     out.push_str(".globl _meta_stype_input\n_meta_stype_input:\n    .ascii \"Input\"\n");
     out.push_str(".globl _meta_stype_dir\n_meta_stype_dir:\n    .ascii \"dir\"\n");
+    out.push_str(".globl _meta_stype_zip\n_meta_stype_zip:\n    .ascii \"zip\"\n");
     out.push_str(".globl _meta_stype_glob\n_meta_stype_glob:\n    .ascii \"glob\"\n");
     // php-src names a TCP socket after the ssl-capable transport whenever the ssl transport
     // exists in the build, which for elephc is whenever a program can ask for TLS at all.
@@ -1684,6 +1685,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_wrapper_bzip2\n_meta_wrapper_bzip2:\n    .ascii \"compress.bzip2\"\n");
     out.push_str(".globl _meta_wrapper_glob\n_meta_wrapper_glob:\n    .ascii \"glob\"\n");
     out.push_str(".globl _meta_wrapper_user\n_meta_wrapper_user:\n    .ascii \"user-space\"\n");
+    // php's zip wrapper names ITSELF `zip wrapper` in `wrapper_type`, unlike every other
+    // built-in, whose name has no such suffix. Measured on `php -n` 8.5.6.
+    out.push_str(".globl _meta_wrapper_zip\n_meta_wrapper_zip:\n    .ascii \"zip wrapper\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");

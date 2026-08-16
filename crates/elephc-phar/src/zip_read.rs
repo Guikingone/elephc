@@ -18,21 +18,54 @@ pub(super) fn parse_zip_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
         .map(|candidate| candidate.payload)
 }
 
-/// Parses a zip-based phar into entries plus its global metadata and stub.
+/// One decoded ZIP central-directory record, with its payload still in `data`.
 ///
-/// Global metadata is read from the EOCD archive comment; the reserved
-/// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
-/// hidden from the entry listing.
-pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
-    let eocd = find_zip_eocd(data)?;
+/// Borrowing the name and comment out of the archive buffer keeps the walk
+/// allocation-free: only the entry a caller actually asks for is decoded.
+pub(super) struct ZipCentralRecord<'a> {
+    /// The entry name exactly as stored — no separator or leading-slash rewriting.
+    pub(super) name: &'a [u8],
+    /// ZIP compression method (`ZIP_METHOD_STORE` / `ZIP_METHOD_DEFLATE`).
+    pub(super) method: u16,
+    /// Stored (post-compression, post-encryption) byte length.
+    pub(super) compressed_size: usize,
+    /// Original byte length.
+    pub(super) uncompressed_size: usize,
+    /// Offset of the entry's local file header inside the archive.
+    pub(super) local_offset: usize,
+    /// Whether the entry is ZipCrypto encrypted (general-purpose flag bit 0).
+    pub(super) encrypted: bool,
+    /// The ZipCrypto password check byte for this entry.
+    pub(super) check_byte: u8,
+    /// The central-directory file comment (phar per-file metadata rides here).
+    pub(super) comment: &'a [u8],
+}
+
+impl ZipCentralRecord<'_> {
+    /// Decodes this record's payload out of the archive it was walked from.
+    pub(super) fn decode(&self, data: &[u8]) -> Option<Vec<u8>> {
+        decode_zip_local_entry(
+            data,
+            self.local_offset,
+            self.method,
+            self.compressed_size,
+            self.uncompressed_size,
+            self.encrypted,
+            self.check_byte,
+        )
+    }
+}
+
+/// Walks a ZIP central directory and returns every record, undecoded.
+///
+/// This is the shared spine under both the phar view of a ZIP container
+/// ([`parse_zip_archive`], which hides `.phar/*` control entries) and the raw
+/// `zip://` wrapper view ([`zip_entry_payload`], which hides nothing). Walking
+/// without decoding also means one entry stored with a method the bridge cannot
+/// inflate no longer makes the whole archive unreadable.
+pub(super) fn zip_central_records(data: &[u8]) -> Option<Vec<ZipCentralRecord<'_>>> {
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
-    let comment_len = le16(data, eocd + 20)? as usize;
-    let comment_start = eocd.checked_add(22)?;
-    let metadata = data
-        .get(comment_start..comment_start.checked_add(comment_len)?)?
-        .to_vec();
-    let mut entries = Vec::with_capacity(entry_count.min(1 << 16));
-    let mut stub = Vec::new();
+    let mut records = Vec::with_capacity(entry_count.min(1 << 16));
     let mut p = central_dir_offset;
     for _ in 0..entry_count {
         if le32(data, p)? != 0x0201_4b50 {
@@ -61,32 +94,63 @@ pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
             &mut local_offset,
         )?;
         let (encrypted, check_byte) = zip_entry_crypto(data, p)?;
-        let payload = decode_zip_local_entry(
-            data,
-            local_offset,
+        let comment_start = name_start.checked_add(name_len)?.checked_add(extra_len)?;
+        let comment = data.get(comment_start..comment_start.checked_add(entry_comment_len)?)?;
+        records.push(ZipCentralRecord {
+            name,
             method,
             compressed_size,
             uncompressed_size,
+            local_offset,
             encrypted,
             check_byte,
-        )?;
-        let comment_start = name_start.checked_add(name_len)?.checked_add(extra_len)?;
-        if name == PHAR_STUB_ENTRY {
+            comment,
+        });
+        p = comment_start.checked_add(entry_comment_len)?;
+    }
+    Some(records)
+}
+
+/// Returns the bytes of `entry` from a plain ZIP archive, by EXACT stored name.
+///
+/// This is the `zip://` stream wrapper's view of an archive, which php's
+/// `ext/zip` gives no phar meaning: a `.phar/*` control entry is a readable file
+/// like any other, no leading slash is stripped, and no directory name resolves.
+pub(super) fn zip_entry_payload(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
+    let records = zip_central_records(data)?;
+    let record = records.iter().find(|record| record.name == entry)?;
+    record.decode(data)
+}
+
+/// Parses a zip-based phar into entries plus its global metadata and stub.
+///
+/// Global metadata is read from the EOCD archive comment; the reserved
+/// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
+/// hidden from the entry listing.
+pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
+    let eocd = find_zip_eocd(data)?;
+    let comment_len = le16(data, eocd + 20)? as usize;
+    let comment_start = eocd.checked_add(22)?;
+    let metadata = data
+        .get(comment_start..comment_start.checked_add(comment_len)?)?
+        .to_vec();
+    let records = zip_central_records(data)?;
+    let mut entries = Vec::with_capacity(records.len());
+    let mut stub = Vec::new();
+    for record in records {
+        let payload = record.decode(data)?;
+        if record.name == PHAR_STUB_ENTRY {
             stub = payload;
-        } else if !is_phar_control_entry(name) {
-            let compression = zip_compression_from_method(method)?;
-            // Per-file metadata rides in the central-directory file comment.
-            let entry_metadata = data
-                .get(comment_start..comment_start.checked_add(entry_comment_len)?)?
-                .to_vec();
+        } else if !is_phar_control_entry(record.name) {
+            let compression = zip_compression_from_method(record.method)?;
             entries.push(ArchiveEntry {
-                name: name.to_vec(),
+                name: record.name.to_vec(),
                 payload,
+                // Per-file metadata rides in the central-directory file comment.
+                metadata: record.comment.to_vec(),
                 compression,
-                metadata: entry_metadata,
             });
         }
-        p = comment_start.checked_add(entry_comment_len)?;
     }
     Some(Archive {
         entries,

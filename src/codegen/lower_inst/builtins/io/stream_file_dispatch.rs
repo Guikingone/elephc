@@ -303,6 +303,9 @@ pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let stream = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
     load_open_stream_handle_to_result(ctx, stream, "fseek")?;
+    let refused_label = ctx.next_label("fseek_no_seek");
+    let finished_label = ctx.next_label("fseek_no_seek_done");
+    emit_seek_unsupported_branch(ctx, &refused_label);
     let success_label = ctx.next_label("fseek_success");
     let done_label = ctx.next_label("fseek_done");
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
@@ -319,6 +322,11 @@ pub(crate) fn lower_fseek(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         Arch::X86_64 => lower_fseek_x86_64(ctx, &success_label, &done_label),
     }
     emit_clear_append_skip(ctx, stream, "fseek")?;
+    abi::emit_jump(ctx.emitter, &finished_label);
+    ctx.emitter.label(&refused_label);
+    emit_static_diag_warning(ctx, "Warning: fseek(): Stream does not support seeking\n");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), -1);
+    ctx.emitter.label(&finished_label);
     store_if_result(ctx, inst)
 }
 
@@ -327,6 +335,9 @@ pub(crate) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     super::super::ensure_arg_count(inst, "rewind", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_open_stream_handle_to_result(ctx, stream, "rewind")?;
+    let refused_label = ctx.next_label("rewind_no_seek");
+    let finished_label = ctx.next_label("rewind_no_seek_done");
+    emit_seek_unsupported_branch(ctx, &refused_label);
     let success_label = ctx.next_label("rewind_success");
     let done_label = ctx.next_label("rewind_done");
     match ctx.emitter.target.arch {
@@ -334,7 +345,40 @@ pub(crate) fn lower_rewind(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::X86_64 => lower_rewind_x86_64(ctx, &success_label, &done_label),
     }
     emit_clear_append_skip(ctx, stream, "rewind")?;
+    abi::emit_jump(ctx.emitter, &finished_label);
+    ctx.emitter.label(&refused_label);
+    emit_static_diag_warning(ctx, "Warning: rewind(): Stream does not support seeking\n");
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&finished_label);
     store_if_result(ctx, inst)
+}
+
+/// Branches to `refused_label` when the stream's WRAPPER has no seek op at all.
+///
+/// php-src refuses such a seek in `php_stream_seek`, before any descriptor is touched, and
+/// `ext/zip`'s entry ops are exactly that shape. elephc serves a zip entry out of a regular
+/// temp file, which seeks perfectly well, so the refusal can only come from the recorded
+/// wrapper identity — see `__rt_stream_seek_unsupported` for the measured php lines.
+///
+/// The opaque stream handle is in the integer result register on entry and is left there, so
+/// the caller's normal path is byte-for-byte what it was for every stream that does seek.
+fn emit_seek_unsupported_branch(ctx: &mut FunctionContext<'_>, refused_label: &str) {
+    let reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, reg);
+    abi::emit_call_label(ctx.emitter, "__rt_stream_seek_unsupported");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x9, x0");                              // hold the verdict across the handle restore
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // the opaque stream handle, back where it was
+            ctx.emitter.instruction(&format!("cbnz x9, {}", refused_label));    // → php's refusal line and its failure value
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                            // hold the verdict across the handle restore
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // the opaque stream handle, back where it was
+            ctx.emitter.instruction("test r10, r10");                           // did the wrapper refuse to seek?
+            ctx.emitter.instruction(&format!("jnz {}", refused_label));         // → php's refusal line and its failure value
+        }
+    }
 }
 
 /// Lowers `ftruncate(stream, size)` through the shared fd truncate runtime helper.

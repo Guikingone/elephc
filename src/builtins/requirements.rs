@@ -52,6 +52,12 @@ pub fn file_get_contents_requirements(
         {
             vec![BuiltinRequirement::Bridge("elephc_tls")]
         }
+        // A literal `zip://` URL reads through the bridge at RUN time, so — unlike a literal
+        // `phar://` URL, whose entry is extracted during lowering — it really does need the
+        // bridge linked in. It needs nothing else: a ZIP entry is inflated inside the bridge.
+        Some(ExprKind::StringLiteral(url)) if url.starts_with("zip://") => {
+            vec![BuiltinRequirement::Bridge("elephc_phar")]
+        }
         Some(ExprKind::StringLiteral(_)) => Vec::new(),
         _ => vec![
             BuiltinRequirement::Bridge("elephc_tls"),
@@ -112,6 +118,12 @@ pub fn fopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinReq
     if filename.starts_with("phar://") && write_mode {
         requirements.push(BuiltinRequirement::Bridge("elephc_phar"));
         requirements.push(BuiltinRequirement::Bridge("elephc_crypto"));
+    }
+    // A literal `zip://` open reads its archive at run time through the bridge, in EVERY mode:
+    // the read modes to serve the entry, and the refused write modes because the lowering still
+    // publishes the bridge pointer before the runtime gate turns the open down.
+    if filename.starts_with("zip://") {
+        requirements.push(BuiltinRequirement::Bridge("elephc_phar"));
     }
     requirements
 }

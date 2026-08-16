@@ -2241,14 +2241,14 @@ fn test_stream_get_wrappers_lists_known_wrappers() {
     // `tests/php_oracle/manifests/streams`:
     //   https, ftps, compress.zlib, compress.bzip2, php, file, glob, data,
     //   http, ftp, phar, zip
-    // php's probe reads `12:https,compress.bzip2,file`; only the count differs,
-    // because php's twelfth entry is `zip`, which elephc has no wrapper for and
-    // does not advertise. The list used to start at `file` and this probe read
-    // `11:file,ftp,https`.
+    // php's probe reads `12:https,compress.bzip2,file` and so does elephc's: `zip` is now
+    // really readable through the elephc-phar bridge, so advertising it is no longer a lie.
+    // This assertion read `11:https,compress.bzip2,file` while the wrapper was missing, and
+    // before that the list started at `file` and the probe read `11:file,ftp,https`.
     let out = compile_and_run(
-        r#"<?php $w = stream_get_wrappers(); echo count($w) . ":" . $w[0] . "," . $w[3] . "," . $w[5];"#,
+        r#"<?php $w = stream_get_wrappers(); echo count($w) . ":" . $w[0] . "," . $w[3] . "," . $w[5] . "," . $w[11];"#,
     );
-    assert_eq!(out, "11:https,compress.bzip2,file");
+    assert_eq!(out, "12:https,compress.bzip2,file,zip");
 }
 
 /// Verifies compiled PHP output for stream get transports and filters.
@@ -4554,6 +4554,186 @@ echo (unlink("phar://delete.zip/missing.txt") ? "bad" : "missing");
     assert_eq!(
         out,
         "u|missing|bravo|u|tar-two|u|zip-two|missing"
+    );
+}
+
+/// Verifies the `zip://archive.zip#entry` stream wrapper against `php -n` 8.5.6.
+///
+/// php's `ext/zip` wrapper takes a URL shape nothing else uses — a single `#` separates the
+/// archive from the entry — and reads the member as a plain ZIP file with no phar semantics.
+/// Measured, in this order:
+///
+/// ```text
+/// file_get_contents("zip://a.zip#f.txt")       => string(12) "hello world\n"   (deflated)
+/// file_get_contents("zip://a.zip#sub/n.txt")   => string(20) "nested content here\n"
+/// strlen(file_get_contents("...#stored.txt"))  => int(200)                     (stored)
+/// file_get_contents("zip://a.zip#a#b.txt")     => string(9) "hashname\n"       (splits at the FIRST #)
+/// file_get_contents("zip://a.zip#nope.txt")    => Warning + bool(false)
+/// file_get_contents("zip://ghost.zip#f.txt")   => Warning + bool(false)
+/// file_get_contents("zip://a.zip")             => Warning + bool(false)
+/// file_get_contents("zip://a.zip#/f.txt")      => Warning + bool(false)   (no leading-slash stripping)
+/// file_get_contents("zip://a.zip#sub")         => Warning + bool(false)   (a directory names nothing)
+/// fopen("zip://a.zip#f.txt", "w")              => Warning + bool(false)   (the wrapper is read-only)
+/// ```
+///
+/// EVERY failure is the same line — `Failed to open stream: operation failed` — because
+/// `ext/zip` stashes no wrapper error and the generic caller has only its fallback to print.
+///
+/// Before this test the wrapper did not exist: elephc answered
+/// `Warning: fopen(): Unable to find the wrapper "zip"` followed by
+/// `Failed to open stream: No such file or directory`, and `stream_get_wrappers()` listed 11
+/// entries where php lists 12.
+#[test]
+fn test_zip_wrapper_reads_entries_and_refuses_like_php() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_w1_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+            ("a#b.txt", b"hashname\n", false),
+        ]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+var_dump(file_get_contents("zip://{p}#f.txt"));
+var_dump(file_get_contents("zip://{p}#sub/n.txt"));
+var_dump(strlen(file_get_contents("zip://{p}#stored.txt")));
+var_dump(file_get_contents("zip://{p}#a#b.txt"));
+var_dump(file_get_contents("zip://{p}#nope.txt"));
+var_dump(file_get_contents("zip://{p}.ghost#f.txt"));
+var_dump(file_get_contents("zip://{p}"));
+var_dump(file_get_contents("zip://{p}#/f.txt"));
+var_dump(file_get_contents("zip://{p}#sub"));
+var_dump(fopen("zip://{p}#f.txt", "w"));
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    let p = archive.display();
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "string(12) \"hello world\n\"\n\
+         string(20) \"nested content here\n\"\n\
+         int(200)\n\
+         string(9) \"hashname\n\"\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n\
+         bool(false)\n"
+    );
+    // One wording for every failure, and the URL php names is the WHOLE url, `#` included.
+    for expected in [
+        format!("Warning: file_get_contents(zip://{p}#nope.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}.ghost#f.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}#/f.txt): Failed to open stream: operation failed"),
+        format!("Warning: file_get_contents(zip://{p}#sub): Failed to open stream: operation failed"),
+        format!("Warning: fopen(zip://{p}#f.txt): Failed to open stream: operation failed"),
+    ] {
+        assert!(
+            out.stderr.contains(&expected),
+            "missing php's failed-open line {expected:?}, got stderr={}",
+            out.stderr
+        );
+    }
+    // php's zip wrapper EXISTS, so none of these may claim otherwise.
+    assert!(
+        !out.stderr.contains("Unable to find the wrapper"),
+        "the zip wrapper is registered now, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies a `zip://` stream opened through `fopen()` reads, ends, and names itself as php does.
+///
+/// A RUN-TIME filename is used for the reads so the dynamic route is covered too: php reads the
+/// archive when the program runs, so — unlike `phar://`, whose literal entry is extracted during
+/// lowering — a literal `zip://` URL must NOT be resolved at compile time either.
+///
+/// Measured on `php -n` 8.5.6:
+///
+/// ```text
+/// $h = fopen("zip://a.zip#f.txt", "r");
+/// fread($h, 5)   => string(5) "hello"
+/// fread($h, 100) => string(7) " world\n"
+/// feof($h)       => bool(true)
+/// stream_get_meta_data($h) => wrapper_type "zip wrapper", stream_type "zip", seekable false
+/// fread($h,3); rewind($h) => Warning: rewind(): Stream does not support seeking + bool(false)
+/// ftell($h)               => int(3)   (the refused seek moved nothing)
+/// fseek($h, 0, SEEK_SET)  => Warning: fseek(): Stream does not support seeking  + int(-1)
+/// ```
+///
+/// The metadata and the seek refusal are the same fact twice: `ext/zip`'s stream ops leave
+/// `seek` NULL. elephc serves the entry from a regular temp file, which seeks perfectly well,
+/// so both had to be keyed off the recorded wrapper identity — before that this read
+/// `plainfile` / `STDIO` / `bool(true)` and the seeks quietly succeeded.
+#[test]
+fn test_zip_wrapper_stream_reads_and_refuses_to_seek() {
+    let archive = std::env::temp_dir().join(format!("elephc_zip_w2_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip_phar_container(&[("f.txt", b"hello world\n", true)]),
+    )
+    .unwrap();
+    let src = format!(
+        r#"<?php
+$url = "zip://{p}#f.txt";
+$h = fopen($url, "r");
+var_dump(fread($h, 5));
+var_dump(fread($h, 100));
+var_dump(feof($h));
+fclose($h);
+$m = stream_get_meta_data(fopen("zip://{p}#f.txt", "r"));
+var_dump($m["wrapper_type"], $m["stream_type"], $m["seekable"], $m["uri"]);
+$g = fopen($url, "r");
+var_dump(fread($g, 3));
+var_dump(rewind($g));
+var_dump(ftell($g));
+var_dump(fseek($g, 0, SEEK_SET));
+var_dump(stream_get_contents(fopen($url, "r")));
+"#,
+        p = archive.display()
+    );
+    let out = compile_and_run_capture(&src);
+    std::fs::remove_file(&archive).ok();
+    let uri = format!("zip://{}#f.txt", archive.display());
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        format!(
+            "string(5) \"hello\"\n\
+             string(7) \" world\n\"\n\
+             bool(true)\n\
+             string(11) \"zip wrapper\"\n\
+             string(3) \"zip\"\n\
+             bool(false)\n\
+             string({uri_len}) \"{uri}\"\n\
+             string(3) \"hel\"\n\
+             bool(false)\n\
+             int(3)\n\
+             int(-1)\n\
+             string(12) \"hello world\n\"\n",
+            uri_len = uri.len()
+        )
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: rewind(): Stream does not support seeking"),
+        "expected php's rewind refusal, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: fseek(): Stream does not support seeking"),
+        "expected php's fseek refusal, got stderr={}",
+        out.stderr
     );
 }
 

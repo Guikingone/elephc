@@ -53,6 +53,25 @@ pub fn emit_stream_record_meta(emitter: &mut Emitter) {
         "str x11, [x9, #{}]", STREAM_URI_LEN_OFFSET
     ));                                                                         // publish the new URI byte length
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the requested wrapper id
+    // A URI that NAMES the zip wrapper is the zip wrapper, whichever route recorded it. The
+    // dynamic `fopen()` path cannot know the scheme while it lowers and passes the plainfile
+    // fallback, which made `stream_get_meta_data()` report `plainfile`/`STDIO` for a zip entry
+    // stream and let it seek. Deciding it HERE, from the URI every caller already hands over,
+    // is the one place both the literal and the run-time filename pass through.
+    emitter.instruction("ldr x13, [sp, #24]");                                  // the caller-visible URI byte length
+    emitter.instruction("cmp x13, #6");                                         // at least "zip://" long?
+    emitter.instruction("b.lo __rt_srm_not_zip");                               // too short to name the zip wrapper
+    emitter.instruction("ldr x14, [sp, #16]");                                  // the owned URI pointer
+    for (offset, byte) in b"zip://".iter().enumerate() {
+        emitter.instruction(&format!("ldrb w15, [x14, #{}]", offset));          // one URI byte
+        emitter.instruction(&format!("cmp w15, #{:#x}", byte));                 // against the canonical zip:// prefix
+        emitter.instruction("b.ne __rt_srm_not_zip");                           // a different scheme keeps the caller's id
+    }
+    emitter.instruction(&format!(
+        "mov x11, #{}",
+        super::WRAPPER_ID_ZIP
+    ));                                                                         // php's twelfth wrapper, whose ops have no seek
+    emitter.label("__rt_srm_not_zip");
     emitter.instruction(&format!(
         "ldr x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
     ));                                                                         // load instance flags before replacing URL identity
@@ -158,6 +177,20 @@ fn emit_stream_record_meta_linux_x86_64(emitter: &mut Emitter) {
         "mov QWORD PTR [r10 + {}], rax", STREAM_URI_LEN_OFFSET
     ));                                                                         // publish the new URI byte length
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the requested wrapper id
+    // See the AArch64 counterpart: a URI that names the zip wrapper IS the zip wrapper, and
+    // this is the one place both the literal and the run-time filename pass through.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // the caller-visible URI byte length
+    emitter.instruction("cmp rcx, 6");                                          // at least "zip://" long?
+    emitter.instruction("jb __rt_srm_not_zip_x86");                             // too short to name the zip wrapper
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // the owned URI pointer
+    for (offset, byte) in b"zip://".iter().enumerate() {
+        emitter.instruction(&format!(
+            "cmp BYTE PTR [rcx + {}], {:#x}", offset, byte
+        ));                                                                     // one URI byte against the canonical zip:// prefix
+        emitter.instruction("jne __rt_srm_not_zip_x86");                        // a different scheme keeps the caller's id
+    }
+    emitter.instruction(&format!("mov rax, {}", super::WRAPPER_ID_ZIP));        // php's twelfth wrapper, whose ops have no seek
+    emitter.label("__rt_srm_not_zip_x86");
     emitter.instruction(&format!(
         "mov rdx, QWORD PTR [r10 + {}]", STREAM_OWNERSHIP_FLAGS_OFFSET
     ));                                                                         // load instance flags before replacing URL identity

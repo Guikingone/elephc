@@ -283,7 +283,7 @@ pub(crate) use append_position::{
     emit_dynamic_context_deprecation, emit_stream_wrapper_pos_advance,
     emit_stream_wrapper_pos_set,
 };
-pub(crate) use stream_type_name::emit_stream_type_name;
+pub(crate) use stream_type_name::{emit_stream_type_name, WRAPPER_ID_ZIP};
 pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use socket_errno::emit_socket_strerror;

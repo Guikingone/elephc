@@ -429,3 +429,137 @@ pub(super) fn signed_encrypted_zip_still_verifies() {
     assert_eq!(extract_entry_bytes(&data, b"doc.txt"), None);
     std::fs::remove_file(&path).ok();
 }
+
+/// Verifies the `zip://archive#entry` URL shape php's `ext/zip` wrapper uses.
+///
+/// Measured on `php -n` 8.5.6 against an archive holding `f.txt` (deflated),
+/// `sub/n.txt` (deflated), `stored.txt` (stored) and, separately, `a#b.txt`:
+///
+/// ```text
+/// file_get_contents("zip://a.zip#f.txt")      => string(12) "hello world\n"
+/// file_get_contents("zip://a.zip#sub/n.txt")  => string(20) "nested content here\n"
+/// file_get_contents("zip://a.zip#stored.txt") => 200 bytes
+/// file_get_contents("zip://h.zip#a#b.txt")    => string(9) "hashname\n"
+/// file_get_contents("zip://a.zip#nope.txt")   => false
+/// file_get_contents("zip://ghost.zip#f.txt")  => false
+/// file_get_contents("zip://a.zip")            => false
+/// file_get_contents("zip://a.zip#")           => false
+/// file_get_contents("zip://a.zip#/f.txt")     => false
+/// file_get_contents("zip://a.zip#sub")        => false
+/// ```
+///
+/// The `a#b.txt` line is the one that fixes the separator: php splits at the
+/// FIRST `#`, so every later one belongs to the entry name. `#/f.txt` and `#sub`
+/// pin that php does no leading-slash stripping and resolves no directory name.
+#[test]
+fn zip_url_reads_entries_by_exact_name_after_the_first_hash() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_url_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip(&[
+            ("f.txt", b"hello world\n", true),
+            ("sub/n.txt", b"nested content here\n", true),
+            ("stored.txt", &[b'x'; 200], false),
+            ("a#b.txt", b"hashname\n", false),
+        ]),
+    )
+    .unwrap();
+    let url = |entry: &str| format!("zip://{}#{}", archive.display(), entry);
+
+    assert_eq!(
+        zip_extract_url_bytes(url("f.txt").as_bytes()).as_deref(),
+        Some(&b"hello world\n"[..])
+    );
+    assert_eq!(
+        zip_extract_url_bytes(url("sub/n.txt").as_bytes()).as_deref(),
+        Some(&b"nested content here\n"[..])
+    );
+    assert_eq!(
+        zip_extract_url_bytes(url("stored.txt").as_bytes()).map(|bytes| bytes.len()),
+        Some(200)
+    );
+    // The separator is the FIRST `#`: the rest, hashes and all, is the entry name.
+    assert_eq!(
+        zip_extract_url_bytes(url("a#b.txt").as_bytes()).as_deref(),
+        Some(&b"hashname\n"[..])
+    );
+
+    assert_eq!(zip_extract_url_bytes(url("nope.txt").as_bytes()), None);
+    assert_eq!(zip_extract_url_bytes(url("").as_bytes()), None);
+    // php strips no leading slash and resolves no directory name.
+    assert_eq!(zip_extract_url_bytes(url("/f.txt").as_bytes()), None);
+    assert_eq!(zip_extract_url_bytes(url("sub").as_bytes()), None);
+    // No `#` at all, and a missing archive.
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}", archive.display()).as_bytes()),
+        None
+    );
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}.ghost#f.txt", archive.display()).as_bytes()),
+        None
+    );
+
+    std::fs::remove_file(&archive).ok();
+}
+
+/// Verifies `zip://` reaches the SAME bridge entry point `phar://` does.
+///
+/// The generated runtime holds one bridge function pointer and hands it whole
+/// URLs, so [`extract_url_bytes`] has to recognise both shapes; a URL with
+/// neither scheme still resolves to nothing.
+#[test]
+fn extract_url_bytes_accepts_both_archive_url_shapes() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_shared_{}.zip", std::process::id()));
+    std::fs::write(&archive, build_zip(&[("f.txt", b"shared", true)])).unwrap();
+
+    assert_eq!(
+        extract_url_bytes(format!("zip://{}#f.txt", archive.display()).as_bytes()).as_deref(),
+        Some(&b"shared"[..])
+    );
+    // The phar shape splits on a `/` boundary, and finds the same entry.
+    assert_eq!(
+        extract_url_bytes(format!("phar://{}/f.txt", archive.display()).as_bytes()).as_deref(),
+        Some(&b"shared"[..])
+    );
+    assert_eq!(
+        extract_url_bytes(format!("{}#f.txt", archive.display()).as_bytes()),
+        None
+    );
+
+    std::fs::remove_file(&archive).ok();
+}
+
+/// Verifies the `zip://` wrapper sees a `.phar/*` control entry as an ordinary file.
+///
+/// [`parse_zip_archive`] hides those entries because a zip-based PHAR uses them
+/// for its stub, metadata and signature. php's `ext/zip` knows nothing of that
+/// convention, so the wrapper must read them like any other member — which is
+/// exactly why the raw walk and the phar view are two views over one spine.
+#[test]
+fn zip_url_reads_phar_control_entries_the_phar_view_hides() {
+    let dir = std::env::temp_dir();
+    let archive = dir.join(format!("elephc_zip_control_{}.zip", std::process::id()));
+    std::fs::write(
+        &archive,
+        build_zip(&[
+            ("real.txt", b"visible", false),
+            (".phar/stub.php", b"<?php __HALT_COMPILER(); ?>", false),
+        ]),
+    )
+    .unwrap();
+
+    assert_eq!(
+        zip_extract_url_bytes(format!("zip://{}#.phar/stub.php", archive.display()).as_bytes())
+            .as_deref(),
+        Some(&b"<?php __HALT_COMPILER(); ?>"[..])
+    );
+    // The phar view of the same archive keeps hiding it.
+    let bytes = std::fs::read(&archive).unwrap();
+    let parsed = parse_zip_archive(&bytes).unwrap();
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].name, b"real.txt");
+
+    std::fs::remove_file(&archive).ok();
+}

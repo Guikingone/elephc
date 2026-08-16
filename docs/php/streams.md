@@ -129,6 +129,16 @@ only in lower case. So `data://text,…`, `data://text/plain;,…` and
 | `compress.zlib://` | Read-only wrapper that opens the underlying file and applies `zlib.inflate`. |
 | `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |
 | `glob://` | Directory-style wrapper for iterating paths matching a glob pattern through `opendir()` / `readdir()`. |
+| `zip://` | Read-only wrapper for one entry of a plain ZIP archive, addressed as `zip://archive.zip#entry`. The archive is read when the program runs — even for a literal URL — so an archive the program just wrote is visible. Stored and deflated entries are decoded, including ZIP64; the entry name is matched EXACTLY after the first `#`, with no leading-slash stripping and no directory resolution. Every failure — missing archive, missing entry, no `#`, an encrypted entry — reports PHP's one wording, `Failed to open stream: operation failed`. |
+
+`zip://` is read-only in PHP: a write mode is refused with the same failed-open
+line rather than falling through to the filesystem. The stream reports
+`wrapper_type` `zip wrapper` and `stream_type` `zip`, and — like PHP, whose
+`ext/zip` stream ops define no `seek` — it is not seekable: `fseek()` warns
+`Stream does not support seeking` and returns `-1`, `rewind()` warns and returns
+`false`, and the read position does not move. `zip://` entries are decoded by the
+same `elephc-phar` bridge that reads zip-based PHAR containers, so a program that
+reads one links `-lelephc_phar` and nothing else.
 
 `phar://` write streams buffer one uncompressed entry in memory. `fclose()` and
 `file_put_contents("phar://archive.phar/entry", $data)` insert or replace that
@@ -407,7 +417,7 @@ its own closing dispatch.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers in PHP's registration order: `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `php`, `file`, `glob`, `data`, `http`, and `ftp`, then `phar`, followed by every scheme `stream_wrapper_register()` added. PHP also lists `zip`, which elephc does not implement. |
+| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers in PHP's registration order: `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `php`, `file`, `glob`, `data`, `http`, and `ftp`, then `phar` and `zip`, followed by every scheme `stream_wrapper_register()` added. This is PHP's full list of twelve. |
 | `stream_wrapper_register()` | `stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool` | Register a userspace wrapper class for `$protocol://` URLs. Up to 16 registrations are stored. |
 | `stream_wrapper_unregister()` | `stream_wrapper_unregister(string $protocol): bool` | Remove a user-registered wrapper; built-in wrappers cannot be unregistered in v1. |
 | `stream_wrapper_restore()` | `stream_wrapper_restore(string $protocol): bool` | Clears the disabled bit `stream_wrapper_unregister()` set on a built-in wrapper, and answers PHP's three cases. A wrapper that really was unregistered is restored silently and reports `true`. One that was never unregistered reports `true` with `Notice: stream_wrapper_restore(): <proto>:// was never changed, nothing to restore`. A scheme that never existed reports `false` with `Warning: stream_wrapper_restore(): <proto>:// never existed, nothing to restore`, which `@` suppresses. Following elephc's convention for every diagnostic, the Notice goes to stdout through the output-buffer funnel and the Warning to stderr; PHP CLI puts both on stdout, a repo-wide divergence rather than one specific to this builtin. |

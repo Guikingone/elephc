@@ -88,7 +88,12 @@ fn emit_file_get_contents_bytes(
             return Ok(false);
         }
     }
-    if path_literal.is_none() {
+    // A literal `zip://` URL reads its archive at RUN time (see the fopen lowering), so it needs
+    // the bridge published exactly like a filename that is only known then — but only the one
+    // entry point a zip read reaches.
+    if path_literal.as_deref().is_some_and(|p| p.starts_with("zip://")) {
+        publish_zip_bridge_function_pointer(ctx);
+    } else if path_literal.is_none() {
         publish_dynamic_phar_function_pointers(ctx);
     }
     // Publish the `$context` argument for the duration of the read, exactly as fopen
@@ -304,6 +309,18 @@ pub(super) fn publish_dynamic_phar_function_pointers(ctx: &mut FunctionContext<'
             }
         }
     }
+}
+
+/// Publishes the one bridge entry point a `zip://` read needs.
+///
+/// A ZIP entry's DEFLATE payload is inflated INSIDE the bridge, and the assembly
+/// fallback in `__rt_phar_read_entry` only knows the native PHAR manifest, so none
+/// of the four zlib/libbz2 entry points [`publish_dynamic_phar_function_pointers`]
+/// also publishes is reachable from a zip read. Publishing them anyway would drag
+/// `-lz` and `-lbz2` into the link of every program that reads one zip entry.
+pub(super) fn publish_zip_bridge_function_pointer(ctx: &mut FunctionContext<'_>) {
+    const ENTRIES: &[(&str, &str)] = &[("elephc_phar_extract_url", "_elephc_phar_extract_url_fn")];
+    publish_phar_bridge_entries(ctx, ENTRIES);
 }
 
 /// Publishes a list of elephc-phar bridge entry points into runtime slots.

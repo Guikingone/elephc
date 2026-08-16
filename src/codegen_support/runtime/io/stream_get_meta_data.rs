@@ -108,6 +108,18 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     // wants it — only the reported flag moves.
     emitter.instruction("ldr x0, [sp, #72]");                                   // the backend descriptor
     emitter.instruction("bl __rt_stream_fd_is_regular");                        // S_ISREG, the question php asks
+    // ...unless the WRAPPER has no seek at all. php-src builds a stream from a set of ops, and
+    // `ext/zip`'s entry ops leave `seek` NULL, which `_php_stream_get_metadata` reports as
+    // `seekable => false` no matter what backs the stream. elephc serves a zip entry from a
+    // regular temp file, so S_ISREG alone called it seekable where php says false. Measured:
+    // `stream_get_meta_data(fopen("zip://a.zip#f.txt","r"))["seekable"]` is `bool(false)`.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // the stable StreamState pointer
+    emitter.instruction(&format!("ldr x9, [x9, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!(
+        "cmp x9, #{}",
+        super::WRAPPER_ID_ZIP
+    ));                                                                         // the zip wrapper?
+    emitter.instruction("csel x0, xzr, x0, eq");                                // a zip entry stream never seeks
     emitter.instruction("str x0, [sp, #16]");                                   // that is the seekable flag
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
@@ -466,6 +478,7 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
         ("_meta_wrapper_bzip2", 14),
         ("_meta_wrapper_glob", 4),
         ("_meta_wrapper_user", 10),
+        ("_meta_wrapper_zip", 11),
     ];
     emitter.instruction("ldr x6, [sp, #80]");                                   // reload the stable StreamState pointer
     emitter.instruction(&format!(
@@ -670,6 +683,15 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     // See the AArch64 counterpart: `seekable` is S_ISREG, not whether lseek worked.
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // the backend descriptor
     emitter.instruction("call __rt_stream_fd_is_regular");                      // S_ISREG, the question php asks
+    // See the AArch64 counterpart: `ext/zip`'s entry ops have no `seek`, so php reports the
+    // stream as unseekable however regular the file elephc serves it from happens to be.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [r10 + {STREAM_WRAPPER_ID_OFFSET}]"
+    ));                                                                         // which wrapper opened it
+    emitter.instruction(&format!("cmp r10, {}", super::WRAPPER_ID_ZIP));        // the zip wrapper?
+    emitter.instruction("mov r11d, 0");                                         // the unseekable answer
+    emitter.instruction("cmove rax, r11");                                      // a zip entry stream never seeks
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // that is the seekable flag
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
@@ -850,6 +872,7 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
         ("_meta_wrapper_bzip2", 14),
         ("_meta_wrapper_glob", 4),
         ("_meta_wrapper_user", 10),
+        ("_meta_wrapper_zip", 11),
     ];
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the stable StreamState pointer
     emitter.instruction(&format!(

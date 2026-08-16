@@ -906,6 +906,15 @@ pub(super) fn emit_literal_fopen_result(
         }
         return emit_literal_phar_fopen_read_result(ctx, path);
     }
+    if path.starts_with("zip://") {
+        // Unlike `phar://`, a literal `zip://` URL is NOT extracted at compile time: php's zip
+        // wrapper reads the archive when the program runs, so an archive the program itself
+        // wrote a line earlier has to be visible. Publishing the bridge and falling through to
+        // the generic runtime open is what makes the run-time read happen; `__rt_fopen_maybe_phar`
+        // recognises the scheme and hands the whole URL to the bridge.
+        publish_zip_bridge_function_pointer(ctx);
+        return emit_runtime_fopen_literal_result(ctx, path, mode);
+    }
     if path.starts_with("http://") {
         return emit_literal_http_fopen_result(ctx, path);
     }
