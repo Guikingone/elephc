@@ -3266,6 +3266,80 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a user wrapper's `stream_write()` receives CHUNKS, not the whole payload.
+///
+/// php hands a userspace wrapper at most `chunk_size` bytes per call, so 70 bytes to a stream whose
+/// chunk size is 42 calls `stream_write()` twice, with 42 then 28. elephc made one call with all
+/// 70, which a wrapper that counts or frames its writes observes directly.
+///
+/// Two details had to be measured rather than assumed. The default here is 8192 — the value
+/// `stream_set_chunk_size()` itself reports as the previous one — not the 4096
+/// `__rt_stream_chunk_size` answers, which is a read-loop fallback. And a SHORT write is not the
+/// end: php re-offers from the new position, so a wrapper accepting four bytes of every ten still
+/// receives the whole payload, as `10,10,10,10,10,10,6,2` for 30 bytes at chunk 10.
+#[test]
+fn test_user_wrapper_write_is_split_at_the_chunk_size() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class W {
+    public $context;
+    public static array $writes = [];
+    public static int $accept = -1;   // -1 = take everything
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_write($data) {
+        self::$writes[] = strlen($data);
+        return self::$accept < 0 ? strlen($data) : min(self::$accept, strlen($data));
+    }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_tell() { return 0; }
+    public function stream_seek($o, $w) { return false; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("chunked", "W");
+function run(int $chunk, int $bytes, int $accept): void {
+    W::$writes = [];
+    W::$accept = $accept;
+    $h = fopen("chunked://x", "wb");
+    stream_set_chunk_size($h, $chunk);
+    $n = fwrite($h, str_repeat("a", $bytes));
+    fclose($h);
+    printf("chunk=%d bytes=%d accept=%d -> returned=%s writes=%s\n",
+        $chunk, $bytes, $accept, var_export($n, true), implode(",", W::$writes));
+}
+run(42, 70, -1);
+run(10, 25, -1);
+run(100, 25, -1);
+run(1, 3, -1);
+run(10, 30, 4);
+// The default chunk size is 8192, which is what stream_set_chunk_size() reports as the previous.
+W::$writes = [];
+W::$accept = -1;
+$h = fopen("chunked://x", "wb");
+var_dump(stream_set_chunk_size($h, 42));
+fclose($h);
+$h = fopen("chunked://x", "wb");
+$n = fwrite($h, str_repeat("b", 9000));
+fclose($h);
+printf("default -> returned=%s writes=%s\n", var_export($n, true), implode(",", W::$writes));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "chunk=42 bytes=70 accept=-1 -> returned=70 writes=42,28\n",
+            "chunk=10 bytes=25 accept=-1 -> returned=25 writes=10,10,5\n",
+            "chunk=100 bytes=25 accept=-1 -> returned=25 writes=25\n",
+            "chunk=1 bytes=3 accept=-1 -> returned=3 writes=1,1,1\n",
+            "chunk=10 bytes=30 accept=4 -> returned=30 writes=10,10,10,10,10,10,6,2\n",
+            "int(8192)\n",
+            "default -> returned=9000 writes=8192,808\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an INCOMPLETE line is refused and kept on the stream, not handed back.
 ///
 /// php's `stream_get_line()` answers `false` when it finds neither the delimiter nor the length cap

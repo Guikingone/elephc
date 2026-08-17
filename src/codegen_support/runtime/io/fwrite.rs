@@ -14,6 +14,7 @@
 //!   filters target the common small-write case.
 
 use crate::codegen_support::runtime::resources::layout::{
+    STREAM_CHUNK_SIZE_OFFSET,
     STREAM_APPEND_SKIP_OFFSET, STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER,
     STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
     STREAM_WRAPPER_ID_OFFSET,
@@ -153,11 +154,69 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_fwrite_real_fd");                            // not a wrapper fd → issue the real write syscall path
-    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the payload pointer for the tail call
-    emitter.instruction("ldr x2, [sp, #16]");                                   // restore the payload length for the tail call
+
+    // -- a wrapper's `stream_write()` sees CHUNKS, not the whole payload --
+    //
+    // php hands a userspace wrapper at most `chunk_size` bytes per call, so writing 70 bytes to a
+    // stream whose chunk size is 42 calls `stream_write()` twice, with 42 then 28. elephc made one
+    // call with all 70, which a wrapper that counts or frames its writes observes directly.
+    // Measured on `php -n` 8.5.6.
+    //
+    // The loop lives here rather than in `__rt_user_wrapper_fwrite` because the chunk size hangs
+    // off the StreamState and only the HANDLE reaches it — the wrapper helper receives the
+    // synthetic descriptor, which cannot. A short write ends the loop: php stops handing over
+    // chunks as soon as the wrapper takes fewer bytes than it was given.
+    emitter.instruction("str x0, [sp, #0]");                                    // the synthetic descriptor every chunk goes to
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the opaque stream handle
+    emitter.instruction("bl __rt_stream_state");                                // the size lives on the state
+    emitter.instruction("cbz x0, __rt_uw_chunk_default");
+    emitter.instruction(&format!("ldr x0, [x0, #{STREAM_CHUNK_SIZE_OFFSET}]"));
+    emitter.instruction("cbnz x0, __rt_uw_chunk_sized");                        // an explicitly configured size
+    emitter.label("__rt_uw_chunk_default");
+    // php's default here is 8192, which is also what `stream_set_chunk_size()` reports as the
+    // previous value — NOT the 4096 `__rt_stream_chunk_size` answers, which is a read-loop
+    // fallback. Measured on `php -n` 8.5.6: 9000 bytes to an unconfigured wrapper arrive as 8192
+    // then 808.
+    emitter.instruction("mov x0, #8192");
+    emitter.label("__rt_uw_chunk_sized");
+    emitter.instruction("str x0, [sp, #32]");                                   // the TLS slot is unused on this path
+    emitter.instruction("str xzr, [sp, #48]");                                  // bytes the wrapper has taken so far
+    emitter.label("__rt_uw_chunk_loop");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // what it has taken
+    emitter.instruction("ldr x10, [sp, #16]");                                  // the whole payload length
+    emitter.instruction("cmp x9, x10");
+    emitter.instruction("b.ge __rt_uw_chunk_done");                             // every byte has been handed over
+    emitter.instruction("sub x11, x10, x9");                                    // what is left
+    emitter.instruction("ldr x12, [sp, #32]");                                  // the chunk size
+    emitter.instruction("cmp x11, x12");
+    emitter.instruction("csel x11, x12, x11, gt");                              // hand over MIN(remaining, chunk)
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the payload base
+    emitter.instruction("add x1, x1, x9");                                      // this chunk starts after what was taken
+    emitter.instruction("mov x2, x11");                                         // and is this long
+    emitter.instruction("str x11, [sp, #40]");                                  // remember what was offered, to spot a short write
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the synthetic descriptor
+    emitter.instruction("bl __rt_user_wrapper_fwrite");                         // stream_write($chunk)
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_uw_chunk_failed");                           // a missing hook reports failure, not a byte count
+    emitter.instruction("cbz x0, __rt_uw_chunk_done");                          // it took nothing: stop rather than spin
+    emitter.instruction("ldr x9, [sp, #48]");
+    emitter.instruction("add x9, x9, x0");                                      // count what it took
+    emitter.instruction("str x9, [sp, #48]");
+    // A SHORT write is not the end. php re-offers from the new position, so a wrapper that
+    // accepts four bytes of every ten still receives the whole payload: measured on `php -n`
+    // 8.5.6, 30 bytes at chunk 10 with such a wrapper arrive as 10,10,10,10,10,10,6,2 and
+    // `fwrite()` answers 30.
+    emitter.instruction("b __rt_uw_chunk_loop");
+    emitter.label("__rt_uw_chunk_failed");
+    emitter.instruction("ldr x9, [sp, #48]");
+    emitter.instruction("cbnz x9, __rt_uw_chunk_done");                         // some chunks landed: report those bytes
+    emitter.instruction("mov x9, #-1");                                         // nothing landed: the caller sees php false
+    emitter.instruction("str x9, [sp, #48]");
+    emitter.label("__rt_uw_chunk_done");
+    emitter.instruction("ldr x0, [sp, #48]");                                   // the total the wrapper accepted
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the frame before the tail call
-    emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
+    emitter.instruction("add sp, sp, #80");                                     // release the frame
+    emitter.instruction("ret");
     emitter.label("__rt_fwrite_real_fd");
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the payload pointer clobbered by resolution
     emitter.instruction("ldr x2, [sp, #16]");                                   // reload the payload length clobbered by resolution
@@ -390,7 +449,8 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fwrite");
 
     // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length [-32]=handle
-    //                        [-40]=session [-48]=append cursor [-56]=byte count.
+    //                        [-40]=session [-48]=append cursor [-56]=byte count
+    //                        [-72]=chunk size [-80]=bytes the wrapper took [-88]=bytes offered.
     //
     // See the AArch64 counterpart on the last two: [-48] holds -1 for every stream but an append
     // one, and where its logical cursor stood otherwise.
@@ -406,7 +466,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     // callers want.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // frame for the saved write state
+    emitter.instruction("sub rsp, 96");                                         // frame for the saved write state and the wrapper chunking
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the incoming handle or raw descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
@@ -477,11 +537,57 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jl __rt_fwrite_real_fd_x86");                          // not a wrapper fd → issue the real write syscall path
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the payload pointer for the tail call
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the payload length for the tail call
-    emitter.instruction("mov rsp, rbp");                                        // discard the helper frame before the tail call
+
+    // -- a wrapper's `stream_write()` sees CHUNKS, not the whole payload --
+    // See the AArch64 counterpart for the rule and its measurements.
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // the synthetic descriptor every chunk goes to
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // the size lives on the state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_uw_chunk_default_x86");
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [rax + {STREAM_CHUNK_SIZE_OFFSET}]"
+    ));
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_uw_chunk_sized_x86");                         // an explicitly configured size
+    emitter.label("__rt_uw_chunk_default_x86");
+    emitter.instruction("mov rax, 8192");                                       // php's wrapper default, not the read-loop's 4096
+    emitter.label("__rt_uw_chunk_sized_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // the chunk size
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // bytes the wrapper has taken so far
+    emitter.label("__rt_uw_chunk_loop_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");                        // what it has taken
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // the whole payload length
+    emitter.instruction("cmp r9, r10");
+    emitter.instruction("jge __rt_uw_chunk_done_x86");                          // every byte has been handed over
+    emitter.instruction("mov r11, r10");
+    emitter.instruction("sub r11, r9");                                         // what is left
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // the chunk size
+    emitter.instruction("cmp r11, rax");
+    emitter.instruction("cmovg r11, rax");                                      // hand over MIN(remaining, chunk)
+    emitter.instruction("mov QWORD PTR [rbp - 88], r11");                       // remember what was offered
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the payload base
+    emitter.instruction("add rsi, r9");                                         // this chunk starts after what was taken
+    emitter.instruction("mov rdx, r11");                                        // and is this long
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the synthetic descriptor
+    emitter.instruction("call __rt_user_wrapper_fwrite");                       // stream_write($chunk)
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_uw_chunk_failed_x86");                         // a missing hook reports failure, not a byte count
+    emitter.instruction("jz __rt_uw_chunk_done_x86");                           // it took nothing: stop rather than spin
+    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");
+    emitter.instruction("add r9, rax");                                         // count what it took
+    emitter.instruction("mov QWORD PTR [rbp - 80], r9");
+    emitter.instruction("jmp __rt_uw_chunk_loop_x86");                          // a short write is not the end: php re-offers
+    emitter.label("__rt_uw_chunk_failed_x86");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 80]");
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jnz __rt_uw_chunk_done_x86");                          // some chunks landed: report those bytes
+    emitter.instruction("mov QWORD PTR [rbp - 80], -1");                        // nothing landed: the caller sees php false
+    emitter.label("__rt_uw_chunk_done_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // the total the wrapper accepted
+    emitter.instruction("mov rsp, rbp");                                        // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
-    emitter.instruction("jmp __rt_user_wrapper_fwrite");                        // dispatch into the wrapper's stream_write instead of issuing a write syscall
+    emitter.instruction("ret");
     emitter.label("__rt_fwrite_real_fd_x86");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the payload pointer clobbered by resolution
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the payload length clobbered by resolution
