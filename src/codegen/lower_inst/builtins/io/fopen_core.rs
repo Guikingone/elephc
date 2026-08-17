@@ -351,6 +351,12 @@ fn emit_dynamic_php_wrapper_branch(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+    // A php:// URL built at run time can still carry a LITERAL mode, and `php://memory`/`temp`
+    // resolve to a bare `tmpfile()` descriptor here exactly as they do on the literal-path side.
+    // See the literal branch for why the flag goes on the descriptor rather than into the write.
+    if LiteralOpenMode::Operand(expect_operand(inst, 1)?).is_append(ctx)? {
+        abi::emit_call_label(ctx.emitter, "__rt_fd_set_append");
+    }
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
     emit_dynamic_php_filter_finish(ctx, "fopen");                               // the parked chain, and what php says about the names it could not resolve
     emit_record_stream_meta_after_boxed_stashed(ctx, 6);
@@ -773,6 +779,19 @@ impl LiteralOpenMode {
         }
     }
 
+    /// Whether this open is an APPEND mode, in which php sends every write to the end.
+    ///
+    /// php-src searches the whole mode string, so `a`, `a+` and `ab+` all append. A mode that is
+    /// not a compile-time literal answers false, which is the mode the temp-file backend already
+    /// creates — that keeps a dynamic mode no worse than it was rather than guessing.
+    fn is_append(self, ctx: &FunctionContext<'_>) -> Result<bool> {
+        match self {
+            LiteralOpenMode::ReadOnly => Ok(false),
+            LiteralOpenMode::Operand(mode) => Ok(optional_const_string_operand(ctx, mode)?
+                .is_some_and(|text| text.contains('a'))),
+        }
+    }
+
     /// The `(read, write)` filter directions php derives from the open mode.
     ///
     /// php-src searches the WHOLE mode string with `strchr`, so `rb` reads, `a` writes and
@@ -881,6 +900,15 @@ pub(super) fn emit_literal_fopen_result(
     }
     if is_php_memory_stream(path) {
         abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
+        // php's `a` modes send every write to the END of the stream, whatever `fseek()` did:
+        // `fopen("php://temp","a+")`, write `hello`, `fseek(0)`, write `world` answers
+        // `helloworld`. A real file gets that from `O_APPEND` at `open()`, but this backend is a
+        // `tmpfile()` descriptor created with no mode at all, so the second write OVERWROTE and
+        // the stream silently lost the first one. Setting the flag on the descriptor reuses the
+        // append bookkeeping files already have rather than adding a second one.
+        if mode.is_append(ctx)? {
+            abi::emit_call_label(ctx.emitter, "__rt_fd_set_append");
+        }
         box_stream_fd_or_false_result(ctx, "fopen");
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());

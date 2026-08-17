@@ -241,6 +241,19 @@ impl Platform {
         }
     }
 
+    /// Returns the bare `O_APPEND` descriptor flag.
+    ///
+    /// Used to turn an already-open descriptor into an appending one through `fcntl(F_SETFL)`,
+    /// which is how a `php://memory` or `php://temp` stream opened with an `a` mode gets php's
+    /// "every write goes to the end" behaviour from the same code path a real file uses.
+    pub fn o_append(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0008,
+            Platform::Linux => 0x0400,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_APPEND` flag combination for `open()`.
     ///
     /// Opens or creates a file for writing, with all writes appended to the end.

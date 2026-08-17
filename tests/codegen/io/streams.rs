@@ -3214,6 +3214,53 @@ echo qp("caf\xe9 au lait");
     );
 }
 
+/// Verifies an `a` mode on `php://memory`/`php://temp` sends every write to the END.
+///
+/// php ignores the seek position for a write in append mode: writing `hello`, seeking to 0 and
+/// writing `world` answers `helloworld`. A real file gets that from `O_APPEND` at `open()`, but
+/// the in-memory backend is a `tmpfile()` descriptor created with no mode at all, so the second
+/// write OVERWROTE the first and the stream silently lost data. `php://temp` and `php://memory`
+/// are separate cases because they are separate sub-wrappers, and the URL is checked once as a
+/// literal and once built at run time because those are two different openers.
+#[test]
+fn test_append_mode_memory_stream_writes_at_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+$fp = fopen("php://temp", "a+");
+fwrite($fp, "hello");
+fseek($fp, 0, SEEK_SET);
+fwrite($fp, "world");
+echo stream_get_contents($fp, -1, 0), "|";
+fclose($fp);
+
+$m = fopen("php://memory", "a+");
+fwrite($m, "abc");
+rewind($m);
+fwrite($m, "XY");
+echo stream_get_contents($m, -1, 0), "|";
+fclose($m);
+
+// The same URL built at run time takes the dynamic opener, which needs the flag too.
+$path = "php://" . "temp";
+$d = fopen($path, "a+");
+fwrite($d, "one");
+fseek($d, 0, SEEK_SET);
+fwrite($d, "two");
+echo stream_get_contents($d, -1, 0), "|";
+fclose($d);
+
+// A `w+` mode still overwrites, which is the case the append flag must not capture.
+$w = fopen("php://temp", "w+");
+fwrite($w, "hello");
+fseek($w, 0, SEEK_SET);
+fwrite($w, "world");
+echo stream_get_contents($w, -1, 0);
+fclose($w);
+"#,
+    );
+    assert_eq!(out, "helloworld|abcXY|onetwo|world");
+}
+
 /// Verifies `stream_get_meta_data()` omits `uri` for a pathless stream and calls a directory
 /// seekable.
 ///
