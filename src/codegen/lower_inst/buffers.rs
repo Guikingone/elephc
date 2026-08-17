@@ -323,10 +323,14 @@ fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_
             if result_reg != address_reg {
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(
+                            &format!("mov {}, {}", result_reg, address_reg)
+                        );                                                      // return the checked packed-element address as the packed receiver pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(
+                            &format!("mov {}, {}", result_reg, address_reg)
+                        );                                                      // return the checked packed-element address as the packed receiver pointer
                     }
                 }
             }

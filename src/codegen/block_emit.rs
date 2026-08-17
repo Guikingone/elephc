@@ -535,10 +535,14 @@ fn emit_generator_constructor(
         }
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)) // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(
+                    &format!("str {}, [x19, #{}]", gen_reg, store_off)
+                )                                                               // store the owned Mixed cell into the generator start_args slot
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)) // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(
+                    &format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)
+                )                                                               // store the owned Mixed cell into the generator start_args slot
             }
         }
     }
@@ -547,14 +551,16 @@ fn emit_generator_constructor(
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("mov x9, #{}", n));                    // number of boxed start arguments forwarded to the body
-            emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)); // publish the start argument count
+            emitter.instruction(
+                &format!("str x9, [x19, #{}]", FIBER_START_ARG_COUNT_OFFSET)
+            );                                                                  // publish the start argument count
             emitter.instruction("mov x0, x19");                                 // return the Generator object to the caller
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], {}",
                 FIBER_START_ARG_COUNT_OFFSET, n
-            )); // publish the start argument count
+            ));                                                                 // publish the start argument count
             emitter.instruction("mov rax, r12");                                // return the Generator object to the caller
         }
     }
@@ -645,7 +651,9 @@ fn emit_generator_callback(
                 emitter.instruction(&format!("ldr x0, [x19, #{}]", load_off));  // load the boxed Mixed start argument
             }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov rax, QWORD PTR [r12 + {}]", load_off)); // load the boxed Mixed start argument
+                emitter.instruction(
+                    &format!("mov rax, QWORD PTR [r12 + {}]", load_off)
+                );                                                              // load the boxed Mixed start argument
             }
         }
         if gen_param_kind(ty) == GenParamKind::Mixed {
@@ -737,14 +745,16 @@ fn emit_generator_callback(
     abi::emit_release_temporary_stack(emitter, overflow_bytes); // drop any stack-passed parameters after the body returns
     match target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)); // park the body return value for getReturn()
+            emitter.instruction(
+                &format!("str x0, [x19, #{}]", GEN_RETURN_VALUE_OFFSET)
+            );                                                                  // park the body return value for getReturn()
             emitter.instruction("mov x0, #0");                                  // hand the fiber transfer value a null so it does not alias the return
         }
         Arch::X86_64 => {
             emitter.instruction(&format!(
                 "mov QWORD PTR [r12 + {}], rax",
                 GEN_RETURN_VALUE_OFFSET
-            )); // park the body return value for getReturn()
+            ));                                                                 // park the body return value for getReturn()
             emitter.instruction("xor eax, eax");                                // hand the fiber transfer value a null so it does not alias the return
         }
     }

@@ -131,11 +131,15 @@ fn emit_pointer_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare pointer-like payloads for PHP strict identity
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize pointer identity as a boolean
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize pointer identity as a boolean
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare pointer-like payloads for PHP strict identity
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize pointer identity in the low byte
+            ctx.emitter.instruction(
+                &format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize pointer identity in the low byte
             ctx.emitter.instruction("movzx rax, al");                           // widen the pointer identity byte into the integer result register
         }
     }
@@ -518,7 +522,9 @@ fn emit_compare_current_float_with_saved_numeric(ctx: &mut FunctionContext<'_>, 
             ctx.emitter.instruction(&format!("fmov {}, d0", sec_reg));          // preserve the mixed numeric payload as the right comparison operand
             abi::emit_pop_float_reg(ctx.emitter, "d0");
             ctx.emitter.instruction(&format!("fcmp d0, {}", sec_reg));          // compare the numeric operand against the mixed numeric payload
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize equality as boolean
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize equality as boolean
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movsd {}, xmm0", sec_reg));       // preserve the mixed numeric payload as the right comparison operand
@@ -563,7 +569,9 @@ fn emit_mixed_numeric_bool_compare(ctx: &mut FunctionContext<'_>, is_equal: bool
             ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the numeric operand against PHP false
             ctx.emitter.instruction("cset x0, ne");                             // materialize numeric truthiness, treating NaN as truthy
             ctx.emitter.instruction("cmp x0, x1");                              // compare numeric truthiness with the mixed boolean payload
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize boolean loose equality
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize boolean loose equality
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float for numeric truthiness
@@ -573,7 +581,9 @@ fn emit_mixed_numeric_bool_compare(ctx: &mut FunctionContext<'_>, is_equal: bool
             ctx.emitter.instruction("or al, r10b");                             // merge nonzero and unordered truthiness
             ctx.emitter.instruction("movzx rax, al");                           // widen numeric truthiness into the result register
             ctx.emitter.instruction("cmp rax, rdi");                            // compare numeric truthiness with the mixed boolean payload
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize boolean loose equality
+            ctx.emitter.instruction(
+                &format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize boolean loose equality
             ctx.emitter.instruction("movzx rax, al");                           // widen the boolean equality byte into the result register
         }
     }
@@ -657,7 +667,9 @@ fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", len_reg, falsy_label)); // empty strings are falsy
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", len_reg, falsy_label)
+            );                                                                  // empty strings are falsy
             ctx.emitter.instruction(&format!("cmp {}, #1", len_reg));           // check whether this can be the special string "0"
             ctx.emitter.instruction(&format!("b.ne {}", truthy_label));         // non-empty strings longer than one byte are truthy
             ctx.emitter.instruction(&format!("ldrb w9, [{}]", ptr_reg));        // load the only string byte for the PHP "0" exception
@@ -676,7 +688,9 @@ fn emit_string_truthiness_to_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("je {}", falsy_label));            // branch to the falsy path for empty strings
             ctx.emitter.instruction(&format!("cmp {}, 1", len_reg));            // check whether this can be the special string "0"
             ctx.emitter.instruction(&format!("jne {}", truthy_label));          // non-empty strings longer than one byte are truthy
-            ctx.emitter.instruction(&format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)); // load the only string byte for the PHP "0" exception
+            ctx.emitter.instruction(
+                &format!("movzx {}d, BYTE PTR [{}]", scratch, ptr_reg)
+            );                                                                  // load the only string byte for the PHP "0" exception
             ctx.emitter.instruction(&format!("cmp {}d, 48", scratch));          // compare the byte with ASCII '0'
             ctx.emitter.instruction(&format!("je {}", falsy_label));            // the exact string "0" is falsy
             ctx.emitter.label(&truthy_label);
@@ -695,11 +709,15 @@ fn emit_compare_current_string_length_to_zero(ctx: &mut FunctionContext<'_>, is_
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // compare the string length with the empty string for null loose equality
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize the null/string loose comparison result
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize the null/string loose comparison result
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // compare the string length with the empty string for null loose equality
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize the null/string loose comparison byte
+            ctx.emitter.instruction(
+                &format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize the null/string loose comparison byte
             ctx.emitter.instruction("movzx rax, al");                           // widen the loose comparison byte into the integer result register
         }
     }
@@ -735,7 +753,9 @@ fn emit_compare_saved_float_with_parsed_string(ctx: &mut FunctionContext<'_>) {
 fn emit_float_bool_from_flags(ctx: &mut FunctionContext<'_>, is_equal: bool) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize numeric-string equality as boolean
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize numeric-string equality as boolean
         }
         Arch::X86_64 => {
             emit_x86_64_float_equality_result(ctx, is_equal);
@@ -762,12 +782,20 @@ fn emit_compare_reg_with_result(ctx: &mut FunctionContext<'_>, lhs_reg: &str, is
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, result_reg)); // compare scalar truthiness operands
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize truthiness equality as boolean
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", lhs_reg, result_reg)
+            );                                                                  // compare scalar truthiness operands
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize truthiness equality as boolean
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, result_reg)); // compare scalar truthiness operands
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize truthiness equality in the low byte
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", lhs_reg, result_reg)
+            );                                                                  // compare scalar truthiness operands
+            ctx.emitter.instruction(
+                &format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize truthiness equality in the low byte
             ctx.emitter.instruction("movzx rax, al");                           // widen the truthiness equality byte into the integer result register
         }
     }
@@ -880,10 +908,14 @@ fn load_numeric_to_float_reg(
             ctx.load_value_to_reg(value, int_reg)?;
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("scvtf {}, {}", float_reg, int_reg)); // promote integer spaceship operand to float
+                    ctx.emitter.instruction(
+                        &format!("scvtf {}, {}", float_reg, int_reg)
+                    );                                                          // promote integer spaceship operand to float
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("cvtsi2sd {}, {}", float_reg, int_reg)); // promote integer spaceship operand to float
+                    ctx.emitter.instruction(
+                        &format!("cvtsi2sd {}, {}", float_reg, int_reg)
+                    );                                                          // promote integer spaceship operand to float
                 }
             }
         }
@@ -891,10 +923,14 @@ fn load_numeric_to_float_reg(
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("scvtf {}, x0", float_reg)); // promote null spaceship operand to 0.0
+                    ctx.emitter.instruction(
+                        &format!("scvtf {}, x0", float_reg)
+                    );                                                          // promote null spaceship operand to 0.0
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("cvtsi2sd {}, rax", float_reg)); // promote null spaceship operand to 0.0
+                    ctx.emitter.instruction(
+                        &format!("cvtsi2sd {}, rax", float_reg)
+                    );                                                          // promote null spaceship operand to 0.0
                 }
             }
         }
@@ -924,7 +960,7 @@ fn move_float_result_to_reg(ctx: &mut FunctionContext<'_>, reg: &str) {
             ctx.emitter.instruction(&format!("fmov {}, {}", reg, result_reg));  // preserve the normalized mixed float comparison operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg)); // preserve the normalized mixed float comparison operand
+            ctx.emitter.instruction(&format!("movapd {}, {}", reg, result_reg));// preserve the normalized mixed float comparison operand
         }
     }
 }
@@ -957,7 +993,9 @@ fn emit_spaceship_result(ctx: &mut FunctionContext<'_>, uses_float_compare: bool
             if uses_float_compare {
                 ctx.emitter.instruction(&format!("jp {}", greater_label));      // PHP treats any NaN spaceship comparison as greater
             }
-            ctx.emitter.instruction(&format!("{} {}", greater_jump, greater_label)); // branch when the left operand is greater
+            ctx.emitter.instruction(
+                &format!("{} {}", greater_jump, greater_label)
+            );                                                                  // branch when the left operand is greater
             ctx.emitter.instruction(&format!("{} {}", less_jump, less_label));  // branch when the left operand is less
             ctx.emitter.instruction("mov rax, 0");                              // equal operands produce spaceship result 0
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the greater and less result branches
@@ -992,11 +1030,15 @@ fn emit_intish_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare scalar equality operands
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize scalar equality as boolean
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize scalar equality as boolean
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("cmp {}, {}", lhs_reg, rhs_reg));  // compare scalar equality operands
-            ctx.emitter.instruction(&format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize scalar equality in the low byte
+            ctx.emitter.instruction(
+                &format!("set{} al", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize scalar equality in the low byte
             ctx.emitter.instruction("movzx rax, al");                           // widen the equality byte into the integer result register
         }
     }
@@ -1103,7 +1145,9 @@ fn emit_float_compare(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fcmp d1, d0");                             // compare strict float equality operands
-            ctx.emitter.instruction(&format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))); // materialize float equality as boolean
+            ctx.emitter.instruction(
+                &format!("cset x0, {}", equality_cond(is_equal, ctx.emitter.target.arch))
+            );                                                                  // materialize float equality as boolean
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // compare strict float equality operands

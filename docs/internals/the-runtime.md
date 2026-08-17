@@ -947,8 +947,10 @@ The `emit_runtime()` function calls the target-aware routine emitters in a fixed
 ```rust
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // diagnostics: runtime warning emission and @ suppression state
+    // numeric: PHP float-to-int coercion and shared rounding-mode decoding
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
     // search/replace, explode/implode, hashing, encoding, sscanf, mb_strlen (gated), ...
+    // bcmath: exact-decimal bridge marshalling and catchable error translation
     // callables: dynamic is_callable() fallback, callable-descriptor release, Closure::bind
     // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex (gated)
     // exceptions: cleanup walk, catch matching, class-implements, throw/rethrow helpers
@@ -956,12 +958,14 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount, GC
     // eval bridge/scope: boxed-value hooks and native eval scope helpers (gated)
     // spl: SplDoublyLinkedList/SplStack/SplQueue and SplFixedArray storage helpers
-    // objects: stdClass dynamic properties and boxed Mixed property/index dispatch
+    // resource ids: stable PHP-visible resource handle allocation and lookup
+    // objects/comparison: stdClass, boxed Mixed property/index dispatch, loose equality
     // buffers: generation-safe handle resolution, descriptor allocation/free, bounds/size/UAF traps
     // io: stdout funnel + web helpers, c-string buffers, file I/O, stat/fs helpers,
     // scandir/glob/tempnam, CSV, streams/sockets, var_dump/print_r, ob_* buffer stack
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
     // zval: pack/unpack bridge between elephc values and PHP zval structures
+    // pdo: callable collation/scalar/aggregate adapters (gated by pdo_udf)
     // fibers: guarded stack allocation, context switch, entry trampoline, Fiber API
 }
 ```
@@ -978,6 +982,9 @@ The tables above document the public runtime operations. The emitters also split
 - **Files, streams, sockets, and networking:** `__rt_addr_is_udp`, `__rt_build_sockaddr_in6`, `__rt_chgrp_group`, `__rt_chown_user`, `__rt_disk_space`, `__rt_fd_write`, `__rt_file_get_contents_maybe_url`, `__rt_format_sockaddr_in`, `__rt_format_sockaddr_in6`, `__rt_format_sockaddr_unix`, `__rt_fsockopen`, `__rt_fwrite`, `__rt_get_int_context_option`, `__rt_get_string_context_option`, `__rt_http_build_copy_aarch64`, `__rt_http_build_copy_x86`, `__rt_inet6_pton`, `__rt_inet_addr_parse`, `__rt_lchgrp_group`, `__rt_lchown_user`, `__rt_opendir`, `__rt_opendir_glob`, `__rt_path_is_wrapper`, `__rt_popen`, `__rt_readdir`, `__rt_readfile_wrapper`, `__rt_rewinddir`, `__rt_servent_load`, `__rt_stash_connect_host`, `__rt_stream_wrapper_register`, and `__rt_stream_wrapper_unregister`.
 - **User stream wrappers:** `__rt_user_wrapper_dir_closedir`, `__rt_user_wrapper_dir_readdir`, `__rt_user_wrapper_dir_rewinddir`, `__rt_user_wrapper_fclose`, `__rt_user_wrapper_feof`, `__rt_user_wrapper_fflush`, `__rt_user_wrapper_flock`, `__rt_user_wrapper_fread`, `__rt_user_wrapper_fseek`, `__rt_user_wrapper_fstat`, `__rt_user_wrapper_ftell`, `__rt_user_wrapper_ftruncate`, `__rt_user_wrapper_fwrite`, `__rt_user_wrapper_opendir`, `__rt_user_wrapper_path_op`, `__rt_user_wrapper_rename`, `__rt_user_wrapper_set_option`, `__rt_user_wrapper_stream_cast`, `__rt_user_wrapper_url_stat`, and `__rt_user_wrapper_url_stat_field`.
 - **Diagnostics and structured output:** `__rt_touch_meta_array`, `__rt_var_dump_array_bool`, `__rt_var_dump_array_float`, `__rt_var_dump_array_int`, `__rt_var_dump_array_str`, `__rt_var_dump_close_container`, `__rt_var_dump_emit_bool_line`, `__rt_var_dump_emit_float_line`, `__rt_var_dump_emit_indexed_key`, `__rt_var_dump_emit_int_line`, `__rt_var_dump_emit_null_line`, `__rt_var_dump_emit_object_key`, `__rt_var_dump_emit_recursion_line`, `__rt_var_dump_emit_string_key`, `__rt_var_dump_emit_string_line`, `__rt_var_dump_emit_uninit_line`, `__rt_var_dump_indexed`, `__rt_var_dump_object`, `__rt_var_dump_open_container`, `__rt_var_dump_open_object`, `__rt_var_dump_value`, `__rt_vd_indent_pop`, `__rt_vd_indent_push`, `__rt_vd_obj_count`, `__rt_vd_obj_desc`, `__rt_vd_pad`, `__rt_vd_seen_find`, `__rt_vd_seen_pop`, `__rt_vd_seen_push`, `__rt_warn_array_offset_on_null`, `__rt_warn_foreach_non_iterable`, `__rt_warn_nan_coerced_bool`, and `__rt_warn_undefined_array_key_str`.
+- **Additional array and scalar entry points:** `__rt_alloc_overflow`, `__rt_array_chunk_to_hash`, `__rt_array_count_values`, `__rt_array_iter_next`, `__rt_array_key_exists_mixed_key`, `__rt_array_ptr_key`, `__rt_array_ptr_seek`, `__rt_array_ptr_value`, `__rt_array_slice_to_hash`, `__rt_array_splice_insert_boxed`, `__rt_array_splice_insert_refcounted`, `__rt_array_splice_insert_str`, `__rt_array_splice_insert_unboxed`, `__rt_array_strict_eq`, `__rt_array_to_hash_reverse`, `__rt_count_values_bump`, `__rt_hash_count_values`, `__rt_int_pow_checked`, `__rt_min_max_hash`, `__rt_min_max_mixed`, `__rt_min_max_str`, `__rt_mixed_clone`, `__rt_mixed_inc_dec`, `__rt_mixed_intval_base`, `__rt_mixed_numeric_pow`, `__rt_php_float_to_int`, `__rt_php_truthy`, and `__rt_round_mode`.
+- **Additional string and crypto entry points:** `__rt_base_convert`, `__rt_base_to_number`, `__rt_chunk_split`, `__rt_concat_grow`, `__rt_concat_publish`, `__rt_concat_reserve`, `__rt_count_chars`, `__rt_dec_to_base`, `__rt_openssl_cipher_iv_length`, `__rt_openssl_decrypt`, `__rt_openssl_encrypt`, `__rt_openssl_get_cipher_methods`, `__rt_parse_url_key_address`, `__rt_parse_url_throw_component`, `__rt_quotemeta`, `__rt_str_inc_dec`, `__rt_str_to_int_base`, `__rt_str_word_count`, `__rt_strncasecmp`, `__rt_strncmp`, `__rt_strtr_array`, `__rt_strtr_hash`, `__rt_strtr_int_key_len`, `__rt_strtr_pairwise`, `__rt_strtr_probe`, and `__rt_substr_count`.
+- **Additional object, generator, I/O, bridge, and PDO entry points:** `__rt_bcmath_throw`, `__rt_file_get_contents_range`, `__rt_gen_suspend_delegated`, `__rt_obj_enum_case_name`, `__rt_obj_prop_count`, `__rt_obj_prop_name`, `__rt_pdo_call_agg_final`, `__rt_pdo_call_agg_step`, `__rt_pdo_call_collation`, `__rt_pdo_call_scalar`, `__rt_pr_obj_desc`, `__rt_print_r_object`, and `__rt_var_dump_emit_enum_line`.
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 
@@ -1029,6 +1036,7 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 .comm _buffer_registry_free, 8 ; recycled descriptor-index free-list head
 _buffer_registry_next:
     .quad 1                 ; next never-issued descriptor index
+.comm _web_heap_guard_enabled, 8 ; enables per-request heap leak checks in --web mode
 .comm _gc_collecting, 8      ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
 .comm _json_last_error, 8    ; last JSON_ERROR_* code
@@ -1054,6 +1062,10 @@ _heap_max:
 .comm _cstr_buf2, 4096       ; 4KB second C-string buffer
 .comm _eof_flags, 256        ; EOF flag per file descriptor
 .comm _principal_lookup_buf, 4096 ; passwd/group lookup line buffer
+.comm _elephc_crypto_cipher_iv_length_fn, 8 ; published crypto bridge IV-length callback
+.comm _elephc_crypto_cipher_methods_fn, 8 ; published crypto bridge cipher-list callback
+.comm _elephc_crypto_decrypt_fn, 8 ; published crypto bridge decryption callback
+.comm _elephc_crypto_encrypt_fn, 8 ; published crypto bridge encryption callback
 _etc_passwd_path:
     .asciz "/etc/passwd"     ; passwd database path for name lookups
 _etc_group_path:

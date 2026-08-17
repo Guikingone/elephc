@@ -67,7 +67,9 @@ pub(super) fn emit_sprintf_runtime_call(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_value_as_string_to_regs(ctx, format, name, "x1", "x2")?;
-            ctx.emitter.instruction(&format!("mov x0, #{}", inst.operands.len() - 1)); // pass the number of packed sprintf() variadic records
+            ctx.emitter.instruction(
+                &format!("mov x0, #{}", inst.operands.len() - 1)
+            );                                                                  // pass the number of packed sprintf() variadic records
         }
         Arch::X86_64 => {
             load_value_as_string_to_regs(ctx, format, name, "rax", "rdx")?;

@@ -60,7 +60,9 @@ pub(super) fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov x3, x2");                              // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov x2, x1");                              // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)); // select STREAM_OPTION_READ_TIMEOUT
+            ctx.emitter.instruction(
+                &format!("mov x1, #{}", STREAM_OPTION_READ_TIMEOUT)
+            );                                                                  // select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }
@@ -73,7 +75,9 @@ pub(super) fn lower_stream_timeout_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.label(&wrapper);
             ctx.emitter.instruction("mov rcx, rdx");                            // pass microseconds as wrapper option arg2
             ctx.emitter.instruction("mov rdx, rsi");                            // pass seconds as wrapper option arg1
-            ctx.emitter.instruction(&format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)); // select STREAM_OPTION_READ_TIMEOUT
+            ctx.emitter.instruction(
+                &format!("mov rsi, {}", STREAM_OPTION_READ_TIMEOUT)
+            );                                                                  // select STREAM_OPTION_READ_TIMEOUT
             abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_set_option");
             ctx.emitter.label(&after);
         }

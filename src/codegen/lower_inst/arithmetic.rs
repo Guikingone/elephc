@@ -35,10 +35,14 @@ pub(super) fn lower_int_binop(
     load_integer_operand(ctx, rhs, rhs_reg, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)); // compute the integer arithmetic result from both SSA operands
+            ctx.emitter.instruction(
+                &format!("{} {}, {}, {}", aarch64_mnemonic, result_reg, result_reg, rhs_reg)
+            );                                                                  // compute the integer arithmetic result from both SSA operands
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)); // update the integer result register with the arithmetic operand
+            ctx.emitter.instruction(
+                &format!("{} {}, {}", x86_64_mnemonic, result_reg, rhs_reg)
+            );                                                                  // update the integer result register with the arithmetic operand
         }
     }
     store_if_result(ctx, inst)
@@ -105,9 +109,15 @@ pub(super) fn lower_int_mod(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let quotient_reg = abi::tertiary_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to the zero-divisor throw when the modulo divisor is zero
-            ctx.emitter.instruction(&format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)); // compute signed quotient for the modulo operation
-            ctx.emitter.instruction(&format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)); // compute left - quotient * right as the remainder
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", rhs_reg, zero_label)
+            );                                                                  // branch to the zero-divisor throw when the modulo divisor is zero
+            ctx.emitter.instruction(
+                &format!("sdiv {}, {}, {}", quotient_reg, result_reg, rhs_reg)
+            );                                                                  // compute signed quotient for the modulo operation
+            ctx.emitter.instruction(
+                &format!("msub {}, {}, {}, {}", result_reg, quotient_reg, rhs_reg, result_reg)
+            );                                                                  // compute left - quotient * right as the remainder
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the zero-divisor throw after a normal remainder
         }
         Arch::X86_64 => {
@@ -150,7 +160,9 @@ pub(super) fn lower_int_div_to_float(
     let done_label = ctx.next_label("div_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", rhs_reg, zero_label)); // branch to the zero-divisor throw when the divisor is zero
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", rhs_reg, zero_label)
+            );                                                                  // branch to the zero-divisor throw when the divisor is zero
             ctx.emitter.instruction(&format!("scvtf d0, {}", lhs_reg));         // promote the integer dividend into the float result register
             ctx.emitter.instruction(&format!("scvtf d1, {}", rhs_reg));         // promote the integer divisor into a float scratch register
             ctx.emitter.instruction("fdiv d0, d0, d1");                         // divide promoted operands as PHP floating-point division
@@ -197,7 +209,7 @@ pub(super) fn lower_float_div(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             let bits_reg = abi::secondary_scratch_reg(ctx.emitter);
             ctx.emitter.instruction(&format!("movq {}, xmm0", bits_reg));       // raw IEEE-754 bits of the divisor
-            ctx.emitter.instruction(&format!("add {}, {}", bits_reg, bits_reg)); // shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
+            ctx.emitter.instruction(&format!("add {}, {}", bits_reg, bits_reg));// shift out the sign bit so -0.0 tests equal to +0.0 (NaN stays non-zero)
             ctx.emitter.instruction(&format!("jz {}", zero_label));             // branch to the zero-divisor throw for both +0.0 and -0.0
             ctx.emitter.instruction("divsd xmm1, xmm0");                        // divide the dividend by the divisor in the float scratch register
             ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the quotient into the float result register
@@ -222,10 +234,14 @@ pub(super) fn lower_int_unary(
     load_integer_operand(ctx, value, result_reg, inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("{} {}, {}", aarch64_mnemonic, result_reg, result_reg)); // apply the integer unary operation to the loaded operand
+            ctx.emitter.instruction(
+                &format!("{} {}, {}", aarch64_mnemonic, result_reg, result_reg)
+            );                                                                  // apply the integer unary operation to the loaded operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("{} {}", x86_64_mnemonic, result_reg)); // apply the integer unary operation to the loaded operand
+            ctx.emitter.instruction(
+                &format!("{} {}", x86_64_mnemonic, result_reg)
+            );                                                                  // apply the integer unary operation to the loaded operand
         }
     }
     store_if_result(ctx, inst)
@@ -259,16 +275,22 @@ pub(super) fn lower_int_shift(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let mnemonic = if left { "lsl" } else { "asr" };
-            ctx.emitter.instruction(&format!("tbnz {}, #63, {}", rhs_reg, negative_label)); // a negative shift count is an ArithmeticError in PHP
+            ctx.emitter.instruction(
+                &format!("tbnz {}, #63, {}", rhs_reg, negative_label)
+            );                                                                  // a negative shift count is an ArithmeticError in PHP
             ctx.emitter.instruction(&format!("cmp {}, #64", rhs_reg));          // is the shift count outside the 64-bit window?
             ctx.emitter.instruction(&format!("b.hs {}", saturate_label));       // PHP saturates instead of masking the count to 6 bits
-            ctx.emitter.instruction(&format!("{} {}, {}, {}", mnemonic, result_reg, result_reg, rhs_reg)); // shift the integer operand by the EIR count operand
+            ctx.emitter.instruction(
+                &format!("{} {}, {}, {}", mnemonic, result_reg, result_reg, rhs_reg)
+            );                                                                  // shift the integer operand by the EIR count operand
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the saturation and throw blocks after a normal shift
             ctx.emitter.label(&saturate_label);
             if left {
                 ctx.emitter.instruction(&format!("mov {}, #0", result_reg));    // every bit is shifted out, so PHP yields 0
             } else {
-                ctx.emitter.instruction(&format!("asr {}, {}, #63", result_reg, result_reg)); // PHP fills with the sign bit: 0 for non-negative, -1 for negative
+                ctx.emitter.instruction(
+                    &format!("asr {}, {}, #63", result_reg, result_reg)
+                );                                                              // PHP fills with the sign bit: 0 for non-negative, -1 for negative
             }
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the throw block after saturating
         }
@@ -279,7 +301,9 @@ pub(super) fn lower_int_shift(
             ctx.emitter.instruction(&format!("cmp {}, 64", rhs_reg));           // is the shift count outside the 64-bit window?
             ctx.emitter.instruction(&format!("jge {}", saturate_label));        // PHP saturates instead of masking the count to 6 bits
             ctx.emitter.instruction(&format!("mov rcx, {}", rhs_reg));          // move the variable shift count into x86_64's required cl register
-            ctx.emitter.instruction(&format!("{} {}, cl", mnemonic, result_reg)); // shift the integer operand by the low count byte
+            ctx.emitter.instruction(
+                &format!("{} {}, cl", mnemonic, result_reg)
+            );                                                                  // shift the integer operand by the low count byte
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the saturation and throw blocks after a normal shift
             ctx.emitter.label(&saturate_label);
             if left {

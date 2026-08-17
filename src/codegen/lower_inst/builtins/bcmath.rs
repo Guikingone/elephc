@@ -372,14 +372,14 @@ fn move_scale_result(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov x{}, x0", aarch64_scale_reg)); // preserve the explicit scale for the BCMath helper
-            ctx.emitter.instruction(&format!("mov x{}, xzr", aarch64_null_reg)); // mark the explicit scale as non-null
+            ctx.emitter.instruction(&format!("mov x{}, x0", aarch64_scale_reg));// preserve the explicit scale for the BCMath helper
+            ctx.emitter.instruction(&format!("mov x{}, xzr", aarch64_null_reg));// mark the explicit scale as non-null
         }
         Arch::X86_64 => {
             let scale_reg = x86_reg(x86_scale_reg);
             let null_reg = x86_reg(x86_null_reg);
             ctx.emitter.instruction(&format!("mov {}, rax", scale_reg));        // preserve the explicit scale for the BCMath helper
-            ctx.emitter.instruction(&format!("xor {}, {}", null_reg, null_reg)); // mark the explicit scale as non-null
+            ctx.emitter.instruction(&format!("xor {}, {}", null_reg, null_reg));// mark the explicit scale as non-null
         }
     }
 }

@@ -116,7 +116,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, web, eval, regex)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, bcmath, web, eval, regex)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
