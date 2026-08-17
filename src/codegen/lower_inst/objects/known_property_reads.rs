@@ -327,6 +327,14 @@ pub(super) fn emit_stdclass_get_call(
 /// retain each read handed the caller a reference it did not own, and the caller's release
 /// eventually freed a live hash entry, after which further reads of that property answered
 /// `NULL` (a use-after-free of the removed cell).
+///
+/// EXACTLY ONE retain, which is the part a "does it retain?" reading misses. `__rt_incref`
+/// reads its pointer from `x0`/`rax` and leaves it there, so the explicit call below is the
+/// whole retain; a following `emit_incref_if_refcounted(Mixed)` would retain the SAME cell a
+/// second time. That second retain was here, and it turned the use-after-free into its mirror
+/// image: the refcount never reached zero, so one 40-byte Mixed cell survived exit — for ANY
+/// number of reads, since an over-retained block is still one block. Only a heap-debug leak
+/// summary sees it; the program's output stays correct.
 pub(super) fn lower_allow_dynamic_prop_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -348,8 +356,7 @@ pub(super) fn lower_allow_dynamic_prop_get(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
-            ctx.emitter.instruction("bl __rt_incref");                          // retain the dynamic-property cell so the caller owns the result
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+            ctx.emitter.instruction("bl __rt_incref");                          // retain the dynamic-property cell so the caller owns the result (x0 survives the call)
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
@@ -363,10 +370,9 @@ pub(super) fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
             ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
-            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_push_reg(ctx.emitter, "rax");                             // keep the SysV stack aligned across the helper call
             ctx.emitter.instruction("call __rt_incref");                        // retain the dynamic-property cell so the caller owns the result
             abi::emit_pop_reg(ctx.emitter, "rax");
-            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
         }
     }

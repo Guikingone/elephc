@@ -75,8 +75,23 @@ pub(super) fn lower_property_assign(
         Op::PropSet.default_effects(),
         Some(span),
     );
-    if let Some(property_ty) = object_property_type(ctx, object.value, property) {
-        release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    // `None` here means the property is UNDECLARED, not that no store happened: the write lands
+    // in the dynamic-property hash as a boxed Mixed cell that RETAINS its heap child, exactly as
+    // a declared slot does. Skipping the release on that branch stranded every owning temporary
+    // assigned to a dynamic property — `$c->a = [1, 2, 3];` leaked the array, on `stdClass` and
+    // `#[AllowDynamicProperties]` alike, and `unset()` could not recover it because the surplus
+    // reference was never the hash's to drop. Mixed IS the storage type there, so asking
+    // `property_store_keeps_independent_ref` about it gives the same answer the backend acts on.
+    let property_ty =
+        object_property_type(ctx, object.value, property).unwrap_or(PhpType::Mixed);
+    release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
+    // The RECEIVER can be an owning temporary too — `$c->o->n = 5` reads `$c->o`, and a
+    // dynamic-property read hands back a reference the caller owns. `PropSet` writes THROUGH
+    // that receiver without consuming it, so nothing else would ever drop it; the read path
+    // already releases the same intermediate, which is why only a nested WRITE leaked. The
+    // readonly-throw branch above guards this the same way, on this same value.
+    if ctx.value_is_owning_temporary(object) {
+        crate::ir_lower::ownership::release_if_owned(ctx, object, Some(span));
     }
 }
 
