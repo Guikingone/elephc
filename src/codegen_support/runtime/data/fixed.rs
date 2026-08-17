@@ -1250,6 +1250,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
             text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
         ));
     }
+    // _user_filter_current_stream: the stream a `filter()` call is running FOR, or zero outside
+    // one. php publishes `$this->stream` for the DURATION of each call and nowhere else — measured
+    // on `php -n` 8.5.6 it is UNSET in `onCreate()`, a live resource in `filter()`, and NULL again
+    // in `onClose()` — so the handle travels here rather than being retained on the instance.
+    out.push_str(&comm_directive("_user_filter_current_stream", 8, target));
     out.push_str(&comm_directive("_asf_line_length", 8, target));
     out.push_str(&comm_directive("_asf_break_ptr", 8, target));
     out.push_str(&comm_directive("_asf_break_len", 8, target));

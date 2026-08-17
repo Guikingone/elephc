@@ -392,13 +392,22 @@ fn emit_filter_apply_chain_aarch64(emitter: &mut Emitter) {
     // answer with a DIFFERENT buffer (its bucket brigade builds one), so both halves of
     // the pair are carried forward, not just the length.
     emitter.label("__rt_apply_chain_user");
+    // php gives `filter()` the stream it is running for, and takes it away again afterwards.
+    // The node knows which stream that is; the dispatch two calls down does not, so the handle
+    // travels through a global for exactly the duration of the call.
+    emitter.instruction(&format!("ldr x9, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]")); // the stream this node filters
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_current_stream");
+    emitter.instruction("str x9, [x10]");
     emitter.instruction(&format!("ldr x0, [x0, #{FILTER_OBJECT_OFFSET}]"));     // the php_user_filter instance this node owns
-    emitter.instruction("cbz x0, __rt_apply_chain_loop");                       // a node without an instance is inert
+    emitter.instruction("cbz x0, __rt_apply_chain_user_clear");                 // a node without an instance is inert
     emitter.instruction("ldr x1, [sp, #0]");                                    // buffer pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // current length
     emitter.instruction("bl __rt_apply_user_filter_obj");                       // x1/x2 = the filtered pair
     emitter.instruction("str x1, [sp, #0]");                                    // carry the possibly-relocated buffer
     emitter.instruction("str x2, [sp, #8]");                                    // and its length
+    emitter.label("__rt_apply_chain_user_clear");
+    abi::emit_symbol_address(emitter, "x10", "_user_filter_current_stream");
+    emitter.instruction("str xzr, [x10]");                                      // the stream is the call's, not the instance's
     emitter.instruction("b __rt_apply_chain_loop");                             // continue down the chain
 
     emitter.label("__rt_apply_chain_done");
@@ -469,14 +478,23 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     // See the AArch64 counterpart: a user filter runs from the node's own instance and
     // may answer with a different buffer, so both halves of the pair are carried.
     emitter.label("__rt_apply_chain_user_x");
+    // See the AArch64 counterpart: the node knows which stream this call filters.
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}]"
+    ));
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_current_stream");
+    emitter.instruction("mov QWORD PTR [r10], r9");
     emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]")); // the php_user_filter instance this node owns
     emitter.instruction("test rdi, rdi");
-    emitter.instruction("jz __rt_apply_chain_loop_x");                          // a node without an instance is inert
+    emitter.instruction("jz __rt_apply_chain_user_clear_x");                    // a node without an instance is inert
     emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // current length
     emitter.instruction("call __rt_apply_user_filter_obj");                     // rax/rdx = the filtered pair
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // carry the possibly-relocated buffer
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // and its length
+    emitter.label("__rt_apply_chain_user_clear_x");
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_current_stream");
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // the stream is the call's, not the instance's
     emitter.instruction("jmp __rt_apply_chain_loop_x");                         // continue down the chain
 
     emitter.label("__rt_apply_chain_done_x");

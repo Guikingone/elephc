@@ -3266,6 +3266,59 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies `php_user_filter::$stream` is the stream being filtered, for the duration of `filter()`.
+///
+/// The property stayed null, so a filter could not reach the stream it was filtering — the manual's
+/// own example does. php publishes it for the DURATION of each `filter()` call and nowhere else:
+/// measured on `php -n` 8.5.6 it is UNSET inside `onCreate()`, a live resource inside `filter()`,
+/// and NULL again inside `onClose()`. All three are asserted, because publishing it permanently
+/// would be as wrong as never publishing it.
+#[test]
+fn test_user_filter_stream_property_is_live_during_filter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Probe extends php_user_filter {
+    public function onCreate(): bool {
+        printf("onCreate %s\n", isset($this->stream) ? gettype($this->stream) : "unset");
+        return true;
+    }
+    public function filter($in, $out, &$consumed, $closing): int {
+        printf("filter %s %s %s\n",
+            gettype($this->stream),
+            var_export(is_resource($this->stream), true),
+            is_resource($this->stream) ? stream_get_meta_data($this->stream)["stream_type"] : "-");
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+    public function onClose(): void {
+        printf("onClose %s\n", gettype($this->stream));
+    }
+}
+stream_filter_register("probe", "Probe");
+$h = fopen("php://memory", "w+");
+fwrite($h, "hello");
+rewind($h);
+stream_filter_append($h, "probe", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "onCreate unset\n",
+            "filter resource true MEMORY\n",
+            "filter resource true MEMORY\n",
+            "string(5) \"hello\"\n",
+            "onClose NULL\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies php's two explanations for a stream `stream_select()` cannot represent.
 ///
 /// The `ValueError` that follows was already right, but it arrived with nothing to say WHICH stream
