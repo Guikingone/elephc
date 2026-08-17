@@ -76,6 +76,8 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_fd_set_append(emitter);
     io::emit_resource_id_burn(emitter);
     io::emit_stream_record_fsockopen_meta(emitter);
+    io::emit_filter_absorb_params(emitter);
+    io::emit_asf_params_load(emitter);
     io::emit_stream_context_options_shape_ok(emitter);
     io::emit_stream_get_meta_data(emitter);
     io::emit_gethostname(emitter);

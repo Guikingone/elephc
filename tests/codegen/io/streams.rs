@@ -3266,6 +3266,61 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies php's built-in encoders read `$params`: `line-length`, `line-break-chars`, `binary`.
+///
+/// elephc retained `$params` only for a USER filter, where `filter()` reads it off the instance, and
+/// passed 0 for a built-in — so `["line-length" => 8]` produced one unbroken line where php
+/// produces wrapped ones, and `["binary" => true]` left SPACE and TAB literal where php escapes
+/// them. The array is now parsed once at attach, into plain words on the filter node.
+///
+/// The default is NO wrapping for both encoders, which is why the unparameterized cases are here:
+/// they are the common path and must stay byte-identical. The default break is CRLF, not a lone
+/// newline — measured on `php -n` 8.5.6, `["line-length" => 8]` over "hello world" answers 18
+/// bytes, not 17.
+#[test]
+fn test_builtin_filters_read_their_params() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function through(string $filter, array $params, string $data): string {
+    $h = fopen("php://memory", "w+");
+    stream_filter_append($h, $filter, STREAM_FILTER_WRITE, $params);
+    fwrite($h, $data);
+    rewind($h);
+    $out = (string) stream_get_contents($h);
+    fclose($h);
+    return $out;
+}
+echo bin2hex(through("convert.base64-encode", ["line-length" => 8], "hello world")), "\n";
+echo through("convert.base64-encode", ["line-length" => 8, "line-break-chars" => "|"], "hello world"), "\n";
+echo through("convert.base64-encode", [], "hello world"), "\n";
+echo through("convert.quoted-printable-encode", ["binary" => true], "a b\tc"), "\n";
+echo through("convert.quoted-printable-encode", [], "a b\tc"), "\n";
+// The soft break costs a column of its own, and never falls inside an `=XX` triplet.
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 12], "aaaaaaaaaaaaaaaaaaaa")), "\n";
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 10], "aaaaaa\xE9bbbbbb")), "\n";
+echo bin2hex(through("convert.quoted-printable-encode", ["line-length" => 8], "aaaaaaaa\xE9bbbbbb")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // "aGVsbG8g" CRLF "d29ybGQ=" — the default break is CRLF, not a lone newline
+            "61475673624738670d0a643239796247513d\n",
+            "aGVsbG8g|d29ybGQ=\n",
+            "aGVsbG8gd29ybGQ=\n",
+            "a=20b=09c\n",
+            "a b\tc\n",
+            // 11 a's, then the soft `=` taking the twelfth column, CRLF, then the remaining 9
+            "61616161616161616161613d0d0a616161616161616161\n",
+            // the `=E9` FITS at column 6 with line-length 10, so no break precedes it
+            "6161616161613d45393d0d0a626262626262\n",
+            // at line-length 8 the eighth `a` already needs a break, and the triplet stays whole
+            "616161616161613d0d0a613d45396262623d0d0a626262\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a SOCKET carries no `wrapper_type` and does carry the address it was opened on.
 ///
 /// php reaches every transport through `php_stream_xport_create`, which never assigns

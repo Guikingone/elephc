@@ -1221,6 +1221,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // `tcp://` prefix elephc adds for a schemeless host. That slice is what php records as the
     // stream's `uri` and what names its transport, so the two are published here for
     // `__rt_stream_record_fsockopen_meta` to read once the descriptor has been boxed.
+    // The built-in filter parameter names, and the four words `__rt_asf_params_load` publishes for
+    // the encoders. `_filter_break_lf` is php's default `line-break-chars`.
+    out.push_str(".globl _filter_key_line_length\n_filter_key_line_length:\n    .ascii \"line-length\"\n");
+    out.push_str(".globl _filter_key_line_break\n_filter_key_line_break:\n    .ascii \"line-break-chars\"\n");
+    out.push_str(".globl _filter_key_binary\n_filter_key_binary:\n    .ascii \"binary\"\n");
+    // php's default `line-break-chars` is CRLF, not a lone newline: measured on `php -n` 8.5.6,
+    // `["line-length" => 8]` over "hello world" answers 18 bytes, `aGVsbG8g\r\nd29ybGQ=`.
+    out.push_str(".globl _filter_break_crlf\n_filter_break_crlf:\n    .ascii \"\\r\\n\"\n");
+    out.push_str(&comm_directive("_asf_line_length", 8, target));
+    out.push_str(&comm_directive("_asf_break_ptr", 8, target));
+    out.push_str(&comm_directive("_asf_break_len", 8, target));
+    out.push_str(&comm_directive("_asf_binary", 8, target));
     out.push_str(&comm_directive("_fsockopen_uri_ptr", 8, target));
     out.push_str(&comm_directive("_fsockopen_uri_len", 8, target));
     // _user_wrappers_ptr: heap base of the scheme→class registration table, or

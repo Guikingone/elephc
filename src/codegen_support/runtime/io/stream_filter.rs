@@ -596,17 +596,7 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("strb w11, [x4, x6]");                                  // write encoded output into the scratch buffer
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
     emitter.label("__rt_asf_b64e_copyback");
-    // memcpy scratch[0..x6] back into x1.
-    emitter.instruction("mov x5, #0");                                          // initialize the read cursor
-    emitter.label("__rt_asf_b64e_cb_loop");
-    emitter.instruction("cmp x5, x6");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_b64e_done");                             // finish the base64 encoder operation when the bound is reached
-    emitter.instruction("ldrb w11, [x4, x5]");                                  // load the next byte from the scratch buffer
-    emitter.instruction("strb w11, [x1, x5]");                                  // copy scratch output back into the stream buffer
-    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_b64e_cb_loop");                             // continue the base64 encoder loop
-    emitter.label("__rt_asf_b64e_done");
-    emitter.instruction("mov x2, x6");                                          // return encoded length
+    emit_wrapped_copyback_aarch64(emitter, "b64e");
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.quoted-printable-encode: bytes outside 33..126 (and '=' itself)
@@ -618,10 +608,17 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("cmp x2, x4");                                          // check whether the current cursor reached its bound
     emitter.instruction("csel x2, x4, x2, gt");                                 // x2 = MIN(x2, 21845)
     crate::codegen_support::abi::emit_symbol_address(emitter, "x4", "_stream_grow_scratch");
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_b64_encode_tbl");
     // hex table is just '0'..'9','A'..'F' so build inline instead.
+    //
+    // The two parameters are read ONCE, here: they cannot change while a buffer is encoded, and
+    // the escape path tests the line budget on every byte.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_asf_binary");
+    emitter.instruction("ldr x13, [x13]");                                      // do the binary rules apply?
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_asf_line_length");
+    emitter.instruction("ldr x15, [x15]");                                      // the width php wraps at, 0 for none
     emitter.instruction("mov x5, #0");                                          // read index
     emitter.instruction("mov x6, #0");                                          // write index
+    emitter.instruction("mov x14, #0");                                         // characters on the current line
     emitter.label("__rt_asf_qpe_loop");
     emitter.instruction("cmp x5, x2");                                          // check whether the current cursor reached its bound
     emitter.instruction("b.ge __rt_asf_qpe_copyback");                          // copy back once input encoding is complete
@@ -633,10 +630,15 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     // both literal — `convert.quoted-printable-encode` over `a b=c d` answers `a b=3Dc d`, not
     // `a=20b=3Dc=20d`. Escaping them unconditionally applied binary rules to every call, which
     // is the wrong half of the option to implement by default.
+    // `binary` is what turns that default off: with it, php escapes SPACE and TAB like any other
+    // byte outside 33..126. Measured on `php -n` 8.5.6, `["binary" => true]` over `a b\tc` answers
+    // `a=20b=09c` where the default answers `a b\tc`.
+    emitter.instruction("cbnz x13, __rt_asf_qpe_range");                        // binary: no byte gets a literal exemption
     emitter.instruction("cmp w8, #9");                                          // TAB passes through unescaped
     emitter.instruction("b.eq __rt_asf_qpe_literal");                           // keep it as-is
     emitter.instruction("cmp w8, #32");                                         // SPACE passes through unescaped
     emitter.instruction("b.eq __rt_asf_qpe_literal");                           // keep it as-is
+    emitter.label("__rt_asf_qpe_range");
     emitter.instruction("cmp w8, #33");                                         // check whether a full three-byte group is available
     emitter.instruction("b.lt __rt_asf_qpe_escape");                            // reject values below the accepted range
     emitter.instruction("cmp w8, #126");                                        // check whether only one byte remains
@@ -644,10 +646,68 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("cmp w8, #61");                                         // test for '=' before quoted-printable escaping
     emitter.instruction("b.eq __rt_asf_qpe_escape");                            // escape the current byte
     emitter.label("__rt_asf_qpe_literal");
+    emitter.instruction("cbz x15, __rt_asf_qpe_lit_fits");                                     // php wraps at nothing by default
+    emitter.instruction("add x9, x14, #1");                                     // where this token would end
+    emitter.instruction("sub x11, x15, #1");                                    // the `=` needs the last column
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.le __rt_asf_qpe_lit_fits");                                         // it fits on the current line
+    emitter.instruction("mov w9, #61");                                         // php's soft break is `=` then the break chars
+    emitter.instruction("strb w9, [x4, x6]");
+    emitter.instruction("add x6, x6, #1");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_asf_break_ptr");
+    emitter.instruction("ldr x9, [x9]");                                        // the caller's break bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_asf_break_len");
+    emitter.instruction("ldr x10, [x10]");
+    emitter.instruction("cbnz x9, __rt_asf_qpe_lit_have");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_filter_break_crlf");
+    emitter.instruction("mov x10, #2");                                         // php's default break is CRLF
+    emitter.label("__rt_asf_qpe_lit_have");
+    emitter.instruction("mov x11, #0");                                         // break-byte cursor
+    emitter.label("__rt_asf_qpe_lit_bloop");
+    emitter.instruction("cmp x11, x10");
+    emitter.instruction("b.ge __rt_asf_qpe_lit_bend");
+    emitter.instruction("ldrb w12, [x9, x11]");
+    emitter.instruction("strb w12, [x4, x6]");
+    emitter.instruction("add x6, x6, #1");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("b __rt_asf_qpe_lit_bloop");
+    emitter.label("__rt_asf_qpe_lit_bend");
+    emitter.instruction("mov x14, #0");                                         // the new line starts empty
+    emitter.label("__rt_asf_qpe_lit_fits");
     emitter.instruction("strb w8, [x4, x6]");                                   // write encoded output into the scratch buffer
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
+    emitter.instruction("add x14, x14, #1");                                    // one more column on this line
     emitter.instruction("b __rt_asf_qpe_loop");                                 // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_escape");
+    emitter.instruction("cbz x15, __rt_asf_qpe_esc_fits");                                     // php wraps at nothing by default
+    emitter.instruction("add x9, x14, #3");                                     // where this token would end
+    emitter.instruction("sub x11, x15, #1");                                    // the `=` needs the last column
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.le __rt_asf_qpe_esc_fits");                                         // it fits on the current line
+    emitter.instruction("mov w9, #61");                                         // php's soft break is `=` then the break chars
+    emitter.instruction("strb w9, [x4, x6]");
+    emitter.instruction("add x6, x6, #1");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_asf_break_ptr");
+    emitter.instruction("ldr x9, [x9]");                                        // the caller's break bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_asf_break_len");
+    emitter.instruction("ldr x10, [x10]");
+    emitter.instruction("cbnz x9, __rt_asf_qpe_esc_have");
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_filter_break_crlf");
+    emitter.instruction("mov x10, #2");                                         // php's default break is CRLF
+    emitter.label("__rt_asf_qpe_esc_have");
+    emitter.instruction("mov x11, #0");                                         // break-byte cursor
+    emitter.label("__rt_asf_qpe_esc_bloop");
+    emitter.instruction("cmp x11, x10");
+    emitter.instruction("b.ge __rt_asf_qpe_esc_bend");
+    emitter.instruction("ldrb w12, [x9, x11]");
+    emitter.instruction("strb w12, [x4, x6]");
+    emitter.instruction("add x6, x6, #1");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("b __rt_asf_qpe_esc_bloop");
+    emitter.label("__rt_asf_qpe_esc_bend");
+    emitter.instruction("mov x14, #0");                                         // the new line starts empty
+    emitter.label("__rt_asf_qpe_esc_fits");
+    emitter.instruction("add x14, x14, #3");                                    // `=XX` occupies three columns
     // Emit '=' then two hex digits.
     emitter.instruction("mov w9, #61");                                         // '='
     emitter.instruction("strb w9, [x4, x6]");                                   // write encoded output into the scratch buffer
@@ -677,18 +737,109 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
     emitter.instruction("b __rt_asf_qpe_loop");                                 // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_copyback");
+    // A plain copy: the soft breaks are already in the scratch. Wrapping here as base64 does would
+    // break the SAME output twice, and php's quoted-printable break is not a plain separator — it
+    // is a `=` that occupies a column and must not fall inside an `=XX` triplet, which only the
+    // encoder knows.
+    emit_plain_copyback_aarch64(emitter, "qpe");
+    emitter.instruction("ret");                                                 // return to the stream-filter caller
+}
+
+/// Copies `scratch[0..x6]` into the buffer at `x1`, breaking lines at the published `line-length`.
+///
+/// On entry `x4` is the scratch base and `x6` the encoded length; on exit `x2` is the length
+/// actually WRITTEN, which exceeds `x6` whenever a break was inserted. `x1` is the caller's own
+/// buffer: every caller of `__rt_apply_stream_filter` hands it one sized for the worst-case growth
+/// its filter can produce, and both encoders cap their input to stay inside it.
+///
+/// php's `convert.base64-encode` and `convert.quoted-printable-encode` take `line-length` and
+/// `line-break-chars` from `$params` and wrap at NOTHING when neither is given — which is why a
+/// zero length takes the plain-copy path, so the common case pays one compare. Measured on
+/// `php -n` 8.5.6: `["line-length" => 8]` over "hello world, this is a test" answers five
+/// 8-character lines separated by `\n` with NO trailing break, and `line-break-chars` replaces the
+/// `\n` verbatim.
+fn emit_wrapped_copyback_aarch64(emitter: &mut Emitter, tag: &str) {
+    let plain = format!("__rt_asf_{tag}_cb_plain");
+    let plain_loop = format!("__rt_asf_{tag}_cb_ploop");
+    let wrap_loop = format!("__rt_asf_{tag}_cb_wloop");
+    let no_break = format!("__rt_asf_{tag}_cb_nobreak");
+    let have_break = format!("__rt_asf_{tag}_cb_have");
+    let brk_head = format!("__rt_asf_{tag}_cb_brk");
+    let brk_end = format!("__rt_asf_{tag}_cb_brkend");
+    let finish = format!("__rt_asf_{tag}_cb_fin");
+
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_asf_line_length");
+    emitter.instruction("ldr x13, [x13]");                                      // the width the caller asked for
+    emitter.instruction(&format!("cbz x13, {plain}"));                          // php wraps at nothing by default
+
+    // -- wrapping copy: x5 reads the scratch, x7 writes the buffer, x14 counts the line --
+    emitter.instruction("mov x5, #0");                                          // scratch read cursor
+    emitter.instruction("mov x7, #0");                                          // buffer write cursor
+    emitter.instruction("mov x14, #0");                                         // characters on the current line
+    emitter.label(&wrap_loop);
+    emitter.instruction("cmp x5, x6");                                          // copied every encoded byte?
+    emitter.instruction(&format!("b.ge {finish}"));
+    emitter.instruction("cmp x14, x13");                                        // is the current line full?
+    emitter.instruction(&format!("b.lt {no_break}"));                           // no: keep filling it
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_asf_break_ptr");
+    emitter.instruction("ldr x9, [x9]");                                        // the caller's break bytes
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_asf_break_len");
+    emitter.instruction("ldr x10, [x10]");
+    emitter.instruction(&format!("cbnz x9, {have_break}"));
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_filter_break_crlf");
+    emitter.instruction("mov x10, #2");                                         // php's default break is CRLF
+    emitter.label(&have_break);
+    emitter.instruction("mov x11, #0");                                         // break-byte cursor
+    emitter.label(&brk_head);
+    emitter.instruction("cmp x11, x10");                                        // written the whole break?
+    emitter.instruction(&format!("b.ge {brk_end}"));
+    emitter.instruction("ldrb w12, [x9, x11]");                                 // one break byte
+    emitter.instruction("strb w12, [x1, x7]");
+    emitter.instruction("add x7, x7, #1");
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction(&format!("b {brk_head}"));
+    emitter.label(&brk_end);
+    emitter.instruction("mov x14, #0");                                         // the new line starts empty
+    emitter.label(&no_break);
+    emitter.instruction("ldrb w12, [x4, x5]");                                  // one encoded byte
+    emitter.instruction("strb w12, [x1, x7]");
+    emitter.instruction("add x5, x5, #1");
+    emitter.instruction("add x7, x7, #1");
+    emitter.instruction("add x14, x14, #1");
+    emitter.instruction(&format!("b {wrap_loop}"));
+
+    // -- plain copy: the unparameterized path, byte for byte --
+    emitter.label(&plain);
     emitter.instruction("mov x5, #0");                                          // initialize the read cursor
-    emitter.label("__rt_asf_qpe_cb_loop");
+    emitter.instruction("mov x7, x6");                                          // the written length equals the encoded one
+    emitter.label(&plain_loop);
     emitter.instruction("cmp x5, x6");                                          // check whether the current cursor reached its bound
-    emitter.instruction("b.ge __rt_asf_qpe_done");                              // finish the quoted-printable encoder operation when the bound is reached
+    emitter.instruction(&format!("b.ge {finish}"));                             // finish when the bound is reached
     emitter.instruction("ldrb w11, [x4, x5]");                                  // load the next byte from the scratch buffer
     emitter.instruction("strb w11, [x1, x5]");                                  // copy scratch output back into the stream buffer
     emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    emitter.instruction("b __rt_asf_qpe_cb_loop");                              // continue the quoted-printable encoder loop
-    emitter.label("__rt_asf_qpe_done");
-    emitter.instruction("mov x2, x6");                                          // return encoded length
-    emitter.instruction("ret");                                                 // return to the stream-filter caller
+    emitter.instruction(&format!("b {plain_loop}"));
+
+    emitter.label(&finish);
+    emitter.instruction("mov x2, x7");                                          // return what was WRITTEN, breaks included
 }
+
+/// Copies `scratch[0..x6]` into the buffer at `x1` byte for byte, and answers the length in `x2`.
+fn emit_plain_copyback_aarch64(emitter: &mut Emitter, tag: &str) {
+    let loop_label = format!("__rt_asf_{tag}_cb_loop");
+    let done = format!("__rt_asf_{tag}_cb_done");
+    emitter.instruction("mov x5, #0");                                          // initialize the read cursor
+    emitter.label(&loop_label);
+    emitter.instruction("cmp x5, x6");                                          // check whether the current cursor reached its bound
+    emitter.instruction(&format!("b.ge {done}"));                               // finish when the bound is reached
+    emitter.instruction("ldrb w11, [x4, x5]");                                  // load the next byte from the scratch buffer
+    emitter.instruction("strb w11, [x1, x5]");                                  // copy scratch output back into the stream buffer
+    emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
+    emitter.instruction(&format!("b {loop_label}"));
+    emitter.label(&done);
+    emitter.instruction("mov x2, x6");                                          // return the encoded length
+}
+
 
 /// Emits the Linux x86_64 stream runtime helper for apply stream filter.
 fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
@@ -1133,27 +1284,85 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r10");                                             // advance the write cursor
     emitter.instruction("mov BYTE PTR [r11 + r10], 61");                        // '='
     emitter.instruction("inc r10");                                             // advance the write cursor
+    // See the AArch64 counterpart: php wraps base64 output at `line-length`, with
+    // `line-break-chars` (default CRLF) between lines and no trailing break. A zero length — php's
+    // default, and what a filter attached without `$params` leaves on the node — takes the plain
+    // copy, so the common case pays one compare.
+    //
+    // `rbx` and `r12` are borrowed for the break emission: this helper is a leaf with no frame, and
+    // the wrapping copy needs two cursors more than the encoder left free.
     emitter.label("__rt_asf_b64e_copyback_x86");
+    emitter.instruction("push rbx");                                            // borrowed, restored at the single exit
+    emitter.instruction("push r12");
+    abi::emit_symbol_address(emitter, "rdi", "_asf_line_length");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // the width the caller asked for
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_asf_b64e_cb_plain_x86");                       // php wraps at nothing by default
+    emitter.instruction("xor r9, r9");                                          // scratch read cursor
+    emitter.instruction("xor rsi, rsi");                                        // buffer write cursor
+    emitter.instruction("xor r8, r8");                                          // characters on the current line
+    emitter.label("__rt_asf_b64e_cb_wloop_x86");
+    emitter.instruction("cmp r9, r10");                                         // copied every encoded byte?
+    emitter.instruction("jge __rt_asf_b64e_cb_fin_x86");
+    emitter.instruction("cmp r8, rdi");                                         // is the current line full?
+    emitter.instruction("jl __rt_asf_b64e_cb_nobreak_x86");                     // no: keep filling it
+    abi::emit_symbol_address(emitter, "rcx", "_asf_break_ptr");
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // the caller's break bytes
+    abi::emit_symbol_address(emitter, "rbx", "_asf_break_len");
+    emitter.instruction("mov rbx, QWORD PTR [rbx]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jnz __rt_asf_b64e_cb_have_x86");
+    abi::emit_symbol_address(emitter, "rcx", "_filter_break_crlf");
+    emitter.instruction("mov rbx, 2");                                          // php's default break is CRLF
+    emitter.label("__rt_asf_b64e_cb_have_x86");
+    emitter.instruction("xor r12, r12");                                        // break-byte cursor
+    emitter.label("__rt_asf_b64e_cb_bloop_x86");
+    emitter.instruction("cmp r12, rbx");                                        // written the whole break?
+    emitter.instruction("jge __rt_asf_b64e_cb_bend_x86");
+    emitter.instruction("movzx edx, BYTE PTR [rcx + r12]");                     // one break byte
+    emitter.instruction("mov BYTE PTR [rax + rsi], dl");
+    emitter.instruction("inc rsi");
+    emitter.instruction("inc r12");
+    emitter.instruction("jmp __rt_asf_b64e_cb_bloop_x86");
+    emitter.label("__rt_asf_b64e_cb_bend_x86");
+    emitter.instruction("xor r8, r8");                                          // the new line starts empty
+    emitter.label("__rt_asf_b64e_cb_nobreak_x86");
+    emitter.instruction("movzx edx, BYTE PTR [r11 + r9]");                      // one encoded byte
+    emitter.instruction("mov BYTE PTR [rax + rsi], dl");
+    emitter.instruction("inc r9");
+    emitter.instruction("inc rsi");
+    emitter.instruction("inc r8");
+    emitter.instruction("jmp __rt_asf_b64e_cb_wloop_x86");
+
+    emitter.label("__rt_asf_b64e_cb_plain_x86");
     emitter.instruction("xor r9, r9");                                          // initialize the read cursor
+    emitter.instruction("mov rsi, r10");                                        // the written length equals the encoded one
     emitter.label("__rt_asf_b64e_cb_loop_x86");
     emitter.instruction("cmp r9, r10");                                         // check whether the current cursor reached its bound
-    emitter.instruction("jge __rt_asf_b64e_done_x86");                          // finish the base64 encoder operation when the bound is reached
+    emitter.instruction("jge __rt_asf_b64e_cb_fin_x86");                        // finish when the bound is reached
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r9]");                      // load the next byte from the scratch buffer
     emitter.instruction("mov BYTE PTR [rax + r9], cl");                         // copy scratch output back into the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
     emitter.instruction("jmp __rt_asf_b64e_cb_loop_x86");                       // continue the base64 encoder loop
+
+    emitter.label("__rt_asf_b64e_cb_fin_x86");
     emitter.label("__rt_asf_b64e_done_x86");
-    emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("mov rdx, rsi");                                        // return what was WRITTEN, breaks included
+    emitter.instruction("pop r12");
+    emitter.instruction("pop rbx");
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 
     // -- convert.quoted-printable-encode (x86_64) --
     emitter.label("__rt_asf_qp_encode_x86");
+    emitter.instruction("push rbx");                                            // borrowed for the break emission
+    emitter.instruction("push r12");
     emitter.instruction("mov r11, 21845");                                      // set the maximum input length that fits the scratch buffer
     emitter.instruction("cmp rdx, r11");                                        // check whether the current cursor reached its bound
     emitter.instruction("cmovg rdx, r11");                                      // rdx = MIN(rdx, 21845)
     abi::emit_symbol_address(emitter, "r11", "_stream_grow_scratch");           // load the scratch buffer base address
     emitter.instruction("xor r9, r9");                                          // initialize the read cursor
     emitter.instruction("xor r10, r10");                                        // initialize the write cursor
+    emitter.instruction("xor rsi, rsi");                                        // characters on the current line
     emitter.label("__rt_asf_qpe_loop_x86");
     emitter.instruction("cmp r9, rdx");                                         // check whether the current cursor reached its bound
     emitter.instruction("jge __rt_asf_qpe_copyback_x86");                       // copy back once input encoding is complete
@@ -1161,10 +1370,15 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc r9");                                              // advance the read cursor
     // SPACE and TAB stay literal: php escapes them only under the filter's `binary` option, and
     // its DEFAULT answers `a b=3Dc d` for `a b=c d`. See the AArch64 arm for the full note.
+    abi::emit_symbol_address(emitter, "rdi", "_asf_binary");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // do the binary rules apply?
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jnz __rt_asf_qpe_range_x86");                          // binary: no byte gets a literal exemption
     emitter.instruction("cmp r8b, 9");                                          // TAB passes through unescaped
     emitter.instruction("je __rt_asf_qpe_literal_x86");                         // keep it as-is
     emitter.instruction("cmp r8b, 32");                                         // SPACE passes through unescaped
     emitter.instruction("je __rt_asf_qpe_literal_x86");                         // keep it as-is
+    emitter.label("__rt_asf_qpe_range_x86");
     emitter.instruction("cmp r8b, 33");                                         // check whether a full three-byte group is available
     emitter.instruction("jl __rt_asf_qpe_escape_x86");                          // reject values below the accepted range
     emitter.instruction("cmp r8b, 126");                                        // check whether only one byte remains
@@ -1172,10 +1386,74 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r8b, 61");                                         // test for '=' before quoted-printable escaping
     emitter.instruction("je __rt_asf_qpe_escape_x86");                          // escape the current byte
     emitter.label("__rt_asf_qpe_literal_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_asf_line_length");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // the width php wraps at, 0 for none
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_asf_qpe_lit_fits_x86");                            // php wraps at nothing by default
+    emitter.instruction("lea rcx, [rsi + 1]");                                   // where this token would end
+    emitter.instruction("dec rdi");                                             // the `=` needs the last column
+    emitter.instruction("cmp rcx, rdi");
+    emitter.instruction("jle __rt_asf_qpe_lit_fits_x86");                           // it fits on the current line
+    emitter.instruction("mov BYTE PTR [r11 + r10], 61");                        // php's soft break is `=` then the break chars
+    emitter.instruction("inc r10");
+    abi::emit_symbol_address(emitter, "rcx", "_asf_break_ptr");
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // the caller's break bytes
+    abi::emit_symbol_address(emitter, "rbx", "_asf_break_len");
+    emitter.instruction("mov rbx, QWORD PTR [rbx]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jnz __rt_asf_qpe_lit_have_x86");
+    abi::emit_symbol_address(emitter, "rcx", "_filter_break_crlf");
+    emitter.instruction("mov rbx, 2");                                          // php's default break is CRLF
+    emitter.label("__rt_asf_qpe_lit_have_x86");
+    emitter.instruction("xor r12, r12");                                        // break-byte cursor
+    emitter.label("__rt_asf_qpe_lit_bloop_x86");
+    emitter.instruction("cmp r12, rbx");
+    emitter.instruction("jge __rt_asf_qpe_lit_bend_x86");
+    emitter.instruction("movzx edi, BYTE PTR [rcx + r12]");
+    emitter.instruction("mov BYTE PTR [r11 + r10], dil");
+    emitter.instruction("inc r10");
+    emitter.instruction("inc r12");
+    emitter.instruction("jmp __rt_asf_qpe_lit_bloop_x86");
+    emitter.label("__rt_asf_qpe_lit_bend_x86");
+    emitter.instruction("xor rsi, rsi");                                        // the new line starts empty
+    emitter.label("__rt_asf_qpe_lit_fits_x86");
     emitter.instruction("mov BYTE PTR [r11 + r10], r8b");                       // write encoded output into the scratch buffer
     emitter.instruction("inc r10");                                             // advance the write cursor
+    emitter.instruction("inc rsi");                                             // one more column on this line
     emitter.instruction("jmp __rt_asf_qpe_loop_x86");                           // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_escape_x86");
+    abi::emit_symbol_address(emitter, "rdi", "_asf_line_length");
+    emitter.instruction("mov rdi, QWORD PTR [rdi]");                            // the width php wraps at, 0 for none
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_asf_qpe_esc_fits_x86");                            // php wraps at nothing by default
+    emitter.instruction("lea rcx, [rsi + 3]");                                   // where this token would end
+    emitter.instruction("dec rdi");                                             // the `=` needs the last column
+    emitter.instruction("cmp rcx, rdi");
+    emitter.instruction("jle __rt_asf_qpe_esc_fits_x86");                           // it fits on the current line
+    emitter.instruction("mov BYTE PTR [r11 + r10], 61");                        // php's soft break is `=` then the break chars
+    emitter.instruction("inc r10");
+    abi::emit_symbol_address(emitter, "rcx", "_asf_break_ptr");
+    emitter.instruction("mov rcx, QWORD PTR [rcx]");                            // the caller's break bytes
+    abi::emit_symbol_address(emitter, "rbx", "_asf_break_len");
+    emitter.instruction("mov rbx, QWORD PTR [rbx]");
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jnz __rt_asf_qpe_esc_have_x86");
+    abi::emit_symbol_address(emitter, "rcx", "_filter_break_crlf");
+    emitter.instruction("mov rbx, 2");                                          // php's default break is CRLF
+    emitter.label("__rt_asf_qpe_esc_have_x86");
+    emitter.instruction("xor r12, r12");                                        // break-byte cursor
+    emitter.label("__rt_asf_qpe_esc_bloop_x86");
+    emitter.instruction("cmp r12, rbx");
+    emitter.instruction("jge __rt_asf_qpe_esc_bend_x86");
+    emitter.instruction("movzx edi, BYTE PTR [rcx + r12]");
+    emitter.instruction("mov BYTE PTR [r11 + r10], dil");
+    emitter.instruction("inc r10");
+    emitter.instruction("inc r12");
+    emitter.instruction("jmp __rt_asf_qpe_esc_bloop_x86");
+    emitter.label("__rt_asf_qpe_esc_bend_x86");
+    emitter.instruction("xor rsi, rsi");                                        // the new line starts empty
+    emitter.label("__rt_asf_qpe_esc_fits_x86");
+    emitter.instruction("add rsi, 3");                                          // `=XX` occupies three columns
     emitter.instruction("mov BYTE PTR [r11 + r10], 61");                        // '='
     emitter.instruction("inc r10");                                             // advance the write cursor
     // hi nibble
@@ -1215,5 +1493,7 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_asf_qpe_cb_loop_x86");                        // continue the quoted-printable encoder loop
     emitter.label("__rt_asf_qpe_done_x86");
     emitter.instruction("mov rdx, r10");                                        // return the transformed output length
+    emitter.instruction("pop r12");
+    emitter.instruction("pop rbx");
     emitter.instruction("ret");                                                 // return to the stream-filter caller
 }

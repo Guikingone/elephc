@@ -91,7 +91,7 @@ pub(super) fn lower_builtin_stream_filter_attach(
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst, Some(0))?;
-    emit_attach_filter_node(ctx, Some(filter_id), prepend, false);
+    emit_attach_filter_node(ctx, Some(filter_id), prepend, false, Some(inst))?;
     // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
     // display id, which the legacy design could afford because its "filter
     // resource" was really the stream descriptor; a chain node has to be findable
@@ -114,12 +114,18 @@ pub(super) fn lower_builtin_stream_filter_attach(
 /// stack under the stream handle, and its built-in id stays 0. The node retains no
 /// params value in that case: the attach helper already exposed `$params` on the
 /// instance, which is what `filter()` reads.
+///
+/// A BUILT-IN node retains `$params` instead, because php's own built-in filters read it:
+/// `convert.base64-encode` and `convert.quoted-printable-encode` take `line-length` and
+/// `line-break-chars`, and the quoted-printable pair also takes `binary`. `params_inst` is the call
+/// whose fourth operand carries them; `None` retains nothing, which is what the user path wants.
 fn emit_attach_filter_node(
     ctx: &mut FunctionContext<'_>,
     filter_id: Option<u8>,
     prepend: bool,
     user_object: bool,
-) {
+    params_inst: Option<&Instruction>,
+) -> Result<()> {
     let skip_read = ctx.next_label("sf_chain_skip_read");
     let skip_write = ctx.next_label("sf_chain_skip_write");
     let prepend_flag = i64::from(prepend);
@@ -135,20 +141,31 @@ fn emit_attach_filter_node(
             if user_object {
                 ctx.emitter.instruction("str x5, [sp, #24]");                   // preserve the instance across the calls
             }
-            ctx.emitter.instruction("mov x2, x0");                              // direction bits
+            if filter_id.is_none() && !user_object {
+                ctx.emitter.instruction("str x9, [sp, #16]");                    // park the run-time id: the params call clobbers x9
+            }
+            if let Some(params_inst) = params_inst {
+                materialize_stream_filter_params(ctx, params_inst)?;             // the boxed `$params` the node retains
+                ctx.emitter.instruction("str x0, [sp, #24]");                    // a built-in node has this slot free
+            }
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                         // direction bits, past any params call
             match filter_id {
                 // A literal name resolves at compile time; a dynamic one arrives in
                 // x9 from __rt_builtin_filter_id.
                 Some(id) => ctx.emitter.instruction(&format!("mov x0, #{id}")),  // built-in filter id
                 None if user_object => ctx.emitter.instruction("mov x0, #0"),    // a user filter has no built-in id
-                None => ctx.emitter.instruction("mov x0, x9"),                   // run-time resolved filter id
+                None => ctx.emitter.instruction("ldr x0, [sp, #16]"),            // run-time resolved filter id, reparked above
             }
             if user_object {
                 ctx.emitter.instruction("ldr x1, [sp, #24]");                   // the instance this node owns
             } else {
                 ctx.emitter.instruction("mov x1, #0");                          // built-ins carry no user-filter object
             }
-            ctx.emitter.instruction("mov x3, #0");                              // params live on the instance, not the node
+            match params_inst {
+                // php's built-in filters read `$params`; a user filter reads it off its instance.
+                Some(_) => ctx.emitter.instruction("ldr x3, [sp, #24]"),         // the retained params box
+                None => ctx.emitter.instruction("mov x3, #0"),                   // params live on the instance
+            }
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
 
@@ -186,20 +203,31 @@ fn emit_attach_filter_node(
             if user_object {
                 ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r14");       // preserve the instance across the calls
             }
-            ctx.emitter.instruction("mov rdx, rax");                            // direction bits
+            if filter_id.is_none() && !user_object {
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r13");        // park the run-time id: the params call clobbers r13
+            }
+            if let Some(params_inst) = params_inst {
+                materialize_stream_filter_params(ctx, params_inst)?;             // the boxed `$params` the node retains
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");        // a built-in node has this slot free
+            }
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");             // direction bits, past any params call
             match filter_id {
                 // A literal name resolves at compile time; a dynamic one arrives in
                 // r13 from __rt_builtin_filter_id.
                 Some(id) => ctx.emitter.instruction(&format!("mov rdi, {id}")),  // built-in filter id
                 None if user_object => ctx.emitter.instruction("xor edi, edi"),  // a user filter has no built-in id
-                None => ctx.emitter.instruction("mov rdi, r13"),                 // run-time resolved filter id
+                None => ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]"), // run-time resolved filter id, reparked above
             }
             if user_object {
                 ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");       // the instance this node owns
             } else {
                 ctx.emitter.instruction("xor esi, esi");                        // built-ins carry no user-filter object
             }
-            ctx.emitter.instruction("xor ecx, ecx");                            // params live on the instance, not the node
+            match params_inst {
+                // php's built-in filters read `$params`; a user filter reads it off its instance.
+                Some(_) => ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 24]"), // the retained params box
+                None => ctx.emitter.instruction("xor ecx, ecx"),                  // params live on the instance
+            }
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // rax = the new filter handle
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the filter handle
 
@@ -227,6 +255,7 @@ fn emit_attach_filter_node(
             abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
     }
+    Ok(())
 }
 
 /// Materializes the stream-filter mode operand, deducing php's `$mode = 0`
@@ -416,7 +445,7 @@ pub(super) fn lower_user_stream_filter_attach(
             ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 16]");           // resolved id, below the pushed handle
         }
     }
-    emit_attach_filter_node(ctx, None, prepend, false);
+    emit_attach_filter_node(ctx, None, prepend, false, Some(inst))?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("add sp, sp, #16");                         // drop the preserved id
@@ -495,7 +524,7 @@ fn lower_user_stream_filter_attach_node(
         }
     }
     materialize_stream_filter_mode(ctx, inst, Some(0))?;                                 // direction bits for the node
-    emit_attach_filter_node(ctx, None, prepend, true);
+    emit_attach_filter_node(ctx, None, prepend, true, None)?;
     emit_boxed_filter_handle(ctx);
     abi::emit_jump(ctx.emitter, &done);
 

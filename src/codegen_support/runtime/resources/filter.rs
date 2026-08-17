@@ -125,6 +125,15 @@ fn emit_filter_create_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [sp, #24]");
     emitter.instruction(&format!("str x9, [x0, #{FILTER_PARAMS_OFFSET}]"));     // retained params value
 
+    // -- read the built-in filter parameters out of `$params`, ONCE --
+    //
+    // php parses `$params` in each filter's `create` callback, not per buffer, and for the same
+    // reason: `line-length`, `line-break-chars` and `binary` cannot change once the filter is
+    // attached, so probing the hash on every buffer would put a lookup in the encoder's inner
+    // path for a constant.
+    emitter.instruction("bl __rt_filter_absorb_params");                        // x0 = the node it fills
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the state the absorber consumed
+
     // -- register the filter as an owned resource --
     emitter.instruction("mov x1, x0");                                          // stable state pointer
     emitter.instruction(&format!("mov x0, #{RESOURCE_KIND_FILTER}"));           // resource kind
@@ -351,11 +360,24 @@ fn emit_filter_apply_chain_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x12, [x0, #{FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id
     emitter.instruction("cbz x12, __rt_apply_chain_user");                      // id 0 marks a user filter carried by this node
 
+    emitter.instruction("mov x14, x0");                                         // the node stays reachable across the reloads
     emitter.instruction("ldr x1, [sp, #0]");                                    // buffer pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // current length
     emitter.instruction("mov x3, x12");                                         // built-in filter id
+    abi::emit_push_reg_pair(emitter, "x1", "x2");                               // the buffer pair outlives the publish
+    abi::emit_push_reg(emitter, "x3");
+    emitter.instruction("mov x0, x14");                                         // the node whose parameters apply
+    emitter.instruction("bl __rt_asf_params_load");                             // the encoders read them from globals
+    abi::emit_pop_reg(emitter, "x3");
+    abi::emit_pop_reg_pair(emitter, "x1", "x2");
     emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place; x2 = new length
     emitter.instruction("str x2, [sp, #8]");                                    // carry the new length to the next node
+    // The published parameters are cleared immediately, so they are non-zero for exactly the
+    // duration of one application. The legacy per-descriptor path (which still serves `zlib.*` and
+    // `bzip2.*`) calls the same applier without a node, and a `line-length` left behind by an
+    // unrelated chain would silently wrap ITS output.
+    emitter.instruction("mov x0, #0");
+    emitter.instruction("bl __rt_asf_params_load");                             // clear them again
     emitter.instruction("b __rt_apply_chain_loop");                             // continue down the chain
 
     // A user filter runs from the node's own `php_user_filter`, through the same
@@ -388,7 +410,7 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: apply a stream filter chain ---");
     emitter.label_global("__rt_stream_apply_filter_chain");
-    // Frame: [-8]=buffer [-16]=length [-24]=node handle [-32]=head offset
+    // Frame: [-8]=buffer [-16]=length [-24]=node handle [-32]=head offset [-40]=filter id
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the chain-walk frame
     emitter.instruction("sub rsp, 48");                                         // reserve spill slots
@@ -419,10 +441,21 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r11, r11");
     emitter.instruction("jz __rt_apply_chain_user_x");                          // id 0 marks a user filter carried by this node
 
+    emitter.instruction("mov rdi, rax");                                        // the node whose parameters apply
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // the filter id outlives the publish
+    emitter.instruction("call __rt_asf_params_load");                           // the encoders read them from globals
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // current length
-    emitter.instruction("mov rcx, r11");                                        // built-in filter id
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // built-in filter id
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place; rdx = new length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // the new length outlives the clear
+    // The published parameters are cleared immediately, so they are non-zero for exactly the
+    // duration of one application. The legacy per-descriptor path (which still serves `zlib.*` and
+    // `bzip2.*`) calls the same applier without a node, and a `line-length` left behind by an
+    // unrelated chain would silently wrap ITS output.
+    emitter.instruction("xor edi, edi");
+    emitter.instruction("call __rt_asf_params_load");                           // clear them again
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // and carry the length onward
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // carry the new length to the next node
     emitter.instruction("jmp __rt_apply_chain_loop_x");                         // continue down the chain
 
@@ -747,6 +780,16 @@ fn emit_filter_create_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_DIRECTION_OFFSET}], r10")); // direction bits
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");
     emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PARAMS_OFFSET}], r10")); // retained params value
+
+    // -- read the built-in filter parameters out of `$params`, ONCE --
+    //
+    // php parses `$params` in each filter's `create` callback, not per buffer, and for the same
+    // reason: `line-length`, `line-break-chars` and `binary` cannot change once the filter is
+    // attached, so probing the hash on every buffer would put a lookup in the encoder's inner
+    // path for a constant.
+    emitter.instruction("mov rdi, rax");                                        // the node it fills
+    emitter.instruction("call __rt_filter_absorb_params");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the state the absorber consumed
 
     // -- register the filter as an owned resource --
     emitter.instruction("mov rsi, rax");                                        // stable state pointer

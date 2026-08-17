@@ -281,7 +281,7 @@ pub(crate) const CONTEXT_NOTIFIER_OFFSET: i64 = 16;
 pub(crate) const CONTEXT_FLAGS_OFFSET: i64 = 24;
 
 /// Size in bytes of one stable filter-state allocation.
-pub(crate) const FILTER_STATE_SIZE: u64 = 64;
+pub(crate) const FILTER_STATE_SIZE: u64 = 96;
 
 /// Byte offset of the next filter in the chain (filter handle, 0 = tail).
 pub(crate) const FILTER_NEXT_OFFSET: i64 = 0;
@@ -307,6 +307,23 @@ pub(crate) const FILTER_PARAMS_OFFSET: i64 = 48;
 /// Byte offset of the filter lifecycle flags.
 pub(crate) const FILTER_FLAGS_OFFSET: i64 = 56;
 
+/// Byte offset of the `line-length` a built-in encoder wraps at, 0 for no wrapping.
+///
+/// The four fields below are the built-in filter parameters, read out of `$params` ONCE at attach
+/// time rather than on every buffer. php's own defaults are what a zeroed allocation already says:
+/// measured on `php -n` 8.5.6, both `convert.base64-encode` and `convert.quoted-printable-encode`
+/// wrap at nothing unless the caller names a `line-length`.
+pub(crate) const FILTER_LINE_LENGTH_OFFSET: i64 = 64;
+
+/// Byte offset of the `line-break-chars` pointer, 0 when the default `\n` applies.
+pub(crate) const FILTER_BREAK_PTR_OFFSET: i64 = 72;
+
+/// Byte offset of the `line-break-chars` byte length.
+pub(crate) const FILTER_BREAK_LEN_OFFSET: i64 = 80;
+
+/// Byte offset of the `binary` flag, which is what makes quoted-printable escape SPACE and TAB.
+pub(crate) const FILTER_BINARY_OFFSET: i64 = 88;
+
 /// Read-direction bit, matching PHP's `STREAM_FILTER_READ`.
 pub(crate) const FILTER_DIRECTION_READ: u64 = 1;
 
@@ -328,7 +345,13 @@ const _: () = {
     assert!(STREAM_TLS_SESSION_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(FILTER_PREV_OFFSET == FILTER_NEXT_OFFSET + 8);
     assert!(FILTER_STREAM_HANDLE_OFFSET == FILTER_PREV_OFFSET + 8);
-    assert!(FILTER_FLAGS_OFFSET + 8 == FILTER_STATE_SIZE as i64);
+    // The four built-in filter parameters sit after the lifecycle flags and close the node, so an
+    // allocation that forgot to grow with them would be caught here rather than by a stray write.
+    assert!(FILTER_LINE_LENGTH_OFFSET == FILTER_FLAGS_OFFSET + 8);
+    assert!(FILTER_BREAK_PTR_OFFSET == FILTER_LINE_LENGTH_OFFSET + 8);
+    assert!(FILTER_BREAK_LEN_OFFSET == FILTER_BREAK_PTR_OFFSET + 8);
+    assert!(FILTER_BINARY_OFFSET == FILTER_BREAK_LEN_OFFSET + 8);
+    assert!(FILTER_BINARY_OFFSET + 8 == FILTER_STATE_SIZE as i64);
     assert!(FILTER_DIRECTION_READ | FILTER_DIRECTION_WRITE == 3);
     assert!(SLOT_REQUEST_EPOCH_OFFSET == SLOT_NEXT_FREE_OFFSET);
     assert!(STREAM_WRAPPER_ID_OFFSET == STREAM_BACKEND_KIND_OFFSET + 8);
