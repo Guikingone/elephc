@@ -11334,6 +11334,111 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a METHOD call lends its array argument a reference, on every dispatch kind.
+///
+/// The callee OWNS its array parameter and releases it at every exit — that is what gives PHP's
+/// by-value semantics, since a mutation inside then sees two owners and copies on write. Free
+/// functions lent a counted reference for exactly that reason; no method path did, so each call
+/// dropped the CALLER's array by one. Calling TWICE is what exposes it: with a freshly built
+/// array the first call still reads correct data and the second reads a freed block, which is
+/// why the probe below repeats every call and then re-reads the source.
+///
+/// Direct, static, mutating (copy-on-write) and interface-typed dispatch are all here because
+/// each had its OWN inlined copy of the argument decision — a rule added to one reached none of
+/// the others.
+#[test]
+fn test_cli_wasm_method_array_arguments_lend_a_reference() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_method_array_args");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, METHOD_ARRAY_ARG_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the method array-argument probe");
+    assert!(
+        output.status.success(),
+        "method array-argument compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the method array-argument probe under Node");
+    assert!(
+        run.status.success(),
+        "method array-argument probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes. The trailing `abc` is the source array re-read AFTER eight
+    // calls took it by value: an over-release shows up there as garbage, a leak would not.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "3|3|3|3|4|4|3|3|3|abc\n",
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Each call kind that can take an array, called twice on one source array.
+const METHOD_ARRAY_ARG_SOURCE: &str = r##"<?php
+// Each call kind that can take an array, called TWICE on ONE source array. Twice is the whole
+// point: the callee releases its array parameter at every exit, so a caller that does not lend
+// a counted reference drops the source by one per call — the FIRST call still reads correct
+// data and the SECOND reads freed memory.
+interface Sink { public function take(array $items): int; }
+
+class Direct implements Sink
+{
+    public function take(array $items): int { return count($items); }
+    public static function statically(array $items): int { return count($items); }
+}
+
+class Grower
+{
+    public function grow(array $items): int { $items[] = "inside"; return count($items); }
+}
+
+function through(Sink $s, array $items): int { return $s->take($items); }
+
+$src = ["a", "b", "c"];
+$d = new Direct();
+$g = new Grower();
+
+echo $d->take($src), "|", $d->take($src), "|";
+echo Direct::statically($src), "|", Direct::statically($src), "|";
+echo $g->grow($src), "|", $g->grow($src), "|";
+echo through($d, $src), "|", through($d, $src), "|";
+echo count($src), "|", $src[0], $src[1], $src[2], "\n";
+"##;
+
 /// Verifies an include-loaded function reaches its caller through the variant dispatcher.
 ///
 /// The body arrives from a `require`d file, so the public name has no `Function` of its own —

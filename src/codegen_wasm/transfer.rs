@@ -603,7 +603,7 @@ fn convert_temps_to_dest(
             let widened = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(
                 &format!("local.tee {}", widened),
-                "remember the widened array (the callee owns it and releases it)",
+                "remember the widened array: FRESH, so it is already the one reference the destination takes",
             );
             let _ = widened;
             Ok(None)

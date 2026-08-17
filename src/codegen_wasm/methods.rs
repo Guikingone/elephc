@@ -206,33 +206,15 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     ctx.emit_load_value(receiver)?;
     let mut minted_cells: Vec<String> = Vec::new();
     for (index, &arg) in inst.operands.iter().skip(1).enumerate() {
-        let boxes = ctx
-            .function
-            .value(arg)
-            .zip(body_params.get(index + 1))
-            .is_some_and(|(value, parameter)| {
-                super::capability::argument_boxes_into_a_mixed_parameter(value, parameter)
-            });
-        if boxes {
-            let repr = ctx.value_repr(arg)?.clone();
-            let cell = super::inst::box_value_into_mixed_cell(ctx, arg, &repr)?;
-            ctx.fb
-                .ins(&format!("local.get {}", cell), "argument boxed for a `mixed` parameter");
+        if let Some(cell) = push_call_argument(ctx, arg, body_params.get(index + 1))? {
             minted_cells.push(cell);
-        } else {
-            ctx.emit_load_value(arg)?;
         }
     }
     ctx.fb.ins(
         &format!("call ${}", callee_symbol),
         &format!("{}::{} ({})", class_name, method_name, mode),
     );
-    for cell in &minted_cells {
-        ctx.fb.ins(
-            &format!("(call $__rt_decref_any (local.get {}))", cell),
-            "release the boxed argument",
-        );
-    }
+    release_boxed_arguments(ctx, &minted_cells);
 
     // A `void` method returns nothing, but PHP still gives its CALL EXPRESSION the value null —
     // which is what the EIR materializes when the result is used. Nothing came back on the
@@ -289,15 +271,30 @@ fn lower_interface_method_call(
         WasmRepr::val_types(inst.result_type).len()
     };
 
+    // The audit proved every implementor shares one signature, so any body's parameters are
+    // THE parameters this call is compiled against. An open-coded `Throwable` accessor has no
+    // body and takes no arguments, which is why an empty list is a correct answer here.
+    let stub_params: Vec<crate::ir::FunctionParam> = candidates
+        .iter()
+        .find_map(|(_, implementation)| {
+            find_method_function(&ctx.module.class_methods, implementation, method_key)
+        })
+        .map(|body| body.params.clone())
+        .unwrap_or_default();
+
     emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
     ctx.emit_load_value(receiver)?;
-    for &arg in inst.operands.iter().skip(1) {
-        ctx.emit_load_value(arg)?;
+    let mut minted_cells: Vec<String> = Vec::new();
+    for (index, &arg) in inst.operands.iter().skip(1).enumerate() {
+        if let Some(cell) = push_call_argument(ctx, arg, stub_params.get(index + 1))? {
+            minted_cells.push(cell);
+        }
     }
     ctx.fb.ins(
         &format!("call ${}", method_dispatch_symbol(interface_name, method_key)),
         &format!("{}::{} (interface dispatch)", interface_name, method_name),
     );
+    release_boxed_arguments(ctx, &minted_cells);
 
     if body_returns_void && inst.result.is_some() {
         ctx.fb.ins(
@@ -368,8 +365,53 @@ fn push_call_argument(
         .is_some_and(|(value, parameter)| {
             super::capability::argument_boxes_into_a_mixed_parameter(value, parameter)
         });
+    // An `array<T>` reaching an `array<mixed>` parameter is a real element-wise conversion,
+    // so it goes through the transfer layer rather than a bare load. The fresh array it builds
+    // has no other owner — parameter slots are excluded from the callee's epilogue — so it joins
+    // the minted cells the call site releases afterwards.
+    let widens = ctx
+        .function
+        .value(arg)
+        .zip(parameter)
+        .is_some_and(|(value, parameter)| {
+            super::capability::argument_widens_into_an_array_parameter(value, parameter)
+        });
+    if widens {
+        let parameter = parameter.expect("widening was decided from a parameter");
+        // The fresh array the conversion builds IS the reference the callee owns and releases,
+        // so it is neither retained again here nor freed after the call.
+        super::transfer::emit_push_call_argument(
+            ctx,
+            arg,
+            parameter.ir_type,
+            parameter.php_type.codegen_repr(),
+        )?;
+        return Ok(None);
+    }
     if !boxes {
         ctx.emit_load_value(arg)?;
+        let lends = parameter.is_some_and(|parameter| {
+            parameter.ir_type == IrType::Heap(IrHeapKind::Array)
+                && super::inst::argument_reaches_parameter_unconverted(
+                    ctx,
+                    arg,
+                    &parameter.php_type,
+                )
+        });
+        if lends {
+            // The callee OWNS its array parameter and releases it at every exit, so the caller
+            // lends a counted reference and never takes it back — the same contract
+            // `lower_call` honours for a free function. Without it, every call decremented the
+            // CALLER's array: the first still read right, the second read freed memory.
+            // Only when the value is passed AS-IS: a converted one is a fresh array whose
+            // single reference is already the one being handed over.
+            let array = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.tee {}", array), "array argument");
+            ctx.fb.ins(
+                &format!("(call $__rt_incref (local.get {}))", array),
+                "the callee owns its array parameter",
+            );
+        }
         return Ok(None);
     }
     let repr = ctx.value_repr(arg)?.clone();
@@ -1030,15 +1072,23 @@ fn emit_candidate_call(
             .map(|s| s.return_type.clone())
             .unwrap_or(PhpType::Mixed);
 
-        // Receiver (the unboxed object pointer) as `this`, then user args in order.
+        // Receiver (the unboxed object pointer) as `this`, then user args in order. The args go
+        // through the same conversion the direct path uses: this arm calls ONE body, so its
+        // parameters are exactly as binding here as they are there — a raw load handed a
+        // narrower array straight to a body expecting `array<mixed>`.
+        let callee_params = callee_fn.params.clone();
         ctx.fb.ins(&format!("local.get {}", obj_local), "receiver object pointer (this)");
-        for &arg in inst.operands.iter().skip(1) {
-            ctx.emit_load_value(arg)?;
+        let mut minted: Vec<String> = Vec::new();
+        for (index, &arg) in inst.operands.iter().skip(1).enumerate() {
+            if let Some(cell) = push_call_argument(ctx, arg, callee_params.get(index + 1))? {
+                minted.push(cell);
+            }
         }
         ctx.fb.ins(
             &format!("call ${}", callee_symbol),
             &format!("{}::{} (closed-world direct)", class_name, method_name),
         );
+        release_boxed_arguments(ctx, &minted);
         (callee_ret_ir, callee_ret_php)
     };
 

@@ -6105,7 +6105,9 @@ fn static_method_call_shape_issue(
         };
         // A concrete scalar bound to a `mixed` parameter is a legal boxing transfer, which the
         // call lowering performs — the same relaxation the instance-call path applies.
-        if argument_boxes_into_a_mixed_parameter(value, parameter) {
+        if argument_boxes_into_a_mixed_parameter(value, parameter)
+            || argument_widens_into_an_array_parameter(value, parameter)
+        {
             continue;
         }
         if value.ir_type != parameter.ir_type
@@ -6292,7 +6294,9 @@ fn method_body_argument_shape_issue(
                 index + 1
             ));
         };
-        if argument_boxes_into_a_mixed_parameter(value, parameter) {
+        if argument_boxes_into_a_mixed_parameter(value, parameter)
+            || argument_widens_into_an_array_parameter(value, parameter)
+        {
             continue;
         }
         if value.ir_type != parameter.ir_type
@@ -6644,6 +6648,34 @@ pub(super) fn argument_boxes_into_a_mixed_parameter(
                 | PhpType::Str
                 | PhpType::Void
         )
+}
+
+/// Returns true when an `array<T>` argument reaches an `array<mixed>` parameter, which the call
+/// lowering CONVERTS at the call site.
+///
+/// Element-wise, not a pointer copy: the two layouts differ, so admitting this without emitting
+/// the conversion would hand the callee raw string pointers to read as Mixed cells. The transfer
+/// layer has always known how (`TransferKind::WidenArrayToMixed`); what was missing was the call
+/// boundary asking it to. `array_widen_shape` is the authority on which element types have a
+/// conversion, so an element it cannot shape stays refused here rather than guessed at.
+pub(super) fn argument_widens_into_an_array_parameter(
+    value: &crate::ir::Value,
+    parameter: &crate::ir::FunctionParam,
+) -> bool {
+    if value.ir_type != IrType::Heap(IrHeapKind::Array)
+        || parameter.ir_type != IrType::Heap(IrHeapKind::Array)
+        || parameter.php_type.codegen_repr() != PhpType::Array(Box::new(PhpType::Mixed))
+    {
+        return false;
+    }
+    let source = value.php_type.codegen_repr();
+    if source == parameter.php_type.codegen_repr() {
+        return false; // already the destination shape; nothing to convert
+    }
+    let PhpType::Array(element) = &source else {
+        return false;
+    };
+    transfer::array_widen_shape(element).is_some()
 }
 
 /// Returns the LITERAL constant name a `define()` call names, when it has one.

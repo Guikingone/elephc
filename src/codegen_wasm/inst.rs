@@ -450,7 +450,9 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
             if let Some(cell) = synthesized {
                 boxed_args.push(cell);
-            } else if matches!(*param_ir, IrType::Heap(IrHeapKind::Array)) {
+            } else if matches!(*param_ir, IrType::Heap(IrHeapKind::Array))
+                && argument_reaches_parameter_unconverted(ctx, arg, param_php)
+            {
                 // The callee OWNS its array parameter and releases it at every exit, which is
                 // what gives PHP by-value semantics: a mutation inside sees two owners and copies
                 // on write. So the caller lends a counted reference here and never takes it back
@@ -1547,6 +1549,21 @@ fn owned_heap_load(ctx: &FnCtx, result: crate::ir::ValueId) -> bool {
         candidate.op != Op::Release && candidate.operands.contains(&result)
     });
     released && used_beyond_release
+}
+
+/// Whether an argument reaches its parameter with NO conversion, so the caller still owns it.
+///
+/// Only then does an array parameter need a lent reference: a converted one is a fresh array
+/// whose single reference is already the one the callee will release. Both call families ask
+/// this same question, which is why it lives beside neither of them.
+pub(super) fn argument_reaches_parameter_unconverted(
+    ctx: &FnCtx,
+    arg: crate::ir::ValueId,
+    param_php: &PhpType,
+) -> bool {
+    ctx.function
+        .value(arg)
+        .is_some_and(|value| value.php_type.codegen_repr() == param_php.codegen_repr())
 }
 
 /// Lowers `StoreLocal`: stores the operand value into the slot.
