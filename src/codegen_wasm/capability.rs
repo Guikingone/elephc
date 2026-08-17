@@ -4678,6 +4678,67 @@ fn throwable_intrinsic_shape_issue(
     .map(|issue| format!("{class_name}::{method_name} result: {issue}"))
 }
 
+/// Validates an interface-typed call to an open-coded `Throwable` accessor.
+///
+/// Two obligations the class-typed check does not have. Every implementor must store the
+/// accessor's property in the SAME representation, because one dispatch stub declares one
+/// result signature — an implementor that stored `$code` as a Mixed cell could not share a
+/// stub that returns an `i64`. And the destination is checked against that storage rather
+/// than against the interface's declared return type, which for `getPrevious()` is the wider
+/// `?Throwable`.
+fn interface_throwable_intrinsic_shape_issue(
+    module: &Module,
+    interface_name: &str,
+    method_name: &str,
+    intrinsic: super::objects::ThrowableIntrinsic,
+    candidates: &[(String, String)],
+    arguments: &[ValueId],
+    inst: &Instruction,
+) -> Option<String> {
+    if !arguments.is_empty() {
+        return Some(format!(
+            "{interface_name}::{method_name} takes no arguments, got {}",
+            arguments.len()
+        ));
+    }
+    let mut storage: Option<(IrType, PhpType)> = None;
+    for (candidate, _) in candidates {
+        let Some(candidate_info) = module.class_infos.get(candidate) else {
+            return Some(format!("missing implementor class {candidate}"));
+        };
+        let found = match super::objects::throwable_intrinsic_storage(candidate_info, intrinsic) {
+            Ok(found) => found,
+            Err(error) => return Some(format!("{candidate}::{method_name}: {error}")),
+        };
+        match &storage {
+            None => storage = Some(found),
+            Some(agreed) if *agreed == found => {}
+            Some(agreed) => {
+                return Some(format!(
+                    "{interface_name} implementors disagree on {method_name} storage: \
+                     {candidate} stores {found:?}, another stores {agreed:?}"
+                ))
+            }
+        }
+    }
+    let Some((source_ir, source_php)) = storage else {
+        return Some(format!(
+            "{interface_name}::{method_name} has no implementor to read"
+        ));
+    };
+    if inst.result.is_none() {
+        // A discarded accessor result is dropped by arity; nothing reaches a destination.
+        return None;
+    }
+    value_transfer_shape_issue(
+        source_ir,
+        source_php,
+        inst.result_type,
+        inst.result_php_type.codegen_repr(),
+    )
+    .map(|issue| format!("{interface_name}::{method_name} result: {issue}"))
+}
+
 /// Validates a construction whose constructor has a signature but no EIR body.
 ///
 /// That combination is legitimate for exactly one family: `Throwable`. Its constructor is part
@@ -5515,6 +5576,23 @@ fn interface_method_call_shape_issue(
         Ok(candidates) => candidates,
         Err(issue) => return Some(issue),
     };
+    // A `Throwable` accessor has a signature but no EIR body for any implementor. The call is
+    // open-coded against the receiver's slot in the dispatch stub rather than forwarded, so it
+    // is audited against that slot — and against every implementor agreeing on it, since one
+    // stub carries one result signature.
+    if let Some(intrinsic) =
+        super::objects::interface_throwable_intrinsic(module, method_key, &candidates)
+    {
+        return interface_throwable_intrinsic_shape_issue(
+            module,
+            interface_name,
+            method_name,
+            intrinsic,
+            &candidates,
+            arguments,
+            inst,
+        );
+    }
     for (candidate, implementation) in candidates {
         let Some(candidate_info) = module.class_infos.get(&candidate) else {
             return Some(format!("missing implementor class {candidate}"));

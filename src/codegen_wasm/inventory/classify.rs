@@ -795,6 +795,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "property_write_shape_issue",
         "throwable_constructor_shape_issue",
         "throwable_intrinsic_shape_issue",
+        "interface_throwable_intrinsic_shape_issue",
         "local_transfer_shape_issue",
         "load_global_shape_issue",
         "store_ref_cell_shape_issue",

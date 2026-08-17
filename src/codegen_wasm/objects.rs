@@ -199,6 +199,32 @@ pub(super) fn throwable_intrinsic(
     is_throwable_class(module, class_name).then_some(intrinsic)
 }
 
+/// Returns the accessor to open-code for an INTERFACE-typed call, or `None` to dispatch.
+///
+/// The class-typed selector above asks whether the RECEIVER is a `Throwable`; an interface is
+/// not a class, so that question has no answer here. The right one is about the candidates:
+/// `catch (Throwable $e) { $e->getMessage(); }` can only land on classes that implement the
+/// interface, and if every one of them is a bodyless throwable then there is no body to
+/// dispatch to for any receiver the call can have. One implementor that overrides the accessor
+/// puts a real body back in play and the whole call goes back to ordinary dispatch, exactly as
+/// the class-typed rule does.
+pub(super) fn interface_throwable_intrinsic(
+    module: &Module,
+    method_key: &str,
+    candidates: &[(String, String)],
+) -> Option<ThrowableIntrinsic> {
+    let intrinsic = throwable_intrinsic_for_key(method_key)?;
+    if candidates.is_empty() {
+        return None;
+    }
+    candidates
+        .iter()
+        .all(|(candidate, implementation)| {
+            bodyless_throwable_method(module, candidate, implementation, method_key)
+        })
+        .then_some(intrinsic)
+}
+
 /// Returns the storage an open-coded `Throwable` accessor pushes.
 ///
 /// The audit checks the destination against this, and the Mixed-receiver path decides from it
@@ -295,6 +321,116 @@ pub(super) fn emit_throwable_intrinsic(
         | ThrowableIntrinsic::Previous => unreachable!("property-backed accessors returned above"),
     }
     Ok(())
+}
+
+/// Builds an interface-dispatch stub whose arms OPEN-CODE a bodyless `Throwable` accessor.
+///
+/// The ordinary stub forwards to one body per class id; there is no body here, so each arm
+/// reads the receiver's own slot instead. Per-arm rather than one shared load because the slot
+/// OFFSET belongs to the class: two implementors of the same interface can lay `$message` out
+/// differently, and a single load would then read one of them at the other's offset.
+///
+/// One stub, not an inlined ladder per call site — the same reason the ordinary dispatch is a
+/// stub. Ownership matches `emit_declared_property_load(.., Owned)` exactly: a string is
+/// persisted and a refcounted child is increfed, because the accessor's result outlives the
+/// object it was read from and the caller will release it.
+pub(super) fn throwable_intrinsic_dispatch_stub(
+    module: &Module,
+    stub_symbol: &str,
+    intrinsic: ThrowableIntrinsic,
+    candidates: &[(String, String)],
+) -> Result<String> {
+    let first = candidates
+        .first()
+        .ok_or_else(|| WasmError::Unsupported("throwable accessor with no implementor".into()))?;
+    let first_info = module
+        .class_infos
+        .get(&first.0)
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown implementor {}", first.0)))?;
+    let (result_ir, _) = throwable_intrinsic_storage(first_info, intrinsic)?;
+    let results = WasmRepr::val_types(result_ir);
+
+    let mut wat = format!("(func ${stub_symbol} (param $this i32)");
+    for ty in &results {
+        wat.push_str(&format!(" (result {})", ty.as_str()));
+    }
+    wat.push_str("\n  (local $cid i64) (local $p i32)\n");
+
+    // The three synthetic accessors do not read the object at all, so they need no ladder:
+    // every runtime class answers the same constant.
+    let property = match intrinsic {
+        ThrowableIntrinsic::Message => "message",
+        ThrowableIntrinsic::Code => "code",
+        ThrowableIntrinsic::Previous => "previous",
+        ThrowableIntrinsic::EmptyString => {
+            wat.push_str("  (return (i32.const 0) (i64.const 0)))\n"); // elephc records no file
+            return Ok(wat);
+        }
+        ThrowableIntrinsic::ZeroInt => {
+            wat.push_str("  (return (i64.const 0)))\n"); // elephc records no line
+            return Ok(wat);
+        }
+        ThrowableIntrinsic::EmptyTrace => {
+            wat.push_str(
+                "  (return (call $__rt_array_new (i64.const 0) (i64.const 16))))\n", // empty backtrace
+            );
+            return Ok(wat);
+        }
+    };
+
+    wat.push_str("  (local.set $cid (i64.load (local.get $this)))   ;; runtime class id at +0\n");
+    let mut arms: Vec<(u64, String)> = Vec::new();
+    for (class_name, _) in candidates {
+        let class_info = module
+            .class_infos
+            .get(class_name)
+            .ok_or_else(|| WasmError::Unsupported(format!("unknown implementor {class_name}")))?;
+        let (arm_ir, _) = throwable_intrinsic_storage(class_info, intrinsic)?;
+        if arm_ir != result_ir {
+            return Err(WasmError::Unsupported(format!(
+                "implementor {class_name} stores ${property} as {arm_ir:?}, not {result_ir:?}"
+            )));
+        }
+        let (_, offset, property_type) = resolve_property_slot(class_info, property)?;
+        let body = match property_type.codegen_repr() {
+            PhpType::Int | PhpType::Bool => {
+                format!("    (return (i64.load offset={offset} (local.get $this)))")
+            }
+            PhpType::Float => format!("    (return (f64.load offset={offset} (local.get $this)))"),
+            PhpType::Str => format!(
+                "    (return (call $__rt_str_persist\n      \
+                 (i32.load offset={offset} (local.get $this))\n      \
+                 (i64.load offset={} (local.get $this))))",
+                offset + 8
+            ),
+            PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable => format!(
+                "    (local.set $p (i32.load offset={offset} (local.get $this)))\n    \
+                 (call $__rt_incref (local.get $p))\n    (return (local.get $p))"
+            ),
+            other => {
+                return Err(WasmError::Unsupported(format!(
+                    "${property} of type {other:?} has no wasm32-wasi accessor storage"
+                )))
+            }
+        };
+        arms.push((class_info.class_id, body));
+    }
+    arms.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    for (class_id, body) in &arms {
+        wat.push_str(&format!(
+            "  (if (i64.eq (local.get $cid) (i64.const {})) (then\n{body}))\n",
+            *class_id as i64
+        ));
+    }
+        wat.push_str(
+        "  call $__rt_fail_callable_dispatch\n  unreachable ;; elephc-trap:post-noreturn:closed-method-dispatch-failure\n)\n",
+    );
+    Ok(wat)
 }
 
 /// Returns true when `class_name` implements `Throwable`, directly or through its parents.

@@ -1658,6 +1658,29 @@ fn emit_interface_dispatch_stubs(wm: &mut WatModule, module: &Module) -> Result<
                 continue;
             };
 
+            // A `Throwable` accessor has no body for ANY implementor, so there is nothing to
+            // forward to; the stub reads the receiver's slot instead. Checked before the body
+            // loop because that loop's first act is to refuse the missing body.
+            if let Some(intrinsic) = objects::interface_throwable_intrinsic(
+                module,
+                method_key,
+                &candidates,
+            ) {
+                let stub_symbol = method_dispatch_symbol(interface_name, method_key);
+                match objects::throwable_intrinsic_dispatch_stub(
+                    module,
+                    &stub_symbol,
+                    intrinsic,
+                    &candidates,
+                ) {
+                    // A stub the audit refuses is one no `call` will reference, so a failure
+                    // here is skipped rather than propagated, exactly as a mismatched ABI is.
+                    Ok(wat) => wm.add_raw_func(&wat),
+                    Err(_) => {}
+                }
+                continue;
+            }
+
             let mut arms: Vec<(u64, String)> = Vec::new();
             let mut sig_fn: Option<&Function> = None;
             let mut unusable = false;

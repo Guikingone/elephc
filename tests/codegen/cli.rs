@@ -11334,6 +11334,110 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an INTERFACE-typed catch reaches the built-in `Throwable` accessors under Node.
+///
+/// `getMessage()` and `getCode()` have a signature but no PHP body, so an interface-typed
+/// receiver has no implementor to dispatch to; the stub reads the receiver's own slot instead,
+/// one arm per class id because the offset belongs to the class. Both interfaces are exercised
+/// — php's own `Throwable` and a user interface extending it — and the SAME variable binds
+/// both catches, which widens its slot to a Mixed cell and sends the receiver through an
+/// unbox. That last part is what the accessor pairs badly with when the unbox hands back a
+/// borrow: three reads dropped the exception to refcount zero mid-block and the next one
+/// walked a freed block, so this pins the arithmetic as much as the accessor.
+#[test]
+fn test_cli_wasm_interface_typed_throwable_accessors_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_iface_throwable");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r##"<?php
+interface AppThrowable extends Throwable {}
+class AppException extends Exception implements AppThrowable {}
+
+try {
+    throw new AppException("interface catch", 7);
+} catch (Throwable $e) {
+    echo "T:", $e->getMessage(), "#", $e->getCode(), "|", $e->getLine(), "|", $e->getFile(), "\n";
+}
+
+try {
+    throw new AppException("user interface", 9);
+} catch (AppThrowable $e) {
+    echo "A:", $e->getMessage(), "#", $e->getCode(), "\n";
+}
+
+try {
+    try {
+        throw new AppException("root cause", 10);
+    } catch (AppException $previous) {
+        throw new AppException("wrapped failure", 11, $previous);
+    }
+} catch (AppThrowable $e) {
+    echo "P:", $e->getMessage(), " <- ", $e->getPrevious()?->getMessage(), "\n";
+}
+"##,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the interface-typed accessors to WASM");
+    assert!(
+        output.status.success(),
+        "interface accessor compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the interface-typed accessors under Node");
+    assert!(
+        run.status.success(),
+        "interface accessors trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6 answers the same, except for `getLine`/`getFile`: elephc records no per-throw
+    // file or line on EITHER backend, so both answer zero and the empty string by design.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "T:interface catch#7|0|\n",
+            "A:user interface#9\n",
+            "P:wrapped failure <- root cause\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `parse_url` reproduces php-src over the shared fixture corpus, under Node.
 ///
 /// The corpus is `tests/fixtures/parse_url_cases.json`, the same one the Magician scanner is

@@ -1514,9 +1514,19 @@ fn lower_load_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// So the reference is owed exactly when the value is USED for something besides being
 /// released — the consumed-directly case, which is the read-back-null bug this exists to fix.
 fn owned_heap_load(ctx: &FnCtx, result: crate::ir::ValueId) -> bool {
+    // `MaybeOwned` counts too, and that is not a loosening — it is the case the pairing below
+    // was always describing. A load that NARROWS a Mixed slot to a pointer is annotated
+    // `maybe_owned`, yet the EIR still releases it, because the narrowing is defined as "an
+    // unbox AND an incref" (the native backend does exactly that). This target's unbox hands
+    // back a pointer BORROWED from the cell, so each such load ate one of the cell's references:
+    // `catch (Throwable $e) { $e->getMessage(); $e->getCode(); }` with `$e` shared by a second
+    // catch dropped the exception to refcount zero mid-block, and the next read of it walked a
+    // freed block's free-list link. Two uses were survivable by luck; the third crashed.
     let declared_owned = ctx.function.value(result).is_some_and(|value| {
-        value.ownership == crate::ir::Ownership::Owned
-            && matches!(value.ir_type, IrType::Heap(_))
+        matches!(
+            value.ownership,
+            crate::ir::Ownership::Owned | crate::ir::Ownership::MaybeOwned
+        ) && matches!(value.ir_type, IrType::Heap(_))
     });
     if !declared_owned {
         return false;
