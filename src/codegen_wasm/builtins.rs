@@ -57,6 +57,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_B64_VALUE);
     wm.add_raw_func(RT_STR_BASE64_ENCODE);
     wm.add_raw_func(RT_STR_BASE64_DECODE);
+    wm.add_raw_func(RT_BASE64_DECODE);
     wm.add_raw_func(RT_STR_CASE_EDGE);
     wm.add_raw_func(RT_STR_UCWORDS);
     wm.add_raw_func(RT_STR_CMP);
@@ -681,6 +682,29 @@ const RT_STR_BASE64_DECODE: &str = r#"(func $__rt_str_base64_decode (param $ptr 
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; leftover bits are discarded
 "#;
 
+/// `__rt_base64_decode`: the `base64_decode` BUILTIN, boxed as PHP's `string|false`.
+///
+/// The declared return type is a union for every arity because the two-argument STRICT form can
+/// answer `false`; the one-argument form lowered here never can, so this always boxes tag 1.
+/// Wrapping the decode rather than inlining it at each call site keeps one copy of the boxing in
+/// the module. `__rt_mixed_from_value` persists its own copy of a tag-1 payload, so the
+/// transient decode block is released right after — the same ownership handoff `__rt_getenv`
+/// makes.
+const RT_BASE64_DECODE: &str = r#"(func $__rt_base64_decode (param $ptr i32) (param $len i64) (result i32)
+  (local $out i32)                                                ;; transient decoded block
+  (local $olen i64)                                               ;; decoded length
+  (local $cell i32)                                               ;; the boxed answer
+  (call $__rt_str_base64_decode (local.get $ptr) (local.get $len))
+  (local.set $olen)                                               ;; decoded length
+  (local.set $out)                                                ;; decoded pointer
+  (local.set $cell (call $__rt_mixed_from_value
+    (i64.const 1)                                                 ;; mixed tag (string)
+    (i64.extend_i32_u (local.get $out))
+    (local.get $olen)))                                           ;; boxing persists a copy
+  (call $__rt_decref_any (local.get $out))                        ;; release the transient block
+  (local.get $cell))                                              ;; owned Mixed cell
+"#;
+
 /// `__rt_str_chr`: owns the one-byte string PHP's `chr` returns for any integer.
 ///
 /// PHP does not reject an out-of-range codepoint: it constrains it with `% 256`, and a NEGATIVE
@@ -1125,6 +1149,43 @@ fn strstr_shape_issue(function: &Function, call: &Instruction) -> Option<String>
     {
         return Some(format!(
             "strstr result {:?}/{:?} is not the Mixed cell PHP's string|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `base64_decode`: ONE string in, PHP's `string|false` Mixed cell out.
+///
+/// The two-argument STRICT form is what makes the declared type a union, and it is refused here
+/// rather than approximated: php-src's strict decode rejects a stray byte, a misplaced `=` and a
+/// truncated final group, and `$strict` is a runtime value, so a lowering that ignored it would
+/// answer a string where PHP answers `false`. The lax arity has no such split and is exact.
+fn base64_decode_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if call.operands.len() != 1 {
+        return Some(format!(
+            "only the one-argument (non-strict) form is lowered; the $strict flag decides between \
+             a string and false at run time, got {} operands",
+            call.operands.len()
+        ));
+    }
+    let Some(value) = function.value(call.operands[0]) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "base64_decode operand is {:?}/{:?}, expected Str/Str",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || call.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "base64_decode result {:?}/{:?} is not the Mixed cell PHP's string|false needs",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -3961,7 +4022,8 @@ fn lower_get_resource_type(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
     matches!(
         target,
-        RuntimeFnId::Abs
+        RuntimeFnId::Base64Decode
+            | RuntimeFnId::Abs
             | RuntimeFnId::Gettype
             | RuntimeFnId::Floor
             | RuntimeFnId::Round
@@ -4174,6 +4236,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Base64Decode {
+        return base64_decode_shape_issue(function, call);
     }
     if target == RuntimeFnId::StrPad {
         return str_pad_shape_issue(function, call);
@@ -4511,6 +4576,12 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
+    }
+    if target == RuntimeFnId::Base64Decode {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb
+            .ins("call $__rt_base64_decode", "tolerant decode, boxed as string|false");
+        return store_result(ctx, inst);
     }
     if target == RuntimeFnId::StrPad {
         return lower_str_pad(ctx, inst);

@@ -7752,6 +7752,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Sha1
         | RuntimeFnId::Md5
         | RuntimeFnId::Htmlspecialchars
+        | RuntimeFnId::Base64Decode
         | RuntimeFnId::Gettype => true,
         // Added upstream after this backend's last audit; refused until each is
         // lowered and differentially tested here (fail-closed).
@@ -7770,7 +7771,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         RuntimeFnId::ElephcObjectPropCount |
         RuntimeFnId::ElephcObjectPropName |
         RuntimeFnId::ElephcObjectPropValue |
-        RuntimeFnId::Base64Decode |
         RuntimeFnId::ChunkSplit |
         RuntimeFnId::CountChars |
         RuntimeFnId::OpensslCipherIvLength |

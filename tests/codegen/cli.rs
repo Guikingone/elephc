@@ -2423,8 +2423,11 @@ fn test_cli_wasm_rejects_unproven_object_iterator_and_global_shapes() {
             "usort may mutate the iterated container without PHP snapshot/COW semantics",
         ),
         (
+            // The refusal must NAME the global. Its wording has since grown to say what is
+            // missing — a slot shape for the declared type — rather than "not implemented",
+            // so the assertion anchors on the name, which is the part that must never go.
             r#"<?php function read_custom(): mixed { global $custom; return $custom; } echo read_custom();"#,
-            "global $custom is not implemented by the WASI runtime",
+            "global $custom of type Mixed has no slot shape on this target",
         ),
     ];
 
