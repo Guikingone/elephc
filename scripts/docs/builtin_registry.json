@@ -25357,7 +25357,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "filemtime"
       ],
@@ -25368,7 +25368,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -25381,7 +25382,7 @@
           "type": "string"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "filemtime",
@@ -25764,7 +25765,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
+      "result_type": "checked",
       "runtime_functions": [
         "filesize"
       ],
@@ -25775,7 +25776,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -25788,7 +25790,7 @@
           "type": "string"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "filesize",
