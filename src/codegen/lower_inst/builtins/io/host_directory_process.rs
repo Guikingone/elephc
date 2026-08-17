@@ -558,16 +558,30 @@ pub(crate) fn lower_pclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     store_if_result(ctx, inst)
 }
 
-/// Lowers `fsockopen(host, port, errno?, errstr?, timeout?)`.
+/// Lowers `fsockopen(host, port?, errno?, errstr?, timeout?)`.
+///
+/// `$port` is OPTIONAL in php and defaults to -1, which is what lets `fsockopen("unix:///path")`
+/// name a socket that has no port at all. elephc required it, so that call did not compile. The
+/// default is not private either: php spells the failure `Unable to connect to unix:///path:-1`,
+/// so the -1 reaches the warning text — which is why the absent operand passes `None` to the
+/// warning helper, whose no-port arm already writes -1. Measured on `php -n` 8.5.6.
 pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "fsockopen", 2, 5)?;
+    ensure_arg_count_between(inst, "fsockopen", 1, 5)?;
     let host = expect_operand(inst, 0)?;
-    let port = expect_operand(inst, 1)?;
+    let port = if inst.operands.len() >= 2 { Some(expect_operand(inst, 1)?) } else { None };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_to_result(ctx, host, "fsockopen host")?;
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            require_int(ctx.load_value_to_result(port)?.codegen_repr(), "fsockopen port")?;
+            match port {
+                Some(port) => {
+                    require_int(
+                        ctx.load_value_to_result(port)?.codegen_repr(),
+                        "fsockopen port",
+                    )?;
+                }
+                None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), -1),
+            }
             abi::emit_push_reg(ctx.emitter, "x0");
             if inst.operands.len() >= 5 {
                 let timeout = expect_operand(inst, 4)?;
@@ -582,7 +596,15 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::X86_64 => {
             load_string_to_result(ctx, host, "fsockopen host")?;
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            require_int(ctx.load_value_to_result(port)?.codegen_repr(), "fsockopen port")?;
+            match port {
+                Some(port) => {
+                    require_int(
+                        ctx.load_value_to_result(port)?.codegen_repr(),
+                        "fsockopen port",
+                    )?;
+                }
+                None => abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), -1),
+            }
             abi::emit_push_reg(ctx.emitter, "rax");
             if inst.operands.len() >= 5 {
                 let timeout = expect_operand(inst, 4)?;
@@ -594,9 +616,10 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fsockopen");
-    emit_socket_open_failure_warning(ctx, host, Some(port), SOCKET_WARNING_FSOCKOPEN)?;
+    emit_socket_open_failure_warning(ctx, host, port, SOCKET_WARNING_FSOCKOPEN)?;
     store_socket_error_outputs(ctx, inst, 2, 3, true)?;
     box_stream_fd_or_false_result(ctx, "fsockopen");
+    emit_record_fsockopen_meta_after_boxed(ctx);
     store_if_result(ctx, inst)
 }
 

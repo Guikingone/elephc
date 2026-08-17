@@ -15,7 +15,7 @@ use crate::codegen_support::abi;
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,
     STREAM_BACKEND_USER_DIRECTORY, STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET,
-    STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
+    STREAM_MODE_PTR_OFFSET, STREAM_TRANSPORT_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
     STREAM_WRAPPER_ID_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -481,6 +481,14 @@ fn emit_stream_meta_has_api_flags_aarch64(emitter: &mut Emitter) {
 /// Reads the StreamState wrapper id and loads the matching wrapper-type string
 /// literal into x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
 /// Fallback id 0 (unset) → "plainfile".
+///
+/// A socket has NO wrapper: php-src reaches every transport through
+/// `php_stream_xport_create`, which never assigns `stream->wrapper`, and
+/// `_php_stream_get_metadata` writes the key only `if (stream->wrapper)`. So a socket-pair end, a
+/// `stream_socket_server()` and a `stream_socket_client()` all report the key as ABSENT, not as
+/// some default. elephc left the id at its unset value 0, which the table below maps to
+/// "plainfile", so every socket claimed to have been opened by the plain-files wrapper. Measured
+/// on `php -n` 8.5.6.
 fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     let wrappers: &[(&str, i64)] = &[
         ("_meta_wrapper_plainfile", 9),
@@ -498,6 +506,10 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
         ("_meta_wrapper_zip", 11),
     ];
     emitter.instruction("ldr x6, [sp, #80]");                                   // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "ldr x7, [x6, #{}]", STREAM_TRANSPORT_OFFSET
+    ));                                                                         // non-zero only for a socket transport
+    emitter.instruction("cbnz x7, __rt_sgmd_wtype_done");                       // a transport has no wrapper, so php omits the key
     emitter.instruction(&format!(
         "ldr x7, [x6, #{}]", STREAM_WRAPPER_ID_OFFSET
     ));                                                                         // load the handle-keyed wrapper id
@@ -525,6 +537,7 @@ fn emit_set_wrapper_type_aarch64(emitter: &mut Emitter) {
     }
     emitter.label("__rt_sgmd_wtype_put");
     emit_hash_put_aarch64(emitter, "_meta_key_wrapper_type", 12);
+    emitter.label("__rt_sgmd_wtype_done");                                      // a socket rejoins the caller here
 }
 
 /// Inserts `wrapper_data`, the response header lines, for the wrappers that receive a response.
@@ -890,6 +903,14 @@ fn emit_set_int_const_x86(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
 /// Reads the StreamState wrapper id and loads the matching wrapper-type string
 /// literal into rcx (ptr) / r8 (len) / r9 (tag=1), then inserts the hash entry.
 /// Fallback id 0 (unset) → "plainfile".
+///
+/// A socket has NO wrapper: php-src reaches every transport through
+/// `php_stream_xport_create`, which never assigns `stream->wrapper`, and
+/// `_php_stream_get_metadata` writes the key only `if (stream->wrapper)`. So a socket-pair end, a
+/// `stream_socket_server()` and a `stream_socket_client()` all report the key as ABSENT, not as
+/// some default. elephc left the id at its unset value 0, which the table below maps to
+/// "plainfile", so every socket claimed to have been opened by the plain-files wrapper. Measured
+/// on `php -n` 8.5.6.
 fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
     let wrappers: &[(&str, i64)] = &[
         ("_meta_wrapper_plainfile", 9),
@@ -907,6 +928,11 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
         ("_meta_wrapper_zip", 11),
     ];
     emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // reload the stable StreamState pointer
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_TRANSPORT_OFFSET
+    ));                                                                         // non-zero only for a socket transport
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jne __rt_sgmd_wtype_done_x");                          // a transport has no wrapper, so php omits the key
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r10 + {}]", STREAM_WRAPPER_ID_OFFSET
     ));                                                                         // load the handle-keyed wrapper id
@@ -930,6 +956,7 @@ fn emit_set_wrapper_type_x86(emitter: &mut Emitter) {
     }
     emitter.label("__rt_sgmd_wtype_put_x");
     emit_hash_put_x86(emitter, "_meta_key_wrapper_type", 12);
+    emitter.label("__rt_sgmd_wtype_done_x");                                    // a socket rejoins the caller here
 }
 
 /// Reads the StreamState URI pointer/length pair and loads it into

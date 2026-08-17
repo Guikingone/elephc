@@ -17,6 +17,7 @@
 
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_TRANSPORT_OFFSET, STREAM_TRANSPORT_TCP, STREAM_TRANSPORT_UDP, STREAM_TRANSPORT_UNIX,
+    STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -88,6 +89,7 @@ fn emit_record_transport_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x9, x1");                                          // the address the caller wrote
     emitter.instruction("mov x10, x2");                                         // and its byte length
     emitter.instruction("mov x11, x3");                                         // the fallback transport
+    emitter.instruction("stp x9, x10, [sp, #16]");                              // the address is also this socket's `uri`
 
     emitter.instruction("cbz x9, __rt_srt_resolved");                           // no address: the fallback stands
     emit_prefix_probe_aarch64(emitter, "udp", b"udp://", STREAM_TRANSPORT_UDP);
@@ -103,11 +105,34 @@ fn emit_record_transport_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_srt_done");                               // a stale handle records nothing
     emitter.instruction("ldr x11, [sp, #8]");                                   // reload the resolved transport
     emitter.instruction(&format!("str x11, [x0, #{STREAM_TRANSPORT_OFFSET}]")); // publish it for the metadata namer
+    emit_record_transport_uri_aarch64(emitter);
     emitter.label("__rt_srt_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // hand the handle back unchanged
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the helper frame
     emitter.instruction("ret");
+}
+
+/// Publishes the address a socket was opened on as that stream's `uri`, with `x0` holding the
+/// resolved `StreamState`.
+///
+/// php-src stores the address string in `stream->orig_path` when `php_stream_xport_create` opens a
+/// transport, and `_php_stream_get_metadata` reports `orig_path` as `uri`. elephc recorded the
+/// transport but not the text, so `stream_get_meta_data()` on a `stream_socket_server()` or a
+/// `stream_socket_client()` was MISSING the key php provides. A socket pair and an accepted
+/// connection name no address, php leaves `orig_path` NULL for them, and the key stays absent —
+/// which is why the null address short-circuits rather than storing an empty string. Measured on
+/// `php -n` 8.5.6.
+fn emit_record_transport_uri_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // the address the caller wrote
+    emitter.instruction("cbz x1, __rt_srt_done");                               // a pair or an accept has no address to report
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_URI_PTR_OFFSET}]"));    // anything already recorded wins
+    emitter.instruction("cbnz x9, __rt_srt_done");                              // never leak a URI this handle already owns
+    emitter.instruction("str x0, [sp, #8]");                                    // the state outlives the copy (the transport slot is spent)
+    emitter.instruction("bl __rt_str_persist");                                 // the StreamState outlives the caller's bytes
+    emitter.instruction("ldr x0, [sp, #8]");                                    // the state again
+    emitter.instruction(&format!("str x1, [x0, #{STREAM_URI_PTR_OFFSET}]"));    // publish the owned copy
+    emitter.instruction(&format!("str x2, [x0, #{STREAM_URI_LEN_OFFSET}]"));    // and its byte length
 }
 
 /// Emits one AArch64 prefix probe: on a match, `x11` takes `value` and the scan is over.
@@ -137,6 +162,8 @@ fn emit_record_transport_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, rsi");                                         // the address the caller wrote
     emitter.instruction("mov r10, rdx");                                        // and its byte length
     emitter.instruction("mov r11, rcx");                                        // the fallback transport
+    emitter.instruction("mov QWORD PTR [rbp - 24], r9");                        // the address is also this socket's `uri`
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");
 
     emitter.instruction("test r9, r9");
     emitter.instruction("jz __rt_srt_resolved_x86");                            // no address: the fallback stands
@@ -157,11 +184,35 @@ fn emit_record_transport_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov QWORD PTR [rax + {STREAM_TRANSPORT_OFFSET}], r11"
     ));                                                                         // publish it for the metadata namer
+    emit_record_transport_uri_x86_64(emitter);
     emitter.label("__rt_srt_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // hand the handle back unchanged
     emitter.instruction("add rsp, 32");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");
+}
+
+/// The x86_64 counterpart of `emit_record_transport_uri_aarch64`, with `rax` holding the state.
+fn emit_record_transport_uri_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the address the caller wrote
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_srt_done_x86");                                // a pair or an accept has no address to report
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {STREAM_URI_PTR_OFFSET}]"
+    ));                                                                         // anything already recorded wins
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jnz __rt_srt_done_x86");                               // never leak a URI this handle already owns
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the state outlives the copy (the transport slot is spent)
+    emitter.instruction("mov rax, r9");                                         // the persist helper takes the bytes in rax/rdx
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");
+    emitter.instruction("call __rt_str_persist");                               // the StreamState outlives the caller's bytes
+    emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // the state again
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r9 + {STREAM_URI_PTR_OFFSET}], rax"
+    ));                                                                         // publish the owned copy
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r9 + {STREAM_URI_LEN_OFFSET}], rdx"
+    ));                                                                         // and its byte length
 }
 
 /// Emits one x86_64 prefix probe: on a match, `r11` takes `value` and the scan is over.

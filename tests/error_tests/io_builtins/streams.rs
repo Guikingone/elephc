@@ -465,7 +465,7 @@ fn test_error_stream_socket_client_wrong_args() {
 fn test_error_fsockopen_wrong_args() {
     expect_error(
         "<?php fsockopen();",
-        "fsockopen() takes 2 to 5 arguments",
+        "fsockopen() takes 1 to 5 arguments",
     );
 }
 
@@ -700,10 +700,19 @@ fn test_error_stream_bucket_append_wrong_args() {
     );
 }
 
-/// Verifies `pfsockopen()` requires a hostname and port and accepts at most five arguments.
+/// Verifies `pfsockopen()` requires a hostname and accepts at most five arguments.
+///
+/// Only the HOSTNAME is required: php's `$port` defaults to -1, which is what lets
+/// `pfsockopen("unix:///path")` name a socket that has no port. This test previously asserted the
+/// one-argument call was an ERROR, pinning a stricter rule than php's — a `unix://` connection
+/// simply did not compile.
 #[test]
 fn test_error_pfsockopen_wrong_args() {
-    expect_error("<?php pfsockopen(\"localhost\");", "pfsockopen() takes 2 to 5 arguments");
+    expect_error("<?php pfsockopen();", "pfsockopen() takes 1 to 5 arguments");
+    expect_error(
+        "<?php pfsockopen(\"localhost\", 80, $e, $s, 1.0, 6);",
+        "pfsockopen() takes 1 to 5 arguments",
+    );
 }
 
 // stream_filter_append() with an unknown filter name no longer fails at

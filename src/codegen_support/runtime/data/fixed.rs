@@ -1216,6 +1216,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
     out.push_str(&comm_directive("_https_resp_buf", 1048576, target));
     out.push_str(&comm_directive("_fsockopen_addr", 512, target));
+    // _fsockopen_uri_ptr/_len: the slice of `_fsockopen_addr` php would have handed to
+    // `php_stream_xport_create` — the hostname plus `:port` when a port was given, WITHOUT the
+    // `tcp://` prefix elephc adds for a schemeless host. That slice is what php records as the
+    // stream's `uri` and what names its transport, so the two are published here for
+    // `__rt_stream_record_fsockopen_meta` to read once the descriptor has been boxed.
+    out.push_str(&comm_directive("_fsockopen_uri_ptr", 8, target));
+    out.push_str(&comm_directive("_fsockopen_uri_len", 8, target));
     // _user_wrappers_ptr: heap base of the scheme→class registration table, or
     // zero before the first registration. Each entry is 32 bytes
     // (protocol_ptr/len + class_ptr/len); a slot is free when protocol_ptr is

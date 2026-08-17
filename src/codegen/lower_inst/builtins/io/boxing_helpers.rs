@@ -890,6 +890,36 @@ pub(super) fn emit_record_stream_mode_literal_after_boxed(
     ctx.emitter.label(&done_label);
 }
 
+/// Gives a boxed `fsockopen()` descriptor the transport and `uri` php records for it.
+///
+/// `fsockopen()` has no address OPERAND to re-materialize — it composes one from a hostname and a
+/// port — so the address travels through `_fsockopen_uri_ptr`/`_len` instead of through
+/// `load_string_to_result`, and the helper reads it there. The tag guard is the same: a failed
+/// open boxed `false`, which owns no stream to describe.
+pub(super) fn emit_record_fsockopen_meta_after_boxed(ctx: &mut FunctionContext<'_>) {
+    let done_label = ctx.next_label("fsockopen_meta_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a failed open has nothing to describe
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed result outlives the call
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_fsockopen_meta");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // a failed open has nothing to describe
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed result outlives the call
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_fsockopen_meta");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
 /// Records which transport a boxed socket was opened on, for `stream_type` metadata.
 ///
 /// `address` is the operand the caller wrote, re-materialized here so the run-time scheme decides

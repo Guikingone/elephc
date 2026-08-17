@@ -14,7 +14,11 @@
 //! - The line is written in fragments through `__rt_diag_warning`, which is what honours `@`,
 //!   because the address and the reason are only known at run time.
 //! - `fsockopen()` passes a bare host and a port, since PHP spells its address `host:port`; the
-//!   other two pass the address the caller wrote and a negative port to skip the suffix.
+//!   other two pass the address the caller wrote, which already carries any port.
+//! - Which wording carries a port is decided by the KIND, not by the port VALUE. php's fsockopen
+//!   template is `Unable to connect to %s:%d`, so the port is printed whatever it is — including
+//!   the -1 that `fsockopen("unix:///tmp/s.sock")` leaves it at, which php spells `...s.sock:-1`.
+//!   Testing the value instead dropped the suffix for exactly that call.
 
 use super::socket_errno::SOCKET_ERRNO_SYMBOL;
 use crate::codegen_support::runtime::data::{
@@ -35,8 +39,8 @@ pub(crate) const SOCKET_WARNING_FSOCKOPEN: i64 = 2;
 
 /// Emits `__rt_socket_connect_warning(kind, addr_ptr, addr_len, port)`.
 ///
-/// AArch64 receives `x0`/`x1`/`x2`/`x3`; x86_64 receives `rdi`/`rsi`/`rdx`/`rcx`. A negative port
-/// omits the `:port` suffix. The reason comes from the error number the socket helpers publish at
+/// AArch64 receives `x0`/`x1`/`x2`/`x3`; x86_64 receives `rdi`/`rsi`/`rdx`/`rcx`. Only the
+/// `fsockopen()` wording carries a `:port` suffix. The reason comes from the error number the socket helpers publish at
 /// the syscall that failed, described by libc `strerror` — the same source as `&$errstr`.
 pub fn emit_socket_connect_warning(emitter: &mut Emitter) {
     match emitter.target.arch {
@@ -61,14 +65,18 @@ fn emit_socket_connect_warning_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_scw_server");
     emitter.instruction(&format!("cmp x0, #{SOCKET_WARNING_FSOCKOPEN}"));
     emitter.instruction("b.eq __rt_scw_fsockopen");
+    emitter.instruction("str xzr, [sp, #40]");                                  // this wording names no port
     abi::emit_symbol_address(emitter, "x1", "_sock_fail_client");
     emitter.instruction(&format!("mov x2, #{}", SOCKET_FAILED_CLIENT_PREFIX.len()));
     emitter.instruction("b __rt_scw_prefix_ready");
     emitter.label("__rt_scw_server");
+    emitter.instruction("str xzr, [sp, #40]");                                  // nor does this one
     abi::emit_symbol_address(emitter, "x1", "_sock_fail_server");
     emitter.instruction(&format!("mov x2, #{}", SOCKET_FAILED_SERVER_PREFIX.len()));
     emitter.instruction("b __rt_scw_prefix_ready");
     emitter.label("__rt_scw_fsockopen");
+    emitter.instruction("mov x9, #1");                                          // php's fsockopen template is `%s:%d`
+    emitter.instruction("str x9, [sp, #40]");                                   // so the port is printed whatever it is
     abi::emit_symbol_address(emitter, "x1", "_sock_fail_fsockopen");
     emitter.instruction(&format!("mov x2, #{}", SOCKET_FAILED_FSOCKOPEN_PREFIX.len()));
     emitter.label("__rt_scw_prefix_ready");
@@ -100,9 +108,8 @@ fn emit_socket_connect_warning_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // and its byte length
     emitter.instruction("bl __rt_diag_warning");
 
-    emitter.instruction("ldr x9, [sp, #16]");                                   // the port, when the caller passed one apart
-    emitter.instruction("cmp x9, #0");
-    emitter.instruction("b.lt __rt_scw_no_port");                               // a negative port means the address already carries it
+    emitter.instruction("ldr x9, [sp, #40]");                                   // does this wording name a port?
+    emitter.instruction("cbz x9, __rt_scw_no_port");                            // the other two put it in the address instead
     abi::emit_symbol_address(emitter, "x1", "_sock_fail_colon");
     emitter.instruction("mov x2, #1");
     emitter.instruction("bl __rt_diag_warning");
@@ -149,14 +156,17 @@ fn emit_socket_connect_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_scw_server_x86");
     emitter.instruction(&format!("cmp rdi, {SOCKET_WARNING_FSOCKOPEN}"));
     emitter.instruction("je __rt_scw_fsockopen_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // this wording names no port
     abi::emit_symbol_address(emitter, "rdi", "_sock_fail_client");
     emitter.instruction(&format!("mov rsi, {}", SOCKET_FAILED_CLIENT_PREFIX.len()));
     emitter.instruction("jmp __rt_scw_prefix_ready_x86");
     emitter.label("__rt_scw_server_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // nor does this one
     abi::emit_symbol_address(emitter, "rdi", "_sock_fail_server");
     emitter.instruction(&format!("mov rsi, {}", SOCKET_FAILED_SERVER_PREFIX.len()));
     emitter.instruction("jmp __rt_scw_prefix_ready_x86");
     emitter.label("__rt_scw_fsockopen_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // php's fsockopen template is `%s:%d`
     abi::emit_symbol_address(emitter, "rdi", "_sock_fail_fsockopen");
     emitter.instruction(&format!("mov rsi, {}", SOCKET_FAILED_FSOCKOPEN_PREFIX.len()));
     emitter.label("__rt_scw_prefix_ready_x86");
@@ -188,9 +198,9 @@ fn emit_socket_connect_warning_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // and its byte length
     emitter.instruction("call __rt_diag_warning");
 
-    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // the port, when the caller passed one apart
-    emitter.instruction("cmp r10, 0");
-    emitter.instruction("jl __rt_scw_no_port_x86");                             // a negative port means the address already carries it
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // does this wording name a port?
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_scw_no_port_x86");                             // the other two put it in the address instead
     abi::emit_symbol_address(emitter, "rdi", "_sock_fail_colon");
     emitter.instruction("mov rsi, 1");
     emitter.instruction("call __rt_diag_warning");

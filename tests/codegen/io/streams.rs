@@ -3266,6 +3266,106 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a SOCKET carries no `wrapper_type` and does carry the address it was opened on.
+///
+/// php reaches every transport through `php_stream_xport_create`, which never assigns
+/// `stream->wrapper`, and `_php_stream_get_metadata` writes `wrapper_type` only `if
+/// (stream->wrapper)`. elephc left the wrapper id at its unset value, which maps to "plainfile", so
+/// every socket claimed to have been opened by the plain-files wrapper. The `uri` moved the other
+/// way: php stores the address in `stream->orig_path` and reports it, and elephc recorded the
+/// transport but not the text, so the key php provides was missing.
+///
+/// A socket PAIR names no address, php leaves `orig_path` NULL for it, and the key stays absent —
+/// which is why the pair is checked here alongside the two openers that do name one.
+#[test]
+fn test_socket_metadata_has_no_wrapper_and_keeps_its_address() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$m = stream_get_meta_data($pair[0]);
+var_dump(array_key_exists("wrapper_type", $m), array_key_exists("uri", $m), $m["stream_type"]);
+$path = "sockmeta.sock";
+$srv = stream_socket_server("unix://" . $path);
+$m2 = stream_get_meta_data($srv);
+var_dump(array_key_exists("wrapper_type", $m2), $m2["uri"], $m2["stream_type"]);
+$cli = stream_socket_client("unix://" . $path);
+$m3 = stream_get_meta_data($cli);
+var_dump(array_key_exists("wrapper_type", $m3), $m3["uri"]);
+// An accepted connection names no address of its own either.
+$acc = stream_socket_accept($srv);
+$m4 = stream_get_meta_data($acc);
+var_dump(array_key_exists("wrapper_type", $m4), array_key_exists("uri", $m4), $m4["stream_type"]);
+fclose($acc);
+fclose($cli);
+fclose($srv);
+fclose($pair[0]);
+fclose($pair[1]);
+unlink($path);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\nbool(false)\nstring(14) \"generic_socket\"\n",
+            "bool(false)\nstring(20) \"unix://sockmeta.sock\"\nstring(11) \"unix_socket\"\n",
+            "bool(false)\nstring(20) \"unix://sockmeta.sock\"\n",
+            "bool(false)\nbool(false)\nstring(11) \"unix_socket\"\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fsockopen()` takes a lone hostname, honours the transport that hostname names, and
+/// reports the address php reports.
+///
+/// php's `$port` defaults to -1, and `php_stream_xport_create` reads the transport out of the
+/// address, falling back to TCP only when there is no `://`. elephc required the port AND prepended
+/// `tcp://` unconditionally, so `fsockopen("unix:///tmp/s.sock")` did not compile at all — and once
+/// it did, the address became `tcp://unix:///tmp/s.sock`, which resolves as a HOSTNAME.
+///
+/// The `uri` is checked against the port because php records the string it composed, `host:port`,
+/// with no scheme: the `tcp://` elephc adds for a schemeless host is elephc's, and php never saw
+/// it. The `tcp://`-spelled call is here to pin the other side of that rule — a hostname that
+/// names its own transport keeps every byte of it.
+#[test]
+fn test_fsockopen_takes_a_lone_address_and_keeps_its_transport() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$path = "fsock.sock";
+$srv = stream_socket_server("unix://" . $path);
+$c = fsockopen("unix://" . $path);
+$m = stream_get_meta_data($c);
+var_dump(is_resource($c), $m["uri"], $m["stream_type"], array_key_exists("wrapper_type", $m));
+fclose($c);
+fclose($srv);
+unlink($path);
+$tcp = stream_socket_server("tcp://127.0.0.1:0");
+$name = stream_socket_get_name($tcp, false);
+$port = (int) explode(":", $name)[1];
+// A schemeless host gets `tcp://` for the connect, but php's `uri` is the bare `host:port`.
+$c2 = fsockopen("127.0.0.1", $port);
+$m2 = stream_get_meta_data($c2);
+var_dump($m2["uri"] === "127.0.0.1:" . $port, $m2["stream_type"]);
+fclose($c2);
+// A host that names the transport keeps it, whatever letter it starts with.
+$c3 = fsockopen("tcp://127.0.0.1", $port);
+$m3 = stream_get_meta_data($c3);
+var_dump($m3["uri"] === "tcp://127.0.0.1:" . $port);
+fclose($c3);
+fclose($tcp);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(true)\nstring(17) \"unix://fsock.sock\"\nstring(11) \"unix_socket\"\nbool(false)\n",
+            "bool(true)\nstring(14) \"tcp_socket/ssl\"\n",
+            "bool(true)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a resource NESTED in a container renders, and that php's resource numbering matches.
 ///
 /// `__rt_var_dump_value` sent runtime tag 9 to its NULL arm, so a resource inside an array, a

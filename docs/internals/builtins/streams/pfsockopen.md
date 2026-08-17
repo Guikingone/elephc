@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function pfsockopen(string $hostname, int $port, int $error_code = null, string $error_message = null, float $timeout = null): mixed
+function pfsockopen(string $hostname, int $port = -1, int $error_code = null, string $error_message = null, float $timeout = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–5 arguments (3 optional).
+- **Arity**: takes 1–5 arguments (4 optional).
 - **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Eval interpreter (magician)

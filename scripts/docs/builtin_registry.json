@@ -28544,9 +28544,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": -1,
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
@@ -28571,7 +28571,7 @@
           "type": "mixed"
         }
       ],
-      "required_param_count": 2,
+      "required_param_count": 1,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -28598,9 +28598,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": "-1",
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
@@ -28625,7 +28625,7 @@
           "type": "mixed"
         }
       ],
-      "required_param_count": 2,
+      "required_param_count": 1,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -28717,9 +28717,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": "-1",
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
@@ -49884,9 +49884,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": -1,
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
@@ -49911,7 +49911,7 @@
           "type": "mixed"
         }
       ],
-      "required_param_count": 2,
+      "required_param_count": 1,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -49938,9 +49938,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": "-1",
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
@@ -49965,7 +49965,7 @@
           "type": "mixed"
         }
       ],
-      "required_param_count": 2,
+      "required_param_count": 1,
       "runtime_builtin_id": null,
       "signature_override_reason": null,
       "supported": true,
@@ -50057,9 +50057,9 @@
         },
         {
           "by_ref": false,
-          "default": null,
+          "default": "-1",
           "name": "port",
-          "optional": false,
+          "optional": true,
           "type": "int"
         },
         {
