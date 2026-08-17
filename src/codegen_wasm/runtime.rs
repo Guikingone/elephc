@@ -87,6 +87,11 @@ const ERR_UNDEFINED_METHOD_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to undefined method ";
 const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
 const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
+/// A call to a public function name whose body would have arrived from an include that never
+/// ran. The name is composed at RUNTIME because which variant is live is runtime state.
+const ERR_UNDEFINED_FUNCTION_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught Error: Call to undefined function ";
+const ERR_UNDEFINED_FUNCTION_SUFFIX: &[u8] = b"()\n";
 /// A dynamic dispatch selecting a class php-src would not enter for lack of arguments. The class
 /// and method names come from the runtime table and the call site, the two counts are rendered by
 /// `__rt_itoa`, and the wording between them is php-src's own: `exactly` when every declared
@@ -302,6 +307,8 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNDEFINED_METHOD_PREFIX.len() as u32
     + ERR_UNDEFINED_METHOD_SEPARATOR.len() as u32
     + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32
+    + ERR_UNDEFINED_FUNCTION_PREFIX.len() as u32
+    + ERR_UNDEFINED_FUNCTION_SUFFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PREFIX.len() as u32
     + ERR_TOO_FEW_ARGS_PASSED.len() as u32
     + ERR_TOO_FEW_ARGS_EXACTLY.len() as u32
@@ -1034,6 +1041,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_TOO_FEW_ARGS_EXACTLY,
         ERR_TOO_FEW_ARGS_AT_LEAST,
         ERR_TOO_FEW_ARGS_SUFFIX,
+        // Appended LAST so every index the emitters above already use keeps its message.
+        ERR_UNDEFINED_FUNCTION_PREFIX,
+        ERR_UNDEFINED_FUNCTION_SUFFIX,
     ];
     let warning_messages = [
         WARN_UNDEFINED_ARRAY_KEY_PREFIX,
@@ -1599,7 +1609,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 19);
+    debug_assert_eq!(offsets.len(), 21);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
@@ -1629,6 +1639,7 @@ fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
     wm.add_raw_func(&wat);
     emit_undefined_method_failure_runtime(wm, &offsets[11..14]);
     emit_too_few_arguments_failure_runtime(wm, &offsets[12..13], &offsets[14..19]);
+    emit_undefined_function_failure_runtime(wm, &offsets[19..21]);
 }
 
 /// Emits the fatal a dynamic dispatch raises when php-src would not enter the selected class.
@@ -2067,6 +2078,25 @@ fn emit_undefined_method_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u3
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable ;; elephc-trap:post-noreturn:undefined-method-fatal-exit
+)"#
+    ));
+}
+
+/// Emits the fatal a call raises when no include has defined the function's body yet.
+///
+/// The name is a runtime argument rather than baked into the message because ONE dispatcher
+/// serves a whole variant group, and which body is live is decided by whichever include ran.
+fn emit_undefined_function_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_undefined_function (param $name_ptr i32) (param $name_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:undefined-function-fatal-exit
 )"#
     ));
 }

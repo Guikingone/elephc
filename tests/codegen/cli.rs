@@ -11334,6 +11334,96 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an include-loaded function reaches its caller through the variant dispatcher.
+///
+/// The body arrives from a `require`d file, so the public name has no `Function` of its own —
+/// only the variants do, and WHICH one is live is runtime state. That is why `function_exists`
+/// on such a name reads the group's slot instead of folding: asked BEFORE the require it must
+/// answer false, and a closed-world fold would answer true. The include-once guard rides in the
+/// same program — a second `require_once` of the same file must not re-run its body — and the
+/// unqualified `helper` resolves in `App`, where nothing declares it.
+#[test]
+fn test_cli_wasm_include_loaded_function_variants_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_include_variants");
+    fs::write(dir.join("lib.php"), LIB_PHP).unwrap();
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, MAIN_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the include variants to WASM");
+    assert!(
+        output.status.success(),
+        "include-variant compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the include variants under Node");
+    assert!(
+        run.status.success(),
+        "include variants trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same two files.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "before:n\nlib ran\nafter:y\nbare:n\nfrom-include\n",
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The included file: it declares the function and prints, so a second require is visible.
+const LIB_PHP: &str = r##"<?php
+namespace App\Lib;
+function helper(): string { return "from-include"; }
+echo "lib ran\n";
+"##;
+
+/// The program: two `require_once` of one file, around three `function_exists` questions.
+const MAIN_PHP: &str = r##"<?php
+namespace App;
+
+use function App\Lib\helper;
+
+echo function_exists("\\App\\Lib\\helper") ? "before:y\n" : "before:n\n";
+require_once __DIR__ . "/lib.php";
+require_once __DIR__ . "/lib.php";
+echo function_exists("\\App\\Lib\\helper") ? "after:y\n" : "after:n\n";
+echo function_exists("helper") ? "bare:y\n" : "bare:n\n";
+echo helper(), "\n";
+"##;
+
 /// Verifies an INTERFACE-typed catch reaches the built-in `Throwable` accessors under Node.
 ///
 /// `getMessage()` and `getCode()` have a signature but no PHP body, so an interface-typed

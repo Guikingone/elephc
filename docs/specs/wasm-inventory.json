@@ -305,9 +305,9 @@
     },
     "op": {
       "total": 257,
-      "supported": 126,
+      "supported": 129,
       "excluded": 17,
-      "missing": 114,
+      "missing": 111,
       "rows": [
         {
           "name": "const_i64",
@@ -4750,59 +4750,77 @@
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "supported.tests"
-          ],
           "supported": {
             "backend": "codegen_wasm::inst",
-            "lowerer": "codegen_wasm::inst::lower_instruction",
-            "tests": []
+            "lowerer": "codegen_wasm::includes::lower_include_once_mark",
+            "tests": [
+              "codegen_wasm::includes::tests::include_bookkeeping_opcodes_are_admitted_and_need_resolvable_labels",
+              "codegen::cli::test_cli_wasm_include_loaded_function_variants_match_php"
+            ]
           }
         },
         {
           "name": "include_once_guard",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "require_once / include_once first-run test"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::includes::lower_include_once_guard",
+            "tests": [
+              "codegen_wasm::includes::tests::include_bookkeeping_opcodes_are_admitted_and_need_resolvable_labels",
+              "codegen::cli::test_cli_wasm_include_loaded_function_variants_match_php"
+            ]
+          }
         },
         {
           "name": "function_variant_mark",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "a function whose body arrives from an include"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::includes::lower_function_variant_mark",
+            "tests": [
+              "codegen_wasm::includes::tests::include_bookkeeping_opcodes_are_admitted_and_need_resolvable_labels",
+              "codegen::cli::test_cli_wasm_include_loaded_function_variants_match_php"
+            ]
+          }
         },
         {
           "name": "function_variant_dispatch",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "a call to an include-loaded function name"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::includes::emit_variant_dispatchers",
+            "tests": [
+              "codegen_wasm::includes::tests::include_bookkeeping_opcodes_are_admitted_and_need_resolvable_labels",
+              "codegen::cli::test_cli_wasm_include_loaded_function_variants_match_php"
+            ]
+          }
         },
         {
           "name": "acquire",
@@ -13795,7 +13813,11 @@
       "disposition": "enforced"
     },
     {
-      "name": "include_once_mark_shape_issue",
+      "name": "include_once_shape_issue",
+      "disposition": "enforced"
+    },
+    {
+      "name": "function_variant_mark_shape_issue",
       "disposition": "enforced"
     },
     {
@@ -14043,14 +14065,14 @@
   },
   "totals": {
     "total": 765,
-    "supported": 246,
+    "supported": 249,
     "excluded": 47,
-    "missing": 472,
-    "evidence_gaps": 193,
-    "row_evidence_gaps": 192,
+    "missing": 469,
+    "evidence_gaps": 189,
+    "row_evidence_gaps": 188,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "472 reachable identities lack a WASM lowerer; 192 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "469 reachable identities lack a WASM lowerer; 188 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

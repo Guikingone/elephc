@@ -95,9 +95,23 @@ pub(super) fn resolve_direct_call<'a>(
             symbol: closure_body_symbol(&function.name),
             name,
         }),
-        ([], []) => Err(WasmError::Unsupported(format!(
-            "direct call target {name:?} is missing"
-        ))),
+        // A public name whose bodies arrive from an include has no `Function` of its own: only
+        // its variants do. The call addresses the group's dispatcher, and takes its signature
+        // from a representative variant — which the audit has already proved they all share.
+        ([], []) => match super::includes::dispatch_group_for(module, name)
+            .and_then(|group| {
+                crate::ir::function_variants::variant_callee_for_group(module, &group.name)
+                    .map(|function| (group, function))
+            }) {
+            Some((group, function)) => Ok(DirectCallTarget {
+                function,
+                symbol: super::symbols::function_variant_dispatch_symbol(&group.name),
+                name,
+            }),
+            None => Err(WasmError::Unsupported(format!(
+                "direct call target {name:?} is missing"
+            ))),
+        },
         _ => Err(WasmError::Unsupported(format!(
             "direct call target {name:?} is ambiguous across {} user function(s) and {} closure body/bodies",
             functions.len(),

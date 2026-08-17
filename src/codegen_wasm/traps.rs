@@ -521,6 +521,18 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // The include-variant dispatcher's fatal writes the prefix, the runtime-supplied
+        // function name and the suffix, then exits — the same proof shape as the
+        // undefined-method fatal above, for the same reason: one stub, many possible names.
+        "$__rt_fail_undefined_function" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_undefined_function",
+                    TrapClass::PostNoreturn,
+                    "undefined-function-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         // The `ArgumentCountError` a dynamic dispatch raises composes its message from the
         // class-name table and two rendered counts, then exits — the same proof shape as the
         // undefined-method fatal it sits beside in the ladder.
@@ -604,6 +616,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_callable_dispatch",
         "$__rt_fail_method_call_non_object",
         "$__rt_fail_undefined_method",
+        "$__rt_fail_undefined_function",
         "$__rt_fail_too_few_arguments",
         "$__rt_fail_operand_types",
         "$__rt_fail_object_to_string",

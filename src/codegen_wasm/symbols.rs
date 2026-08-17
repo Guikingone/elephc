@@ -46,6 +46,32 @@ pub(super) fn method_symbol(qualified_name: &str) -> String {
     format!("fn_m_{}", mangle_fqn(qualified_name))
 }
 
+/// Names the mutable global recording whether one `include_once`/`require_once` site has run.
+///
+/// One flag per include SITE, keyed by the label the EIR interns, because that is what the
+/// guard reads. Like `define`, the answer has to be decided at run time: an include inside a
+/// branch or a loop cannot be settled by program order.
+pub(super) fn include_once_flag_symbol(label: &str) -> String {
+    format!("__inc1_{}", mangle_fqn(label))
+}
+
+/// Names the mutable global holding which variant of an include-loaded function is active.
+///
+/// Zero means "no include has defined it yet", which is what makes the dispatcher able to raise
+/// PHP's own `Call to undefined function`; a live variant is stored as its ONE-BASED index in
+/// the group, so the zero is never a legal variant.
+pub(super) fn function_variant_active_symbol(name: &str) -> String {
+    format!("__fv_{}", mangle_fqn(name))
+}
+
+/// Returns the internal symbol for an include-variant dispatch stub.
+///
+/// Its own generated category: the public PHP name belongs to no single body, so it cannot
+/// reuse `user_function_symbol` without colliding with a variant that happens to share it.
+pub(super) fn function_variant_dispatch_symbol(name: &str) -> String {
+    format!("fn_gv_{}", mangle_fqn(name))
+}
+
 /// Returns the internal symbol for a lowered closure body.
 pub(super) fn closure_body_symbol(name: &str) -> String {
     format!("fn_c_{}", mangle_fqn(name))

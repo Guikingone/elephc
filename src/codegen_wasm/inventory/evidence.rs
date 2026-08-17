@@ -45,6 +45,9 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::TypePredicate => &["is_int(), is_string(), and the rest of that family"],
         Op::ConstClassName => &["Foo::class and self::class"],
         Op::IncludeOnceMark => &["require_once / include_once site bookkeeping"],
+        Op::IncludeOnceGuard => &["require_once / include_once first-run test"],
+        Op::FunctionVariantMark => &["a function whose body arrives from an include"],
+        Op::FunctionVariantDispatch => &["a call to an include-loaded function name"],
         Op::LoadRefCell => &["read through a PHP reference"],
         Op::StoreRefCell => &["assignment through a PHP reference"],
         Op::PromoteLocalRefCell => &["first by-reference use of a local"],
@@ -161,6 +164,15 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
 /// Returns tests that actually emit and lower the requested opcode.
 fn op_tests(op: Op) -> &'static [&'static str] {
     match op {
+        Op::IncludeOnceMark
+        | Op::IncludeOnceGuard
+        | Op::FunctionVariantMark
+        | Op::FunctionVariantDispatch => {
+            &[
+                "codegen_wasm::includes::tests::include_bookkeeping_opcodes_are_admitted_and_need_resolvable_labels",
+                "codegen::cli::test_cli_wasm_include_loaded_function_variants_match_php",
+            ]
+        }
         Op::ConstI64 => &["codegen_wasm::tests::echo_integers_writes_to_stdout"],
         Op::ConstF64 => &["codegen_wasm::tests::echo_float_writes_to_stdout"],
         Op::ConstStr => &["codegen_wasm::tests::echo_string_literal_writes_to_stdout"],
@@ -344,7 +356,10 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::StrCharAt => "codegen_wasm::inst::lower_str_char_at",
         Op::TypePredicate => "codegen_wasm::inst::lower_type_predicate",
         Op::ConstClassName => "codegen_wasm::inst::lower_const_class_name",
-        Op::IncludeOnceMark => "codegen_wasm::inst::lower_instruction",
+        Op::IncludeOnceMark => "codegen_wasm::includes::lower_include_once_mark",
+        Op::IncludeOnceGuard => "codegen_wasm::includes::lower_include_once_guard",
+        Op::FunctionVariantMark => "codegen_wasm::includes::lower_function_variant_mark",
+        Op::FunctionVariantDispatch => "codegen_wasm::includes::emit_variant_dispatchers",
         Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::IBitOr | Op::IBitXor => {
             "codegen_wasm::inst::lower_int_binop"
         }
@@ -488,7 +503,10 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::IToStr | Op::FToStr | Op::StrCharAt => "string",
         Op::TypePredicate => "mixed",
         Op::ConstClassName => "string",
-        Op::IncludeOnceMark => "ownership",
+        Op::IncludeOnceMark
+        | Op::IncludeOnceGuard
+        | Op::FunctionVariantMark
+        | Op::FunctionVariantDispatch => "ownership",
         Op::Cast => "cast",
         Op::MixedBox
         | Op::MixedTagOf

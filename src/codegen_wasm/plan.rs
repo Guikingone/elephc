@@ -301,6 +301,13 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // A variant dispatcher's fatal names the function at RUNTIME, so its bytes must be
+    // addressable even when no PHP literal in the program mentions them.
+    for name in super::includes::dispatch_group_names(module) {
+        if !layout_values.iter().any(|value| value == &name) {
+            layout_values.push(name);
+        }
+    }
     layout_values.sort();
     if has_main
         && super::function::module_uses_exceptions(module)
@@ -452,6 +459,10 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `store_global`, and their storage has the same 16-byte shape a static property uses.
     let cursor = super::statics::plan_global_slots(module, &mut static_slots, cursor);
 
+    // One mutable flag per include-once site, and one active-variant slot per include-loaded
+    // function group. Both are plain module globals, like the `define` flags above.
+    super::includes::plan_include_globals(&mut wm, module);
+
     let fcc_entries = closures::collect_fcc_free_function_entries(module);
 
     // The heap begins 16-aligned just above the string/data region; reserve two
@@ -564,6 +575,10 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // defined function. Must run after class methods are lowered (stub signatures
     // are read from the class-method `Function`s) but before `wm.render()`.
     methods::emit_method_dispatch_stubs(&mut wm, module)?;
+
+    // One dispatcher per include-variant group, reading the active-variant global. Must run
+    // after user functions are lowered — the signature comes from a variant's own `Function`.
+    super::includes::emit_variant_dispatchers(&mut wm, module, &default_strings);
 
     // Emit one wrapper per closure body plus the `__rt_closure_call` if-ladder that
     // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are

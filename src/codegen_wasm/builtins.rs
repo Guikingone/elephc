@@ -2710,6 +2710,25 @@ fn class_exists_shape_issue(
 fn lower_class_exists(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
     let name = literal_string_operand(ctx.function, ctx.module, operand(inst, 0)?)
         .ok_or_else(|| WasmError::Unsupported(format!("{target:?} name is not a literal")))?;
+    // A name whose bodies arrive from an include is the ONE case the closed world cannot fold:
+    // whether it exists depends on whether that include has run, which is runtime state. Read
+    // the group's active-variant slot instead, exactly as the native backend does — a fold here
+    // would answer `true` before the `require` that defines it.
+    if target == RuntimeFnId::FunctionExists {
+        if let Some(group) = super::includes::dispatch_group_for(ctx.module, &name) {
+            ctx.fb.ins(
+                &format!(
+                    "global.get ${}",
+                    super::symbols::function_variant_active_symbol(&group.name)
+                ),
+                "which include-loaded body is active, if any",
+            );
+            ctx.fb.ins("i32.const 0", "zero means no include has defined it");
+            ctx.fb.ins("i32.ne", "exists exactly when one is active");
+            ctx.fb.ins("i64.extend_i32_u", "PHP bool travels as i64");
+            return store_result(ctx, inst);
+        }
+    }
     let answer = class_exists_answer(ctx.module, target, &name)
         .ok_or_else(|| WasmError::Unsupported(format!("{target:?} has no answer")))?;
     ctx.fb.ins(

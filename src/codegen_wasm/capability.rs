@@ -477,7 +477,10 @@ fn check_instruction_shape(
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
         Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(module, function, inst),
         Op::IterStart => iter_start_shape_issue(module, function, inst),
-        Op::IncludeOnceMark => include_once_mark_shape_issue(module),
+        Op::IncludeOnceMark | Op::IncludeOnceGuard => include_once_shape_issue(module, inst),
+        Op::FunctionVariantMark => function_variant_mark_shape_issue(module, inst),
+        // The group's own dispatcher carries the dispatch; the marker introduces no code.
+        Op::FunctionVariantDispatch => None,
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet
         | Op::ArrayGetSilent
@@ -5225,26 +5228,50 @@ fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool
         .any(|operand| value_local_origin(function, *operand) == Some(0))
 }
 
-/// Validates `IncludeOnceMark`, which records that one include site has run.
+/// Validates an `include_once`/`require_once` site: it must name the label its flag is keyed by.
 ///
-/// Its ONLY reader is `IncludeOnceGuard`, and that op is refused on this target, so in any module
-/// that compiles the mark is unobservable and needs no storage. That is an invariant, not a
-/// convention: it is checked here, so admitting the guard later fails this rule rather than
-/// silently leaving the mark a no-op the guard would then read as zero.
-fn include_once_mark_shape_issue(module: &Module) -> Option<String> {
-    let guarded = module
-        .functions
-        .iter()
-        .chain(module.class_methods.iter())
-        .any(|function| {
-            function
-                .instructions
-                .iter()
-                .any(|inst| inst.op == Op::IncludeOnceGuard)
-        });
-    guarded.then(|| {
-        "include_once_mark needs real storage once include_once_guard reads it".to_string()
-    })
+/// The mark and the guard share one flag, so they share one check. `IncludeOnceMark` used to be
+/// admitted as a NO-OP on the strength of the guard being refused — an invariant this pair now
+/// replaces, since both carry real storage.
+fn include_once_shape_issue(module: &Module, inst: &Instruction) -> Option<String> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Some("include-once site without an interned label".to_string());
+    };
+    if module.data.strings.get(data.as_raw() as usize).is_none() {
+        return Some(format!("include-once label data {data:?} is missing"));
+    }
+    None
+}
+
+/// Validates a `FunctionVariantMark`: its label must name a group this module dispatches.
+///
+/// A mark whose group has no dispatcher would set a slot nothing reads, so a call to the public
+/// name would fatal as undefined even though the include ran. Refusing here is what keeps the
+/// mark and the dispatcher from disagreeing.
+fn function_variant_mark_shape_issue(module: &Module, inst: &Instruction) -> Option<String> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Some("function variant mark without an interned label".to_string());
+    };
+    let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+        return Some(format!("function variant label data {data:?} is missing"));
+    };
+    let Some(parsed) = crate::ir::function_variants::parse_variant_label(label) else {
+        return Some(format!("malformed function variant label {label:?}"));
+    };
+    if parsed.variants.len() != 1 {
+        return Some(format!(
+            "function variant mark for {:?} names {} variants",
+            parsed.name,
+            parsed.variants.len()
+        ));
+    }
+    if super::includes::dispatch_group_for(module, &parsed.name).is_none() {
+        return Some(format!(
+            "function variant mark for {:?} has no dispatch group in this module",
+            parsed.name
+        ));
+    }
+    None
 }
 
 /// Whether `class_name` is abstract and every concrete class below it initializes `property`.
@@ -8398,7 +8425,10 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::TypePredicate
         | Op::Nop
         | Op::ConstClassName
-        | Op::IncludeOnceMark => true,
+        | Op::IncludeOnceMark
+        | Op::IncludeOnceGuard
+        | Op::FunctionVariantMark
+        | Op::FunctionVariantDispatch => true,
         Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
@@ -8509,9 +8539,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::GeneratorYield
         | Op::GeneratorYieldFrom
         | Op::GeneratorReturn
-        | Op::IncludeOnceGuard
-        | Op::FunctionVariantMark
-        | Op::FunctionVariantDispatch
         // A CONDITIONAL release: the argument is released only when the call's returned
         // payload is a different pointer than the one passed in. That comparison has no
         // lowering here yet, and releasing unconditionally would double-free the value a

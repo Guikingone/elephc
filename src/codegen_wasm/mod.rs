@@ -34,6 +34,7 @@ mod function;
 mod gc;
 mod hashes;
 mod heap;
+mod includes;
 mod inst;
 mod inst_hash;
 mod methods;
