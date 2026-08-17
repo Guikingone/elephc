@@ -23,7 +23,7 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
-use super::super::resolve_int_operand_to_result;
+use super::super::{resolve_int_operand_to_result, resolve_nullable_int_operand_to_result};
 
 const STREAM_METADATA_SLOT: usize = 14;
 const STREAM_WRAPPER_UNLINK_SLOT: usize = 15;

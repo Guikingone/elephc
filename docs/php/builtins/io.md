@@ -27,7 +27,7 @@ sidebar:
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
-| [`fputs()`](./io/fputs.md) | `(mixed $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
+| [`fputs()`](./io/fputs.md) | `(mixed $stream, string $data, mixed $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): mixed` | `mixed` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
@@ -35,7 +35,7 @@ sidebar:
 | [`fsync()`](./io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
+| [`fwrite()`](./io/fwrite.md) | `(resource $stream, string $data, mixed $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |

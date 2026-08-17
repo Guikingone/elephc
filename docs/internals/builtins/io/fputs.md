@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function fputs(mixed $stream, string $data): mixed
+function fputs(mixed $stream, string $data, mixed $length = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

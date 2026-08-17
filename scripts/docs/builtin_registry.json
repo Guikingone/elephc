@@ -27900,6 +27900,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -27934,6 +27941,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -28032,6 +28046,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -29432,6 +29453,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -29466,6 +29494,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -29564,6 +29599,13 @@
           "name": "data",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",

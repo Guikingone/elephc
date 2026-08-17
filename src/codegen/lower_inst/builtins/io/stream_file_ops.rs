@@ -297,22 +297,66 @@ fn emit_advance_wrapper_position(
     Ok(())
 }
 
-/// Lowers `fwrite(stream, data)` and boxes a byte count or PHP `false` on error.
+/// Lowers `fwrite(stream, data, length?)` and boxes a byte count or PHP `false` on error.
+///
+/// php's third argument caps the write at `max(0, min($length, strlen($data)))` bytes and is
+/// NOT an error when non-positive: `fwrite($h, "hello", 0)` and `fwrite($h, "hello", -1)` both
+/// write nothing and answer `0`. `__rt_fwrite_filtered(stream, ptr, len)` already takes the byte
+/// count in its own register, so the cap is a clamp on that register rather than a truncated
+/// copy — which also keeps an attached write filter seeing exactly the bytes php gives it
+/// (`fwrite($h, "abcdef", 4)` through `string.toupper` yields `ABCD`, not `ABCDEF`).
 pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "fwrite", 2)?;
+    super::super::ensure_arg_count_between(inst, "fwrite", 2, 3)?;
     let stream = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
+    // An explicit `null` is php's "no cap", the same as omitting the argument, and it carries no
+    // integer to resolve — so it is settled here rather than materialised and clamped.
+    let length = match inst.operands.get(2).copied() {
+        Some(operand)
+            if !matches!(
+                ctx.value_php_type(operand)?.codegen_repr(),
+                PhpType::Void | PhpType::Never
+            ) =>
+        {
+            Some(operand)
+        }
+        _ => None,
+    };
     load_open_stream_handle_to_result(ctx, stream, "fwrite")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
             load_string_to_result(ctx, data, "fwrite data")?;
+            if let Some(length) = length {
+                // The string view lives in x1/x2 and `$length` is evaluated after it, in source
+                // order, through a resolver that may call out and clobber both.
+                ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");             // spill the string pointer and byte length
+                resolve_nullable_int_operand_to_result(ctx, length, "fwrite length")?;
+                ctx.emitter.instruction("ldp x1, x2, [sp], #16");               // restore the string pointer and byte length
+                ctx.emitter.instruction("cmp x0, #0");                          // a negative cap writes nothing
+                ctx.emitter.instruction("csel x0, xzr, x0, lt");                // clamp it up to zero
+                ctx.emitter.instruction("cmp x0, x2");                          // is the cap shorter than the data?
+                ctx.emitter.instruction("csel x2, x0, x2, lt");                 // write min(cap, strlen($data)) bytes
+            }
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
             load_string_to_result(ctx, data, "fwrite data")?;
+            if let Some(length) = length {
+                ctx.emitter.instruction("push rax");                            // spill the string pointer
+                ctx.emitter.instruction("push rdx");                            // and its byte length
+                resolve_nullable_int_operand_to_result(ctx, length, "fwrite length")?;
+                ctx.emitter.instruction("mov rcx, rax");                        // hold the requested cap
+                ctx.emitter.instruction("pop rdx");                             // restore the byte length
+                ctx.emitter.instruction("pop rax");                             // restore the string pointer
+                ctx.emitter.instruction("xor r8d, r8d");                        // a negative cap writes nothing
+                ctx.emitter.instruction("cmp rcx, 0");
+                ctx.emitter.instruction("cmovl rcx, r8");                       // clamp it up to zero
+                ctx.emitter.instruction("cmp rcx, rdx");                        // is the cap shorter than the data?
+                ctx.emitter.instruction("cmovl rdx, rcx");                      // write min(cap, strlen($data)) bytes
+            }
             abi::emit_pop_reg(ctx.emitter, "rdi");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the string pointer to the runtime fwrite helper
             abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
@@ -420,7 +464,7 @@ pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             }
         }
         Some(length) => {
-            resolve_int_operand_to_result(ctx, length, "fgets length")?;
+            resolve_nullable_int_operand_to_result(ctx, length, "fgets length")?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             load_open_stream_handle_to_result(ctx, stream, "fgets")?;
             let bound_reg = match ctx.emitter.target.arch {
@@ -434,6 +478,30 @@ pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
                     "rsi"
                 }
             };
+            // A null `$length` is php's "no bound", which is the helper's zero — and must reach
+            // it WITHOUT passing through the guard below, whose zero is the rejected case. The
+            // sentinel only appears when the argument arrived as a boxed null.
+            let unbounded = ctx.next_label("fgets_unbounded");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "x9", NULL_SENTINEL);
+                    ctx.emitter.instruction(&format!("cmp {}, x9", bound_reg));  // was the length null?
+                    ctx.emitter.instruction(&format!("b.ne {}", unbounded));     // a real length still faces the guard
+                    ctx.emitter.instruction(&format!("mov {}, #0", bound_reg));  // null → the helper's unbounded read
+                }
+                Arch::X86_64 => {
+                    abi::emit_load_int_immediate(ctx.emitter, "r10", NULL_SENTINEL);
+                    ctx.emitter.instruction(&format!("cmp {}, r10", bound_reg)); // was the length null?
+                    ctx.emitter.instruction(&format!("jne {}", unbounded));      // a real length still faces the guard
+                    ctx.emitter.instruction(&format!("xor {}, {}", bound_reg, bound_reg)); // null → unbounded
+                }
+            }
+            let bounded = ctx.next_label("fgets_bounded");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", bounded)),
+                Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", bounded)),
+            }
+            ctx.emitter.label(&unbounded);
             // Zero is what an omitted argument means to the helper, so a caller-supplied zero
             // must never reach it. php-src rejects zero and negatives outright.
             super::super::exceptions::emit_value_error_unless(
@@ -441,6 +509,7 @@ pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
                 super::super::exceptions::ValueGuard::SignedAtLeast(bound_reg, 1),
                 FGETS_NON_POSITIVE_LENGTH_MESSAGE,
             );
+            ctx.emitter.label(&bounded);
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");

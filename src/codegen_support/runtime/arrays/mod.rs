@@ -485,7 +485,7 @@ pub use mixed_cast_bool::emit_mixed_cast_bool;
 /// Emit Mixed-to-boolean cast helper.
 pub use mixed_cast_float::emit_mixed_cast_float;
 /// Emit Mixed-to-float cast helper.
-pub use mixed_cast_int::emit_mixed_cast_int;
+pub use mixed_cast_int::{emit_mixed_cast_int, emit_mixed_cast_int_nullable};
 pub use mixed_intval_base::emit_mixed_intval_base;
 /// Emit Mixed-to-integer cast helper.
 pub use mixed_cast_string::emit_mixed_cast_string;

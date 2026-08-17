@@ -8,7 +8,7 @@ sidebar:
 ## fputs()
 
 ```php
-function fputs(mixed $stream, string $data): mixed
+function fputs(mixed $stream, string $data, mixed $length = null): mixed
 ```
 
 Binary-safe file write (alias of fwrite).
@@ -16,6 +16,7 @@ Binary-safe file write (alias of fwrite).
 **Parameters**:
 - `$stream` (`mixed`)
 - `$data` (`string`)
+- `$length` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

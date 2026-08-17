@@ -627,13 +627,23 @@ pub fn emit_apply_stream_filter(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_asf_qpe_copyback");                          // copy back once input encoding is complete
     emitter.instruction("ldrb w8, [x1, x5]");                                   // load the next byte from the stream buffer
     emitter.instruction("add x5, x5, #1");                                      // advance the read cursor
-    // Pass-through printable ASCII (33..60, 62..126) directly.
+    // Pass-through printable ASCII (33..60, 62..126) directly, plus SPACE and TAB.
+    //
+    // php escapes a space or a tab only under the filter's `binary` option; its DEFAULT leaves
+    // both literal — `convert.quoted-printable-encode` over `a b=c d` answers `a b=3Dc d`, not
+    // `a=20b=3Dc=20d`. Escaping them unconditionally applied binary rules to every call, which
+    // is the wrong half of the option to implement by default.
+    emitter.instruction("cmp w8, #9");                                          // TAB passes through unescaped
+    emitter.instruction("b.eq __rt_asf_qpe_literal");                           // keep it as-is
+    emitter.instruction("cmp w8, #32");                                         // SPACE passes through unescaped
+    emitter.instruction("b.eq __rt_asf_qpe_literal");                           // keep it as-is
     emitter.instruction("cmp w8, #33");                                         // check whether a full three-byte group is available
     emitter.instruction("b.lt __rt_asf_qpe_escape");                            // reject values below the accepted range
     emitter.instruction("cmp w8, #126");                                        // check whether only one byte remains
     emitter.instruction("b.gt __rt_asf_qpe_escape");                            // reject values above the accepted range
     emitter.instruction("cmp w8, #61");                                         // test for '=' before quoted-printable escaping
     emitter.instruction("b.eq __rt_asf_qpe_escape");                            // escape the current byte
+    emitter.label("__rt_asf_qpe_literal");
     emitter.instruction("strb w8, [x4, x6]");                                   // write encoded output into the scratch buffer
     emitter.instruction("add x6, x6, #1");                                      // advance the write cursor
     emitter.instruction("b __rt_asf_qpe_loop");                                 // continue the quoted-printable encoder loop
@@ -1149,12 +1159,19 @@ fn emit_apply_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_asf_qpe_copyback_x86");                       // copy back once input encoding is complete
     emitter.instruction("movzx r8d, BYTE PTR [rax + r9]");                      // load the next byte from the stream buffer
     emitter.instruction("inc r9");                                              // advance the read cursor
+    // SPACE and TAB stay literal: php escapes them only under the filter's `binary` option, and
+    // its DEFAULT answers `a b=3Dc d` for `a b=c d`. See the AArch64 arm for the full note.
+    emitter.instruction("cmp r8b, 9");                                          // TAB passes through unescaped
+    emitter.instruction("je __rt_asf_qpe_literal_x86");                         // keep it as-is
+    emitter.instruction("cmp r8b, 32");                                         // SPACE passes through unescaped
+    emitter.instruction("je __rt_asf_qpe_literal_x86");                         // keep it as-is
     emitter.instruction("cmp r8b, 33");                                         // check whether a full three-byte group is available
     emitter.instruction("jl __rt_asf_qpe_escape_x86");                          // reject values below the accepted range
     emitter.instruction("cmp r8b, 126");                                        // check whether only one byte remains
     emitter.instruction("jg __rt_asf_qpe_escape_x86");                          // reject values above the accepted range
     emitter.instruction("cmp r8b, 61");                                         // test for '=' before quoted-printable escaping
     emitter.instruction("je __rt_asf_qpe_escape_x86");                          // escape the current byte
+    emitter.label("__rt_asf_qpe_literal_x86");
     emitter.instruction("mov BYTE PTR [r11 + r10], r8b");                       // write encoded output into the scratch buffer
     emitter.instruction("inc r10");                                             // advance the write cursor
     emitter.instruction("jmp __rt_asf_qpe_loop_x86");                           // continue the quoted-printable encoder loop

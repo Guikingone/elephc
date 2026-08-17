@@ -55,9 +55,14 @@ fn test_error_fread_requires_resource_handle() {
 }
 
 /// Verifies fwrite() produces correct error when called with only one argument.
+///
+/// The arity is 2 OR 3: php's signature is `fwrite($stream, string $data, ?int $length = null)`
+/// and the third argument caps the write. php reports the shortfall at run time as
+/// `ArgumentCountError: fwrite() expects at least 2 arguments, 1 given`; elephc refuses it at
+/// compile time, as it does for every builtin arity.
 #[test]
 fn test_error_fwrite_wrong_args() {
-    expect_error("<?php fwrite(1);", "fwrite() takes exactly 2 arguments");
+    expect_error("<?php fwrite(1);", "fwrite() takes 2 or 3 arguments");
 }
 
 /// Verifies fwrite() produces correct error when passed an int instead of a resource.

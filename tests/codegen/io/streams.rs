@@ -3180,6 +3180,131 @@ fclose($m);
     assert_eq!(out, "abc=C3=A9=0A=3D");
 }
 
+/// Verifies the quoted-printable encoder leaves SPACE and TAB literal, as php's default does.
+///
+/// php escapes whitespace only under the filter's `binary` option; the default answers
+/// `a b=3Dc d` for `a b=c d`. elephc passed through 33..126 only, which escaped both — php's
+/// BINARY rule applied to every call, so `a b` came back as `a=20b` and a plain sentence round
+/// -tripped into something php never writes. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_qp_encode_keeps_space_and_tab_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function qp(string $data): string {
+    $m = fopen("php://memory", "r+");
+    stream_filter_append($m, "convert.quoted-printable-encode", STREAM_FILTER_WRITE);
+    fwrite($m, $data);
+    rewind($m);
+    $out = (string) stream_get_contents($m);
+    fclose($m);
+    return $out;
+}
+echo qp("a b=c d"), "|";
+echo qp("Hello World!"), "|";
+echo qp("a\tb"), "|";
+echo qp(" "), "|";
+// A newline is still escaped: only SPACE and TAB are exempt, and `=` still becomes `=3D`.
+echo qp("x\ny"), "|";
+echo qp("caf\xe9 au lait");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a b=3Dc d|Hello World!|a\tb| |x=0Ay|caf=E9 au lait"
+    );
+}
+
+/// Verifies `stream_get_meta_data()` omits `uri` for a pathless stream and calls a directory
+/// seekable.
+///
+/// php guards the key with `if (stream->orig_path)`, so a directory handle answers EIGHT keys;
+/// elephc inserted `["uri"] => ""` and reported nine, which made every `count()` over the result
+/// disagree. `seekable` is `stream->ops->seek != NULL` in php, not a live probe: the plain-files
+/// directory ops carry `rewinddir`, so php says `true` where `S_ISREG` on the descriptor — the
+/// question elephc asked — says `false`.
+#[test]
+fn test_stream_get_meta_data_directory_shape() {
+    let out = compile_and_run(
+        r#"<?php
+$d = opendir(sys_get_temp_dir());
+$m = stream_get_meta_data($d);
+echo count($m), "|", var_export(isset($m["uri"]), true), "|", var_export($m["seekable"], true);
+echo "|", $m["stream_type"], "|", $m["wrapper_type"];
+closedir($d);
+"#,
+    );
+    assert_eq!(out, "8|false|true|dir|plainfile");
+}
+
+/// Verifies `fwrite()`'s third argument caps the write, and that a null cap writes everything.
+///
+/// php's signature is `fwrite($stream, string $data, ?int $length = null)`: the write is capped
+/// at `max(0, min($length, strlen($data)))`, a non-positive cap writes nothing WITHOUT raising,
+/// and null means no cap. elephc accepted only two arguments. The cap is applied to the byte
+/// count the runtime write helper already takes, so an attached write filter sees exactly the
+/// bytes php gives it rather than the whole string.
+#[test]
+fn test_fwrite_length_argument_caps_the_write() {
+    let out = compile_and_run(
+        r#"<?php
+function w(string $data, $length): string {
+    $m = fopen("php://memory", "r+");
+    $n = $length === "omit" ? fwrite($m, $data) : fwrite($m, $data, $length);
+    rewind($m);
+    $got = (string) stream_get_contents($m);
+    fclose($m);
+    return $n . ":" . $got;
+}
+echo w("hello", 3), "|";       // shorter than the data
+echo w("hello", 5), "|";       // exactly the data
+echo w("hello", 9), "|";       // longer than the data clamps to it
+echo w("hello", 0), "|";       // zero writes nothing, and is not an error
+echo w("hello", -1), "|";      // neither is a negative
+echo w("hello", null), "|";    // null is "no cap"
+echo w("hello", "omit"), "|";  // as is omitting it
+// A write filter must see the CAPPED bytes, not the whole string.
+$m = fopen("php://memory", "r+");
+stream_filter_append($m, "string.toupper", STREAM_FILTER_WRITE);
+$n = fwrite($m, "abcdef", 4);
+rewind($m);
+echo $n, ":", stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "3:hel|5:hello|5:hello|0:|0:|5:hello|5:hello|4:ABCD"
+    );
+}
+
+/// Verifies a `?int` argument arriving as a boxed null keeps php's "no bound" meaning.
+///
+/// `__rt_mixed_cast_int` flattens a null payload to `0` — the same answer a real `0` gives — so
+/// forwarding one through an untyped parameter turned `fgets($h, null)` into
+/// `ValueError: Argument #2 ($length) must be greater than 0` and made `fwrite($h, $d, null)`
+/// write nothing. php reads the whole line and writes every byte for both.
+#[test]
+fn test_nullable_length_through_an_untyped_parameter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("nullable_len.txt", "hello world\n");
+function grabLine($h, $len) { return fgets($h, $len); }
+function writeAll($h, $data, $len) { return fwrite($h, $data, $len); }
+$h = fopen("nullable_len.txt", "r");
+echo var_export(grabLine($h, null), true), "|";
+fclose($h);
+$m = fopen("php://memory", "r+");
+echo writeAll($m, "abcdef", null), "|";
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+unlink("nullable_len.txt");
+"#,
+    );
+    assert_eq!(out, "'hello world\n'|6|abcdef");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for stream filter base64 decode decompacts.
 #[test]
 fn test_stream_filter_base64_decode_decompacts() {

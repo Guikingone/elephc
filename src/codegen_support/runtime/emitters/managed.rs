@@ -202,6 +202,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_float(emitter);
     arrays::emit_mixed_cast_int(emitter);
+    arrays::emit_mixed_cast_int_nullable(emitter);
     arrays::emit_mixed_intval_base(emitter);
     arrays::emit_mixed_cast_string(emitter);
     arrays::emit_mixed_count(emitter);

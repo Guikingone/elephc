@@ -13,8 +13,10 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::resources::layout::{
-    STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET,
-    STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
+    STREAM_BACKEND_DIRECTORY, STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,
+    STREAM_BACKEND_USER_DIRECTORY, STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET,
+    STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET,
+    STREAM_WRAPPER_ID_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -120,6 +122,21 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
         super::WRAPPER_ID_ZIP
     ));                                                                         // the zip wrapper?
     emitter.instruction("csel x0, xzr, x0, eq");                                // a zip entry stream never seeks
+    // ...and a DIRECTORY always does. php's plain-files directory ops carry a seek (rewinddir),
+    // so `_php_stream_get_metadata` reports `seekable => true` for every `opendir()` handle,
+    // while `S_ISREG` on a directory descriptor is false. This is the same "ask the ops, not the
+    // descriptor" rule as the zip case just above, in the other direction.
+    emitter.instruction("ldr x9, [sp, #80]");                                   // the stable StreamState pointer
+    emitter.instruction(&format!("ldr x9, [x9, #{STREAM_BACKEND_KIND_OFFSET}]")); // what backs the stream
+    emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_DIRECTORY}"));
+    emitter.instruction("b.eq __rt_sgmd_dir_seekable");
+    emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_USER_DIRECTORY}"));
+    emitter.instruction("b.eq __rt_sgmd_dir_seekable");
+    emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_GLOB_DIRECTORY}"));
+    emitter.instruction("b.ne __rt_sgmd_dir_seek_done");
+    emitter.label("__rt_sgmd_dir_seekable");
+    emitter.instruction("mov x0, #1");                                          // a directory handle is seekable
+    emitter.label("__rt_sgmd_dir_seek_done");
     emitter.instruction("str x0, [sp, #16]");                                   // that is the seekable flag
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
@@ -539,7 +556,12 @@ fn emit_set_wrapper_data_aarch64(emitter: &mut Emitter) {
 
 /// Reads the StreamState URI pointer/length pair and loads it into
 /// x3 (ptr) / x4 (len) / x5 (tag=1), then inserts the hash entry.
-/// Fallback (ptr == 0) → empty string.
+///
+/// A stream with NO recorded path contributes no key at all. php guards the insertion with
+/// `if (stream->orig_path)` (`ext/standard/streamsfuncs.c`), so a directory handle and a socket
+/// — neither of which carries an `orig_path` — answer EIGHT keys. elephc inserted
+/// `["uri"] => ""` for them, which made every `count()` and every key-set assertion over
+/// `stream_get_meta_data()` disagree with php on exactly those two stream kinds.
 fn emit_set_uri_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [sp, #80]");                                   // reload the stable StreamState pointer
     emitter.instruction(&format!(
@@ -548,7 +570,8 @@ fn emit_set_uri_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "ldr x4, [x6, #{}]", STREAM_URI_LEN_OFFSET
     ));                                                                         // load the handle-keyed URI byte length
-    emitter.instruction("cbz x3, __rt_sgmd_uri_empty");                         // null ptr → empty uri
+    emitter.instruction("cbz x3, __rt_sgmd_uri_absent");                        // no recorded path → php emits no `uri` key
+    emitter.instruction("cbz x4, __rt_sgmd_uri_absent");                        // a zero-length path is no path either
     // The array releases its string values, so handing it the StreamState's own URI allocation
     // freed the state's copy: the third `stream_get_meta_data()` on a stream then read a block
     // that intervening hash keys had already reused. Give the array a duplicate it can own.
@@ -558,13 +581,8 @@ fn emit_set_uri_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x3, x1");                                          // value_lo = the owned duplicate
     emitter.instruction("mov x4, x2");                                          // value_hi = its length
     emitter.instruction("mov x5, #1");                                          // value tag = string
-    emitter.instruction("b __rt_sgmd_uri_put");                                 // insert the uri entry
-    emitter.label("__rt_sgmd_uri_empty");
-    emitter.instruction("mov x3, #0");                                          // ptr = null (empty string)
-    emitter.instruction("mov x4, #0");                                          // len = 0
-    emitter.instruction("mov x5, #1");                                          // value tag = string
-    emitter.label("__rt_sgmd_uri_put");
     emit_hash_put_aarch64(emitter, "_meta_key_uri", 3);
+    emitter.label("__rt_sgmd_uri_absent");                                      // pathless stream: the key is simply not there
 }
 
 /// Emit one `__rt_hash_set` with the value already staged in x3/x4/x5.
@@ -672,6 +690,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the stream_type pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], 5");                         // save the stream_type length
     emitter.label("__rt_sgmd_seek_done_x86");
+
     // See the AArch64 counterpart: a recorded identity outranks the seekability-derived name.
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
     emitter.instruction("call __rt_stream_type_name");                          // rax = name or 0, rdx = length
@@ -692,6 +711,19 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("cmp r10, {}", super::WRAPPER_ID_ZIP));        // the zip wrapper?
     emitter.instruction("mov r11d, 0");                                         // the unseekable answer
     emitter.instruction("cmove rax, r11");                                      // a zip entry stream never seeks
+    // ...and a DIRECTORY always does — see the AArch64 arm for php's "ask the ops, not the
+    // descriptor" rule, which this case applies in the other direction.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 88]");                       // the stable StreamState pointer
+    emitter.instruction(&format!("mov r10, QWORD PTR [r10 + {STREAM_BACKEND_KIND_OFFSET}]")); // what backs the stream
+    emitter.instruction(&format!("cmp r10, {STREAM_BACKEND_DIRECTORY}"));
+    emitter.instruction("je __rt_sgmd_dir_seekable_x86");
+    emitter.instruction(&format!("cmp r10, {STREAM_BACKEND_USER_DIRECTORY}"));
+    emitter.instruction("je __rt_sgmd_dir_seekable_x86");
+    emitter.instruction(&format!("cmp r10, {STREAM_BACKEND_GLOB_DIRECTORY}"));
+    emitter.instruction("jne __rt_sgmd_dir_seek_done_x86");
+    emitter.label("__rt_sgmd_dir_seekable_x86");
+    emitter.instruction("mov rax, 1");                                          // a directory handle is seekable
+    emitter.label("__rt_sgmd_dir_seek_done_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // that is the seekable flag
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
@@ -911,8 +943,12 @@ fn emit_set_uri_x86(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r8, QWORD PTR [r10 + {}]", STREAM_URI_LEN_OFFSET
     ));                                                                         // load the handle-keyed URI byte length
-    emitter.instruction("test rcx, rcx");                                       // null ptr?
-    emitter.instruction("jz __rt_sgmd_uri_empty_x");                            // → empty uri
+    // A pathless stream contributes no key at all — see the AArch64 counterpart for php's
+    // `if (stream->orig_path)` guard and the eight-vs-nine key divergence it caused.
+    emitter.instruction("test rcx, rcx");                                       // no recorded path?
+    emitter.instruction("jz __rt_sgmd_uri_absent_x");                           // → php emits no `uri` key
+    emitter.instruction("test r8, r8");                                         // a zero-length path is no path either
+    emitter.instruction("jz __rt_sgmd_uri_absent_x");
     // See the AArch64 counterpart: the array releases its string values, so it needs a duplicate
     // rather than the StreamState's own URI allocation.
     emitter.instruction("mov rax, rcx");                                        // duplicate the URI bytes
@@ -921,13 +957,8 @@ fn emit_set_uri_x86(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, rax");                                        // value_lo = the owned duplicate
     emitter.instruction("mov r8, rdx");                                         // value_hi = its length
     emitter.instruction("mov r9, 1");                                           // value tag = string
-    emitter.instruction("jmp __rt_sgmd_uri_put_x");                             // insert the uri entry
-    emitter.label("__rt_sgmd_uri_empty_x");
-    emitter.instruction("xor ecx, ecx");                                        // ptr = 0 (empty string)
-    emitter.instruction("xor r8d, r8d");                                        // len = 0
-    emitter.instruction("mov r9, 1");                                           // value tag = string
-    emitter.label("__rt_sgmd_uri_put_x");
     emit_hash_put_x86(emitter, "_meta_key_uri", 3);
+    emitter.label("__rt_sgmd_uri_absent_x");                                    // pathless stream: the key is simply not there
 }
 
 /// Emits one x86_64 `__rt_hash_set` whose string value is duplicated first.

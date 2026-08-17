@@ -58,11 +58,11 @@ resources than the initial reservation holds grows the table on the heap as usua
 | `fopen()` | `fopen($filename, $mode, $use_include_path = false, $context = null): resource\|false` | Open a file, wrapper URL, socket-like wrapper, or temporary/memory stream. PHP's modes are supported: `r`, `w`, `a`, `c` and `x`, each with an optional `+`, and the `b`/`t` flags anywhere in the string. The optional args are evaluated in source order. `fopen()`, `file_get_contents()` and `readfile()` each publish their own `$context` for the duration of the call and restore the previous one afterwards. |
 | `fclose()` | `fclose(resource $handle): bool` | Close a stream. Closing a `phar://` write stream finalizes the archive, and closing a filtered stream runs pending filter cleanup such as user-filter `onClose()`. |
 | `fread()` | `fread(resource $handle, $length): string` | Read up to `$length` bytes. Attached read filters and user-wrapper `stream_read()` methods are honored. On a filtered stream the result is capped at `$length` and the filter's remainder is kept for the next read. |
-| `fwrite()` | `fwrite(resource $handle, $data): int` | Write bytes and return the byte count. Attached write filters and user-wrapper `stream_write()` methods are honored. |
-| `fputs()` | `fputs(resource $handle, $data): int` | Alias of `fwrite()`. |
+| `fwrite()` | `fwrite(resource $handle, string $data, ?int $length = null): int\|false` | Write bytes and return the byte count. `$length` caps the write at `max(0, min($length, strlen($data)))`; a non-positive cap writes nothing and returns `0` without raising, and `null` (or an omitted argument) writes everything. Attached write filters and user-wrapper `stream_write()` methods are honored, and a filter sees only the capped bytes. |
+| `fputs()` | `fputs(resource $handle, string $data, ?int $length = null): int\|false` | Alias of `fwrite()`, third argument included. |
 | `fprintf()` | `fprintf(resource $handle, string $format, ...$values): int` | Format like `sprintf()` and write to the stream. |
 | `vfprintf()` | `vfprintf(resource $handle, string $format, array $values): int` | Like `fprintf()`, with format values supplied as an array. |
-| `fscanf()` | `fscanf(resource $handle, string $format): array` | Read one line and parse it with the `sscanf()` engine. v1 supports the two-argument array-returning form and conversions `%d`, `%f`, `%s`, and `%%`. php's by-ref `...$vars` form, which assigns each field through the reference and returns the field count instead, is refused at compile time. |
+| `fscanf()` | `fscanf(resource $handle, string $format): array\|false\|null` | Read one line — newline included, as `php_stream_get_line()` does — and parse it with the `sscanf()` engine, which implements php's whole scanner: widths, `*` suppression, `%[...]` character classes, `%c`/`%d`/`%D`/`%e`/`%E`/`%f`/`%g`/`%i`/`%n`/`%o`/`%s`/`%u`/`%x`/`%X`, the `l`/`h`/`L` modifiers, and php's `ValueError` wording for a format it refuses. End of file is `false`; an empty line is `null`, since scanning `"\n"` reaches end of input without assigning. php's by-ref `...$vars` form, which assigns each field through the reference and returns the field count instead, is refused at compile time. |
 | `fgets()` | `fgets(resource $handle, int $length = null): string\|false` | Read a line until newline, EOF, or `$length`; returns `false` at EOF. `$length` bounds the line at `$length - 1` bytes and leaves the remainder for the next read; a non-positive `$length` raises `ValueError`. |
 | `fgetc()` | `fgetc(resource $handle): string\|false` | Read one byte, or `false` at EOF/failure. |
 | `feof()` | `feof(resource $handle): bool` | Report whether the stream is at EOF. |
@@ -411,6 +411,14 @@ uses libc `iconv` and auto-links `-liconv` on macOS.
 Compression filter params can be a bare integer or a literal array. `zlib.deflate`
 reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`
 (`0..250`). Non-literal params keep defaults.
+
+`convert.quoted-printable-encode` implements PHP's DEFAULT rules: `=` becomes
+`=3D`, bytes outside 33..126 become `=XX`, and a SPACE or TAB stays literal, so
+`a b=c d` encodes to `a b=3Dc d`. Its `binary`, `line-length` and
+`line-break-chars` parameters are **not** honoured — the filter always applies
+the default rules, so a call that asks for binary mode still passes whitespace
+through, and one that asks for a line length does not soft-wrap.
+`convert.base64-encode` likewise ignores `line-length` and never wraps.
 
 A filter name held in a variable resolves against the string, conversion and
 `consumed` filters, and against user-registered names. `zlib.*`, `bzip2.*` and

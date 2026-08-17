@@ -8,7 +8,7 @@ sidebar:
 ## fwrite()
 
 ```php
-function fwrite(resource $stream, string $data): mixed
+function fwrite(resource $stream, string $data, mixed $length = null): mixed
 ```
 
 Binary-safe file write.
@@ -16,6 +16,7 @@ Binary-safe file write.
 **Parameters**:
 - `$stream` (`resource`)
 - `$data` (`string`)
+- `$length` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
