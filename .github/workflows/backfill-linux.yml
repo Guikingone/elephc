@@ -1,0 +1,153 @@
+name: Backfill Linux Release Assets
+
+# Adds Linux x86_64 / ARM64 tarballs to a release that was published before
+# release.yml built Linux targets. Dispatch once per tag; assets upload to the
+# existing release without touching its notes, date, or the macOS assets.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to backfill (v0.25.2 or newer)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify tag eligibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Linux CI coverage (v0.25.2+)
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # The full sharded Linux test suite entered CI with 0468eeab9 and
+          # first shipped in v0.25.2. Older tags never ran the Linux suite, so
+          # refuse to publish untested Linux binaries for them.
+          FLOOR="v0.25.2"
+          if [ "$(printf '%s\n' "$FLOOR" "$TAG" | sort -V | head -n1)" != "$FLOOR" ]; then
+            echo "::error::${TAG} predates Linux CI coverage (${FLOOR}); refusing to backfill."
+            exit 1
+          fi
+
+      - name: Require an existing GitHub release for the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName
+
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - verify
+    strategy:
+      # Each architecture uploads independently; a failure on one runner must
+      # not cancel the other upload.
+      fail-fast: false
+      matrix:
+        include:
+          # Same runner generation as release.yml: glibc 2.35 keeps the
+          # binaries usable on older distros (Ubuntu 22.04, Debian 12, RHEL 9).
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set version from tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          # The tagged commit does not contain the release version: the release
+          # workflow patches Cargo.toml/Cargo.lock after tagging and pushes the
+          # bump to main separately. Re-apply the same patch locally so the
+          # backfilled binary reports the right --version.
+          VERSION="${TAG#v}"
+          export VERSION
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          version = os.environ["VERSION"]
+
+          cargo_toml = Path("Cargo.toml")
+          cargo_toml.write_text(
+              re.sub(
+                  r'^version = ".*"$',
+                  f'version = "{version}"',
+                  cargo_toml.read_text(),
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+          )
+
+          cargo_lock = Path("Cargo.lock")
+          cargo_lock.write_text(
+              re.sub(
+                  r'(\[\[package\]\]\nname = "elephc"\nversion = ")[^"]+(")',
+                  rf'\g<1>{version}\2',
+                  cargo_lock.read_text(),
+                  count=1,
+              )
+          )
+          PY
+          echo "Set Cargo.toml and Cargo.lock version to ${VERSION}"
+
+      - name: Determine the staticlib set shipped by this release
+        run: |
+          # The bridge staticlib set has changed over time (bcmath joined after
+          # v0.26.0). Mirror exactly what this tag's own release workflow put
+          # in the macOS tarball instead of hardcoding today's set.
+          LIBS="$(grep -o 'libelephc_[a-z_]*\.a' .github/workflows/release.yml | sort -u | tr '\n' ' ')"
+          test -n "${LIBS// /}"
+          CRATES=""
+          for lib in $LIBS; do
+            name="${lib#libelephc_}"
+            name="${name%.a}"
+            CRATES="$CRATES -p elephc-${name//_/-}"
+          done
+          echo "BRIDGE_LIBS=$LIBS" >> "$GITHUB_ENV"
+          echo "BRIDGE_CRATES=$CRATES" >> "$GITHUB_ENV"
+          echo "Staticlibs for this tag: $LIBS"
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Build release bridge staticlibs
+        run: |
+          # shellcheck disable=SC2086 # BRIDGE_CRATES expands to multiple -p flags
+          cargo build --release $BRIDGE_CRATES
+
+      - name: Strip binary
+        run: strip target/release/elephc
+
+      - name: Create tarball
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          cd target/release
+          TARBALL="elephc-${TAG}-${{ matrix.target }}.tar.gz"
+          # shellcheck disable=SC2086 # BRIDGE_LIBS expands to multiple archives
+          tar czf "$TARBALL" elephc $BRIDGE_LIBS
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
+
+      - name: Upload assets to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          gh release upload "$TAG" \
+            "target/release/elephc-${TAG}-${{ matrix.target }}.tar.gz" \
+            "target/release/elephc-${TAG}-${{ matrix.target }}.tar.gz.sha256" \
+            --clobber

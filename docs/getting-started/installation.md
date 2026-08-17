@@ -66,9 +66,24 @@ cp target/release/elephc /usr/local/bin/
 
 ## From GitHub releases
 
-Pre-built binaries may be available on the [releases page](https://github.com/illegalstudio/elephc/releases). Download the artifact for your platform, make it executable if needed, and move it to your `PATH`:
+Each release on the [releases page](https://github.com/illegalstudio/elephc/releases)
+ships a tarball per supported platform:
+
+- `elephc-<version>-aarch64-apple-darwin.tar.gz` — macOS ARM64
+- `elephc-<version>-x86_64-unknown-linux-gnu.tar.gz` — Linux x86_64
+- `elephc-<version>-aarch64-unknown-linux-gnu.tar.gz` — Linux ARM64
+
+Each tarball contains the `elephc` binary plus the bridge staticlibs
+(`libelephc_*.a`) that compiled programs link against. Install them in a layout
+elephc searches: the staticlibs either in the same directory as the binary, or
+in a `lib/` directory next to the `bin/` directory holding the binary — for
+example `/usr/local/bin` and `/usr/local/lib`:
 
 ```bash
-chmod +x elephc
-mv elephc /usr/local/bin/
+tar xzf elephc-<version>-<target>.tar.gz
+sudo install -m 755 elephc /usr/local/bin/
+sudo install -m 644 libelephc_*.a /usr/local/lib/
 ```
+
+The Linux tarballs are built against glibc 2.35 and run on any distribution
+with that glibc or newer (Ubuntu 22.04+, Debian 12+, RHEL 9+, ...).
