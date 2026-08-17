@@ -2244,6 +2244,37 @@ unlink("perfile.zip");
     assert_eq!(out, "first:3|nested|yy|9:yn|n");
 }
 
+/// Verifies persisted archive metadata cannot instantiate application classes
+/// or run wakeup hooks while a fresh Phar object loads an untrusted archive.
+#[test]
+fn test_phar_persisted_metadata_blocks_class_hydration() {
+    let out = compile_and_run(
+        r#"<?php
+class ArchiveMetadata {
+    public static int $wakeups = 0;
+    public function __wakeup(): void {
+        self::$wakeups = self::$wakeups + 1;
+    }
+}
+$p = new Phar("metadata-policy.phar");
+$p->addFromString("entry.txt", "payload");
+$p->setMetadata(new ArchiveMetadata());
+$p["entry.txt"]->setMetadata(new ArchiveMetadata());
+
+$q = new Phar("metadata-policy.phar");
+echo get_class($q->getMetadata()), "|";
+echo get_class($q["entry.txt"]->getMetadata()), "|";
+echo ArchiveMetadata::$wakeups;
+unlink("metadata-policy.phar");
+"#,
+    );
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class|__PHP_Incomplete_Class|0",
+        "archive metadata must deserialize with allowed_classes=false"
+    );
+}
+
 /// `PharData::compress()` produces a whole-archive `.tar.gz`/`.tar.bz2` that is read
 /// back transparently, and `decompress()` reverses it — entries (including a nested
 /// path) survive each step.
@@ -2296,16 +2327,30 @@ KEYEOF;
 $p = new Phar("signed.phar");
 $p->addFromString("a.txt", "alpha");
 $p->setSignatureAlgorithm(Phar::OPENSSL, $key);
+$archive = "signed.phar";
+echo (file_get_contents("phar://" . $archive . "/a.txt") === false ? "closed:" : "open:");
+echo ($p->getSignature() === false ? "closed|" : "metadata|");
+$publicKey = <<<'KEYEOF'
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrgD+8WWlX4cJ/ZQWjIMSj1NTg
+wabk+2G7uhWr9N0yadQSnNcFDIl51D62lFCNkdicaGrbQ3u0fy3BpI1aD4gRhj6M
+cU2gcneSyWSZOjCQIhgYc0E+25CtzjAxy0Koc4nn6gxX5wy7f0ze/rprjAj7S5rh
+elFF4nmzM8h9tce47wIDAQAB
+-----END PUBLIC KEY-----
+KEYEOF;
+file_put_contents("signed.phar.pubkey", $publicKey);
 $s = $p->getSignature();
-echo $s["hash_type"], ":", strlen($s["hash"]), "|";
+echo $s["hash_type"], ":", strlen($s["hash"]), ":";
+echo file_get_contents("phar://" . $archive . "/a.txt"), "|";
 $p->setSignatureAlgorithm(Phar::SHA256);
 $s2 = $p->getSignature();
 echo $s2["hash_type"], ":", strlen($s2["hash"]);
 unlink("signed.phar");
+unlink("signed.phar.pubkey");
 "#,
     );
     // 1024-bit RSA signature = 128 bytes = 256 uppercase-hex chars; SHA-256 = 32 bytes = 64 hex.
-    assert_eq!(out, "OpenSSL:256|SHA-256:64");
+    assert_eq!(out, "closed:closed|OpenSSL:256:alpha|SHA-256:64");
 }
 
 /// Tar and zip phars carry their signature in a `.phar/signature.bin` entry rather
@@ -2341,11 +2386,21 @@ echo $ts["hash_type"], ":", strlen($ts["hash"]), "|";
 $zip = new PharData("sig.zip");
 $zip->addFromString("doc.txt", "zipbody");
 $zip->setSignatureAlgorithm(Phar::OPENSSL, $key);
+$publicKey = <<<'KEYEOF'
+-----BEGIN PUBLIC KEY-----
+MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDrgD+8WWlX4cJ/ZQWjIMSj1NTg
+wabk+2G7uhWr9N0yadQSnNcFDIl51D62lFCNkdicaGrbQ3u0fy3BpI1aD4gRhj6M
+cU2gcneSyWSZOjCQIhgYc0E+25CtzjAxy0Koc4nn6gxX5wy7f0ze/rprjAj7S5rh
+elFF4nmzM8h9tce47wIDAQAB
+-----END PUBLIC KEY-----
+KEYEOF;
+file_put_contents("sig.zip.pubkey", $publicKey);
 $zs = $zip->getSignature();
 echo $zs["hash_type"], ":", strlen($zs["hash"]), "|";
 echo $tar["doc.txt"]->getContent(), ":", $zip["doc.txt"]->getContent();
 unlink("sig.tar");
 unlink("sig.zip");
+unlink("sig.zip.pubkey");
 "#,
     );
     // SHA-256 digest = 32 bytes = 64 hex; OpenSSL 1024-bit RSA = 128 bytes = 256 hex.

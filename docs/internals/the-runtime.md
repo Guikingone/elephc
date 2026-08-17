@@ -387,7 +387,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
 | `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending |
 | `__rt_hash_asort` / `__rt_hash_arsort` | Sort an associative array by value while preserving keys, ascending or descending |
-| `__rt_hash_sort_links` | Shared engine behind the four hash sorts: a stable insertion sort that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
+| `__rt_hash_sort_links` | Shared engine behind the four hash sorts: an allocation-free, stable bottom-up merge sort with `O(n log n)` comparisons that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
+| `__rt_hash_sort_compare_entries` | Reads and compares the heads of two merge runs with exact `SORT_REGULAR` key semantics or PHP's general value comparison table |
 | `__rt_hash_sort_triple` | Reads a hash entry's key or value as a `__rt_php_compare` `(tag, lo, hi)` triple, peeling boxed Mixed cells |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |
 | `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |
@@ -455,7 +456,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories; 70 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (44 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, `json_encode_str/`, and `unserialize/` subdirectories; 82 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -505,7 +506,7 @@ The check itself lives in every compiled function prologue — see [The codegen]
 
 ## Exception routines
 
-**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files in the directory)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -575,9 +576,11 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 
 ### Serialization routines
 
-**Files:** `system/serialize.rs`, `system/unserialize.rs`
+**Files:** `system/serialize.rs`, `system/unserialize/` (11 Rust modules including `mod.rs`)
 
 These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes PHP's exact wire format (`N;`, `b:0;`/`b:1;`, `i:<int>;`, `d:<shortest-round-trip>;`, `s:<bytelen>:"<raw>";`, `a:<n>:{...}`, and `O:<len>:"<class>":<n>:{...}`) directly into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad), reusing `__rt_json_ftoa` for shortest-round-trip float digits. Object serialization honors `__sleep()` / `Serializable` and reuses an object back-reference table so repeated instances emit `r:`/`R:` references.
+
+The unserializer keeps the fixed runtime-emission order in `unserialize/mod.rs`. Shared diagnostics and per-call context lifecycle are separated from target-specific allowed-class policy parsing, allocation-free validation, recursive decoding, and object-storage/key helpers. The two decoder files are cohesive architecture leaves; every surrounding orchestration or support module remains below the repository's 500-line warning threshold.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -718,7 +721,7 @@ Userspace `streamWrapper` classes registered with `stream_wrapper_register()` di
 | Routine | What it does |
 |---|---|
 | `__rt_fopen_maybe_phar` / `__rt_file_get_contents_maybe_phar` | Route dynamic `phar://` read paths to archive entry reads and write-mode `fopen()` paths to PHAR write streams, falling through to plain file I/O otherwise |
-| `__rt_phar_read_entry` | Locate and read one entry from a PHAR URL. When the `elephc-phar` bridge is published it handles native PHAR, tar, and ZIP containers; the assembly fallback handles native PHAR plus gzip/bzip2 payloads through published zlib/libbz2 slots |
+| `__rt_phar_read_entry` | Locate and read one entry from a PHAR URL through the `elephc-phar` bridge, which handles native PHAR, tar, and ZIP containers and authenticates OpenSSL signatures with `<archive>.pubkey`; missing/invalid keys and a missing bridge fail closed rather than entering the legacy unauthenticated assembly parser |
 | `__rt_phar_write_open` / `__rt_phar_write_open_url` / `__rt_phar_write_append` / `__rt_phar_write_finalize` / `__rt_file_put_contents_maybe_phar` | Buffer `phar://` write entries in bridge-owned descriptor slots, then finalize each through the `elephc-phar` bridge so native PHAR, tar, and ZIP archives preserve existing entries; runtime-built `file_put_contents()` and `fopen()` write URLs call a bridge variant that splits the full `phar://` URL; the assembly fallback still emits a single-entry SHA1-signed native archive |
 
 ### var_dump output routines
@@ -732,7 +735,7 @@ Every terminal stdout write in a compiled program travels through one indirectio
 1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to `_print_r_buf` via `__rt_pr_append` instead of writing
 2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
 3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
-4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write` so the bridge can capture the per-request response body
+4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write`; default worker isolation buffers them, while pool/request isolation frames them onto the handler response stream
 5. **plain `write(1, ptr, len)` syscall** — the universal fallback
 
 The `--web` capture branch is emitted only when compiling with `--web`, so ordinary binaries never reference the bridge symbols. A few related helpers are always emitted so their EIR calls resolve on every build, with bodies that differ under `--web`: `__rt_php_input` (reads the request body for `file_get_contents('php://input')`, false otherwise) and `__rt_http_response_code` / `__rt_header` (call the bridge setters under `--web`, no-ops otherwise). PHP session support (`session_*`) is **not** part of this runtime: it lives in the `--web` PHP prelude (`src/web_prelude.rs`) as `elephc_web_session_*` extern functions provided by the web bridge.
@@ -804,15 +807,18 @@ These helpers back the PHP `zval` bridge extension: they convert elephc runtime 
 
 ## Buffer routines
 
-**Source:** `src/codegen_support/runtime/buffers/` (5 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/buffers/` (8 files including `mod.rs`)
 
-These helpers support the compiler-specific `buffer<T>` hot-path data type.
+These helpers support the compiler-specific `buffer<T>` hot-path data type. Public Buffer values are opaque `(generation:u32 << 32) | descriptor_index:u32` handles. The runtime resolves each non-null handle through a 4096-slot static descriptor registry and validates its active marker and generation before exposing payload metadata. Payload bytes remain a separate compiler-heap allocation.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_buffer_new` | Allocate a contiguous buffer with header `[length:8][stride:8]` followed by zero-initialized payload | `x0` = element count, `x1` = element stride | `x0` = buffer pointer |
-| `__rt_buffer_len` | Read the logical element count from a buffer header | `x0` = buffer pointer | `x0` = length |
+| `__rt_buffer_resolve` | Validate handle index, non-zero generation, active state, and exact descriptor generation | `x0` = opaque buffer handle | `x0` = static descriptor address |
+| `__rt_buffer_new` | Reuse or claim a descriptor, allocate and exactly zero `length * stride` payload bytes, then publish the new handle | `x0` = element count, `x1` = element stride | `x0` = opaque buffer handle |
+| `__rt_buffer_free` | Invalidate a resolved descriptor, recycle it unless its u32 generation is saturated, then release the detached payload | `x0` = opaque buffer handle | — |
+| `__rt_buffer_len` | Resolve the handle and read the logical element count from descriptor offset 8 | `x0` = opaque buffer handle | `x0` = length |
 | `__rt_buffer_bounds_fail` | Abort with `Fatal error: buffer index out of bounds` | — | does not return |
+| `__rt_buffer_size_overflow` | Abort when `length * stride` overflows or no descriptor can be issued | — | does not return |
 | `__rt_buffer_use_after_free` | Abort with `Fatal error: use of buffer after buffer_free()` | — | does not return |
 
 ## Mixed-type helpers
@@ -953,7 +959,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // spl: SplDoublyLinkedList/SplStack/SplQueue and SplFixedArray storage helpers
     // resource ids: stable PHP-visible resource handle allocation and lookup
     // objects/comparison: stdClass, boxed Mixed property/index dispatch, loose equality
-    // buffers: contiguous buffer allocation, bounds checking, UAF traps
+    // buffers: generation-safe handle resolution, descriptor allocation/free, bounds/size/UAF traps
     // io: stdout funnel + web helpers, c-string buffers, file I/O, stat/fs helpers,
     // scandir/glob/tempnam, CSV, streams/sockets, var_dump/print_r, ob_* buffer stack
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
@@ -1025,6 +1031,10 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 .comm _heap_free_list, 8     ; head of the general address-ordered free list
 .comm _heap_small_bins, 32   ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
+.comm _buffer_registry, 196656 ; reserved slot 0 + 4096 generation-safe 48-byte descriptors
+.comm _buffer_registry_free, 8 ; recycled descriptor-index free-list head
+_buffer_registry_next:
+    .quad 1                 ; next never-issued descriptor index
 .comm _web_heap_guard_enabled, 8 ; enables per-request heap leak checks in --web mode
 .comm _gc_collecting, 8      ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
@@ -1076,7 +1086,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_size_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers

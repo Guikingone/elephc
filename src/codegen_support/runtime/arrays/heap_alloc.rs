@@ -47,6 +47,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_heap_alloc_start");                          // skip if already >= 8
     emitter.instruction("mov x0, #8");                                          // round up to minimum 8 bytes
     emitter.label("__rt_heap_alloc_start");
+    emitter.instruction("lsr x9, x0, #32");                                     // inspect bits the 32-bit block-size header cannot represent
+    emitter.instruction("cbnz x9, __rt_heap_alloc_size_overflow");              // reject unrepresentable payload sizes before truncating metadata
 
     // -- debug mode: validate the free list before consuming it --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_debug_enabled");
@@ -264,6 +266,9 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1
     emitter.syscall(1);
+
+    emitter.label("__rt_heap_alloc_size_overflow");
+    emitter.instruction("b __rt_heap_exhausted");                               // report an impossible header size through the established fatal path
 }
 
 /// Emits the x86_64 Linux variant of `__rt_heap_alloc`.
@@ -284,6 +289,9 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jge __rt_heap_alloc_start");                           // keep the original request when it already satisfies the minimum payload size
     emitter.instruction("mov rax, 8");                                          // round tiny allocations up so free blocks can still carry a next pointer
     emitter.label("__rt_heap_alloc_start");
+    emitter.instruction("mov r10d, 0xffffffff");                                // materialize u32::MAX with zero-extension to a 64-bit comparison operand
+    emitter.instruction("cmp rax, r10");                                        // verify the request fits the 32-bit block-size header
+    emitter.instruction("ja __rt_heap_alloc_size_overflow");                    // reject before a narrowing metadata store can truncate the size
 
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_heap_debug_enabled");
     emitter.instruction("mov r8, QWORD PTR [r8]");                              // load the heap-debug enabled flag before consuming cached free-list state
@@ -492,4 +500,40 @@ fn emit_heap_alloc_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // exit code 1 for heap exhaustion
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting heap exhaustion
+
+    emitter.label("__rt_heap_alloc_size_overflow");
+    emitter.instruction("jmp __rt_heap_exhausted");                             // report an impossible header size through the established fatal path
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies the AArch64 allocator rejects payload sizes that cannot be
+    /// represented by its 32-bit block-size header before any metadata write.
+    #[test]
+    fn aarch64_heap_allocator_guards_32_bit_header_size() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("lsr x9, x0, #32\n"));
+        assert!(asm.contains("cbnz x9, __rt_heap_alloc_size_overflow\n"));
+        assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
+
+    /// Verifies the x86_64 allocator rejects payload sizes that cannot be
+    /// represented by its 32-bit block-size header before truncating `rax`.
+    #[test]
+    fn x86_64_heap_allocator_guards_32_bit_header_size() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_heap_alloc(&mut emitter);
+        let asm = emitter.output();
+
+        assert!(asm.contains("mov r10d, 0xffffffff\n"));
+        assert!(asm.contains("cmp rax, r10\n"));
+        assert!(asm.contains("ja __rt_heap_alloc_size_overflow\n"));
+        assert!(asm.contains("__rt_heap_alloc_size_overflow:\n"));
+    }
 }

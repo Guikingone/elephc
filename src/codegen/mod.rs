@@ -90,6 +90,33 @@ pub enum Emit {
     Cdylib,
 }
 
+/// Compile-time process-isolation model selected for a `--web` executable.
+///
+/// This value is consumed while emitting the process-entry symbol, so the
+/// entry stub references only the requested server entry and does not branch
+/// on the isolation model while serving requests.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum WebIsolation {
+    /// Run PHP synchronously inside each prefork worker, matching the original server.
+    #[default]
+    Worker,
+    /// Dispatch requests to a persistent supervised pool of handler processes.
+    Pool,
+    /// Fork one disposable handler process for every request.
+    Request,
+}
+
+impl WebIsolation {
+    /// Returns the bridge C symbol embedded in the generated process-entry stub.
+    pub(crate) const fn bridge_symbol(self) -> &'static str {
+        match self {
+            Self::Worker => "elephc_web_run",
+            Self::Pool => "elephc_web_run_pool",
+            Self::Request => "elephc_web_run_request",
+        }
+    }
+}
+
 /// Error returned by the Phase 04 IR backend while a required lowering path is missing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodegenIrError {
@@ -151,6 +178,7 @@ pub fn generate_user_asm_from_ir(
         &exported_functions,
         true,
         false,
+        WebIsolation::Worker,
     )
 }
 
@@ -161,8 +189,8 @@ pub fn generate_user_asm_from_ir(
 ///
 /// `web` restructures the process entry for `--web`: the top-level body becomes
 /// the C-callable `_elephc_web_handler` and the real entry point becomes a thin
-/// stub that calls `elephc_web_run`. When false the entry is byte-for-byte the
-/// normal exit-based main.
+/// stub that calls the bridge symbol selected by `web_isolation`. When false
+/// the entry is byte-for-byte the normal exit-based main.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_user_asm_from_ir_with_options(
     module: &Module,
@@ -173,6 +201,7 @@ pub fn generate_user_asm_from_ir_with_options(
     exported_functions: &HashMap<String, ExportedFunction>,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<String> {
     let mut emitter = match emit {
         Emit::Cdylib => Emitter::new_pic(module.target),
@@ -192,6 +221,7 @@ pub fn generate_user_asm_from_ir_with_options(
         emit,
         regalloc_linear,
         web,
+        web_isolation,
     )?;
     Ok(finalize_user_asm(
         module,
@@ -256,7 +286,10 @@ fn finalize_user_asm(
     let user_functions = runtime_user_function_sigs(module);
     let function_variant_groups = runtime_function_variant_groups(module);
     let mut allowed_class_names = runtime_referenced_class_names(module);
-    if module_uses_dynamic_callable_lookup(module) || module.required_runtime_features.eval_bridge {
+    if module_uses_dynamic_callable_lookup(module)
+        || module_uses_unserialize(module)
+        || module.required_runtime_features.eval_bridge
+    {
         allowed_class_names.extend(module.class_infos.keys().cloned());
     }
     let runtime_interfaces = runtime_referenced_interfaces(module, &allowed_class_names);

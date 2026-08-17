@@ -9,6 +9,48 @@
 
 use super::*;
 
+/// Verifies a suspended Fiber's recursion accounting is isolated from the main
+/// context. Each traversal stays below the 4 MiB guard, while their combined
+/// live-frame charge exceeds it when a context switch leaks the Fiber budget.
+#[test]
+fn test_suspended_fiber_recursion_budget_does_not_leak_to_main() {
+    const LIVE_LOCALS: usize = 128;
+    const DEPTH: usize = 10;
+
+    let mut source = String::from(
+        "<?php\nfunction descend_with_large_frame(int $depth, bool $suspend): int {\n",
+    );
+    for local in 0..LIVE_LOCALS {
+        source.push_str(&format!("    $v{local} = $depth + {local};\n"));
+    }
+    let live_sum = (0..LIVE_LOCALS)
+        .map(|local| format!("$v{local}"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    source.push_str(&format!(
+        r#"    if ($depth === 0) {{
+        if ($suspend) {{
+            Fiber::suspend("held");
+        }}
+        return {live_sum};
+    }}
+    $next = descend_with_large_frame($depth - 1, $suspend);
+    return $next + {live_sum};
+}}
+$fiber = new Fiber(function(): void {{
+    descend_with_large_frame({DEPTH}, true);
+}});
+$fiber->start();
+unset($fiber);
+$result = descend_with_large_frame({DEPTH}, false);
+echo $result > 0 ? "main-ok" : "bad";
+"#,
+    ));
+
+    let out = compile_and_run(&source);
+    assert_eq!(out, "main-ok");
+}
+
 /// Verifies try/finally, foreach, match, and `new` work inside a fiber body across a suspend boundary.
 #[test]
 fn test_fiber_php_constructs_inside_body() {

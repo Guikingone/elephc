@@ -81,6 +81,7 @@ extern "elephc_web" {
     function elephc_web_server_port(): int;
     function elephc_web_protocol(): string;
     function elephc_web_request_time(): int;
+    function elephc_web_handle_uncaught_exception(): void;
     function elephc_web_env_count(): int;
     function elephc_web_env_name(int $i): string;
     function elephc_web_env_value(int $i): string;
@@ -878,6 +879,17 @@ function __elephc_session_start_core(int $read_and_close): bool {
             }
         }
     }
+    if ($id === '') {
+        // Keep narrowing nested: the checker does not carry an `instanceof`
+        // refinement across the right-hand side of `&&`.
+        if ($__elephc_h !== null) {
+            if ($__elephc_h instanceof SessionHandlerInterface) {
+                $__elephc_h->close();
+            }
+        }
+        elephc_web_session_set_status(PHP_SESSION_NONE);
+        return false;
+    }
     __ElephcSessionState::$sendCookie = $__elephc_use_cookies === 1
         && !$__elephc_from_cookie && !$__elephc_from_global;
     elephc_web_session_set_id((string)$id);
@@ -1117,8 +1129,10 @@ function session_create_id(string $prefix = ""): string|false {
         throw new ValueError('session_create_id(): Argument #1 ($prefix) cannot be longer than 256 characters');
     }
     $__elephc_created_id = elephc_web_session_create_id($prefix);
-    if ($__elephc_created_id === '' && $prefix !== '') {
-        trigger_error('session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, "-", and "," characters are allowed', E_WARNING);
+    if ($__elephc_created_id === '') {
+        if ($prefix !== '') {
+            trigger_error('session_create_id(): Prefix cannot contain special characters. Only the A-Z, a-z, 0-9, "-", and "," characters are allowed', E_WARNING);
+        }
         return false;
     }
     return $__elephc_created_id;
@@ -1829,14 +1843,15 @@ if (elephc_web_session_get_auto_start() === 1) { __elephc_session_start_core(0);
 "#;
 
 /// The catch-all wrapper: the whole handler body is placed inside its `try` so an
-/// uncaught exception sets a 500 status instead of crashing the worker (the
-/// process would otherwise die and the master would respawn it, dropping the
-/// connection). The `0;` placeholder body is replaced with the real statements.
+/// uncaught exception becomes a 500 before response commitment or aborts an
+/// already-streaming response. The `0;` placeholder body is replaced with the
+/// real statements.
 pub(crate) const WEB_WRAP_SRC: &str =
-    "<?php try { $__elephc_wrap = 0; } catch (\\Throwable $__elephc_exc) { http_response_code(500); } finally { if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE && __ElephcSessionState::$shutdown) { session_write_close(); } }";
+    "<?php try { $__elephc_wrap = 0; } catch (\\Throwable $__elephc_exc) { elephc_web_handle_uncaught_exception(); } finally { if (elephc_web_session_get_status() === PHP_SESSION_ACTIVE && __ElephcSessionState::$shutdown) { session_write_close(); } }";
 
 /// Prepends the web prelude when compiling with `--web` and wraps the whole
-/// handler body in a catch-all `try`/`catch` so uncaught exceptions become a 500.
+/// handler body in a catch-all `try`/`catch` so uncaught exceptions become a
+/// pre-commit 500 or abort an already-committed response.
 /// Returns the program unchanged otherwise.
 pub fn inject_if_web(
     program: Program,
@@ -2176,6 +2191,24 @@ mod tests {
             &[],
         );
         assert!(declares_function(&injected, "session_regenerate_id"));
+    }
+
+    /// Verifies entropy failure maps an empty bridge result to PHP `false`
+    /// even when `session_create_id()` receives its default empty prefix.
+    #[test]
+    fn session_create_id_maps_empty_entropy_result_to_false() {
+        assert!(
+            WEB_PRELUDE_SRC.contains(
+                "if ($__elephc_created_id === '') {\n        if ($prefix !== '') {"
+            ),
+            "session_create_id must distinguish entropy failure from an invalid non-empty prefix"
+        );
+        assert!(
+            WEB_PRELUDE_SRC.contains(
+                "return false;\n    }\n    return $__elephc_created_id;"
+            ),
+            "an empty generated session id must never escape as a string"
+        );
     }
 
     /// Literal availability probes retain the queried PHP-visible function.

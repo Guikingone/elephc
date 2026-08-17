@@ -63,6 +63,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
 | `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
+| `--web-isolation MODE` / `--web-isolation=MODE` | `worker`, `pool`, `request` | `worker` | Bake the web handler process model into the produced binary. Requires `--web`; plain `--web` is exactly `worker`. |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
 be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`. See
@@ -206,17 +207,31 @@ runtime arguments (not elephc compiler flags):
 | `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes (`0` = unlimited); oversized bodies get `413`. |
-| `--max-requests N` | No | `0` (never) | Recycle each worker after N requests (bounds memory growth). |
-| `--max-execution-time N` | No | `0` (no limit) | Kill and respawn a worker whose request handler runs longer than N seconds. |
+| `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests; stop accepting, drain active HTTP connections, then respawn it. |
+| `--max-execution-time N` | No | `0` (no limit) | Kill/respawn the web worker in `worker`; kill only the handler process in `pool`/`request`. |
+| `--handler-concurrency N` | No | `1` | Handler processes per web worker; `pool`/`request` only. |
+| `--max-handler-requests N` | No | `1000` | Replace a persistent handler after N requests (`0` = never); `pool` only. |
+| `--body-read-timeout N` | No | `30` | Request-body receive deadline in seconds (`0` = unlimited); `pool`/`request` only. |
+| `--response-write-timeout N` | No | `30` | Client-backpressure deadline in seconds (`0` = unlimited); `pool`/`request` only. |
 | `--gzip` | No | off | Compress responses when the client sends `Accept-Encoding: gzip`. |
 | `--access-log` | No | off | Log one line per request to stderr. |
 | `--help` (`-h`), `--version` (`-V`) | No | — | Print usage / version and exit. |
 
 ```bash
 elephc --web app.php
+elephc --web --web-isolation=pool app.php
+elephc --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
 ```
+
+The isolation choice is compile-time: the generated entry stub calls the
+selected bridge symbol directly. Mode-specific runtime flags are rejected by a
+binary compiled for another model rather than ignored. See [Choosing a web
+isolation model](../beyond-php/web.md#choosing-a-model) for concrete worker,
+pool, and request deployment examples, then [Concurrency
+model](../beyond-php/web.md#concurrency-model) for process trees, state lifetime,
+streaming, cancellation, and performance trade-offs.
 
 The served program also receives `$_COOKIE`, `$_REQUEST`, and `$_ENV`, and can
 emit cookies with `setcookie()`. The server shuts down cleanly on

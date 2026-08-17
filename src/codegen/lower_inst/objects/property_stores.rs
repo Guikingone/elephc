@@ -97,6 +97,48 @@ pub(super) fn emit_property_store(
     Ok(())
 }
 
+/// Republishes a sorted container into the declared property that supplied it.
+///
+/// Direct `krsort` lowering passes an owning transient which generic builtin cleanup releases
+/// after the call. The property therefore retains the final array/hash pointer, releases its old
+/// physical container through heap-kind dispatch, and stores the replacement without consulting
+/// the declared packed representation. Reference properties perform the same transfer through
+/// their object-owned ref-cell.
+pub(super) fn store_mutated_container_property(
+    ctx: &mut FunctionContext<'_>,
+    object: crate::ir::ValueId,
+    slot: &PropertySlot,
+    value: crate::ir::ValueId,
+) -> Result<()> {
+    let value_ty = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(&value_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        || !matches!(slot.php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+    {
+        return Err(CodegenIrError::unsupported(format!(
+            "mutated container store for {}::${} from PHP type {:?} to {:?}",
+            slot.class_name, slot.property, value_ty, slot.php_type
+        )));
+    }
+
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let value_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    abi::emit_push_reg(ctx.emitter, base_reg);
+    ctx.load_value_to_reg(value, value_reg)?;
+    abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+    abi::emit_pop_reg(ctx.emitter, base_reg);
+    if slot.is_reference {
+        let pointer_reg = reference_pointer_reg(ctx, base_reg);
+        abi::emit_load_from_address(ctx.emitter, pointer_reg, base_reg, slot.offset);
+        release_previous_referenced_value(ctx, pointer_reg, &slot.php_type, Some(&value_ty));
+        abi::emit_store_to_address(ctx.emitter, value_reg, pointer_reg, 0);
+    } else {
+        release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, Some(&value_ty));
+        abi::emit_store_to_address(ctx.emitter, value_reg, base_reg, slot.offset);
+    }
+    Ok(())
+}
+
 /// Emits a promoted constructor-property bind by storing the parameter ref-cell address.
 pub(super) fn emit_reference_property_bind(
     ctx: &mut FunctionContext<'_>,
@@ -233,6 +275,9 @@ pub(super) fn release_previous_referenced_value(
     match prop_ty {
         PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe"),
         PhpType::Callable => callable_descriptor::emit_release_current_descriptor(ctx.emitter),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
         ty => abi::emit_decref_if_refcounted(ctx.emitter, &ty),
     }
     abi::emit_pop_reg(ctx.emitter, pointer_reg);
@@ -335,6 +380,9 @@ pub(super) fn release_previous_property_value(
     match prop_ty {
         PhpType::Str => abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe"),
         PhpType::Callable => callable_descriptor::emit_release_current_descriptor(ctx.emitter),
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+        }
         ty => abi::emit_decref_if_refcounted(ctx.emitter, &ty),
     }
     abi::emit_pop_reg(ctx.emitter, base_reg);

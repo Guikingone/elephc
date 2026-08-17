@@ -165,6 +165,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_collect_cycles(emitter);
     arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
+    arrays::emit_mixed_cast_array(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
@@ -209,6 +210,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
 
     // Object runtime functions
     objects::emit_object_handles(emitter);
+    objects::emit_object_to_hash(emitter);
     objects::emit_stdclass_new(emitter);
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
@@ -243,8 +245,11 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions
+    buffers::emit_buffer_resolve(emitter);
     buffers::emit_buffer_new(emitter);
+    buffers::emit_buffer_free(emitter);
     buffers::emit_buffer_len(emitter);
     buffers::emit_buffer_bounds_fail(emitter);
+    buffers::emit_buffer_registry_fail(emitter);
     buffers::emit_buffer_use_after_free(emitter);
 }

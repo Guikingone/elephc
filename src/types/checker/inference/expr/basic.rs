@@ -384,14 +384,25 @@ impl Checker {
                 }
             }
             ExprKind::Cast { target, expr } => {
-                self.infer_type(expr, env)?;
+                let source_ty = self.infer_type(expr, env)?;
                 use crate::parser::ast::CastType;
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
                     CastType::String => PhpType::Str,
                     CastType::Bool => PhpType::Bool,
-                    CastType::Array => PhpType::Array(Box::new(PhpType::Int)),
+                    CastType::Array
+                        if matches!(source_ty.codegen_repr(), PhpType::Object(_)) =>
+                    PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                    CastType::Array
+                        if matches!(
+                            source_ty.codegen_repr(),
+                            PhpType::Mixed | PhpType::Union(_)
+                        ) => PhpType::Mixed,
+                    CastType::Array => PhpType::Array(Box::new(PhpType::Mixed)),
                 })
             }
             _ => unreachable!("non-basic expression routed to basic inference"),

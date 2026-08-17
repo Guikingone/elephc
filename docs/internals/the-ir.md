@@ -146,7 +146,7 @@ pub struct Value {
 | `Mixed` | `Heap(Mixed)` | Pointer to runtime tagged Mixed cell. |
 | `Array(inner)` | `Heap(Array)` | Indexed array heap object; element type stays in `php_type`. |
 | `AssocArray { key, value }` | `Heap(Hash)` | Hash table heap object; key/value types stay in `php_type`. |
-| `Buffer(inner)` | `Heap(Buffer(inner))` | Fixed-size elephc buffer header; not PHP array COW storage. |
+| `Buffer(inner)` | `Heap(Buffer(inner))` | Opaque generation/index handle resolved through the static buffer descriptor registry; not PHP array COW storage. |
 | `Callable` | `I64` | Callable descriptor address; ownership is tracked separately and released via callable descriptor runtime. |
 | `Object(name)` | `Heap(Object(name))` | Runtime object pointer and class metadata. |
 | `Packed(name)` | `Heap(Packed(name))` | Pointer/layout handle for packed POD data. |
@@ -737,10 +737,10 @@ eval-scope helpers, or retain interpreter fallback. See
 | `PtrReadString`, `PtrWriteString` | pointer and string/len | string or int | native memory effects, maybe `alloc_heap`, `may_fatal` |
 | `PtrOffset` | pointer, byte offset | `I64` pointer | pure arithmetic, but php_type tag preserved |
 | `PtrCheckNonnull` | pointer | `Void` | `may_fatal` |
-| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | `alloc_heap`, `may_fatal` |
-| `BufferLen` | buffer | `I64` | `reads_heap`, `may_fatal` on freed buffer |
-| `BufferGet`, `BufferSet` | buffer, index, value | typed value or `Void` | `reads_heap`/`writes_heap`, bounds `may_fatal` |
-| `BufferFree` | buffer | `Void` | `writes_heap`, `may_fatal` on invalid state |
+| `BufferNew(element_type, len)` | length | `Heap(Buffer)` | allocates a separate payload and publishes a generation-safe handle; `alloc_heap`, `may_fatal` |
+| `BufferLen` | buffer handle | `I64` | resolves generation/activity, then `reads_heap`; `may_fatal` on stale or invalid handles |
+| `BufferGet`, `BufferSet` | buffer handle, index, value | typed value or `Void` | resolve generation/activity before payload access; `reads_heap`/`writes_heap`, bounds `may_fatal` |
+| `BufferFree` | local buffer handle | `Void` | invalidates the descriptor before releasing the payload and clears the local; `writes_heap`, `may_fatal` on stale aliases |
 | `PackedFieldGet`, `PackedFieldSet` | packed pointer, field metadata | typed value or `Void` | raw memory effects |
 | `ExternGlobalLoad`, `ExternGlobalStore` | global metadata | typed value or `Void` | external state effects |
 

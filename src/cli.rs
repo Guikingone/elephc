@@ -13,6 +13,7 @@ use std::collections::HashSet;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
@@ -87,6 +88,7 @@ Arguments:
 
 Modes:
   --web                   Compile as a prefork HTTP server
+  --web-isolation MODE    worker (default) | pool | request; requires --web
   --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
 
 Output modes:
@@ -166,6 +168,8 @@ pub(crate) struct CliConfig {
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
     pub(crate) web: bool,
+    /// Process-isolation architecture baked into a `--web` executable.
+    pub(crate) web_isolation: WebIsolation,
     /// Optional capabilities the user force-enabled with `--with-<name>` (short
     /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
     /// staticlib; runtime capabilities enable their helper/native requirements.
@@ -243,6 +247,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut defines: HashSet<String> = HashSet::new();
     let mut strict_php = false;
     let mut web = false;
+    let mut web_isolation = WebIsolation::default();
+    let mut web_isolation_explicit = false;
     let mut quiet = false;
     let mut with_crates: HashSet<String> = HashSet::new();
     let mut ini_overrides: Vec<(String, String)> = Vec::new();
@@ -369,6 +375,17 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             strict_php = true;
         } else if arg == "--web" {
             web = true;
+        } else if arg == "--web-isolation" {
+            i += 1;
+            web_isolation = parse_web_isolation(&required_value(
+                args,
+                i,
+                "Missing mode after --web-isolation (expected: worker, pool, request)",
+            ));
+            web_isolation_explicit = true;
+        } else if let Some(value) = arg.strip_prefix("--web-isolation=") {
+            web_isolation = parse_web_isolation(value);
+            web_isolation_explicit = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
             // entry point); every other known bridge or runtime capability is
@@ -413,6 +430,9 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
+    if web_isolation_explicit && !web {
+        fail("--web-isolation requires --web (or --with-web)");
+    }
 
     // With no explicit `--php-version`, take the profile the project already declares. Every
     // source is optional at every level, so a lone `.php` file still resolves to the default
@@ -454,6 +474,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         defines,
         strict_php,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -578,6 +599,19 @@ fn parse_ir_opt(value: &str) -> bool {
     }
 }
 
+/// Parses the compile-time web process-isolation model.
+fn parse_web_isolation(value: &str) -> WebIsolation {
+    match value {
+        "worker" => WebIsolation::Worker,
+        "pool" => WebIsolation::Pool,
+        "request" => WebIsolation::Request,
+        other => fail(&format!(
+            "Unknown --web-isolation value: {} (expected worker|pool|request)",
+            other
+        )),
+    }
+}
+
 /// Parse a target string to a Target enum, or fail with an error message.
 fn parse_target(value: &str) -> Target {
     match Target::parse(value) {
@@ -686,6 +720,38 @@ mod tests {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
+    }
+
+    /// Verifies all explicit web-isolation spellings select their compile-time model.
+    #[test]
+    fn web_isolation_parses_all_modes() {
+        for (value, expected) in [
+            ("worker", WebIsolation::Worker),
+            ("pool", WebIsolation::Pool),
+            ("request", WebIsolation::Request),
+        ] {
+            let args = vec![
+                "elephc".into(),
+                "--web".into(),
+                format!("--web-isolation={value}"),
+                "app.php".into(),
+            ];
+            assert_eq!(compile_config(&args).web_isolation, expected);
+        }
+    }
+
+    /// Verifies the split spelling selects the same mode as the equals spelling.
+    #[test]
+    fn web_isolation_accepts_split_form() {
+        let args = vec![
+            "elephc".into(),
+            "--web".into(),
+            "--web-isolation".into(),
+            "pool".into(),
+            "app.php".into(),
+        ];
+        assert_eq!(compile_config(&args).web_isolation, WebIsolation::Pool);
     }
 
     /// Verifies the absence of `--web` leaves the web flag off.
@@ -694,6 +760,7 @@ mod tests {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
         assert!(!config.web);
+        assert_eq!(config.web_isolation, WebIsolation::Worker);
     }
 
     /// Verifies every maintained PHP minor maps to its exact compatibility profile.

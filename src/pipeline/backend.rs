@@ -17,6 +17,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) with_crates: &'a HashSet<String>,
     pub(super) ir_module: ir::Module,
     pub(super) web: bool,
+    pub(super) web_isolation: codegen::WebIsolation,
     pub(super) extra_link_libs: &'a [String],
     pub(super) extra_link_paths: &'a [String],
     pub(super) extra_frameworks: &'a [String],
@@ -42,6 +43,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         with_crates,
         mut ir_module,
         web,
+        web_isolation,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -146,6 +148,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         exported_functions,
         regalloc_linear,
         web,
+        web_isolation,
     ) {
         Ok(asm) => asm,
         Err(err) => {
