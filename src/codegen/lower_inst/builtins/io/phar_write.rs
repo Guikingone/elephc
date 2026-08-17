@@ -15,6 +15,12 @@ pub(crate) fn lower_file_put_contents(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "file_put_contents", 2, 4)?;
+    // php opens a stream internally for this call, so it consumes one PHP-visible resource
+    // id even though the caller never sees a handle. elephc uses raw syscalls and minted
+    // nothing, so every id AFTER such a call was one lower than php's — visible through
+    // `var_dump($handle)`, `(int) $handle` and `get_resource_id()`. The cursor is never
+    // reused, so advancing it is the whole of what php does here.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_burn");
     let path = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
     let path_literal = optional_const_string_operand(ctx, path)?;

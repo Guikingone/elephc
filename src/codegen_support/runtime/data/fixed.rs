@@ -1346,6 +1346,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"[\"\n");
     out.push_str(".globl _vd_close_arrow\n_vd_close_arrow:\n    .ascii \"]=>\\n\"\n");
     out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"int(\"\n");
+    // A RESOURCE nested in a container renders like a top-level one:
+    // `resource(4) of type (stream)`. `__rt_var_dump_value` answered NULL for it, so a
+    // resource inside ANY array, hash or object printed as null.
+    out.push_str(".globl _vd_res_prefix\n_vd_res_prefix:\n    .ascii \"resource(\"\n");
+    out.push_str(".globl _vd_res_middle\n_vd_res_middle:\n    .ascii \") of type (\"\n");
     out.push_str(".globl _vd_close_paren\n_vd_close_paren:\n    .ascii \")\\n\"\n");
     out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"string(\"\n");
     out.push_str(".globl _vd_close_paren_space\n_vd_close_paren_space:\n    .ascii \") \\\"\"\n");

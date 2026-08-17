@@ -31,6 +31,7 @@ mod php_fd_open;
 mod fputcsv;
 mod fread;
 mod stream_context_shape;
+mod resource_id_burn;
 mod fd_set_append;
 mod fread_filtered;
 mod fwrite;
@@ -249,6 +250,7 @@ pub(crate) use stream_copy_to_stream::emit_stream_copy_to_stream;
 pub(crate) use stream_get_contents::emit_stream_get_contents;
 pub(crate) use stream_get_line::emit_stream_get_line;
 pub(crate) use stream_context_shape::emit_stream_context_options_shape_ok;
+pub(crate) use resource_id_burn::emit_resource_id_burn;
 pub(crate) use fd_set_append::emit_fd_set_append;
 pub(crate) use stream_get_meta_data::emit_stream_get_meta_data;
 pub(crate) use stream_get_filters::emit_stream_get_filters;
@@ -375,7 +377,8 @@ pub(crate) use var_dump_walk::{
     emit_var_dump_array_bool, emit_var_dump_array_float, emit_var_dump_array_int,
     emit_var_dump_array_str, emit_var_dump_close_container, emit_var_dump_emit_bool_line,
     emit_var_dump_emit_float_line, emit_var_dump_emit_indexed_key, emit_var_dump_emit_int_line,
-    emit_var_dump_emit_null_line, emit_var_dump_emit_string_key, emit_var_dump_emit_string_line,
+    emit_var_dump_emit_null_line, emit_var_dump_emit_resource_line, emit_var_dump_emit_string_key,
+    emit_var_dump_emit_string_line,
     emit_var_dump_hash, emit_var_dump_indent_step, emit_var_dump_indexed,
     emit_var_dump_open_container, emit_var_dump_pad, emit_var_dump_value, emit_var_dump_write,
 };

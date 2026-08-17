@@ -74,6 +74,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_closedir(emitter);
     io::emit_rewinddir(emitter);
     io::emit_fd_set_append(emitter);
+    io::emit_resource_id_burn(emitter);
     io::emit_stream_context_options_shape_ok(emitter);
     io::emit_stream_get_meta_data(emitter);
     io::emit_gethostname(emitter);
@@ -164,6 +165,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_var_dump_emit_bool_line(emitter);
     io::emit_var_dump_emit_float_line(emitter);
     io::emit_var_dump_emit_null_line(emitter);
+    io::emit_var_dump_emit_resource_line(emitter);
     io::emit_print_r_spaces(emitter);
     io::emit_print_r_open(emitter);
     io::emit_print_r_close(emitter);

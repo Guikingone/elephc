@@ -3266,6 +3266,50 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a resource NESTED in a container renders, and that php's resource numbering matches.
+///
+/// `__rt_var_dump_value` sent runtime tag 9 to its NULL arm, so a resource inside an array, a
+/// hash or an object printed as `NULL` while the same resource dumped on its own printed
+/// correctly. That is one renderer, so every container shape was wrong at once — a
+/// `stream_socket_pair()` result looked like `[NULL, NULL]` even though both ends were live.
+///
+/// The NUMBER is checked alongside it because the two defects hid each other: php's
+/// `file_get_contents()` and `file_put_contents()` open a stream internally and therefore consume
+/// one resource id apiece, while elephc used raw syscalls and consumed none — so every id after
+/// such a call was one lower than php's.
+#[test]
+fn test_nested_resource_renders_and_numbers_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+// Each whole-file call costs one id in php, so the handle below must be numbered past them.
+file_put_contents("resnest.txt", "x");
+file_get_contents("resnest.txt");
+$f = fopen("resnest.txt", "r");
+var_dump($f);
+var_dump([$f]);
+var_dump(["h" => $f]);
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+var_dump(is_resource($pair[0]), $pair);
+fclose($pair[0]);
+fclose($pair[1]);
+fclose($f);
+unlink("resnest.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "resource(7) of type (stream)\n",
+            "array(1) {\n  [0]=>\n  resource(7) of type (stream)\n}\n",
+            "array(1) {\n  [\"h\"]=>\n  resource(7) of type (stream)\n}\n",
+            "bool(true)\n",
+            "array(2) {\n  [0]=>\n  resource(8) of type (stream)\n  [1]=>\n",
+            "  resource(9) of type (stream)\n}\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a read filter answering `PSFS_ERR_FATAL` fails the read instead of emptying it.
 ///
 /// php separates "the stream is exhausted" from "a filter refused the data": `fread()` and
