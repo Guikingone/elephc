@@ -78,8 +78,11 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("lsl w11, w11, #16");                                   // form 0x40000000
     emitter.instruction("cmp x14, x11");                                        // synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_stream_get_contents_after_feof");            // normal fd: skip wrapper EOF dispatch
-    emitter.instruction("bl __rt_feof");                                        // wrapper: check stream_eof before reading
-    emitter.instruction("cbnz x0, __rt_stream_get_contents_done");              // wrapper EOF means no extra stream_read call
+    // php does NOT gate the read on `stream_eof()` here: it keeps calling `stream_read()` until one
+    // answers an EMPTY string. Measured on `php -n` 8.5.6, a wrapper serving 100 bytes at a chunk
+    // size of 17 receives SEVEN calls — the seventh returning "" — and one whose `stream_eof()`
+    // never answers true still stops after the read that comes back empty. Gating here made the
+    // last call disappear, which a wrapper that counts its reads observes.
     emitter.label("__rt_stream_get_contents_after_feof");
     // Each chunk is copied out immediately, so every read may reuse the same
     // shared-buffer position instead of walking the offset forward.
@@ -271,6 +274,13 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save the grown accumulation buffer pointer
     emitter.label("__rt_stream_get_contents_bounded_have_room");
 
+    // php asks its source for a WHOLE chunk even when the cap needs fewer bytes, and keeps the
+    // surplus on the stream: `stream_get_contents($h, 30)` on a wrapper whose chunk size is 17
+    // calls `stream_read(17)` TWICE, not 17 then 13. elephc trims the request instead, which that
+    // hook can see. Matching php here means the surplus must survive as buffered stream state that
+    // `ftell()`, a later read AND a SEEK all agree about — a seek has to drop it, or a
+    // `stream_get_contents($h, $len, $offset)` prepends bytes from before the seek. Left trimmed
+    // until that accounting exists; the divergence is the request SIZE, never the bytes delivered.
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("sub x1, x10, x9");                                     // remaining bytes needed
@@ -368,9 +378,8 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp r14, r10");                                        // synthetic user-wrapper fd?
     emitter.instruction("jl __rt_stream_get_contents_after_feof_x86");          // normal fd: skip wrapper EOF dispatch
-    emitter.instruction("call __rt_feof");                                      // wrapper: check stream_eof before reading
-    emitter.instruction("test rax, rax");                                       // did stream_eof report true?
-    emitter.instruction("jnz __rt_stream_get_contents_done_x86");               // wrapper EOF means no extra stream_read call
+    // See the AArch64 counterpart: php does NOT gate the read on `stream_eof()` here, it keeps
+    // calling `stream_read()` until one answers an EMPTY string.
     emitter.label("__rt_stream_get_contents_after_feof_x86");
 
     // -- make room for one more chunk before asking fread for it --

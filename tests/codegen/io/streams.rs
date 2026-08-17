@@ -3266,6 +3266,67 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a wrapper is READ in chunks, and that php's last `stream_read()` is not skipped.
+///
+/// `fgets()` asked the wrapper for ONE BYTE per iteration, so reading 100 bytes cost a HUNDRED
+/// calls into user code where php makes six. php reads a chunk and keeps what the line does not
+/// need, and that buffer survives the call — which is why the byte count below is reached with six
+/// reads however many `fgets()` calls consume it.
+///
+/// `stream_get_contents()` had the opposite problem: it asked `stream_eof()` first and skipped the
+/// final `stream_read()` when the answer was true. php does not gate on eof at all — it keeps
+/// calling until one call answers an EMPTY string, which is the seventh here.
+#[test]
+fn test_user_wrapper_reads_are_chunked_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class R {
+    public $context;
+    public static array $reads = [];
+    public int $pos = 0;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) {
+        self::$reads[] = $n;
+        $r = substr(str_repeat("a", 100), $this->pos, $n);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_write($d) { return strlen($d); }
+    public function stream_eof() { return $this->pos >= 100; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_seek($o, $w) { return false; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("chunkread", "R");
+// stream_get_contents: the seventh call is the empty one that stops php's loop.
+$h = fopen("chunkread://x", "rb");
+stream_set_chunk_size($h, 17);
+$s = stream_get_contents($h);
+fclose($h);
+printf("contents len=%d reads=%s\n", strlen($s), implode(",", R::$reads));
+// fgets: six reads for the whole file, not one per byte.
+R::$reads = [];
+$h = fopen("chunkread://x", "rb");
+stream_set_chunk_size($h, 17);
+$n = 0;
+while (($l = fgets($h)) !== false) {
+    $n += strlen($l);
+}
+fclose($h);
+printf("fgets len=%d reads=%d\n", $n, count(R::$reads));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "contents len=100 reads=17,17,17,17,17,17,17\n",
+            "fgets len=100 reads=6\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a user wrapper's `stream_write()` receives CHUNKS, not the whole payload.
 ///
 /// php hands a userspace wrapper at most `chunk_size` bytes per call, so 70 bytes to a stream whose

@@ -233,26 +233,50 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #0");                                          // release the whole claimed window
     emitter.instruction("bl __rt_concat_publish");                              // hand the unused line window back to the shared scratch buffer
     emitter.instruction("str xzr, [sp, #8]");                                   // line length = 0
+    // php reads a wrapper in CHUNKS and buffers what the line does not need: a wrapper serving 100
+    // bytes at a chunk size of 17 receives SIX `stream_read()` calls however many `fgets()` calls
+    // consume it. elephc asked for one byte per iteration, so the same read took a HUNDRED calls
+    // into user code. Measured on `php -n` 8.5.6.
+    //
+    // The leftovers go into the same holding area a refused `stream_get_line()` uses, which is
+    // php's stream read buffer: they survive the call, and `fread()` sees them too.
     emitter.label("__rt_fgets_wrapper_loop");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("add x1, sp, #32");                                     // the byte scratch this loop already owns
+    emitter.instruction("mov x2, #1");                                          // one held byte
+    emitter.instruction("bl __rt_stream_pending_take");
+    emitter.instruction("cbnz x0, __rt_fgets_wrapper_have_byte");               // a buffered byte needs no wrapper call
+
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper fd
     emitter.instruction("bl __rt_feof");                                        // check stream_eof FIRST (x0 = 1 at EOF)
     emitter.instruction("cbnz x0, __rt_fgets_wrapper_done");                    // at EOF: return the bytes gathered so far
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the handle carries the chunk size
+    emitter.instruction("bl __rt_stream_chunk_size");                           // x0 = how much php would ask for
+    emitter.instruction("mov x1, x0");                                          // that is the read length
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the wrapper fd
-    emitter.instruction("mov x1, #1");                                          // read exactly one byte
     emitter.instruction("bl __rt_fread");                                       // x1 = chunk ptr, x2 = len
-    emitter.instruction("cbz x2, __rt_fgets_wrapper_done");                     // defensive: empty read also ends the line
-    emitter.instruction("ldrb w13, [x1]");                                      // load the read byte
+    emitter.instruction("cbz x2, __rt_fgets_wrapper_done");                     // an empty read ends the line
+    emitter.instruction("stp x1, x2, [sp, #64]");                               // the chunk outlives the release calls
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_pending_put");                          // the whole chunk belongs to the stream
+    emitter.instruction("ldr x1, [sp, #64]");                                   // the chunk pointer
+    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
+    emitter.instruction("bl __rt_concat_publish");                              // hand the scratch window back before the next read
+    emitter.instruction("ldr x0, [sp, #64]");                                   // chunk ptr for release
+    emitter.instruction("bl __rt_decref_any");                                  // the copy on the stream is the one that lives
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("add x1, sp, #32");                                     // the byte scratch
+    emitter.instruction("mov x2, #1");                                          // take the first buffered byte
+    emitter.instruction("bl __rt_stream_pending_take");
+    emitter.instruction("cbz x0, __rt_fgets_wrapper_done");                     // defensive: nothing came back
+
+    emitter.label("__rt_fgets_wrapper_have_byte");
+    emitter.instruction("ldrb w13, [sp, #32]");                                 // the byte this iteration consumes
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
     crate::codegen_support::abi::emit_symbol_address(emitter, "x12", "_user_wrapper_drain_buf");
     emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
     emitter.instruction("add x10, x10, #1");                                    // advance the line length
     emitter.instruction("str x10, [sp, #8]");                                   // store the updated line length
-    emitter.instruction("strb w13, [sp, #32]");                                 // remember the byte across the chunk-release calls
-    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
-    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov x0, x1");                                          // chunk ptr for release
-    emitter.instruction("bl __rt_decref_any");                                  // release the chunk before continuing or finishing the line
-    emitter.instruction("ldrb w13, [sp, #32]");                                 // reload the byte the wrapper produced
     emitter.instruction("cmp w13, #0x0A");                                      // is the byte a newline?
     emitter.instruction("b.eq __rt_fgets_wrapper_done");                        // newline: finish the line
     emitter.instruction("b __rt_fgets_wrapper_loop");                           // read the next byte
@@ -466,29 +490,50 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // release the whole claimed window
     emitter.instruction("call __rt_concat_publish");                            // hand the unused line window back to the shared scratch buffer
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // line length = 0
+    // See the AArch64 counterpart: php reads a wrapper in CHUNKS and buffers what the line does not
+    // need, so 100 bytes at a chunk size of 17 cost SIX `stream_read()` calls, not a hundred.
     emitter.label("__rt_fgets_wrapper_loop_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("lea rsi, [rbp - 48]");                                 // the byte scratch this loop already owns
+    emitter.instruction("mov rdx, 1");                                          // one held byte
+    emitter.instruction("call __rt_stream_pending_take");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_fgets_wrapper_have_byte_x86");                // a buffered byte needs no wrapper call
+
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
     emitter.instruction("call __rt_feof");                                      // check stream_eof FIRST (rax = 1 at EOF)
     emitter.instruction("test rax, rax");                                       // at EOF?
     emitter.instruction("jnz __rt_fgets_wrapper_done_x86");                     // at EOF: return the bytes gathered so far
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the handle carries the chunk size
+    emitter.instruction("call __rt_stream_chunk_size");                         // rax = how much php would ask for
+    emitter.instruction("mov rsi, rax");                                        // that is the read length
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the wrapper fd
-    emitter.instruction("mov rsi, 1");                                          // read exactly one byte
     emitter.instruction("call __rt_fread");                                     // rax = chunk ptr, rdx = len
     emitter.instruction("test rdx, rdx");                                       // zero-length read?
-    emitter.instruction("jz __rt_fgets_wrapper_done_x86");                      // defensive: empty read also ends the line
-    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the chunk ptr across the per-chunk release
-    emitter.instruction("movzx ecx, BYTE PTR [rax]");                           // load the read byte
+    emitter.instruction("jz __rt_fgets_wrapper_done_x86");                      // an empty read ends the line
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // the chunk outlives the release calls
+    emitter.instruction("mov rsi, rax");                                        // the chunk bytes
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_pending_put");                        // the whole chunk belongs to the stream
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // the chunk pointer
+    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
+    emitter.instruction("call __rt_concat_publish");                            // hand the scratch window back before the next read
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // chunk ptr for release
+    emitter.instruction("call __rt_decref_any");                                // the copy on the stream is the one that lives
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("lea rsi, [rbp - 48]");                                 // the byte scratch
+    emitter.instruction("mov rdx, 1");                                          // take the first buffered byte
+    emitter.instruction("call __rt_stream_pending_take");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fgets_wrapper_done_x86");                      // defensive: nothing came back
+
+    emitter.label("__rt_fgets_wrapper_have_byte_x86");
+    emitter.instruction("movzx ecx, BYTE PTR [rbp - 48]");                      // the byte this iteration consumes
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // current line length
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_drain_buf");        // line buffer base
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
     emitter.instruction("add r10, 1");                                          // advance the line length
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // store the updated line length
-    emitter.instruction("mov BYTE PTR [rbp - 48], cl");                         // remember the byte across the chunk-release calls
-    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
-    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
-    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // chunk ptr for release
-    emitter.instruction("call __rt_decref_any");                                // release the chunk before continuing or finishing the line
-    emitter.instruction("movzx ecx, BYTE PTR [rbp - 48]");                      // reload the byte the wrapper produced
     emitter.instruction("cmp cl, 0x0A");                                        // is the byte a newline?
     emitter.instruction("je __rt_fgets_wrapper_done_x86");                      // newline: finish the line
     emitter.instruction("jmp __rt_fgets_wrapper_loop_x86");                     // read the next byte
