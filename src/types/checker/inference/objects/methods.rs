@@ -517,8 +517,22 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape so method `array` params keep their associative shape, matching
                         // how free-function `array` parameters are specialized (issue #406).
-                        sig.params[i].1 =
-                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
+                        // A BY-REFERENCE parameter the method pass already WIDENED keeps that
+                        // type: it is what the caller's storage now holds, and re-narrowing it
+                        // here would hand a body compiled for raw slots an array of boxes.
+                        // `$o->go($ints)` printed ADDRESSES for the mirror of this mistake. A
+                        // by-reference parameter the body does not widen still specializes, so a
+                        // method that only sorts its argument stays on slots the backend sorts.
+                        let by_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+                        let current = sig.params[i].1.clone();
+                        let widened = by_ref
+                            && self
+                                .by_ref_widened_params
+                                .contains(&(format!("{}::{}", impl_class_name, method_key), i));
+                        if !widened {
+                            sig.params[i].1 =
+                                Self::specialize_generic_array_param_hint(&current, arg_ty);
+                        }
                     }
                     if i < regular_param_count
                         && !declared_flags.get(i).copied().unwrap_or(false)
@@ -1111,8 +1125,22 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape so static-method `array` params keep their associative shape,
                         // matching free-function specialization (issue #406).
-                        sig.params[i].1 =
-                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
+                        // A BY-REFERENCE parameter the method pass already WIDENED keeps that
+                        // type: it is what the caller's storage now holds, and re-narrowing it
+                        // here would hand a body compiled for raw slots an array of boxes.
+                        // `$o->go($ints)` printed ADDRESSES for the mirror of this mistake. A
+                        // by-reference parameter the body does not widen still specializes, so a
+                        // method that only sorts its argument stays on slots the backend sorts.
+                        let by_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+                        let current = sig.params[i].1.clone();
+                        let widened = by_ref
+                            && self
+                                .by_ref_widened_params
+                                .contains(&(format!("{}::{}", class_name, method_key), i));
+                        if !widened {
+                            sig.params[i].1 =
+                                Self::specialize_generic_array_param_hint(&current, arg_ty);
+                        }
                     }
                     if i < regular_param_count
                         && !static_declared_flags.get(i).copied().unwrap_or(false)
@@ -1194,8 +1222,22 @@ impl Checker {
                         // Sharpen a declared generic `array` parameter to the call-site array
                         // shape on `parent::`/`self::` instance dispatch, matching free-function
                         // specialization (issue #406).
-                        sig.params[i].1 =
-                            Self::specialize_generic_array_param_hint(&sig.params[i].1, arg_ty);
+                        // A BY-REFERENCE parameter the method pass already WIDENED keeps that
+                        // type: it is what the caller's storage now holds, and re-narrowing it
+                        // here would hand a body compiled for raw slots an array of boxes.
+                        // `$o->go($ints)` printed ADDRESSES for the mirror of this mistake. A
+                        // by-reference parameter the body does not widen still specializes, so a
+                        // method that only sorts its argument stays on slots the backend sorts.
+                        let by_ref = sig.ref_params.get(i).copied().unwrap_or(false);
+                        let current = sig.params[i].1.clone();
+                        let widened = by_ref
+                            && self
+                                .by_ref_widened_params
+                                .contains(&(format!("{}::{}", direct_impl_class_name, method_key), i));
+                        if !widened {
+                            sig.params[i].1 =
+                                Self::specialize_generic_array_param_hint(&current, arg_ty);
+                        }
                     }
                     if i < regular_param_count
                         && !instance_declared_flags.get(i).copied().unwrap_or(false)

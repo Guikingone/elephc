@@ -10,8 +10,8 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
-use crate::types::{PhpType, TypeEnv};
+use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind, StaticReceiver};
+use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::super::builtins::out_params;
 use super::super::super::null_probe;
@@ -291,6 +291,7 @@ impl Checker {
                     }
                 }
                 let ty = self.infer_type(expr, env)?;
+                self.widen_by_ref_array_arg_types(builtin_name, &expanded_args, env);
                 // The callee may mutate any reachable object; drop property narrowings. (The
                 // call's own argument checking above still saw them.)
                 Self::purge_property_narrowings(env);
@@ -339,6 +340,15 @@ impl Checker {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
+                if let ExprKind::StaticMethodCall { receiver, method, .. } = &expr.kind {
+                    let owner = self.static_call_owner_class(receiver);
+                    self.widen_by_ref_array_static_arg_types(
+                        owner.as_deref(),
+                        method,
+                        &expanded_args,
+                        env,
+                    );
+                }
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
@@ -396,13 +406,14 @@ impl Checker {
                 method,
                 args,
             } => {
-                self.infer_type_with_assignment_effects(object, env)?;
+                let receiver_ty = self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
                 let ty = self.infer_type(expr, env)?;
+                self.widen_by_ref_array_method_arg_types(&receiver_ty, method, &expanded_args, env);
                 Self::purge_property_narrowings(env);
                 Ok(ty)
             }
@@ -535,6 +546,122 @@ impl Checker {
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }
+    }
+
+    /// Returns the class a static call dispatches to, resolving `self`/`static`/`parent`.
+    fn static_call_owner_class(&self, receiver: &StaticReceiver) -> Option<String> {
+        match receiver {
+            StaticReceiver::Named(name) => Some(name.to_string()),
+            StaticReceiver::Self_ | StaticReceiver::Static => self.current_class.clone(),
+            StaticReceiver::Parent => {
+                let current = self.current_class.as_ref()?;
+                self.classes.get(current).and_then(|info| info.parent.clone())
+            }
+        }
+    }
+
+    /// Re-types a by-reference ARRAY argument of a STATIC method call.
+    ///
+    /// Same rule as the free-function case: a callee that widened the element representation
+    /// wrote boxed slots into the caller's storage, and the caller's own type has to follow.
+    fn widen_by_ref_array_static_arg_types(
+        &mut self,
+        owner: Option<&str>,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) {
+        let Some(owner) = owner else {
+            return;
+        };
+        let key = php_symbol_key(method);
+        let Some(sig) = self
+            .classes
+            .get(owner)
+            .and_then(|info| info.static_methods.get(&key))
+            .cloned()
+        else {
+            return;
+        };
+        Self::apply_by_ref_array_arg_types(&sig, args, env);
+    }
+
+    /// Re-types a by-reference ARRAY argument of an INSTANCE method call.
+    fn widen_by_ref_array_method_arg_types(
+        &mut self,
+        receiver_ty: &PhpType,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) {
+        let PhpType::Object(class_name) = receiver_ty else {
+            return;
+        };
+        let key = php_symbol_key(method);
+        let Some(sig) = self
+            .classes
+            .get(class_name)
+            .and_then(|info| info.methods.get(&key))
+            .cloned()
+        else {
+            return;
+        };
+        Self::apply_by_ref_array_arg_types(&sig, args, env);
+    }
+
+    /// Writes each by-reference array parameter's type back onto the argument variable.
+    ///
+    /// Only a WIDENING is written. Assigning the parameter type unconditionally would let a
+    /// callee compiled for `array<int>` NARROW a caller that holds `array<mixed>` — the same
+    /// defect in reverse, and one no call site can justify: a callee cannot unbox storage it
+    /// does not own.
+    fn apply_by_ref_array_arg_types(sig: &FunctionSig, args: &[Expr], env: &mut TypeEnv) {
+        for (index, arg) in args.iter().enumerate() {
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let ExprKind::Variable(variable) = &arg.kind else {
+                continue;
+            };
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                continue;
+            };
+            if !matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                continue;
+            }
+            let Some(current) = env.get(variable).cloned() else {
+                continue;
+            };
+            if crate::types::checker::array_element_representation_widens(&current, param_ty) {
+                env.insert(variable.clone(), param_ty.clone());
+            }
+        }
+    }
+
+    /// Re-types a by-reference ARRAY argument to the parameter type the callee was compiled for.
+    ///
+    /// A by-reference parameter keeps its declared `array` — that is, `array<mixed>` — instead of
+    /// adopting the call site's element type, because the callee writes into the CALLER's storage
+    /// (see `functions::resolution::specialization`). The caller therefore holds boxed slots once
+    /// the call returns, and its own type has to say so: leaving it `array<int>` made a LATER
+    /// by-value call specialize its callee for raw slots and read the boxes back as ADDRESSES —
+    /// `bump($t); total($t);` printed one.
+    ///
+    /// Only a plain variable is re-typed. Any other argument shape is not a by-reference target
+    /// this backend resolves to a slot, and the checker rejects those separately.
+    fn widen_by_ref_array_arg_types(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) {
+        let canonical = self
+            .canonical_function_name_folded(name)
+            .unwrap_or_else(|| name.to_string());
+        let Some(sig) = self.functions.get(&canonical).cloned() else {
+            return;
+        };
+        Self::apply_by_ref_array_arg_types(&sig, args, env);
     }
 }
 

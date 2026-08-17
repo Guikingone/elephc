@@ -260,7 +260,27 @@ impl Checker {
             {
                 let key = (name.to_string(), seen_idx);
                 let seen = self.param_specialization_seen.contains(&key);
-                if Self::is_generic_array_hint(&param_types[seen_idx].1)
+                // A BY-REFERENCE parameter that `resolve_function_signature` already widened
+                // keeps its widened element type. The narrowing below is safe for a by-VALUE
+                // parameter because the callee owns its copy; a by-reference one writes into
+                // the CALLER's storage, so re-narrowing it here would hand a body compiled for
+                // raw slots an array of boxes on the very next call —
+                // `function f(array &$a) { foreach ($a as $k => $v) { $a[$k] = $v * 2; } }`
+                // over `[1, 2, 3]` printed three ADDRESSES for the mirror of this mistake.
+                // A by-reference parameter the body does NOT widen still specializes normally,
+                // which is what keeps a `sort($a)` callee on raw slots the backend can sort.
+                let by_ref_param = stored_sig
+                    .ref_params
+                    .get(seen_idx)
+                    .copied()
+                    .unwrap_or(false);
+                let by_ref_widened = by_ref_param
+                    && self
+                        .by_ref_widened_params
+                        .contains(&(name.to_string(), seen_idx));
+                if by_ref_widened {
+                    self.param_specialization_seen.insert(key);
+                } else if Self::is_generic_array_hint(&param_types[seen_idx].1)
                     && !seen
                     && matches!(actual_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
                 {

@@ -164,6 +164,7 @@ impl Checker {
 
                     if !method_has_errors {
                         self.update_method_return_type(class, method, &method_env, &mut pass_errors);
+                        self.update_method_by_ref_param_types(class, method, &method_env);
                     }
                     self.current_class = None;
                     self.current_method = None;
@@ -318,6 +319,63 @@ impl Checker {
                     }
                 }
             }
+        }
+    }
+
+    /// Re-types a method's BY-REFERENCE array parameters to what its body left them holding.
+    ///
+    /// A by-reference parameter is compiled against the CALLER's storage. When the body widens
+    /// its element representation — a loop storage contract, an element write of a `Mixed` value
+    /// — the caller's array is rewritten to boxed slots, and a caller still typed `array<int>`
+    /// reads those boxes back as ADDRESSES: `$o->go($ints)` printed two.
+    ///
+    /// Only a widening is recorded, exactly as `resolve_function_signature` does for a free
+    /// function. A method that merely sorts its parameter keeps the narrow element type the
+    /// backend can sort.
+    fn update_method_by_ref_param_types(
+        &mut self,
+        class: &FlattenedClass,
+        method: &ClassMethod,
+        method_env: &TypeEnv,
+    ) {
+        let widened: Vec<(usize, PhpType)> = method
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, _, _, is_ref))| *is_ref)
+            .filter_map(|(index, (name, _, _, _))| {
+                let exit_ty = method_env.get(name)?;
+                Some((index, exit_ty.clone()))
+            })
+            .collect();
+        if widened.is_empty() {
+            return;
+        }
+        let key = php_symbol_key(&method.name);
+        let Some(class_info) = self.classes.get_mut(&class.name) else {
+            return;
+        };
+        let sig = if method.is_static {
+            class_info.static_methods.get_mut(&key)
+        } else {
+            class_info.methods.get_mut(&key)
+        };
+        let Some(sig) = sig else {
+            return;
+        };
+        let mut recorded = Vec::new();
+        for (index, exit_ty) in widened {
+            let Some((_, param_ty)) = sig.params.get_mut(index) else {
+                continue;
+            };
+            if crate::types::checker::array_element_representation_widens(param_ty, &exit_ty) {
+                *param_ty = exit_ty;
+                recorded.push(index);
+            }
+        }
+        let owner = format!("{}::{}", class.name, key);
+        for index in recorded {
+            self.by_ref_widened_params.insert((owner.clone(), index));
         }
     }
 

@@ -145,6 +145,8 @@ impl Checker {
             fn_decls: HashMap::new(),
             function_variant_groups: HashMap::new(),
             functions: HashMap::new(),
+            by_ref_widened_params: HashSet::new(),
+            resolving_by_ref_widening: HashSet::new(),
             resolving_functions: HashSet::new(),
             constants,
             closure_return_types: HashMap::new(),
