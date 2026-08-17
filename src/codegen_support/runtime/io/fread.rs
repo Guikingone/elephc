@@ -99,6 +99,25 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.label("__rt_fread_dest_ready");
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
 
+    // -- hand back what a refused `stream_get_line()` held, before touching the descriptor --
+    //
+    // php keeps those bytes in the stream's own read buffer, which every read function shares: a
+    // `stream_get_line()` that answered `false` is followed by an `fread()` that sees them.
+    // Measured on `php -n` 8.5.6 over a non-blocking socket pair, "abc" with no newline is refused
+    // by `stream_get_line()` and then read by `fread($h, 10)`. A stream that never hit that
+    // refusal holds nothing, so this costs one call that returns 0 on its first load.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #16]");                                   // the reserved destination
+    emitter.instruction("ldr x2, [sp, #8]");                                    // at most the requested count
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
+    emitter.instruction("cbz x0, __rt_fread_no_pending");
+    emitter.instruction("str x0, [sp, #24]");                                   // they are the whole result
+    emitter.instruction("ldr x1, [sp, #16]");
+    emitter.instruction("mov x2, x0");
+    emitter.instruction("bl __rt_concat_publish");                              // claim the window they occupy
+    emitter.instruction("b __rt_fread_done");
+    emitter.label("__rt_fread_no_pending");
+
     // -- TLS dispatch: the session hangs off the StreamState, so it is keyed by
     //    the generation-checked handle rather than by a reusable descriptor. --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
@@ -271,6 +290,21 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
     emitter.label("__rt_fread_dest_ready_x86");
+
+    // -- hand back what a refused `stream_get_line()` held, before touching the descriptor --
+    // See the AArch64 counterpart: php keeps those bytes in the stream's shared read buffer.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // the reserved destination
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // at most the requested count
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fread_no_pending_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // they are the whole result
+    emitter.instruction("mov rdx, rax");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");
+    emitter.instruction("call __rt_concat_publish");                            // claim the window they occupy
+    emitter.instruction("jmp __rt_fread_publish_x86");
+    emitter.label("__rt_fread_no_pending_x86");
 
     // -- TLS dispatch: the session hangs off the StreamState, so it is keyed by
     //    the generation-checked handle rather than by a reusable descriptor. --

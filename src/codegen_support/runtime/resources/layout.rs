@@ -239,6 +239,21 @@ pub(crate) const STREAM_TRANSPORT_UNIX: u64 = 3;
 pub(crate) const STREAM_TRANSPORT_GENERIC: u64 = 4;
 
 /// Byte offset of stream ownership flags.
+/// Byte offset of the heap block holding bytes a read consumed but must not hand back yet.
+///
+/// php's `stream_get_line()` answers `false` when it finds neither the delimiter nor the length cap
+/// and the stream is not at EOF, and the bytes it read stay ON the stream: measured on `php -n`
+/// 8.5.6 over a non-blocking socket pair, "abc" with no newline answers `false`, and once "def\n"
+/// arrives the next call answers "abcdef". elephc consumed the "abc" and handed it back as a line
+/// php never breaks. Zero when nothing is held, which is every stream that has not hit that case.
+pub(crate) const STREAM_PENDING_PTR_OFFSET: i64 = 240;
+
+/// Byte offset of the number of bytes in that block.
+pub(crate) const STREAM_PENDING_LEN_OFFSET: i64 = 248;
+
+/// Byte offset of the read cursor into that block.
+pub(crate) const STREAM_PENDING_POS_OFFSET: i64 = 256;
+
 pub(crate) const STREAM_OWNERSHIP_FLAGS_OFFSET: i64 = 296;
 
 /// Marks a stream instance whose wrapper definition declared `STREAM_IS_URL`.

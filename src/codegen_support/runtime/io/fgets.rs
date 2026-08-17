@@ -57,9 +57,10 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // Frame: [0]=opaque stream handle [8]=line length [16]=line buffer pointer
     //        [24]=line capacity [32]=wrapper byte scratch [40]=backend descriptor
     //        [48]=caller's length bound (0 = unbounded) [56]=read-filter chain head
-    emitter.instruction("sub sp, sp, #80");                                     // allocate the frame plus the bound slot
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    //        [64]=this iteration's destination, held across the pending-bytes probe
+    emitter.instruction("sub sp, sp, #96");                                     // allocate the frame plus the bound and destination slots
+    emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #80");                                    // establish new frame pointer
     emitter.instruction("str x1, [sp, #48]");                                   // preserve the caller's length bound
 
     // -- save the handle and resolve the backend descriptor --
@@ -157,6 +158,20 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // current line length
     emitter.instruction("add x1, x1, x10");                                     // buf pointer for read syscall
 
+    // -- a refused `stream_get_line()` may have left bytes ON this stream --
+    //
+    // They are taken ONE AT A TIME, through the same slot the syscall writes, so the newline scan
+    // below sees them exactly as it sees a byte off the descriptor. A bulk copy would skip that
+    // scan, and those bytes CAN contain a newline: `stream_get_line($h, 100, "|")` refuses on its
+    // own delimiter, not on `\n`. A stream that never hit the refusal holds nothing, so this is
+    // one call that returns 0 on its first load.
+    emitter.instruction("str x1, [sp, #64]");                                   // the destination this iteration writes
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("mov x2, #1");                                          // one held byte
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = 1 when one came back
+    emitter.instruction("cbnz x0, __rt_fgets_byte_ready");                      // join the shared newline scan
+    emitter.instruction("ldr x1, [sp, #64]");                                   // the destination again
+
     // -- read 1 byte via syscall --
     emitter.instruction("ldr x0, [sp, #40]");                                   // reload the backend descriptor for the read syscall
     emitter.instruction("mov x2, #1");                                          // read exactly 1 byte
@@ -244,8 +259,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.label("__rt_fgets_wrapper_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // line length
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
 
     // -- nonblocking read miss: return accumulated bytes without EOF --
@@ -271,8 +286,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_fgets_return");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #80]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #96");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -288,9 +303,10 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     // Frame: [rbp-8]=handle [rbp-16]=line length [rbp-24]=line pointer [rbp-32]=wrapper
     //        chunk pointer [rbp-40]=line capacity [rbp-48]=byte scratch [rbp-56]=descriptor
     //        [rbp-64]=caller's length bound (0 = unbounded) [rbp-72]=read-filter chain head
+    //        [rbp-80]=this iteration's destination, held across the pending-bytes probe
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fgets() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved handle and line metadata
-    emitter.instruction("sub rsp, 80");                                         // reserve the read-loop temporaries plus the bound slot
+    emitter.instruction("sub rsp, 96");                                         // reserve the read-loop temporaries plus the bound and destination slots
 
     // Resolution is a call, so it has to happen inside the frame; an invalid stream
     // therefore leaves through the framed epilogue rather than a bare `ret`.
@@ -380,6 +396,18 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_fgets_filtered_byte_x86");                    // filtered: take the byte from the chain
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // line buffer base pointer
     emitter.instruction("add rsi, QWORD PTR [rbp - 16]");                       // compute the address where libc read() should append the next byte
+
+    // -- a refused `stream_get_line()` may have left bytes ON this stream --
+    // See the AArch64 counterpart: taken ONE AT A TIME, through the slot libc read() writes, so
+    // the newline scan below sees them exactly as it sees a byte off the descriptor.
+    emitter.instruction("mov QWORD PTR [rbp - 80], rsi");                       // the destination this iteration writes
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov edx, 1");                                          // one held byte
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = 1 when one came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_fgets_read_ok_x86");                          // join the shared newline scan
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // the destination again
+
     emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // pass the resolved backend descriptor as the first libc read() argument
     emitter.instruction("mov edx, 1");                                          // request exactly one byte so fgets() can stop on the first newline
     emitter.instruction("call read");                                           // read one byte from the stream through libc read() into the concat buffer

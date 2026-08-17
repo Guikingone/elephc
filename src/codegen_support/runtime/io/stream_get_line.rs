@@ -12,6 +12,11 @@
 //! - Reads one byte at a time into that reservation until the byte budget is
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
 //!   (which is consumed and stripped). EOF/read failure updates `StreamState`.
+//! - A read that would BLOCK is not the end of the line: php answers `false` and leaves the bytes
+//!   ON the stream, so the next call sees them prefixed to whatever arrives. Measured on `php -n`
+//!   8.5.6 over a non-blocking socket pair, "abc" with no newline answers `false`, and once
+//!   "def\n" arrives the next call answers "abcdef". elephc consumed the "abc" and handed it back
+//!   as a line php never breaks. `__rt_stream_pending_put` holds it; the entry drains it back.
 //! - A third output reports whether ANY byte was consumed. PHP returns `false` only when
 //!   the call found nothing at all; a delimiter sitting at the read position yields an
 //!   empty string, so the stripped length alone cannot tell the two apart.
@@ -73,6 +78,19 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #56]");                                  // running total starts at zero
     emitter.instruction("str xzr, [sp, #72]");                                  // nothing consumed yet: the caller sees PHP false
 
+    // -- take back what a previous refusal held on this stream --
+    // Those bytes carried no delimiter — that is why they were refused — so they need no scan of
+    // their own: the tail comparison below runs as each further byte arrives.
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #48]");                                   // the reserved result window
+    emitter.instruction("ldr x2, [sp, #88]");                                   // for at most the clamped budget
+    emitter.instruction("bl __rt_stream_pending_take");                         // x0 = how many came back
+    emitter.instruction("cbz x0, __rt_sgl_no_pending");
+    emitter.instruction("str x0, [sp, #56]");                                   // they count toward the line
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("str x9, [sp, #72]");                                   // and make the result a string
+    emitter.label("__rt_sgl_no_pending");
+
     // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
     // The reservation above is NOT claimed on the raw path, because nothing nested allocates
     // from the scratch there. `__rt_fread` does, so the filtered path has to claim the whole
@@ -123,8 +141,19 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     } else {
         emitter.instruction(&format!("cmp x0, #{}", plat.would_block_errno())); // macOS: compare errno with EAGAIN/EWOULDBLOCK
     }
-    emitter.instruction("b.eq __rt_stream_get_line_done");                      // transient nonblocking miss is not EOF
+    emitter.instruction("b.eq __rt_sgl_would_block");                           // transient nonblocking miss is not EOF
     emitter.instruction("b __rt_stream_get_line_eof");                          // a read failure ends the line
+
+    // -- nothing more to read RIGHT NOW: php keeps the partial line and answers false --
+    emitter.label("__rt_sgl_would_block");
+    emitter.instruction("ldr x2, [sp, #56]");                                   // what the line has so far
+    emitter.instruction("cbz x2, __rt_stream_get_line_done");                   // nothing gathered: already false
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the opaque stream handle
+    emitter.instruction("ldr x1, [sp, #48]");                                   // the bytes to give back
+    emitter.instruction("bl __rt_stream_pending_put");                          // they stay ON the stream
+    emitter.instruction("str xzr, [sp, #56]");                                  // the caller receives nothing
+    emitter.instruction("str xzr, [sp, #72]");                                  // which php spells false
+    emitter.instruction("b __rt_stream_get_line_done");
     emitter.label("__rt_stream_get_line_read_ok");
     emitter.instruction("cbz x0, __rt_stream_get_line_eof");                    // a zero-byte read means EOF
 
@@ -295,6 +324,19 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
     emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // nothing consumed yet: the caller sees PHP false
 
+    // -- take back what a previous refusal held on this stream --
+    // See the AArch64 counterpart: those bytes carried no delimiter, so they need no scan of
+    // their own; the tail comparison runs as each further byte arrives.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // the reserved result window
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // for at most the clamped budget
+    emitter.instruction("call __rt_stream_pending_take");                       // rax = how many came back
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sgl_no_pending_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // they count toward the line
+    emitter.instruction("mov QWORD PTR [rbp - 64], 1");                         // and make the result a string
+    emitter.label("__rt_sgl_no_pending_x86");
+
     // -- a read-filter chain outranks the backend: __rt_fread pulls through it either way --
     // See the AArch64 counterpart: the filtered path has to CLAIM the reservation, because
     // `__rt_fread` allocates from the same scratch and would otherwise hand back a pointer
@@ -390,7 +432,19 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __errno_location");                               // fetch errno after libc read() failed
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
-    emitter.instruction("je __rt_stream_get_line_done_x86");                    // transient nonblocking miss returns without setting EOF
+    emitter.instruction("jne __rt_sgl_not_would_block_x86");
+
+    // -- nothing more to read RIGHT NOW: php keeps the partial line and answers false --
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // what the line has so far
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_stream_get_line_done_x86");                    // nothing gathered: already false
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // the bytes to give back
+    emitter.instruction("call __rt_stream_pending_put");                        // they stay ON the stream
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // the caller receives nothing
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // which php spells false
+    emitter.instruction("jmp __rt_stream_get_line_done_x86");
+    emitter.label("__rt_sgl_not_would_block_x86");
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
     //    (a SEPARATE buffer from _concat_buf, which each __rt_fread result may

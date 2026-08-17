@@ -3266,6 +3266,82 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies an INCOMPLETE line is refused and kept on the stream, not handed back.
+///
+/// php's `stream_get_line()` answers `false` when it finds neither the delimiter nor the length cap
+/// and the stream is not at EOF, and the bytes it read stay ON the stream. elephc consumed them and
+/// answered them as a line php never breaks — so a reader assembling records off a non-blocking
+/// socket saw a record split wherever the packets happened to land.
+///
+/// EOF is NOT that case, which is why the file half is here: a blocking file whose last line has no
+/// delimiter still answers that line. Nor is the length cap: `stream_get_line($h, 4, "\n")` answers
+/// four bytes with no delimiter in sight.
+///
+/// The bytes go back into the stream's read buffer, which php shares with every read function — a
+/// refused `stream_get_line()` followed by `fread()` sees them, and so does one followed by
+/// `fgets()`. `fgets()` takes them one at a time rather than in bulk because they CAN contain a
+/// newline: `stream_get_line()` refuses on ITS delimiter, not on `\n`.
+#[test]
+fn test_stream_get_line_keeps_an_incomplete_line_on_the_stream() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($pair[0], false);
+fwrite($pair[1], "abc");
+var_dump(stream_get_line($pair[0], 100, "
+"));
+fwrite($pair[1], "def
+ghi");
+var_dump(stream_get_line($pair[0], 100, "
+"));
+var_dump(stream_get_line($pair[0], 100, "
+"));
+fclose($pair[0]);
+fclose($pair[1]);
+// The retained bytes belong to the stream, so every reader sees them.
+$p2 = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($p2[0], false);
+fwrite($p2[1], "abc");
+var_dump(stream_get_line($p2[0], 100, "
+"), fread($p2[0], 10));
+fclose($p2[0]);
+fclose($p2[1]);
+$p3 = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+stream_set_blocking($p3[0], false);
+fwrite($p3[1], "abc");
+var_dump(stream_get_line($p3[0], 100, "
+"), fgets($p3[0]));
+fclose($p3[0]);
+fclose($p3[1]);
+// EOF still hands back a last line with no delimiter, and the cap still wins.
+$f = "sglkeep.txt";
+file_put_contents($f, "one
+two
+three");
+$h = fopen($f, "rb");
+var_dump(stream_get_line($h, 100, "
+"), stream_get_line($h, 100, "
+"));
+var_dump(stream_get_line($h, 100, "
+"), stream_get_line($h, 100, "
+"));
+fclose($h);
+unlink($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "bool(false)\nstring(6) \"abcdef\"\nbool(false)\n",
+            "bool(false)\nstring(3) \"abc\"\n",
+            "bool(false)\nstring(3) \"abc\"\n",
+            "string(3) \"one\"\nstring(3) \"two\"\n",
+            "string(5) \"three\"\nbool(false)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies removing a `zlib.deflate` STOPS it, and flushes its tail where php flushes it.
 ///
 /// The filter runs as an inline shape keyed on the descriptor, so unlinking its node retired the
