@@ -28,6 +28,9 @@ use super::{
     SCANDIR_ERRNO_WARNING_HEAD, SCANDIR_ERRNO_WARNING_MIDDLE,
     SCANDIR_OPEN_WARNING_HEAD, SCANDIR_OPEN_WARNING_MIDDLE,
     DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
+    FILTER_PARAM_CREATE_APPEND_HEAD, FILTER_PARAM_CREATE_PREPEND_HEAD, FILTER_PARAM_CREATE_TAIL,
+    FILTER_PARAM_INVALID_APPEND_HEAD, FILTER_PARAM_INVALID_PREPEND_HEAD,
+    FILTER_PARAM_INVALID_TAIL,
     SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE,
     SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_REASON_UNKNOWN, SOCKET_FAILED_SERVER_PREFIX,
     UNKNOWN_WRAPPER_HEAD, UNKNOWN_WRAPPER_MIDDLE, UNKNOWN_WRAPPER_TAIL,
@@ -1229,6 +1232,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // php's default `line-break-chars` is CRLF, not a lone newline: measured on `php -n` 8.5.6,
     // `["line-length" => 8]` over "hello world" answers 18 bytes, `aGVsbG8g\r\nd29ybGQ=`.
     out.push_str(".globl _filter_break_crlf\n_filter_break_crlf:\n    .ascii \"\\r\\n\"\n");
+    for (symbol, text) in [
+        ("_diag_fp_invalid_append", FILTER_PARAM_INVALID_APPEND_HEAD),
+        ("_diag_fp_invalid_prepend", FILTER_PARAM_INVALID_PREPEND_HEAD),
+        ("_diag_fp_invalid_tail", FILTER_PARAM_INVALID_TAIL),
+        ("_diag_fp_create_append", FILTER_PARAM_CREATE_APPEND_HEAD),
+        ("_diag_fp_create_prepend", FILTER_PARAM_CREATE_PREPEND_HEAD),
+        ("_diag_fp_create_tail", FILTER_PARAM_CREATE_TAIL),
+    ] {
+        out.push_str(&format!(
+            ".globl {symbol}\n{symbol}:\n    .ascii \"{}\"\n",
+            text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+        ));
+    }
     out.push_str(&comm_directive("_asf_line_length", 8, target));
     out.push_str(&comm_directive("_asf_break_ptr", 8, target));
     out.push_str(&comm_directive("_asf_break_len", 8, target));

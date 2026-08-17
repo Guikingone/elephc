@@ -91,12 +91,18 @@ pub(super) fn lower_builtin_stream_filter_attach(
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst, Some(0))?;
-    emit_attach_filter_node(ctx, Some(filter_id), prepend, false, Some(inst))?;
+    // OMITTING `$params` is not the same as passing null. php tests the zval POINTER, which is
+    // NULL only when the argument was not supplied — which is why `stream_filter_append($h,
+    // "convert.base64-encode", STREAM_FILTER_WRITE)` succeeds while the same call with an explicit
+    // `null` fourth argument is REFUSED. Retaining nothing for a three-operand call is what keeps
+    // the two apart at run time.
+    let params_inst = (inst.operands.len() >= 4).then_some(inst);
+    emit_attach_filter_node(ctx, Some(filter_id), prepend, false, params_inst)?;
     // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
     // display id, which the legacy design could afford because its "filter
     // resource" was really the stream descriptor; a chain node has to be findable
     // again by `stream_filter_remove()`.
-    emit_boxed_filter_handle(ctx);
+    emit_filter_handle_or_param_refusal(ctx, inst, prepend)?;
     store_if_result(ctx, inst)
 }
 
@@ -354,6 +360,60 @@ pub(super) fn materialize_stream_filter_params(
     Ok(())
 }
 
+/// Boxes the new filter handle, or reports a refused `$params` and answers php's `false`.
+///
+/// `__rt_filter_create` hands back 0 when the node's filter PARSES `$params` and was given
+/// something that is not an array — which only the four `convert.*` filters do. php raises TWO
+/// warnings for that, `Stream filter (<name>): invalid filter parameter` then `Unable to create or
+/// locate filter "<name>"`, and returns `false`; elephc attached a working filter and said nothing.
+/// Measured on `php -n` 8.5.6.
+///
+/// The check is emitted only when a fourth argument was written, so a call that cannot be refused
+/// pays nothing. The name is re-materialized rather than saved: this path is reached only for a
+/// LITERAL filter name, so producing it a second time evaluates no user code.
+fn emit_filter_handle_or_param_refusal(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    if inst.operands.len() < 4 {
+        emit_boxed_filter_handle(ctx);                                          // nothing was passed to refuse
+        return Ok(());
+    }
+    let filter = expect_operand(inst, 1)?;
+    let live = ctx.next_label("filter_params_ok");
+    let done = ctx.next_label("filter_attach_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("cbnz x0, {live}")),  // a live handle attached
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jnz {live}"));                    // a live handle attached
+        }
+    }
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The name arrives in x1/x2 and the composer wants it in x0/x1, so the length moves
+            // first — the pointer move would otherwise clobber it.
+            ctx.emitter.instruction("mov x0, x1");                              // filter-name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // filter-name length
+            ctx.emitter.instruction(&format!("mov x2, #{}", i64::from(prepend)));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // filter-name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // filter-name length
+            ctx.emitter.instruction(&format!("mov rdx, {}", i64::from(prepend)));
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_filter_param_warning");
+    emit_boxed_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&live);
+    emit_boxed_filter_handle(ctx);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Reports a filter name that resolves to nothing, the way php-src does.
 ///
 /// The message names the filter, so it is composed at run time. Each function names
@@ -445,7 +505,8 @@ pub(super) fn lower_user_stream_filter_attach(
             ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 16]");           // resolved id, below the pushed handle
         }
     }
-    emit_attach_filter_node(ctx, None, prepend, false, Some(inst))?;
+    let params_inst = (inst.operands.len() >= 4).then_some(inst);
+    emit_attach_filter_node(ctx, None, prepend, false, params_inst)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("add sp, sp, #16");                         // drop the preserved id

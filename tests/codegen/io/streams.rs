@@ -3266,6 +3266,47 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a `$params` the filter cannot read is REFUSED, and only by the filters that read it.
+///
+/// php's four `convert.*` filters parse `$params` as an array and reject anything else with two
+/// warnings and a `false`; `string.*`, `dechunk`, `zlib.*` and `bzip2.*` accept a null, an int or a
+/// string without complaint, because they never look at it. elephc attached a working filter in
+/// every case and said nothing.
+///
+/// OMITTING the argument is the case that pins the rule: php tests the zval POINTER, which is NULL
+/// only when nothing was supplied, so a three-argument call SUCCEEDS on the very filters that
+/// refuse an explicit `null`.
+#[test]
+fn test_builtin_filter_refuses_a_params_it_cannot_read() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$names = ["string.toupper", "dechunk", "convert.base64-encode", "convert.base64-decode",
+          "convert.quoted-printable-encode", "convert.quoted-printable-decode"];
+foreach ($names as $n) {
+    $h = fopen("php://memory", "w+");
+    printf("%s null=%s int=%s none=%s arr=%s\n", $n,
+        var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, null)), true),
+        var_export(is_resource(@stream_filter_append($h, $n, STREAM_FILTER_WRITE, 7)), true),
+        var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE)), true),
+        var_export(is_resource(stream_filter_append($h, $n, STREAM_FILTER_WRITE, [])), true));
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string.toupper null=true int=true none=true arr=true\n",
+            "dechunk null=true int=true none=true arr=true\n",
+            "convert.base64-encode null=false int=false none=true arr=true\n",
+            "convert.base64-decode null=false int=false none=true arr=true\n",
+            "convert.quoted-printable-encode null=false int=false none=true arr=true\n",
+            "convert.quoted-printable-decode null=false int=false none=true arr=true\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies php's built-in encoders read `$params`: `line-length`, `line-break-chars`, `binary`.
 ///
 /// elephc retained `$params` only for a USER filter, where `filter()` reads it off the instance, and

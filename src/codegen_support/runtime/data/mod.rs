@@ -60,6 +60,35 @@ pub(crate) const SOCKET_FAILED_FSOCKOPEN_PREFIX: &str = "Warning: fsockopen(): "
 /// Head of the connect-failure line, after the `Warning: <fn>(): ` the three prefixes carry.
 pub(crate) const SOCKET_FAILED_UNABLE: &str = "Unable to connect to ";
 
+/// Head of the first warning php raises when a built-in filter cannot read its `$params`.
+///
+/// Only the four `convert.*` filters parse `$params`; the rest never look at it and accept
+/// anything. Measured on `php -n` 8.5.6: passing `null` explicitly raises BOTH this and
+/// [`FILTER_PARAM_CREATE_APPEND_HEAD`], and the call answers `false`.
+pub(crate) const FILTER_PARAM_INVALID_APPEND_HEAD: &str =
+    "Warning: stream_filter_append(): Stream filter (";
+
+/// The `stream_filter_prepend()` form of [`FILTER_PARAM_INVALID_APPEND_HEAD`].
+pub(crate) const FILTER_PARAM_INVALID_PREPEND_HEAD: &str =
+    "Warning: stream_filter_prepend(): Stream filter (";
+
+/// Tail of that first warning, after the filter name.
+pub(crate) const FILTER_PARAM_INVALID_TAIL: &str = "): invalid filter parameter\n";
+
+/// Head of the second warning, which reports the attach itself as having failed.
+///
+/// The verb differs from the unknown-name wording: php says "create or locate" when the filter
+/// EXISTS but refused its parameters, and plain "locate" when the name resolves to nothing.
+pub(crate) const FILTER_PARAM_CREATE_APPEND_HEAD: &str =
+    "Warning: stream_filter_append(): Unable to create or locate filter \"";
+
+/// The `stream_filter_prepend()` form of [`FILTER_PARAM_CREATE_APPEND_HEAD`].
+pub(crate) const FILTER_PARAM_CREATE_PREPEND_HEAD: &str =
+    "Warning: stream_filter_prepend(): Unable to create or locate filter \"";
+
+/// Tail of the second warning, after the filter name.
+pub(crate) const FILTER_PARAM_CREATE_TAIL: &str = "\"\n";
+
 /// Head of the message PHP reports when a socket address names a host that does not resolve.
 ///
 /// php-src composes this itself rather than using an `errno`, which is why the `&$error_code` of

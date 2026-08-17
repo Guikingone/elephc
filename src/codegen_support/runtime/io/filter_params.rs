@@ -26,15 +26,30 @@
 
 use crate::codegen_support::runtime::resources::layout::{
     FILTER_BINARY_OFFSET, FILTER_BREAK_LEN_OFFSET, FILTER_BREAK_PTR_OFFSET,
-    FILTER_LINE_LENGTH_OFFSET, FILTER_PARAMS_OFFSET,
+    FILTER_BUILTIN_ID_OFFSET, FILTER_LINE_LENGTH_OFFSET, FILTER_PARAMS_OFFSET,
 };
+
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// Emits `__rt_filter_absorb_params(state)`, which parses the node's retained `$params` array.
+/// `convert.base64-encode`, the first built-in filter id that PARSES `$params`.
+///
+/// The four `convert.*` ids are contiguous — 6, 7, 8, 9 — which is what lets the refusal be a
+/// range test rather than four compares. Every other built-in accepts any `$params` because it
+/// never reads it.
+const FIRST_PARAM_PARSING_FILTER_ID: u64 = 6;
+
+/// `convert.quoted-printable-decode`, the last such id.
+const LAST_PARAM_PARSING_FILTER_ID: u64 = 9;
+
+/// Emits `__rt_filter_absorb_params(state) -> ok`, which parses the node's retained `$params`.
 ///
 /// Reads `line-length`, `line-break-chars` and `binary` and publishes them as plain words on the
-/// node. A missing key, a non-array `$params`, and no `$params` at all all leave the zeroed
-/// defaults in place, which is php's behaviour for each.
+/// node. A missing KEY leaves the zeroed default in place, which is php's behaviour.
+///
+/// Answers 0 when the node's filter PARSES `$params` and was handed something that is not an
+/// array. Only the four `convert.*` filters parse it — measured on `php -n` 8.5.6, `string.*`,
+/// `dechunk`, `zlib.*` and `bzip2.*` accept a null, an int or a string without complaint, because
+/// they never look at it. The caller turns a 0 into php's two warnings and a `false`.
 pub fn emit_filter_absorb_params(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => emit_absorb_aarch64(emitter),
@@ -63,10 +78,24 @@ fn emit_absorb_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // the node whose fields we fill
     emitter.instruction("cbz x0, __rt_fap_done");                               // no node, nothing to fill
     emitter.instruction(&format!("ldr x0, [x0, #{FILTER_PARAMS_OFFSET}]"));     // the retained `$params` box
-    emitter.instruction("cbz x0, __rt_fap_done");                               // php's default: no parameters at all
+    emitter.instruction("cbz x0, __rt_fap_done");                               // the argument was not supplied at all
     emitter.instruction("bl __rt_mixed_unbox");                                 // x0 = tag, x1 = payload
     emitter.instruction("cmp x0, #5");                                          // runtime tag 5 identifies a hash
-    emitter.instruction("b.ne __rt_fap_done");                                  // a packed array carries no string keys
+    emitter.instruction("b.eq __rt_fap_array");
+    emitter.instruction("cmp x0, #4");                                          // tag 4 identifies a packed array
+    emitter.instruction("b.eq __rt_fap_done");                                  // an array with no string keys: nothing to read
+    // -- not an array: only the filters that PARSE `$params` refuse it --
+    emitter.instruction("ldr x9, [sp, #0]");
+    emitter.instruction(&format!("ldr x9, [x9, #{FILTER_BUILTIN_ID_OFFSET}]")); // which built-in this node runs
+    emitter.instruction(&format!("cmp x9, #{FIRST_PARAM_PARSING_FILTER_ID}"));  // the four `convert.*` ids are contiguous
+    emitter.instruction("b.lo __rt_fap_done");                                  // every other filter ignores `$params`
+    emitter.instruction(&format!("cmp x9, #{LAST_PARAM_PARSING_FILTER_ID}"));
+    emitter.instruction("b.hi __rt_fap_done");
+    emitter.instruction("mov x0, #0");                                          // php refuses the attach outright
+    emitter.instruction("ldp x29, x30, [sp, #16]");
+    emitter.instruction("add sp, sp, #32");
+    emitter.instruction("ret");
+    emitter.label("__rt_fap_array");
     emitter.instruction("str x1, [sp, #8]");                                    // the hash every lookup below reads
 
     // -- line-length --
@@ -108,6 +137,7 @@ fn emit_absorb_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x10, [x9, #{FILTER_BINARY_OFFSET}]"));
 
     emitter.label("__rt_fap_done");
+    emitter.instruction("mov x0, #1");                                          // the parameters were usable
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the absorber frame
     emitter.instruction("ret");
@@ -128,10 +158,26 @@ fn emit_absorb_x86_64(emitter: &mut Emitter) {
         "mov rdi, QWORD PTR [rdi + {FILTER_PARAMS_OFFSET}]"
     ));                                                                         // the retained `$params` box
     emitter.instruction("test rdi, rdi");
-    emitter.instruction("jz __rt_fap_done_x86");                                // php's default: no parameters at all
+    emitter.instruction("jz __rt_fap_done_x86");                                // the argument was not supplied at all
     emitter.instruction("call __rt_mixed_unbox");                               // rax = tag, rdi = payload
     emitter.instruction("cmp rax, 5");                                          // runtime tag 5 identifies a hash
-    emitter.instruction("jne __rt_fap_done_x86");                               // a packed array carries no string keys
+    emitter.instruction("je __rt_fap_array_x86");
+    emitter.instruction("cmp rax, 4");                                          // tag 4 identifies a packed array
+    emitter.instruction("je __rt_fap_done_x86");                                // an array with no string keys
+    // -- not an array: only the filters that PARSE `$params` refuse it --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [r10 + {FILTER_BUILTIN_ID_OFFSET}]"
+    ));                                                                         // which built-in this node runs
+    emitter.instruction(&format!("cmp r10, {FIRST_PARAM_PARSING_FILTER_ID}"));  // the four `convert.*` ids are contiguous
+    emitter.instruction("jb __rt_fap_done_x86");                                // every other filter ignores `$params`
+    emitter.instruction(&format!("cmp r10, {LAST_PARAM_PARSING_FILTER_ID}"));
+    emitter.instruction("ja __rt_fap_done_x86");
+    emitter.instruction("xor eax, eax");                                        // php refuses the attach outright
+    emitter.instruction("add rsp, 32");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+    emitter.label("__rt_fap_array_x86");
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // the hash every lookup below reads
 
     // -- line-length --
@@ -182,6 +228,7 @@ fn emit_absorb_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r10 + {FILTER_BINARY_OFFSET}], 1"));
 
     emitter.label("__rt_fap_done_x86");
+    emitter.instruction("mov rax, 1");                                          // the parameters were usable
     emitter.instruction("add rsp, 32");                                         // release the absorber frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");

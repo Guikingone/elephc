@@ -132,6 +132,7 @@ fn emit_filter_create_aarch64(emitter: &mut Emitter) {
     // attached, so probing the hash on every buffer would put a lookup in the encoder's inner
     // path for a constant.
     emitter.instruction("bl __rt_filter_absorb_params");                        // x0 = the node it fills
+    emitter.instruction("cbz x0, __rt_filter_create_bad_params");               // php refuses the attach outright
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the state the absorber consumed
 
     // -- register the filter as an owned resource --
@@ -143,6 +144,12 @@ fn emit_filter_create_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #64");                                     // release the creation frame
     emitter.instruction("ret");                                                 // return the filter handle
 
+    emitter.label("__rt_filter_create_bad_params");
+    // The state was allocated before the parameters could be read, so it is released here rather
+    // than leaked: the caller sees the same 0 an allocation failure produces and reports php's
+    // wording for the refusal.
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the state nobody will own
+    emitter.instruction("bl __rt_heap_free");
     emitter.label("__rt_filter_create_fail");
     emitter.instruction("mov x0, #0");                                          // report allocation failure
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
@@ -789,6 +796,8 @@ fn emit_filter_create_x86_64(emitter: &mut Emitter) {
     // path for a constant.
     emitter.instruction("mov rdi, rax");                                        // the node it fills
     emitter.instruction("call __rt_filter_absorb_params");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_create_bad_params_x86");                // php refuses the attach outright
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the state the absorber consumed
 
     // -- register the filter as an owned resource --
@@ -799,6 +808,10 @@ fn emit_filter_create_x86_64(emitter: &mut Emitter) {
     emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return the filter handle
 
+    emitter.label("__rt_filter_create_bad_params_x86");
+    // See the AArch64 counterpart: the state was allocated before the parameters could be read.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the state nobody will own
+    emitter.instruction("call __rt_heap_free");                                 // takes its pointer in rax, not rdi
     emitter.label("__rt_filter_create_fail");
     emitter.instruction("xor eax, eax");                                        // report allocation failure
     emitter.instruction("leave");                                               // restore rbp + rsp
