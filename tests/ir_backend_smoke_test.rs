@@ -6981,3 +6981,25 @@ fn unique_test_id() -> u128 {
         .expect("system time should be after unix epoch")
         .as_nanos()
 }
+
+/// Verifies that an assignment used as the right operand of a comparison evaluates with PHP
+/// semantics: the assignment happens first and its value is what the comparison sees.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_comparison() {
+    let source = "<?php $s = \"a/b/c\"; if (false !== $pos = strrpos($s, \"/\")) { echo $pos; }";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_comparison", source),
+        "3"
+    );
+}
+
+/// Verifies that a chained assignment inside an arithmetic expression assigns the inner
+/// variable and folds its value into the surrounding sum, matching PHP.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_arithmetic() {
+    let source = "<?php $x = 1 + $y = 2; echo $x; echo $y;";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_arithmetic", source),
+        "32"
+    );
+}

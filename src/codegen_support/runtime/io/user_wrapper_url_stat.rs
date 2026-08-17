@@ -289,11 +289,16 @@ fn emit_user_wrapper_url_stat_linux_x86_64(emitter: &mut Emitter) {
 ///
 /// Calls `__rt_user_wrapper_url_stat` (which sets `_url_stat_matched`) and, on a
 /// stat-array result, extracts an integer field by its PHP string key:
-/// `field_sel` 0 → `'size'`, 1 → `'mode'`. Returns the field as an int, or `-1`
-/// when the scheme did not match, the wrapper reported the path absent, or the
-/// field is missing/non-integer. Backs `filesize()`/`is_file()` on `scheme://`
-/// URLs; the caller reads `_url_stat_matched` to choose between this result and
-/// the real-filesystem fallback. Reuses the boxed-Mixed reader
+/// `field_sel` 0 → `'size'`, 1 → `'mode'`. Returns the field as an int in
+/// `x0`/`rax` plus a success flag in `x1`/`rdx`, or `-1` with the flag clear when
+/// the scheme did not match, the wrapper reported the path absent, or the field is
+/// missing/non-integer. Backs `filesize()`/`is_file()` on `scheme://` URLs; the
+/// caller reads `_url_stat_matched` to choose between this result and the
+/// real-filesystem fallback.
+///
+/// `-1` alone could not distinguish "absent" from a real field value for callers that
+/// must box PHP `false`, and it is a value a wrapper is free to report. `is_file()`
+/// reads the payload register only, so the flag is inert for it. Reuses the boxed-Mixed reader
 /// (`__rt_mixed_array_get`) with a `__rt_hash_normalize_key`-normalized string
 /// key, then releases both the field box and the stat-array box.
 pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
@@ -345,6 +350,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #24]");                                   // stat-array Mixed
     emitter.instruction("bl __rt_decref_any");                                  // release the boxed stat array
     emitter.instruction("ldr x0, [sp, #32]");                                   // load the integer result
+    emitter.instruction("mov x1, #1");                                          // success flag for callers that box int|false
     emitter.instruction("b __rt_uusf_ret");                                     // return it
 
     emitter.label("__rt_uusf_valfail");
@@ -358,6 +364,7 @@ pub fn emit_user_wrapper_url_stat_field(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_decref_any");                                  // release the boxed-false stat result (x0)
     emitter.label("__rt_uusf_fail");
     emitter.instruction("mov x0, #-1");                                         // -1 sentinel (caller ignores when _url_stat_matched is 0)
+    emitter.instruction("mov x1, #0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
     emitter.label("__rt_uusf_ret");
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -413,6 +420,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // stat-array Mixed
     emitter.instruction("call __rt_decref_any");                                // release the boxed stat array
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // load the integer result
+    emitter.instruction("mov rdx, 1");                                          // success flag for callers that box int|false
     emitter.instruction("jmp __rt_uusf_ret_x86");                               // return it
 
     emitter.label("__rt_uusf_valfail_x86");
@@ -426,6 +434,7 @@ fn emit_user_wrapper_url_stat_field_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release the boxed-false stat result (rax)
     emitter.label("__rt_uusf_fail_x86");
     emitter.instruction("mov rax, -1");                                         // -1 sentinel (caller ignores when _url_stat_matched is 0)
+    emitter.instruction("mov rdx, 0");                                          // failure flag: `filesize()` boxes PHP false rather than -1
 
     emitter.label("__rt_uusf_ret_x86");
     emitter.instruction("add rsp, 32");                                         // release the helper frame

@@ -360,7 +360,7 @@ fn parse_expr_bp_inner(
         }
 
         if let Some((op, l_bp, r_bp)) = assignment_bp(&tokens[*pos].0) {
-            if l_bp < min_bp {
+            if l_bp < min_bp && !is_assignment_expression_target(&lhs) {
                 break;
             }
 

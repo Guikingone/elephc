@@ -651,8 +651,7 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_file` | Read file into array of lines |
 | `__rt_file_exists` / `__rt_is_file` / `__rt_is_dir` | Existence and path-type checks backed by `stat()` |
 | `__rt_is_readable` / `__rt_is_writable` | Access checks backed by `access()` |
-| `__rt_filesize` / `__rt_filemtime` | File size and modification timestamp from stat metadata |
-| `__rt_fileatime` / `__rt_filectime` / `__rt_fileperms` / `__rt_fileowner` / `__rt_filegroup` / `__rt_fileinode` | Extended stat scalar metadata. Return a payload plus success flag so codegen can box PHP `false` without confusing legitimate zero values. |
+| `__rt_filesize` / `__rt_filemtime` / `__rt_fileatime` / `__rt_filectime` / `__rt_fileperms` / `__rt_fileowner` / `__rt_filegroup` / `__rt_fileinode` | Stat scalar metadata. Each returns a payload plus a success flag (`x1`/`rdx`) so codegen can box PHP `false` without confusing legitimate zero values — a size of `0` for an empty file, or a timestamp of `0`. |
 | `__rt_filetype` / `__rt_is_executable` / `__rt_is_link` | File type and permission predicates; `filetype()` uses `lstat()` so symlinks report `"link"` and missing paths box as `false`. |
 | `__rt_stat_array` / `__rt_lstat_array` / `__rt_fstat_array` | Build PHP-compatible stat arrays with numeric and string keys, returning a null pointer for codegen to box as `false` on failure |
 | `__rt_unlink` / `__rt_mkdir` / `__rt_rmdir` / `__rt_chdir` | Filesystem path operations via libc/syscalls |
