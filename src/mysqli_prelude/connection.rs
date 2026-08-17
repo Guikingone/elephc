@@ -128,9 +128,10 @@ class mysqli {
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
-        if (str_starts_with($_host, "p:")) {
-            // php-src: a host beginning with `p:` selects a persistent
-            // connection; the real host is the remainder.
+        // php-src compares the `p:` persistent-connection prefix
+        // case-insensitively, so `P:host` is persistent too; the real host is
+        // the remainder.
+        if (strlen($_host) >= 2 && strtolower(substr($_host, 0, 2)) === "p:") {
             $_persistent = 1;
             $_host = substr($_host, 2);
         }
@@ -538,6 +539,32 @@ class mysqli {
         }
         $this->clearError();
         return mysqli_stmt::__elephcFromPrepare($this, $this->conn, $_handle, $query);
+    }
+
+    public function stmt_init(): mysqli_stmt {
+        // The two-step form: an unprepared statement to be prepared with
+        // $stmt->prepare($sql) (or mysqli_stmt_prepare()).
+        $this->requireInitialized("mysqli::stmt_init");
+        return mysqli_stmt::__elephcInit($this, $this->conn);
+    }
+
+    public function get_charset(): mixed {
+        // php returns a stdClass describing the connection charset. elephc knows
+        // the negotiated name (utf8mb4 by default / whatever set_charset set);
+        // the numeric collation/state/comment fields the bridge does not expose
+        // are reported as 0 / "" (documented). The common `->charset` read is
+        // exact.
+        $this->requireInitialized("mysqli::get_charset");
+        $_info = new stdClass();
+        $_info->{"charset"} = $this->currentCharset;
+        $_info->{"collation"} = "";
+        $_info->{"dir"} = "";
+        $_info->{"min_length"} = 0;
+        $_info->{"max_length"} = 0;
+        $_info->{"number"} = 0;
+        $_info->{"state"} = 0;
+        $_info->{"comment"} = "";
+        return $_info;
     }
 
     // -- elephc PHP >= 8.2 mysqli execute_query begin --

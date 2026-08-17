@@ -38,6 +38,7 @@ class mysqli_stmt {
     public int $num_rows = 0;
     public int $param_count = 0;
     public string $sqlstate = "00000";
+    public array $error_list = [];
 
     // Bridge handles: the prepared-statement handle and the owning connection.
     private int $stmt = -1;
@@ -65,6 +66,52 @@ class mysqli_stmt {
         // from the multi-statement scanner on `--` comments / backslash rules).
         $_statement->param_count = elephc_pdo_mysql_param_count($stmt);
         return $_statement;
+    }
+
+    // Internal factory for the two-step mysqli::stmt_init() + prepare() form:
+    // an unprepared statement bound to a connection, ready for prepare().
+    public static function __elephcInit(mysqli $link, int $conn): mysqli_stmt {
+        $_statement = new mysqli_stmt();
+        $_statement->link = $link;
+        $_statement->conn = $conn;
+        return $_statement;
+    }
+
+    public function prepare(string $query): bool {
+        if ($this->conn < 0) {
+            $this->syntheticFailure(2006, "mysqli_stmt object is not associated with a connection", "HY000");
+            return false;
+        }
+        if ($query === "") {
+            throw new ValueError("mysqli_stmt::prepare(): Argument #1 (\$query) cannot be empty");
+        }
+        if ($this->stmt >= 0) {
+            elephc_pdo_finalize($this->stmt);
+            $this->stmt = -1;
+        }
+        $_handle = elephc_pdo_prepare($this->conn, $query, 0);
+        if ($_handle < 0) {
+            // stmt is still -1, so opFailed reads the connection's error state
+            // (its stmt-errno fallback), which is where a prepare error lives.
+            $this->opFailed();
+            return false;
+        }
+        $this->stmt = $_handle;
+        $this->param_count = elephc_pdo_mysql_param_count($_handle);
+        $this->executedOnce = false;
+        $this->hasPending = false;
+        $this->clearError();
+        return true;
+    }
+
+    public function free_result(): void {
+        // Discards a pending buffered result so the statement can be re-executed
+        // (php frees the client-side buffer). We buffer per-statement in the
+        // bridge, so draining/resetting the cursor is the equivalent.
+        if ($this->hasPending && $this->stmt >= 0) {
+            elephc_pdo_reset($this->stmt);
+        }
+        $this->hasPending = false;
     }
 
     public function bind_param(string $types, mixed &...$vars): bool {
@@ -336,6 +383,7 @@ class mysqli_stmt {
         $this->errno = $errno;
         $this->error = $message;
         $this->sqlstate = $sqlstate;
+        $this->error_list = [["errno" => $errno, "sqlstate" => $sqlstate, "error" => $message]];
         $this->report($message, $errno, $sqlstate);
     }
 
@@ -354,6 +402,7 @@ class mysqli_stmt {
         if ($this->sqlstate === "") {
             $this->sqlstate = "HY000";
         }
+        $this->error_list = [["errno" => $this->errno, "sqlstate" => $this->sqlstate, "error" => $this->error]];
         $this->report($this->error, $this->errno, $this->sqlstate);
         return false;
     }
@@ -363,6 +412,7 @@ class mysqli_stmt {
         $this->errno = 0;
         $this->error = "";
         $this->sqlstate = "00000";
+        $this->error_list = [];
     }
 
     // mysqli_report dispatch: STRICT throws mysqli_sql_exception, ERROR alone

@@ -551,4 +551,94 @@ function mysqli_stmt_param_count(mixed $statement): int {
     }
     return $statement->param_count;
 }
+
+function mysqli_stmt_sqlstate(mixed $statement): string {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_sqlstate(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->sqlstate;
+}
+
+function mysqli_stmt_field_count(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_field_count(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->field_count;
+}
+
+function mysqli_stmt_insert_id(mixed $statement): int {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_insert_id(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->insert_id;
+}
+
+function mysqli_stmt_error_list(mixed $statement): array {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_error_list(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->error_list;
+}
+
+function mysqli_stmt_free_result(mixed $statement): void {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_free_result(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    $statement->free_result();
+}
+
+function mysqli_stmt_prepare(mixed $statement, string $query): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_stmt_prepare(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->prepare($query);
+}
+
+// Deprecated php alias of mysqli_stmt_execute (no $params form in the old API).
+function mysqli_execute(mixed $statement): bool {
+    if (!($statement instanceof mysqli_stmt)) {
+        throw new TypeError("mysqli_execute(): Argument #1 (\$statement) must be of type mysqli_stmt, " . gettype($statement) . " given");
+    }
+    return $statement->execute(null);
+}
+
+function mysqli_stmt_init(mixed $mysql): mysqli_stmt|false {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_stmt_init(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->stmt_init();
+}
+
+function mysqli_fetch_lengths(mixed $result): ?array {
+    if (!($result instanceof mysqli_result)) {
+        throw new TypeError("mysqli_fetch_lengths(): Argument #1 (\$result) must be of type mysqli_result, " . gettype($result) . " given");
+    }
+    return $result->lengths;
+}
+
+function mysqli_field_seek(mixed $result, int $index): bool {
+    if (!($result instanceof mysqli_result)) {
+        throw new TypeError("mysqli_field_seek(): Argument #1 (\$result) must be of type mysqli_result, " . gettype($result) . " given");
+    }
+    return $result->field_seek($index);
+}
+
+function mysqli_field_tell(mixed $result): int {
+    if (!($result instanceof mysqli_result)) {
+        throw new TypeError("mysqli_field_tell(): Argument #1 (\$result) must be of type mysqli_result, " . gettype($result) . " given");
+    }
+    return $result->field_tell();
+}
+
+function mysqli_get_charset(mixed $mysql): mixed {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_get_charset(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->get_charset();
+}
+
+// The client library is not thread-safe in this build; php returns a bool.
+function mysqli_thread_safe(): bool {
+    return false;
+}
 "#;

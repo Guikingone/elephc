@@ -161,13 +161,17 @@ pub(crate) fn compile(config: CliConfig) {
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
     let pdo_force = with_crates.contains("pdo");
+    // Detect once, then pass the result as `force` to injection: `inject_if_used`
+    // injects when `force || detect(...)`, so `force = pdo_used` reproduces the
+    // exact decision without a second AST walk (the injected PDO prelude would
+    // otherwise be re-scanned by the mysqli detection below too).
     let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
-        pdo_prelude::inject_if_used(ast, pdo_force, &mut prelude_inventory)
+        pdo_prelude::inject_if_used(ast, pdo_used, &mut prelude_inventory)
     } else {
         pdo_prelude::inject_if_used_for_version(
             ast,
-            pdo_force,
+            pdo_used,
             php_version,
             &mut prelude_inventory,
         )
@@ -187,7 +191,7 @@ pub(crate) fn compile(config: CliConfig) {
     let phase_started = Instant::now();
     let mysqli_force = with_crates.contains("mysqli");
     let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
-    let ast = mysqli_prelude::inject_if_used(ast, mysqli_force, php_version);
+    let ast = mysqli_prelude::inject_if_used(ast, mysqli_used, php_version);
     if mysqli_used {
         linked_php_surfaces.push("mysqli".to_string());
     }

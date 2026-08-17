@@ -44,6 +44,12 @@ class mysqli_sql_exception extends RuntimeException {
     public function getPrevious(): ?Throwable {
         return $this->previous;
     }
+
+    // php 8.1+: the documented accessor for the SQLSTATE (the property itself is
+    // protected in php-src; elephc exposes both — see the class note).
+    public function getSqlState(): string {
+        return $this->sqlstate;
+    }
 }
 
 // Stores the process-wide report mode consumed by every mysqli failure path.

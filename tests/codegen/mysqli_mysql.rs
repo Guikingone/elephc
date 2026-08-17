@@ -552,3 +552,81 @@ echo "|closed";
         "ping|ver|host|tid|cs|utf8mb4|ac|tx|sp|rb|stat|closed"
     );
 }
+
+/// The corrected transaction semantics: a named `commit()` COMMITS (it emits
+/// `COMMIT /*name*/`, not `RELEASE SAVEPOINT`), so the row persists after a
+/// reconnect — the data-loss blocker. Savepoints use the separate
+/// `savepoint()` / `release_savepoint()` API, and `$flags` compose into the
+/// SQL. `$db->affected_rows` after commit is 0 (php resets it).
+#[test]
+#[ignore]
+fn test_mysqli_named_commit_persists_and_savepoints() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mtx");
+$db->query("CREATE TABLE mtx (id INT PRIMARY KEY AUTO_INCREMENT, v INT) ENGINE=InnoDB");
+$db->begin_transaction(MYSQLI_TRANS_START_READ_WRITE, "job");
+$db->query("INSERT INTO mtx (v) VALUES (10), (20)");
+$db->savepoint("half");
+$db->query("INSERT INTO mtx (v) VALUES (30)");
+echo $db->release_savepoint("half") ? "rel" : "norel";
+echo "|", $db->commit(0, "job") ? "commit" : "no";
+echo "|aff=", $db->affected_rows;
+// Reconnect proves the writes were committed, not rolled back on destruct.
+$db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$r = $db2->query("SELECT COUNT(*) c FROM mtx");
+echo "|rows=", ($r instanceof mysqli_result) ? $r->fetch_column(0) : "?";
+// rollback to savepoint keeps the outer transaction open.
+$db->begin_transaction();
+$db->query("INSERT INTO mtx (v) VALUES (40)");
+$db->savepoint("sp2");
+$db->query("INSERT INTO mtx (v) VALUES (50)");
+$db->rollback(0, "sp2");   // ROLLBACK /*sp2*/ — full rollback, not to savepoint
+$rc = $db->query("SELECT COUNT(*) c FROM mtx");
+echo "|after_rb=", ($rc instanceof mysqli_result) ? $rc->fetch_column(0) : "?";
+$db2->query("DROP TABLE mtx");
+"#,
+    ));
+    // 3 rows committed (10,20,30); the second transaction's rollback discards
+    // its inserts, so the count stays 3.
+    assert_eq!(out, "rel|commit|aff=0|rows=3|after_rb=3");
+}
+
+/// The two-step statement API (`stmt_init()` + `prepare()`), the statement
+/// introspectors, and `get_charset()` over the live server.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_init_prepare_and_introspection() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msi");
+$db->query("CREATE TABLE msi (id INT PRIMARY KEY AUTO_INCREMENT, v INT)");
+$stmt = $db->stmt_init();
+echo $stmt->prepare("INSERT INTO msi (v) VALUES (?)") ? "prep" : "no";
+echo "|params=", $stmt->param_count;
+$stmt->execute([7]);
+echo "|stmt_insert_id=", $stmt->insert_id;
+echo "|stmt_affected=", $stmt->affected_rows;
+echo "|stmt_sqlstate=", $stmt->sqlstate;
+$stmt->free_result();
+$stmt->close();
+$cs = $db->get_charset();
+echo "|charset=", $cs->charset;
+$sel = $db->prepare("SELECT id, v FROM msi ORDER BY id");
+$sel->execute();
+$r = $sel->get_result();
+if ($r instanceof mysqli_result) {
+    $r->fetch_field();
+    echo "|field_tell=", $r->field_tell();
+    $r->field_seek(0);
+    echo "|after_seek=", $r->field_tell();
+}
+$sel->close();
+$db->query("DROP TABLE msi");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "prep|params=1|stmt_insert_id=1|stmt_affected=1|stmt_sqlstate=00000|charset=utf8mb4|field_tell=1|after_seek=0"
+    );
+}

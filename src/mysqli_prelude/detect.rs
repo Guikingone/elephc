@@ -18,6 +18,9 @@
 //!   (new, static receivers, `instanceof`, `catch`, `extends`/`implements`, type
 //!   hints, trait uses, `use` imports). The prefix is `mysqli_`, NOT `mysql`:
 //!   the ancient `mysql_query` API must not inject this prelude.
+//! - A bare global `MYSQLI_*` constant reference is a trigger too (the prelude
+//!   declares ~50 of them, so a program whose only mention is a constant must
+//!   still get them — see `name_is_mysqli_constant`).
 //! - Capability probes (`class_exists('mysqli')`, `function_exists('mysqli_…')`,
 //!   `defined('MYSQLI_…')`, `extension_loaded('mysqli')`) are string literals and
 //!   deliberately do NOT trigger injection — same rule as the PDO prelude. A
@@ -58,6 +61,14 @@ fn name_is_mysqli_class(name: &Name) -> bool {
             || segment.eq_ignore_ascii_case("mysqli_result")
             || segment.eq_ignore_ascii_case("mysqli_sql_exception")
     })
+}
+
+/// Returns whether `name` is a bare global `MYSQLI_*` constant. Only the
+/// single-segment global spelling matches (a namespaced `Vendor\MYSQLI_ASSOC`
+/// is unrelated); PHP constant names are case-sensitive and the surface is
+/// all-uppercase, so `MYSQLI_` is matched case-sensitively.
+fn name_is_mysqli_constant(name: &Name) -> bool {
+    matches!(name.parts.as_slice(), [constant] if constant.starts_with("MYSQLI_"))
 }
 
 /// Returns whether a function-call name denotes a mysqli procedural function:
@@ -209,8 +220,15 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
         | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_)
         | ExprKind::PostDecrement(_)
-        | ExprKind::ConstRef(_)
         | ExprKind::MagicConstant(_) => false,
+
+        // A bare global `MYSQLI_*` constant is a mysqli reference: the prelude
+        // declares ~50 of them, and a program whose only mention is e.g.
+        // `['mode' => MYSQLI_ASSOC]` would otherwise fail with "undefined
+        // constant" — the failure the exhaustive walk exists to prevent. PDO
+        // has no such gap because its constants are class constants reached
+        // through a detected static receiver.
+        ExprKind::ConstRef(name) => name_is_mysqli_constant(name),
 
         ExprKind::BinaryOp { left, right, .. } => {
             expr_refs_mysqli(left) || expr_refs_mysqli(right)
@@ -645,6 +663,27 @@ mod tests {
     #[test]
     fn detects_static_receiver() {
         assert!(program_uses_mysqli(&parse("<?php $m = mysqli::$reportMode;")));
+    }
+
+    /// A bare global `MYSQLI_*` constant is a mysqli reference (a config-array
+    /// value or a helper that only forwards the constant would otherwise fail
+    /// with "undefined constant").
+    #[test]
+    fn detects_bare_constant() {
+        assert!(program_uses_mysqli(&parse(
+            "<?php $cfg = ['mode' => MYSQLI_ASSOC];"
+        )));
+        assert!(program_uses_mysqli(&parse(
+            "<?php function m() { return MYSQLI_REPORT_STRICT; }"
+        )));
+    }
+
+    /// A non-mysqli bare constant, and a namespaced `MYSQLI_*`, are not
+    /// mysqli references.
+    #[test]
+    fn ignores_unrelated_or_namespaced_constant() {
+        assert!(!program_uses_mysqli(&parse("<?php echo SORT_ASC;")));
+        assert!(!program_uses_mysqli(&parse("<?php echo Vendor\\MYSQLI_ASSOC;")));
     }
 
     /// Class-name matching is case-insensitive, as PHP class names are.

@@ -232,6 +232,21 @@ class mysqli_result implements IteratorAggregate {
         return $_fields;
     }
 
+    public function field_seek(int $index): bool {
+        // Moves the fetch_field() cursor. php returns the previous position;
+        // elephc returns true/false (in-range), the mysqli_result::field_seek
+        // contract most code relies on.
+        if ($index < 0 || $index > $this->field_count) {
+            return false;
+        }
+        $this->fieldPos = $index;
+        return true;
+    }
+
+    public function field_tell(): int {
+        return $this->fieldPos;
+    }
+
     public function close(): void {
         // Drop the buffered cells; further fetches see an exhausted cursor.
         $this->cells = [];

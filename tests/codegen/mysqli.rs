@@ -14,6 +14,52 @@
 
 use crate::support::*;
 
+/// A bare `MYSQLI_*` constant is enough to inject the surface (issue: a config
+/// array or helper that only forwards the constant must not fail with
+/// "undefined constant"), and `mysqli_sql_exception::getSqlState()` (php 8.1+)
+/// reads the SQLSTATE.
+#[test]
+fn test_mysqli_bare_constant_and_getsqlstate() {
+    let out = compile_and_run(
+        r#"<?php
+$cfg = ['mode' => MYSQLI_ASSOC, 'flags' => MYSQLI_REPORT_STRICT];
+echo $cfg['mode'], $cfg['flags'];
+$e = new mysqli_sql_exception("boom");
+$e->sqlstate = "42S02";
+echo "|", $e->getSqlState();
+"#,
+    );
+    assert_eq!(out, "12|42S02");
+}
+
+/// The completed procedural surface is declared: the savepoint API, the
+/// two-step statement API, the statement introspectors, the result field
+/// cursor, and get_charset / thread_safe all pass `function_exists`, and the
+/// new `MYSQLI_TRANS_COR_*` constants are defined.
+#[test]
+fn test_mysqli_completed_surface_exists() {
+    let out = compile_and_run(
+        r#"<?php
+$fns = [
+    'mysqli_savepoint', 'mysqli_release_savepoint',
+    'mysqli_stmt_init', 'mysqli_stmt_prepare', 'mysqli_execute',
+    'mysqli_stmt_sqlstate', 'mysqli_stmt_field_count', 'mysqli_stmt_insert_id',
+    'mysqli_stmt_error_list', 'mysqli_stmt_free_result',
+    'mysqli_fetch_lengths', 'mysqli_field_seek', 'mysqli_field_tell',
+    'mysqli_get_charset', 'mysqli_thread_safe',
+];
+$missing = 0;
+foreach ($fns as $f) { if (!function_exists($f)) { $missing++; } }
+echo $missing === 0 ? "all-fns" : ("missing:" . $missing);
+echo "|", method_exists('mysqli', 'savepoint') && method_exists('mysqli', 'stmt_init') ? "methods" : "no";
+echo "|", method_exists('mysqli_result', 'field_seek') ? "field_seek" : "no";
+echo "|", defined('MYSQLI_TRANS_COR_AND_CHAIN') && defined('MYSQLI_TRANS_COR_RELEASE') ? "cor" : "no";
+echo "|", mysqli_thread_safe() === false ? "not-ts" : "ts";
+"#,
+    );
+    assert_eq!(out, "all-fns|methods|field_seek|cor|not-ts");
+}
+
 /// A mysqli-only program declares the mysqli surface (class, procedural alias,
 /// constants) and does NOT leak the PDO classes. The `new mysqli()` is the
 /// detection trigger: capability probes are string literals and deliberately

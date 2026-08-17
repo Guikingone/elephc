@@ -148,6 +148,25 @@ while ($db->more_results()) {
 Each produced `mysqli_result` is independent and stays valid while the batch
 advances.
 
+## Transactions and savepoints
+
+```php
+$db->begin_transaction(MYSQLI_TRANS_START_READ_WRITE, "job42");   // START TRANSACTION READ WRITE /*job42*/
+$db->query("UPDATE accounts SET balance = balance - 10 WHERE id = 1");
+$db->savepoint("half");                                           // SAVEPOINT `half`
+$db->query("UPDATE accounts SET balance = balance + 10 WHERE id = 2");
+$db->commit(MYSQLI_TRANS_COR_AND_CHAIN, "job42");                 // COMMIT AND CHAIN /*job42*/
+```
+
+The `$name` argument of `begin_transaction()` / `commit()` / `rollback()` is a
+SQL **comment** (`/*name*/`), exactly as php-src emits it — it is *not* a
+savepoint. Savepoints are the separate `savepoint()` / `release_savepoint()`
+methods (and `mysqli_savepoint()` / `mysqli_release_savepoint()`), which emit
+`SAVEPOINT` / `RELEASE SAVEPOINT`. The `$flags` are composed into the SQL:
+`MYSQLI_TRANS_START_*` on `begin_transaction()` (`READ ONLY`, `READ WRITE`,
+`WITH CONSISTENT SNAPSHOT`) and `MYSQLI_TRANS_COR_*` on `commit()` / `rollback()`
+(`AND [NO] CHAIN`, `[NO] RELEASE`).
+
 While result sets remain unconsumed (including a `real_query()` result not yet
 picked up by `store_result()`), issuing a new statement — `query()`,
 `prepare()`, `multi_query()`, `ping()`, `select_db()`, `set_charset()`,
@@ -167,17 +186,21 @@ default is `MYSQLI_REPORT_OFF`).
 | `MYSQLI_REPORT_OFF` | silent `false` |
 
 After a failure, `errno`, `error`, `sqlstate`, and `error_list` are populated
-on the connection (or the statement). `mysqli_sql_exception` exposes its
-SQLSTATE as a public `$sqlstate` property (php-src keeps it protected behind
-`getSqlState()`).
+on the connection (and on the statement). `mysqli_sql_exception` provides both
+`getSqlState()` (php 8.1+) and a public `$sqlstate` property (php-src keeps the
+property protected behind the getter; elephc exposes both).
 
 ## Escaping
 
 `real_escape_string()` / `escape_string()` return the escaped payload
-**without** wrapping quotes, using the same MySQL rules as `PDO::quote()`:
-backslash-escaping of `\`, `'`, `"`, NUL, `\n`, `\r`, and ctrl-Z — and, when
-the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
-(backslash-escaping is unsafe in that mode; this mirrors mysqlnd).
+**without** wrapping quotes. Escaping is **charset-aware** (through the bridge,
+using the connection charset): backslash-escaping of `\`, `'`, `"`, NUL, `\n`,
+`\r`, and ctrl-Z for ASCII-compatible charsets; for an ASCII-incompatible
+multibyte charset (`gbk`, `big5`, `sjis`, `cp932`, …) a lead byte that does not
+begin a complete character is escaped too, closing the classic trailing-byte
+breakout (`0xBF 0x27` → `\ 0xBF \ '`, matching `mysql_real_escape_string`).
+Under `NO_BACKSLASH_ESCAPES` only `'` is doubled (backslash is a literal there;
+this mirrors mysqlnd).
 
 ## Divergences from php-src
 
@@ -218,6 +241,23 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
   `mysqli_stmt` properties are refreshed after operations but are not
   write-barriered; assigning to them is not rejected.
 - **`ping()` runs `SELECT 1`** rather than the wire-protocol ping packet.
+- **Operations on a never-connected object raise `Error`.** php 8 raises
+  `Error: mysqli object is not fully initialized` for any operation on a
+  `mysqli_init()` / argument-less `new mysqli()` object; elephc matches this
+  (including `real_escape_string()` and `character_set_name()`, which used to
+  return a value with no signal). `close()` on such an object still returns
+  `true`.
+- **`MYSQLI_REPORT_ERROR` (without STRICT) writes to STDERR**, not a real
+  `E_WARNING`: php raises an `E_WARNING` visible to `set_error_handler()`,
+  `error_get_last()`, and log routing, and its message carries the SQLSTATE,
+  errno, and method name. elephc's `fwrite(STDERR, "mysqli error: …")` is
+  invisible to php's error hooks and omits those fields. `STRICT` (the default)
+  is unaffected — it throws `mysqli_sql_exception`.
+- **Argument-error classes differ.** `bind_param()` records errno 2031 and
+  returns `false` when the type-string length does not match the variable
+  count; php throws `ArgumentCountError`. `mysqli_result::data_seek(-1)` and
+  `fetch_column()` out of range return `false` / throw `ValueError` per php,
+  but a negative `data_seek` returns `false` where php throws `ValueError`.
 - **`query()` rejects multi-statement strings client-side** (errno 1064 with
   an elephc-worded message) instead of php-src's server-side rejection: the
   bridge keeps multi-statements enabled for the whole connection (php's
@@ -239,16 +279,16 @@ the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
 - **`fetch_object()` constructs before assigning properties** (the
   `PDO::FETCH_PROPS_LATE` order); php-src assigns the row first and calls the
   constructor afterwards.
-- **`param_count` is a client-side count** of `?` placeholders outside
-  string literals, identifiers, and comments; the bridge does not expose the
-  server's count.
 - **Capability probes do not inject the surface**: like PDO,
   `class_exists('mysqli')` in a program with no other mysqli reference
-  reports `false`; build with `--with-mysqli` to force the surface.
+  reports `false`; build with `--with-mysqli` to force the surface. A bare
+  `MYSQLI_*` constant reference *does* inject it.
 - **`eval()` never sees mysqli** (same rule as PDO):
   `extension_loaded('mysqli')` is `false` inside `eval()`.
-- `mysqli_sql_exception::$sqlstate` is public (php-src: protected +
-  `getSqlState()`).
+- **`get_charset()` reports only the charset name.** The returned object's
+  `charset` field is exact; `collation`, `number`, `state`, `dir`,
+  `min_length`, `max_length`, and `comment` are `0` / `""` (the bridge does not
+  expose the charset table).
 
 ## Not implemented (fails loudly)
 
@@ -261,4 +301,16 @@ The v1 subset deliberately omits — calls fail to compile
 - true unbuffered `use_result`
 - the `mysqli_driver` and `mysqli_warning` objects
 - `bind_result` / `fetch` (see divergences)
+- `mysqli_stmt_data_seek` and `mysqli_stmt_result_metadata` (the statement does
+  not buffer its own rows in this model — use `get_result()` and the
+  `mysqli_result` fetch family, which do)
 - the legacy `mysql_*` API
+
+Provided procedural surface beyond the earlier list now also includes
+`mysqli_savepoint` / `mysqli_release_savepoint`, `mysqli_stmt_init` /
+`mysqli_stmt_prepare` / `mysqli_execute`, `mysqli_stmt_sqlstate` /
+`mysqli_stmt_field_count` / `mysqli_stmt_insert_id` / `mysqli_stmt_error_list` /
+`mysqli_stmt_free_result`, `mysqli_fetch_lengths`, `mysqli_field_seek` /
+`mysqli_field_tell`, `mysqli_get_charset`, and `mysqli_thread_safe`
+(`mysqli_thread_safe()` reports `false` — this build's client is not
+thread-safe).
