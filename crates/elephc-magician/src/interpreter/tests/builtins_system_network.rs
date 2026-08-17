@@ -760,7 +760,7 @@ return function_exists("get_loaded_extensions");"#,
 
     assert_eq!(
         values.output,
-        "10:Core:json:opcache:no-curl:1:Zend OPcache:no-reflection:array"
+        "11:Core:json:opcache:no-curl:1:Zend OPcache:no-reflection:array"
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }

@@ -270,11 +270,11 @@ fn emit_aarch64_eval_dynamic_callable_invoker(
     emitter.instruction(&format!(
         "ldr x0, [x9, #{}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
-    ));                                                                          // pass the captured eval context as FFI argument 1
+    ));                                                                         // pass the captured eval context as FFI argument 1
     emitter.instruction(&format!(
         "ldr x1, [x9, #{}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
-    ));                                                                          // pass the captured eval callback as FFI argument 2
+    ));                                                                         // pass the captured eval callback as FFI argument 2
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass the boxed Mixed invoker argument array
     emitter.instruction("add x3, sp, #16");                                     // pass writable eval result storage
     abi::emit_call_label(emitter, &symbol);
@@ -320,11 +320,11 @@ fn emit_x86_64_eval_dynamic_callable_invoker(
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r9 + {}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CONTEXT_CAPTURE)
-    ));                                                                          // pass the captured eval context as FFI argument 1
+    ));                                                                         // pass the captured eval context as FFI argument 1
     emitter.instruction(&format!(
         "mov rsi, QWORD PTR [r9 + {}]",
         dynamic_capture_offset(EVAL_DYNAMIC_CALLBACK_CAPTURE)
-    ));                                                                          // pass the captured eval callback as FFI argument 2
+    ));                                                                         // pass the captured eval callback as FFI argument 2
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // pass the boxed Mixed invoker argument array
     emitter.instruction("lea rcx, [rbp - 48]");                                 // pass writable eval result storage
     abi::emit_call_label(emitter, &symbol);
@@ -1324,7 +1324,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     emitter.instruction(&format!(
         "ldr x0, [x29, #{}]",
         AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));                                                                          // load the active eval context for dynamic callable validation
+    ));                                                                         // load the active eval context for dynamic callable validation
     emitter.instruction(&format!("cbz x0, {}", fail_label));                    // reject dynamic eval callables when no context is active
     emitter.instruction("ldr x1, [x29, #-16]");                                 // pass the original boxed eval callback value
     abi::emit_call_label(emitter, &is_callable_symbol);
@@ -1344,7 +1344,7 @@ fn emit_aarch64_eval_dynamic_callable_descriptor(
     emitter.instruction(&format!(
         "ldr x10, [x29, #{}]",
         AARCH64_EVAL_CONTEXT_FROM_FP_OFFSET
-    ));                                                                          // reload the active eval context for descriptor capture 0
+    ));                                                                         // reload the active eval context for descriptor capture 0
     abi::emit_store_to_address(
         emitter,
         "x10",
@@ -1381,7 +1381,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [rbp - {}]",
         context_frame_offset
-    ));                                                                          // load the active eval context for dynamic callable validation
+    ));                                                                         // load the active eval context for dynamic callable validation
     emitter.instruction("test rdi, rdi");                                       // check whether a context was passed by magician
     emitter.instruction(&format!("jz {}", fail_label));                         // reject dynamic eval callables when no context is active
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // pass the original boxed eval callback value
@@ -1402,7 +1402,7 @@ fn emit_x86_64_eval_dynamic_callable_descriptor(
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [rbp - {}]",
         context_frame_offset
-    ));                                                                          // reload the active eval context for descriptor capture 0
+    ));                                                                         // reload the active eval context for descriptor capture 0
     abi::emit_store_to_address(
         emitter,
         "r10",

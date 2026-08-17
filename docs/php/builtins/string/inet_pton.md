@@ -2,7 +2,7 @@
 title: "inet_pton()"
 description: "Converts a human-readable IP address to its packed in_addr representation."
 sidebar:
-  order: 404
+  order: 418
 ---
 
 ## inet_pton()

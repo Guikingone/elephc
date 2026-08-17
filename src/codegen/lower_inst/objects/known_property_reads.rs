@@ -355,7 +355,7 @@ pub(super) fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");

@@ -262,7 +262,7 @@ fn lower_dynamic_prop_unset(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");

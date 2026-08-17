@@ -2,7 +2,7 @@
 title: "parse_url()"
 description: "Parses a URL and returns its components."
 sidebar:
-  order: 419
+  order: 433
 ---
 
 ## parse_url()

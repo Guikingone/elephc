@@ -101,12 +101,16 @@ pub(super) fn lower_builtin_stream_filter_attach(
             ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the read filter for this descriptor
+            ctx.emitter.instruction(
+                &format!("mov BYTE PTR [r9 + rcx], {}", id)
+            );                                                                  // record the read filter for this descriptor
             ctx.emitter.label(&skip_read);
             ctx.emitter.instruction("test rax, 2");                             // test whether STREAM_FILTER_WRITE is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_write));             // skip the write-filter table when the write bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", id)); // record the write filter for this descriptor
+            ctx.emitter.instruction(
+                &format!("mov BYTE PTR [r9 + rcx], {}", id)
+            );                                                                  // record the write filter for this descriptor
             ctx.emitter.label(&skip_write);
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }

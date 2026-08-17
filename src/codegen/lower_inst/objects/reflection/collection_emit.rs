@@ -308,11 +308,15 @@ pub(super) fn emit_skip_if_static_property_uninitialized(
     );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("b.eq {}", skip_label));           // omit uninitialized typed static properties from the reflection map
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, {}", marker_reg, sentinel_reg)); // compare the static property marker against the uninitialized sentinel
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}", marker_reg, sentinel_reg)
+            );                                                                  // compare the static property marker against the uninitialized sentinel
             ctx.emitter.instruction(&format!("je {}", skip_label));             // omit uninitialized typed static properties from the reflection map
         }
     }

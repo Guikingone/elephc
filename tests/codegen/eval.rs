@@ -8052,6 +8052,7 @@ echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
 echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
 echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
 echo filemtime("missing-stat.txt") === false ? "missing-mtime" : "bad"; echo ":";
+echo filesize("missing-stat.txt") === false ? "missing-size" : "bad"; echo ":";
 echo call_user_func("filetype", "eval-stat.txt") . ":";
 echo call_user_func_array("fileinode", ["filename" => "eval-stat.txt"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");
@@ -8064,7 +8065,7 @@ unlink("eval-stat.txt");');
     );
     assert_eq!(
         out,
-        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:file:callinode:1111111111"
+        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:missing-size:file:callinode:1111111111"
     );
 }
 

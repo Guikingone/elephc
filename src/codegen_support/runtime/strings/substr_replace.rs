@@ -20,16 +20,19 @@ use crate::codegen_support::platform::Arch;
 /// the result via the standard string ABI (pointer in x1, length in x2).
 ///
 /// ## Register conventions (ARM64)
-/// - `x0`: offset into subject (negative = count from end, -1 means replace to end)
+/// - `x0`: offset into subject (negative = count from the end)
 /// - `x1/x2`: subject string pointer/length
 /// - `x3/x4`: replacement string pointer/length
-/// - `x7`: replace length (-1 = sentinel meaning "replace from offset to end")
+/// - `x7`: replace length (negative = bytes omitted from the end; `i64::MAX` = to the end)
 ///
 /// ## Behavior
 /// 1. Clamps offset to [0, subject_len]. Negative offset is converted to a
 ///    tail-relative index; if still negative it is clamped to 0.
-/// 2. Expands length=-1 to "remaining bytes from offset". Clamps negative lengths to 0.
-/// 3. Clamps the slice end to subject_len.
+/// 2. Reads a NEGATIVE length as php does — bytes omitted from the end of the remaining tail —
+///    clamping to 0 only when more were omitted than remain. The caller signals an omitted
+///    length with `i64::MAX` rather than a value inside the valid range, so `-1` keeps its php
+///    meaning of "stop one byte before the end".
+/// 3. Bounds the length by the remaining tail, which is also what expands `i64::MAX`.
 /// 4. Builds the result in storage reserved through `__rt_concat_reserve` as:
 ///    prefix (subject[0..offset]) + replacement + suffix (subject[slice_end..]),
 ///    then publishes the written length through `__rt_concat_publish`.
@@ -60,15 +63,25 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.instruction("csel x0, x2, x0, gt");                                 // min(offset, len)
 
     // -- compute replace length --
-    emitter.instruction("cmn x7, #1");                                          // check if length == -1 (sentinel)
-    emitter.instruction("b.ne 2f");                                             // if not sentinel, use given length
-    emitter.instruction("sub x7, x2, x0");                                      // length = remaining from offset
+    // A NEGATIVE length is php's "stop this many bytes before the end of the subject", counted
+    // from the remaining tail. It used to be clamped to zero, so `substr_replace("hello","X",1,-1)`
+    // answered `"hX"` where php answers `"hXo"`. The omitted-length case no longer arrives as `-1`
+    // — the caller passes `i64::MAX`, which the end clamp below turns into "through the end"
+    // without a sentinel, so `-1` can be read as the real php length it is.
+    emitter.instruction("cmp x7, #0");                                          // check whether the requested length is negative
+    emitter.instruction("b.ge 2f");                                             // a non-negative length is already a byte count
+    emitter.instruction("sub x9, x2, x0");                                      // bytes remaining from the clamped offset
+    emitter.instruction("add x7, x9, x7");                                      // omit that many bytes from the end of the remaining tail
+    emitter.instruction("cmp x7, #0");                                          // check whether more bytes were omitted than remain
+    emitter.instruction("csel x7, xzr, x7, lt");                                // an over-long omission replaces nothing
     emitter.raw("2:");
-    emitter.instruction("cmp x7, #0");                                          // clamp negative length to 0
-    emitter.instruction("csel x7, xzr, x7, lt");                                // max(0, length)
+    // Bound the length by what remains BEFORE adding it to the offset. That is what turns the
+    // caller's `i64::MAX` into "through the end" with no sentinel test, and it also means the
+    // sum below can never overflow: length <= remaining, so offset + length <= subject length.
+    emitter.instruction("sub x9, x2, x0");                                      // bytes remaining from the clamped offset
+    emitter.instruction("cmp x7, x9");                                          // compare the requested length against what remains
+    emitter.instruction("csel x7, x9, x7, gt");                                 // min(length, remaining)
     emitter.instruction("add x8, x0, x7");                                      // end = offset + length
-    emitter.instruction("cmp x8, x2");                                          // clamp end to string length
-    emitter.instruction("csel x8, x2, x8, gt");                                 // min(end, len)
 
     // -- reserve the exact upper bound (subject + replacement) before writing anything --
     emitter.instruction("stp x0, x8, [sp, #0]");                                // save the clamped replacement offset and slice end across the reservation call
@@ -132,11 +145,13 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_substr_replace`.
 ///
-/// Identical semantics to the ARM64 variant, but uses the x86_64 System V ABI:
-/// - `rdi/rsi`: subject string pointer/length
-/// - `rdx/rcx`: replacement string pointer/length
-/// - `r8`: replacement offset (clamped to [0, subject_len]; negative = from end, -1 = to end)
-/// - `r9`: replace length (clamped, -1 expands to remaining)
+/// Identical semantics to the ARM64 variant. The register assignment is elephc's own, NOT the
+/// System V argument order — read it off the caller (`lower_substr_replace_x86_64`), which pops
+/// the offset, then the replacement pair, then the subject pair:
+/// - `rax/rdx`: subject string pointer/length
+/// - `rdi/rsi`: replacement string pointer/length
+/// - `rcx`: replacement offset (clamped to [0, subject_len]; negative = from the end)
+/// - `r8`: replace length (negative = bytes omitted from the end; `i64::MAX` = to the end)
 ///
 /// ## Output
 /// - `rax`: result string pointer (concat buffer start)
@@ -165,20 +180,28 @@ fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the full subject-string length before clamping offsets past the end
     emitter.instruction("cmp r9, rcx");                                         // compare the requested replacement offset against the full subject-string length
     emitter.instruction("cmovg r9, rcx");                                       // clamp the replacement offset to the end of the subject string when needed
-    emitter.instruction("mov r10, r8");                                         // start from the requested replacement length before sentinel and bounds clamping
-    emitter.instruction("cmp r10, -1");                                         // check whether the caller omitted the optional replacement length
-    emitter.instruction("jne __rt_substr_replace_len_known_linux_x86_64");      // skip the sentinel expansion when the caller supplied an explicit replacement length
-    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the subject-string length before deriving the tail replacement span
-    emitter.instruction("sub r10, r9");                                         // replace the remainder of the subject string when the optional length is omitted
-    emitter.label("__rt_substr_replace_len_known_linux_x86_64");
+    // A NEGATIVE length is php's "stop this many bytes before the end of the subject", counted
+    // from the remaining tail — it used to be clamped to zero, answering `"hX"` for
+    // `substr_replace("hello","X",1,-1)` where php answers `"hXo"`. The omitted-length case no
+    // longer arrives as `-1` but as `i64::MAX`, which the remaining-bound below turns into
+    // "through the end" by the ordinary path, so `-1` reads as the real php length it is.
+    emitter.instruction("mov r10, r8");                                         // start from the requested replacement length before bounds clamping
     emitter.instruction("cmp r10, 0");                                          // check whether the requested replacement length is negative
-    emitter.instruction("mov rcx, 0");                                          // materialize zero for the negative-length clamp
-    emitter.instruction("cmovl r10, rcx");                                      // clamp negative replacement lengths back to zero
+    emitter.instruction("jge __rt_substr_replace_len_known_linux_x86_64");      // a non-negative length is already a byte count
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the subject-string length to size the remaining tail
+    emitter.instruction("sub rcx, r9");                                         // bytes remaining from the clamped replacement offset
+    emitter.instruction("add r10, rcx");                                        // omit that many bytes from the end of the remaining tail
+    emitter.instruction("mov rcx, 0");                                          // materialize zero for the over-omission clamp
+    emitter.instruction("cmovl r10, rcx");                                      // an over-long omission replaces nothing
+    emitter.label("__rt_substr_replace_len_known_linux_x86_64");
+    // Bound the length by what remains BEFORE adding it to the offset: that is what turns the
+    // caller's `i64::MAX` into "through the end", and it keeps the sum below from overflowing.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the full subject-string length
+    emitter.instruction("sub rcx, r9");                                         // bytes remaining from the clamped replacement offset
+    emitter.instruction("cmp r10, rcx");                                        // compare the requested length against what remains
+    emitter.instruction("cmovg r10, rcx");                                      // min(length, remaining)
     emitter.instruction("mov r11, r9");                                         // seed the suffix start from the clamped replacement offset
     emitter.instruction("add r11, r10");                                        // compute the byte offset immediately after the replaced slice
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // reload the full subject-string length before clamping the suffix start
-    emitter.instruction("cmp r11, rcx");                                        // compare the suffix start against the subject-string end
-    emitter.instruction("cmovg r11, rcx");                                      // clamp the suffix start to the end of the subject string when the slice overruns
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // preserve the clamped replacement offset for the prefix copy loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the clamped suffix start for the suffix copy loop
 

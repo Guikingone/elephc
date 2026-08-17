@@ -441,7 +441,9 @@ fn emit_store_result_to_scratch(ctx: &mut FunctionContext<'_>, offset: usize) {
     let result = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("str {}, [sp, #{}]", result, offset)); // stage the resolved integer in scratch
+            ctx.emitter.instruction(
+                &format!("str {}, [sp, #{}]", result, offset)
+            );                                                                  // stage the resolved integer in scratch
         }
         Arch::X86_64 => {
             ctx.emitter
@@ -460,7 +462,7 @@ fn emit_load_scratch_to_arg_reg(ctx: &mut FunctionContext<'_>, index: usize, off
 fn emit_load_scratch_to_reg(ctx: &mut FunctionContext<'_>, reg: &str, offset: usize) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset)); // load the staged integer into the target register
+            ctx.emitter.instruction(&format!("ldr {}, [sp, #{}]", reg, offset));// load the staged integer into the target register
         }
         Arch::X86_64 => {
             ctx.emitter

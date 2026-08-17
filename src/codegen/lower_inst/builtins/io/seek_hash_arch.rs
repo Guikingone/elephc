@@ -29,7 +29,9 @@ pub(super) fn lower_fseek_aarch64(
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); // continue only when lseek succeeds
+    ctx.emitter.instruction(
+        &ctx.emitter.platform.branch_on_syscall_success(success_label)
+    );                                                                          // continue only when lseek succeeds
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction("mov x0, #-1");                                     // fseek returns -1 when lseek fails
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed seek
@@ -97,7 +99,9 @@ pub(super) fn lower_rewind_aarch64(
     if ctx.emitter.platform.needs_cmp_before_error_branch() {
         ctx.emitter.instruction("cmp x0, #0");                                  // Linux reports lseek failure as a negative result
     }
-    ctx.emitter.instruction(&ctx.emitter.platform.branch_on_syscall_success(success_label)); // continue only when rewind succeeds
+    ctx.emitter.instruction(
+        &ctx.emitter.platform.branch_on_syscall_success(success_label)
+    );                                                                          // continue only when rewind succeeds
     abi::emit_pop_reg(ctx.emitter, "x9");
     ctx.emitter.instruction("mov x0, #0");                                      // rewind returns false when lseek fails
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip EOF reset after a failed rewind

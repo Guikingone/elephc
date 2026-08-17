@@ -60,6 +60,33 @@ expect_builtin_arity_error!(
     "mb_strlen() takes 1 or 2 arguments"
 );
 
+/// Verifies the OpenSSL IV-length helper rejects a missing cipher name.
+#[test]
+fn test_error_openssl_cipher_iv_length_wrong_args() {
+    expect_error(
+        "<?php openssl_cipher_iv_length();",
+        "openssl_cipher_iv_length() takes exactly 1 argument",
+    );
+}
+
+/// Verifies OpenSSL decryption rejects calls missing the required passphrase.
+#[test]
+fn test_error_openssl_decrypt_wrong_args() {
+    expect_error(
+        "<?php openssl_decrypt('ciphertext', 'aes-128-cbc');",
+        "openssl_decrypt() takes 3 to 7 arguments",
+    );
+}
+
+/// Verifies the optional OpenSSL cipher-list flag cannot be supplied twice.
+#[test]
+fn test_error_openssl_get_cipher_methods_wrong_args() {
+    expect_error(
+        "<?php openssl_get_cipher_methods(false, true);",
+        "openssl_get_cipher_methods() takes at most 1 argument",
+    );
+}
+
 /// Verifies that `mb_strlen()` rejects a statically non-string value argument.
 #[test]
 fn test_error_mb_strlen_string_type() {

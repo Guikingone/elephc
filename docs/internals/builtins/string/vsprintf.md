@@ -2,7 +2,7 @@
 title: "vsprintf() — internals"
 description: "Compiler internals for vsprintf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 462
+  order: 476
 ---
 
 ## `vsprintf()` — internals

@@ -50,7 +50,8 @@ This page explains where every value lives in memory at runtime.
 │                              │  _ob_level/_ob_in_handler/_ob_flushing,
 │                              │  elephc_web_capture,
 │                              │  _include_once_*, _fn_variant_active_*,
-│                              │  _elephc_crypto_*_fn, _elephc_tls_*_fn,
+│                              │  _elephc_crypto_*_fn, _elephc_bcmath_*_fn,
+│                              │  _elephc_tls_*_fn,
 │                              │  _elephc_eval_*_fn, ...
 ├─────────────────────────────┤
 │       Data section           │  String literals, float constants
@@ -176,6 +177,12 @@ Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<
 `Fiber` objects own native stacks rather than borrowing the caller's stack. The runtime allocates each fiber stack through `mmap` (256 KiB usable by default, plus the guard page), protects the bottom 16 KiB with `mprotect(PROT_NONE)` as a guard page, and stores both the mapping base and total mapped size in the Fiber object so `__rt_fiber_free_stack` can later return it with `munmap`.
 
 The currently running fiber is tracked in `_fiber_current`. When execution switches away from the main stack, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, and `_fiber_main_saved_call_frame` preserve the main stack pointer, exception-handler chain, and activation-record cleanup chain. A suspended Fiber stores the same state inside its object payload (`saved_sp`, `own_exc_head`, and `own_call_frame`), so `__rt_fiber_switch` can swap between main and fiber contexts without mixing exception or cleanup chains.
+
+Every compiled function prologue also consults `_stack_limit`. The main-thread
+floor, derived from `RLIMIT_STACK`, is retained in `_stack_limit_main`; Fiber and
+Generator switches replace the active value with their guarded-stack floor and
+restore the main value on return. Reaching the floor raises the compiler's
+maximum-call-stack fatal instead of falling through to a raw guard-page fault.
 
 ## The string buffer (scratch pad)
 
@@ -530,6 +537,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
 - `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_web_heap_guard_enabled` — enables per-request live-block accounting for persistent `--web` workers
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
 - `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
@@ -555,7 +563,8 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_zlib_fwrite_fn`, `_zlib_close_fn`, `_bz2_fwrite_fn`, `_bz2_close_fn`, `_iconv_fwrite_fn`, `_iconv_close_fn` — late-bound stream compression and iconv bridge entry points
 - `_phar_zlib_inflate_init2_fn`, `_phar_zlib_inflate_fn`, `_phar_zlib_inflate_end_fn`, `_phar_bz2_decompress_fn` — late-bound PHAR decompression entry points
 - `_elephc_tls_connect_fn`, `_elephc_tls_connect_insecure_fn`, `_elephc_tls_connect_cafile_fn`, `_elephc_tls_connect_capath_fn`, `_elephc_tls_connect_peer_name_fn`, `_elephc_tls_connect_client_cert_fn`, `_elephc_tls_attach_fd_fn`, `_elephc_tls_attach_fd_client_cert_fn`, `_elephc_tls_read_fn`, `_elephc_tls_write_fn`, `_elephc_tls_close_fn` — late-bound TLS session entry points
-- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn` — late-bound one-shot and incremental crypto entry points
+- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn`, `_elephc_crypto_cipher_iv_length_fn`, `_elephc_crypto_cipher_methods_fn`, `_elephc_crypto_encrypt_fn`, `_elephc_crypto_decrypt_fn` — late-bound hashing, incremental-context, and OpenSSL-compatible symmetric-crypto entry points
+- `_elephc_bcmath_add_fn`, `_elephc_bcmath_sub_fn`, `_elephc_bcmath_mul_fn`, `_elephc_bcmath_div_fn`, `_elephc_bcmath_mod_fn`, `_elephc_bcmath_divmod_fn`, `_elephc_bcmath_pow_fn`, `_elephc_bcmath_powmod_fn`, `_elephc_bcmath_sqrt_fn`, `_elephc_bcmath_comp_fn`, `_elephc_bcmath_ceil_fn`, `_elephc_bcmath_floor_fn`, `_elephc_bcmath_round_fn`, `_elephc_bcmath_get_scale_fn`, `_elephc_bcmath_set_scale_fn`, `_elephc_bcmath_last_error_fn`, `_elephc_bcmath_free_fn` — late-bound decimal bridge entry points shared by arithmetic lowering and error/result marshalling
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
 ### Global variables
@@ -637,7 +646,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |
 | Stream context and callbacks | `_stream_context_options`, `_stream_notification_callback`, `_stream_connect_host`, `_stream_open_opened_path_scratch`, `_url_stat_matched` | Current stream-context options hash, notification callback, TLS peer host, wrapper opened-path scratch, and wrapper url_stat match flag |
-| TLS and crypto function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto support when a call site publishes the symbol |
+| TLS, crypto, and BCMath function slots | `_elephc_tls_*_fn`, `_zlib_*_fn`, `_bz2_*_fn`, `_phar_zlib_*_fn`, `_phar_bz2_*_fn`, `_iconv_*_fn`, `_elephc_crypto_*_fn`, `_elephc_bcmath_*_fn` = 8 bytes per slot | Late-bound function pointers so programs only link optional TLS/compression/iconv/crypto/decimal support when a call site publishes the symbol |
 | HTTP/HTTPS/FTP buffers | `_http_resp_buf`, `_https_resp_buf`, `_user_wrapper_drain_buf`, `_phar_write_out` = 1MB each; `_http_req_scratch` = 8KB; `_http_redirect_path_buf`, `_fgc_url_retr` = 2KB each; `_fgc_url_addr`, `_fsockopen_addr` = 512 bytes each; `_ftp_resp_buf` = 4KB; `_ftp_data_addr`, `_ftp_cmd_scratch` = 64 bytes each; `_ftp_use_tls` = 8 bytes (FTPS handshake flag) | Protocol-specific response, request, redirect, FTP/FTPS, wrapper, and PHAR writer scratch buffers and flags |
 | HTTP active context | `_http_active_ignore_errors`, `_http_active_max_redirects`, `_http_active_timeout_seconds`, `_http_active_proxy_ptr`, `_http_active_proxy_len`, `_http_active_host_ptr`, `_http_active_host_len`, `_http_redirect_path_len` | Fixed-size state shared between HTTP request construction and redirect/open helpers |
 | Socket address scratch | `_recvfrom_addr_ptr`, `_recvfrom_addr_len`, `_accept_peer_ptr`, `_accept_peer_len` = 8 bytes each | Stores peer/address strings returned through by-reference socket parameters |

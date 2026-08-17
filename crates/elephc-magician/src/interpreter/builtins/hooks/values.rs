@@ -45,6 +45,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayValues,
     /// Dispatches `base_convert(...)`.
     BaseConvert,
+    /// Dispatches the PHP BCMath procedural surface.
+    Bcmath,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -344,6 +346,7 @@ impl EvalValuesHook {
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
+            Self::Bcmath => eval_bcmath_values_result(name, evaluated_args, context, values),
             Self::Base64Decode => match evaluated_args {
                 [value] => eval_base64_decode_result(*value, false, values),
                 [value, strict] => {

@@ -657,11 +657,12 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elephc"
-version = "0.26.3"
+version = "0.26.4"
 dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
  "console",
+ "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-image",
@@ -686,6 +687,10 @@ dependencies = [
  "toml_edit 0.25.12+spec-1.1.0",
  "ureq",
 ]
+
+[[package]]
+name = "elephc-bcmath"
+version = "0.1.0"
 
 [[package]]
 name = "elephc-builtin-contract"
@@ -728,6 +733,7 @@ dependencies = [
 name = "elephc-magician"
 version = "0.1.0"
 dependencies = [
+ "elephc-bcmath",
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-phar",

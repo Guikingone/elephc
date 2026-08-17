@@ -98,18 +98,28 @@ fn emit_aarch64_checked(
     ctx.emitter.instruction(&format!("mov {}, {}", saved_lhs_reg, result_reg)); // preserve the original left operand for overflow promotion
     match op {
         CheckedIntOp::Add => {
-            ctx.emitter.instruction(&format!("adds {}, {}, {}", result_reg, result_reg, rhs_reg)); // compute addition and set the signed-overflow flag
+            ctx.emitter.instruction(
+                &format!("adds {}, {}, {}", result_reg, result_reg, rhs_reg)
+            );                                                                  // compute addition and set the signed-overflow flag
             ctx.emitter.instruction(&format!("b.vs {}", overflow_label));       // convert the promoted double only when signed addition overflowed
         }
         CheckedIntOp::Sub => {
-            ctx.emitter.instruction(&format!("subs {}, {}, {}", result_reg, result_reg, rhs_reg)); // compute subtraction and set the signed-overflow flag
+            ctx.emitter.instruction(
+                &format!("subs {}, {}, {}", result_reg, result_reg, rhs_reg)
+            );                                                                  // compute subtraction and set the signed-overflow flag
             ctx.emitter.instruction(&format!("b.vs {}", overflow_label));       // convert the promoted double only when signed subtraction overflowed
         }
         CheckedIntOp::Mul => {
             let high_reg = abi::symbol_scratch_reg(ctx.emitter);
-            ctx.emitter.instruction(&format!("smulh {}, {}, {}", high_reg, result_reg, rhs_reg)); // compute the signed high product for overflow detection
-            ctx.emitter.instruction(&format!("mul {}, {}, {}", result_reg, result_reg, rhs_reg)); // compute the low 64 bits of the signed product
-            ctx.emitter.instruction(&format!("cmp {}, {}, asr #63", high_reg, result_reg)); // compare the high product with the low half's sign extension
+            ctx.emitter.instruction(
+                &format!("smulh {}, {}, {}", high_reg, result_reg, rhs_reg)
+            );                                                                  // compute the signed high product for overflow detection
+            ctx.emitter.instruction(
+                &format!("mul {}, {}, {}", result_reg, result_reg, rhs_reg)
+            );                                                                  // compute the low 64 bits of the signed product
+            ctx.emitter.instruction(
+                &format!("cmp {}, {}, asr #63", high_reg, result_reg)
+            );                                                                  // compare the high product with the low half's sign extension
             ctx.emitter.instruction(&format!("b.ne {}", overflow_label));       // convert the promoted double when the product does not fit in I64
         }
     }
@@ -133,7 +143,9 @@ fn emit_x86_64_checked(
         CheckedIntOp::Sub => "sub",
         CheckedIntOp::Mul => "imul",
     };
-    ctx.emitter.instruction(&format!("{} {}, {}", mnemonic, result_reg, rhs_reg)); // compute the scalar result and set the signed-overflow flag
+    ctx.emitter.instruction(
+        &format!("{} {}, {}", mnemonic, result_reg, rhs_reg)
+    );                                                                          // compute the scalar result and set the signed-overflow flag
     ctx.emitter.instruction(&format!("jo {}", overflow_label));                 // convert the promoted double only when the operation overflowed
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // keep the in-range scalar result and skip overflow conversion
 }

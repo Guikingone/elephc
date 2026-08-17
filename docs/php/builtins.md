@@ -275,6 +275,20 @@ sidebar:
 | [`atan()`](./builtins/math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./builtins/math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
 | [`base_convert()`](./builtins/math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
+| [`bcadd()`](./builtins/math/bcadd.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcceil()`](./builtins/math/bcceil.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bccomp()`](./builtins/math/bccomp.md) | `(string $num1, string $num2, int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcdiv()`](./builtins/math/bcdiv.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcdivmod()`](./builtins/math/bcdivmod.md) | `(string $num1, string $num2, int $scale = null): array` | `array` | ✓ | ✓ |
+| [`bcfloor()`](./builtins/math/bcfloor.md) | `(string $num): string` | `string` | ✓ | ✓ |
+| [`bcmod()`](./builtins/math/bcmod.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcmul()`](./builtins/math/bcmul.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpow()`](./builtins/math/bcpow.md) | `(string $num, string $exponent, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcpowmod()`](./builtins/math/bcpowmod.md) | `(string $num, string $exponent, string $modulus, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcround()`](./builtins/math/bcround.md) | `(string $num, int $precision = 0, int $mode = 1): string` | `string` | ✓ | ✓ |
+| [`bcscale()`](./builtins/math/bcscale.md) | `(int $scale = null): int` | `int` | ✓ | ✓ |
+| [`bcsqrt()`](./builtins/math/bcsqrt.md) | `(string $num, int $scale = null): string` | `string` | ✓ | ✓ |
+| [`bcsub()`](./builtins/math/bcsub.md) | `(string $num1, string $num2, int $scale = null): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./builtins/math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./builtins/math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./builtins/math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |

@@ -979,10 +979,14 @@ pub(super) fn emit_owned_local_cleanup(
         abi::load_at_offset(ctx.emitter, state_reg, state_offset);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbnz {}, {}", state_reg, done)); // skip raw cleanup while this slot stores a ref-cell pointer
+                ctx.emitter.instruction(
+                    &format!("cbnz {}, {}", state_reg, done)
+                );                                                              // skip raw cleanup while this slot stores a ref-cell pointer
             }
             Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {}, {}", state_reg, state_reg)); // test whether this slot currently stores a ref-cell pointer
+                ctx.emitter.instruction(
+                    &format!("test {}, {}", state_reg, state_reg)
+                );                                                              // test whether this slot currently stores a ref-cell pointer
                 ctx.emitter
                     .instruction(&format!("jne {}", done));                      // skip raw cleanup for the ref-cell representation
             }

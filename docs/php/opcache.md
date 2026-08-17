@@ -693,6 +693,7 @@ Bridge-linked extensions are added on top, per compilation:
 | `elephc-tls` | `openssl` | TLS streams used, or `--with-tls` |
 | `elephc-pdo` | `PDO` | PDO used, or `--with-pdo` |
 | `elephc-crypto` | `hash` | `hash()` used, or `--with-crypto` |
+| `elephc-bcmath` | `bcmath` | A `bc*` function used, or `--with-bcmath` |
 | `elephc-phar` | `Phar` | Phar used, or `--with-phar` |
 | `elephc-image` | `gd` | GD/Imagick used, or `--with-image` |
 | `elephc-web` | `session` | `--web` |

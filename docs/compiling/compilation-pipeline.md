@@ -34,6 +34,7 @@ Physical source (.php or .lfc)
   -> version-prelude    inject referenced PHP version-surface helpers
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> func-args          desugar func_num_args/get_args/get_arg to a hidden variadic
   -> opcache-manifest-bake complete the OPcache script manifest after autoloading
   -> opt-fold           AST constant folding
   -> typecheck          Type checker / warnings
@@ -45,10 +46,10 @@ Physical source (.php or .lfc)
   -> ir-lower           AST -> EIR lowering + EIR validation
   -> ir-opt             EIR optimization passes (fixed-point driver)
   -> ir-print           print EIR and stop (with --emit-ir)
-  -> runtime-cache      build/reuse the prebuilt runtime object
   -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
   -> source-map         write the .map sidecar (with --source-map)
+  -> runtime-cache      build/reuse the prebuilt runtime object
   -> assemble           assembler: assembly -> object file
   -> link               linker: object files -> binary
 ```
@@ -74,9 +75,14 @@ Physical source (.php or .lfc)
   OPcache, image processing, incremental hashing, and PHP version helpers are
   injected only when referenced. The web runtime prelude is injected with
   `--web`, and namespace/`use` rules rewrite references to fully-qualified
-  names. Autoloading is wired in around these steps; after autoload insertion,
-  **opcache-manifest-bake** replaces the preliminary OPcache script manifest
-  with the complete entry/include/autoload file set before constant folding.
+  names. Autoloading is wired in around these steps.
+- **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
+  `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
+  This happens after autoloading but before manifest baking, optimization, and
+  checking, so those later passes see the desugared callable shape.
+- **opcache-manifest-bake** — replaces the preliminary OPcache script manifest
+  with the complete entry/include/autoload file set after argument-introspection
+  desugaring and before constant folding.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 
@@ -105,11 +111,13 @@ behind a flag.
 - **ir-print** — only present with [`--emit-ir`](output-and-diagnostics.md#--emit-ir);
   formats the optimized or unoptimized EIR textual form, prints it to stdout,
   and stops before runtime preparation or code generation.
+- **codegen** — EIR is lowered to target assembly through the default backend.
+  See [The Code Generator](../internals/the-codegen.md).
+- **write-asm / source-map** — the generated assembly and optional source-map
+  sidecar are materialized before runtime-object preparation.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
-- **codegen** — EIR is lowered to target assembly through the default backend.
-  See [The Code Generator](../internals/the-codegen.md).
 
 ## Tail: assemble and link
 
