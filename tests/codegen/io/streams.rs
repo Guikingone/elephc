@@ -3266,6 +3266,63 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies a read filter answering `PSFS_ERR_FATAL` fails the read instead of emptying it.
+///
+/// php separates "the stream is exhausted" from "a filter refused the data": `fread()` and
+/// `stream_copy_to_stream()` answer `false`, while `stream_get_contents()` answers `""` and
+/// `fgets()` `false`. elephc reported `""` and `int(0)` for the first two, which read as an empty
+/// stream rather than a failure — the whole point of the return value a filter uses to say the
+/// data is unusable.
+///
+/// The published code is reset to `PSFS_PASS_ON` before each filtered read and before a copy,
+/// because the slot lives in BSS and starts at ZERO — which IS `PSFS_ERR_FATAL`, so without the
+/// reset an ordinary EOF on the first filtered read would look like a refusal.
+#[test]
+fn test_filter_fatal_fails_the_read() {
+    let out = compile_and_run(
+        r#"<?php
+class FatalFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        stream_bucket_make_writeable($in);
+        return PSFS_ERR_FATAL;
+    }
+}
+class PassFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('fatalf', 'FatalFilter');
+stream_filter_register('passf', 'PassFilter');
+function src(string $filter) {
+    $s = fopen('php://memory', 'rb+');
+    fwrite($s, 'Test data');
+    rewind($s);
+    stream_filter_prepend($s, $filter, STREAM_FILTER_READ);
+    return $s;
+}
+$a = src('fatalf'); echo var_export(stream_copy_to_stream($a, fopen('php://memory', 'wb')), true), "|"; fclose($a);
+$b = src('fatalf'); echo var_export(fread($b, 32), true), "|"; fclose($b);
+$c = src('fatalf'); echo var_export(stream_get_contents($c), true), "|"; fclose($c);
+$d = src('fatalf'); echo var_export(fgets($d), true), "|"; fclose($d);
+// A filter that PASSES must still report the bytes, and its EOF must still be "" — the
+// reset is what keeps the exhausted read from inheriting the previous stream's refusal.
+$e = src('passf'); echo var_export(fread($e, 32), true), "|";
+echo var_export(fread($e, 32), true), "|";
+fclose($e);
+$f = src('passf'); echo var_export(stream_copy_to_stream($f, fopen('php://memory', 'wb')), true); fclose($f);
+"#,
+    );
+    assert_eq!(
+        out,
+        "false|false|''|false|'Test data'|''|9"
+    );
+}
+
 /// Verifies the `data:` scheme is read by every reader, with or without the `//`.
 ///
 /// RFC 2397 has no `//` and php makes it optional, so the canonical spelling is `data:,abc` /

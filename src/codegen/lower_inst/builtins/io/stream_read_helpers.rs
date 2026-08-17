@@ -372,6 +372,35 @@ pub(super) fn lower_stream_copy_loop_and_box(
             &after_chunk,
         ),
     }
+    // php answers `false`, not a byte count, when a read filter REFUSED the data with
+    // PSFS_ERR_FATAL: `stream_copy_to_stream()` on such a stream is `bool(false)` where elephc
+    // reported `int(0)`, which reads as "nothing to copy" rather than "the copy failed". The
+    // code is the one the last brigade dispatch published; the copy resets it to PSFS_PASS_ON
+    // before its first read, so it can only be FATAL because a filter said so during THIS copy.
+    // The frame has already been left by the loop, so this path boxes false directly rather than
+    // sharing the seek-failure label, which leaves the frame itself.
+    let filter_ok = ctx.next_label("scs_filter_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_user_filter_last_psfs");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // the code the last dispatch published
+            ctx.emitter.instruction("cmp x9, #0");                              // PSFS_ERR_FATAL
+            ctx.emitter.instruction(&format!("b.ne {}", filter_ok));            // no filter refused: report the byte count
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_user_filter_last_psfs");
+            ctx.emitter.instruction("mov r9, QWORD PTR [r9]");                  // the code the last dispatch published
+            ctx.emitter.instruction("cmp r9, 0");                               // PSFS_ERR_FATAL
+            ctx.emitter.instruction(&format!("jne {}", filter_ok));             // no filter refused: report the byte count
+        }
+    }
+    emit_bool_result(ctx, false);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", boxed_done)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", boxed_done)),
+    }
+    ctx.emitter.label(&filter_ok);
     emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

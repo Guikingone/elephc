@@ -154,6 +154,14 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_READ_FILTER_HEAD_OFFSET}]")); // read-direction chain head
     emitter.instruction("cbz x9, __rt_freadb_passthrough");                     // unfiltered stream: keep the raw path untouched
     emitter.instruction("str x0, [sp, #16]");                                   // preserve the state pointer
+    // php answers `false` — not `""` — when a read filter reports PSFS_ERR_FATAL, so the
+    // code the brigade publishes has to survive to the return below. It is reset to
+    // PSFS_PASS_ON first because the symbol lives in BSS and starts at ZERO, which IS
+    // PSFS_ERR_FATAL: without this an ordinary EOF on the very first filtered read would
+    // look like a filter failure.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
+    emitter.instruction("mov x10, #2");                                         // PSFS_PASS_ON
+    emitter.instruction("str x10, [x9]");
 
     emitter.label("__rt_freadb_fill");
     emitter.instruction("ldr x1, [sp, #16]");                                   // state pointer
@@ -263,6 +271,12 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");              // a readable pointer for a zero-length result
     emitter.instruction("mov x2, #0");                                          // the stream is exhausted
     emitter.instruction("mov x0, #1");                                          // exhausted is not failed: php answers "" here
+    // ...unless a filter REFUSED the data. php separates the two: an exhausted filtered stream
+    // answers `""`, one whose filter returned PSFS_ERR_FATAL answers `false`.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
+    emitter.instruction("ldr x9, [x9]");                                        // the code the last dispatch published
+    emitter.instruction("cmp x9, #0");                                          // PSFS_ERR_FATAL
+    emitter.instruction("csel x0, xzr, x0, eq");                                // a refused read is php's false
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the empty read
@@ -381,6 +395,10 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r9, r9");
     emitter.instruction("jz __rt_freadb_passthrough_x");                        // unfiltered: keep the raw path untouched
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the state pointer
+    // See the AArch64 arm: the published PSFS code has to survive to the return, and the
+    // BSS symbol starts at zero, which is PSFS_ERR_FATAL.
+    abi::emit_symbol_address(emitter, "r9", "_user_filter_last_psfs");
+    emitter.instruction("mov QWORD PTR [r9], 2");                              // PSFS_PASS_ON
 
     emitter.label("__rt_freadb_fill_x");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                       // state pointer
@@ -484,6 +502,12 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // a readable pointer for a zero-length result
     emitter.instruction("xor edx, edx");                                        // the stream is exhausted
     emitter.instruction("mov ecx, 1");                                          // exhausted is not failed: php answers "" here
+    // ...unless a filter REFUSED the data — see the AArch64 arm.
+    abi::emit_symbol_address(emitter, "r9", "_user_filter_last_psfs");
+    emitter.instruction("mov r9, QWORD PTR [r9]");                              // the code the last dispatch published
+    emitter.instruction("xor r10d, r10d");
+    emitter.instruction("cmp r9, 0");                                           // PSFS_ERR_FATAL
+    emitter.instruction("cmove rcx, r10");                                      // a refused read is php's false
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty read

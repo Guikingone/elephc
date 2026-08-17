@@ -21,6 +21,20 @@ pub(crate) fn lower_stream_copy_to_stream(
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     load_stream_fd_to_result(ctx, dest, "stream_copy_to_stream")?;
     emit_stream_copy_frame_enter(ctx);
+    // The PSFS code the copy consults at the end is a process-wide slot, and it lives in BSS —
+    // it starts at ZERO, which IS PSFS_ERR_FATAL, and an earlier stream's dispatch would
+    // otherwise still be showing. Reset it so only a refusal during THIS copy can be read back.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_user_filter_last_psfs");
+            ctx.emitter.instruction("mov x10, #2");                             // PSFS_PASS_ON
+            ctx.emitter.instruction("str x10, [x9]");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_user_filter_last_psfs");
+            ctx.emitter.instruction("mov QWORD PTR [r9], 2");                   // PSFS_PASS_ON
+        }
+    }
     materialize_stream_copy_length(ctx, inst)?;
     if inst.operands.len() >= 4 {
         let offset = expect_operand(inst, 3)?;
