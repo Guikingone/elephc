@@ -14824,16 +14824,19 @@ writes: None,
         area: Area::String,
         kind: BuiltinKind::Function,
         params: &[
+            // `search` and `replace` are `array|string` in php: `str_replace(["a","b"], ["1","2"],
+            // $s)` is the idiomatic form and was refused outright. `Mixed` is what lets an array
+            // reach the lowering; a plain string still takes the scalar path unchanged.
             ParamSpec {
                 name: "search",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
 writes: None,
             },
             ParamSpec {
                 name: "replace",
-                ty: TypeSpec::Str,
+                ty: TypeSpec::Mixed,
                 default: None,
                 by_ref: false,
 writes: None,

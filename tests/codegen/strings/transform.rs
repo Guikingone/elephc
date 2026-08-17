@@ -944,3 +944,55 @@ string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|world-again\"\n"
     );
 }
+
+/// Verifies `str_replace()` with an ARRAY `$search`, php's idiomatic form.
+///
+/// It did not compile at all: the EIR backend refused with `str_replace string coercion for PHP
+/// type Array(Str)`, because the shared string-coercion helper has no array case — and rightly so,
+/// an array is not a string. The array form gets its own path instead.
+///
+/// Two rules are measured on `php -n` 8.5.6 and neither is guessable:
+///
+/// - The pairs CASCADE. Each applies to the result of the last, not to the original subject, so
+///   `str_replace(["a","b"], ["b","c"], "a")` answers `"c"` — the `a` became a `b`, and the second
+///   pair then rewrote it.
+/// - A `$replace` array SHORTER than `$search` pairs the remainder with the empty string:
+///   `str_replace(["a","b"], ["1"], "abc")` answers `"1c"`, not `"1bc"`.
+#[test]
+fn test_str_replace_accepts_an_array_search() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(str_replace(["a", "b"], ["1", "2"], "abcabc"));
+var_dump(str_replace(["a", "b"], "X", "abcabc"));
+var_dump(str_replace(["a", "b"], ["1"], "abc"));
+var_dump(str_replace(["a", "b", "c"], [], "abc"));
+var_dump(str_replace(["a", "b"], ["b", "c"], "a"));
+var_dump(str_replace([], [], "abc"));
+var_dump(str_replace(["z"], ["!"], "abc"));
+var_dump(str_replace(["abcdef"], ["x"], "abc"));
+var_dump(str_replace(["ab", "bc"], ["-", "+"], "abcabc"));
+var_dump(str_replace(["a"], ["b"], ""));
+$s = ["x", "y"];
+$r = ["1", "2"];
+var_dump(str_replace($s, $r, "xyxy"));
+var_dump(str_replace("a", "Z", "banana"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(6) \"12c12c\"\n",
+            "string(6) \"XXcXXc\"\n",
+            "string(2) \"1c\"\n",
+            "string(0) \"\"\n",
+            "string(1) \"c\"\n",
+            "string(3) \"abc\"\n",
+            "string(3) \"abc\"\n",
+            "string(3) \"abc\"\n",
+            "string(4) \"-c-c\"\n",
+            "string(0) \"\"\n",
+            "string(4) \"1212\"\n",
+            "string(6) \"bZnZnZ\"\n",
+        )
+    );
+}

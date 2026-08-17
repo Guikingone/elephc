@@ -62443,14 +62443,14 @@
           "default": null,
           "name": "search",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "replace",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         },
         {
           "by_ref": false,
@@ -62491,14 +62491,14 @@
           "default": null,
           "name": "search",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         },
         {
           "by_ref": false,
           "default": null,
           "name": "replace",
           "optional": false,
-          "type": "string"
+          "type": "mixed"
         },
         {
           "by_ref": false,
