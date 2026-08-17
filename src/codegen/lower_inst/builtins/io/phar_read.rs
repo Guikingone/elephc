@@ -64,7 +64,12 @@ fn emit_file_get_contents_bytes(
             emit_literal_php_filter_file_get_contents_bytes(ctx, path_literal)?;
             return Ok(false);
         }
-        if path_literal.starts_with("data://") {
+        // `data:` is the whole scheme; RFC 2397 has no `//` and php makes it optional, so the
+        // canonical spelling is `data:,abc` / `data:text/plain;base64,...`. Testing `data://`
+        // matched only the rarer form, so `file_get_contents("data:,abc")` fell through to the
+        // FILE reader and answered false with "No such file or directory" — while `fopen()` on
+        // the same URL read it. `data://` still matches, since it starts with `data:`.
+        if path_literal.starts_with("data:") {
             emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(false);
         }
@@ -116,11 +121,73 @@ fn emit_file_get_contents_bytes(
     } else {
         None
     };
+    // A filename assembled at run time may also be a bare `data:` URI. The filter route above
+    // only fires for a `php://filter/...` URL, and `__rt_file_get_contents_maybe_url` knows only
+    // http/https/ftp/ftps before falling back to a FILE read — so `file_get_contents("data:," .
+    // $payload)` looked for a file of that name and answered false, while the same URL written as
+    // a literal (decoded at compile time) and `fopen()` on it both worked.
+    let data_done = if path_literal.is_none() {
+        Some(emit_dynamic_data_uri_read_route(ctx))
+    } else {
+        None
+    };
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+    if let Some(done) = data_done {
+        ctx.emitter.label(&done);
+    }
     if let Some(done) = filter_done {
         ctx.emitter.label(&done);
     }
     Ok(true)
+}
+
+/// Reads a run-time `data:` URI through the same opener `fopen()` uses, and answers its bytes.
+///
+/// Entry state: the filename is in the string result pair. On a `data:` URI the route opens the
+/// stream, reads it whole and branches to the returned label with the byte pair in place; on any
+/// other filename it falls through untouched so the caller's ordinary reader still runs.
+fn emit_dynamic_data_uri_read_route(ctx: &mut FunctionContext<'_>) -> String {
+    let not_data = ctx.next_label("fgc_dyn_not_data");
+    let done = ctx.next_label("fgc_dyn_data_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #6");                              // `data:` plus at least a comma
+            ctx.emitter.instruction(&format!("b.lt {}", not_data));
+            for (offset, byte) in b"data:".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
+                ctx.emitter.instruction(&format!("b.ne {}", not_data));
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // the decoder takes ptr/len in x0/x1
+            ctx.emitter.instruction("mov x1, x2");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");      // x0 = descriptor, or -1
+            ctx.emitter.instruction("cmn x0, #1");                              // a refused URI answers php false
+            ctx.emitter.instruction(&format!("b.eq {}", not_data));
+            ctx.emitter.instruction("mov x1, #0");                              // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1 = bytes, x2 = length
+            ctx.emitter.instruction(&format!("b {}", done));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 6");                              // `data:` plus at least a comma
+            ctx.emitter.instruction(&format!("jl {}", not_data));
+            for (offset, byte) in b"data:".iter().enumerate() {
+                ctx.emitter
+                    .instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
+                ctx.emitter.instruction(&format!("jne {}", not_data));
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // the decoder takes ptr/len in rdi/rsi
+            ctx.emitter.instruction("mov rsi, rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");      // rax = descriptor, or -1
+            ctx.emitter.instruction("cmp rax, -1");                             // a refused URI answers php false
+            ctx.emitter.instruction(&format!("je {}", not_data));
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle
+            ctx.emitter.instruction("xor esi, esi");                            // let the state pick its chunk size
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+        }
+    }
+    ctx.emitter.label(&not_data);
+    done
 }
 
 /// The `$offset`/`$length` window a one-shot file read applies to the bytes it produced.

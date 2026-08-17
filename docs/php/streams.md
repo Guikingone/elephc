@@ -398,7 +398,7 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 | `stream_filter_append()` | `stream_filter_append(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): resource\|false` | Attach a built-in or user-registered filter. `STREAM_FILTER_READ`, `STREAM_FILTER_WRITE`, and `STREAM_FILTER_ALL` select directions. The default `0` (and any mode with no direction bit set) is resolved from the stream's own open mode, as PHP does: `r` → read, `w`/`a` → write, any `+` mode → both. An unknown filter name warns `Unable to locate filter "…"` and returns `false`. |
 | `stream_filter_prepend()` | `stream_filter_prepend(resource $stream, string $filter_name, int $mode = 0, mixed $params = null): resource\|false` | Same rules as append; the node joins the head of each selected chain. |
 | `stream_filter_remove()` | `stream_filter_remove(resource $filter): bool` | Detach the filter from its chain. The filter is flushed first with `$closing = true`; if that flush answers `PSFS_ERR_FATAL`, the filter stays attached and the call returns `false`. |
-| `stream_filter_register()` | `stream_filter_register(string $filter_name, string $class): bool` | Register a user filter class. Up to 128 registrations are stored; a literal class name is validated at compile time. |
+| `stream_filter_register()` | `stream_filter_register(string $filter_name, string $class): bool` | Register a user filter class. Answers `false` — without replacing anything — for a name that is already taken, whether PHP owns it (`string.toupper`, `string.tolower`, `string.rot13`, `dechunk`, `consumed`) or an earlier call registered it; the `convert.*`, `zlib.*` and `bzip2.*` families are wildcard factories in PHP, so those names ARE registrable. An empty `$filter_name` or `$class` raises PHP's `ValueError`. Up to 128 registrations are stored, and the name is copied rather than borrowed. The class may be named by a string literal or by `Foo::class`; a class name only known at run time registers the name but leaves the class unusable. A literal class name is validated at compile time. |
 | `stream_bucket_new()` | `stream_bucket_new(resource $stream, string $data): object` | Create a stdClass-backed bucket with public `data` and `datalen` properties. |
 | `stream_bucket_make_writeable()` | `stream_bucket_make_writeable(resource $brigade): object\|null` | Pop the next bucket from a brigade. |
 | `stream_bucket_append()` | `stream_bucket_append(resource $brigade, object $bucket): void` | Push a bucket to the end of a brigade. |
@@ -439,9 +439,12 @@ User filters can implement either `filter(string $data): string` or PHP's
 four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
 Classes may extend PHP's `php_user_filter` base class; the fourth
 `stream_filter_append`/`prepend` `$params` argument is available as
-`$this->params` before `onCreate()` runs. The base class also declares
-`$filtername` and `$stream`, so the manual's `stream_bucket_new($this->stream, …)`
-idiom compiles; neither is seeded with a value yet. Optional `onCreate(): bool` and
+`$this->params` before `onCreate()` runs, and `$this->filtername` carries the name the
+filter was ATTACHED under — the same class registered under two names reports each in
+turn, as PHP does. The base class also declares `$stream`, so the manual's
+`stream_bucket_new($this->stream, …)` idiom compiles, but it is **not** seeded with a
+value: PHP sets it for the duration of each `filter()` call (and leaves it null in
+`onCreate()`/`onClose()`), while elephc leaves it null throughout. Optional `onCreate(): bool` and
 `onClose(): void` hooks are honored; `onClose()` fires exactly once, whether the
 filter is removed with `stream_filter_remove()` or carried off by `fclose()`.
 `$closing` is `false` on read and write dispatches and `true` on the single

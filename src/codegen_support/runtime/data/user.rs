@@ -2212,7 +2212,7 @@ const USER_WRAPPER_VTABLE_TOTAL_SLOTS: usize = USER_WRAPPER_VTABLE_SLOTS + 1;
 /// The flag is read by the runtime dispatcher to choose which code path
 /// to invoke. Adding the flag inline in the vtable lets the dispatcher
 /// branch with a single load + cmp.
-pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 5;
+pub(crate) const USER_FILTER_VTABLE_SLOTS: usize = 6;
 
 /// Returns true when a method key belongs to the fixed-ABI stream-wrapper
 /// vtable surface dispatched by the runtime with raw arguments.
@@ -2366,6 +2366,16 @@ fn emit_user_filter_vtable(out: &mut String, class_info: &ClassInfo) {
         .copied()
         .unwrap_or(0);
     out.push_str(&format!("    .quad {}\n", params_offset));
+    // -- slot 5: the `filtername` property's byte offset.
+    // php seeds `$this->filtername` with the name the filter was ATTACHED under, before
+    // `onCreate()` runs — the same class registered twice reports each name in turn. Without the
+    // offset here the property stayed null, so a filter that branches on its own name could not.
+    let filtername_offset = class_info
+        .property_offsets
+        .get("filtername")
+        .copied()
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", filtername_offset));
 }
 
 /// Emits runtime metadata for user wrapper vtable.

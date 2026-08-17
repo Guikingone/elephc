@@ -7,6 +7,7 @@
 //! Key details:
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
+use crate::codegen_support::sentinels::NULL_SENTINEL;
 use super::*;
 
 /// Lowers `stream_isatty(stream)`.
@@ -87,6 +88,13 @@ const STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE: &str =
 /// php-src's verbatim `ValueError` wording for a negative `stream_select()` `$microseconds`.
 const STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =
     "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0";
+
+/// php-src's verbatim `ValueError` for a non-zero `$microseconds` beside a null `$seconds`.
+///
+/// A null `$seconds` is php's "block forever", which no microsecond count can refine, so php
+/// refuses the pair rather than ignoring one half of it.
+const STREAM_SELECT_MICROSECONDS_WITHOUT_SECONDS_MESSAGE: &str =
+    "stream_select(): Argument #5 ($microseconds) must be null when argument #4 ($seconds) is null";
 
 /// php-src's wording when nothing in the three arrays could be cast to a selectable descriptor.
 ///
@@ -331,6 +339,30 @@ pub(crate) fn lower_stream_select(
             super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, 0),
             STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE,
         );
+        // A null `$seconds` means "block forever", and php refuses to pair that with a non-zero
+        // `$microseconds` rather than silently ignoring one of them. The null arrives as
+        // NULL_SENTINEL, and `$seconds` is the value on top of the stack from the loop above.
+        let paired = ctx.next_label("stream_select_timeout_pair_ok");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("ldr x9, [sp]");                         // the $seconds argument, still spilled
+                abi::emit_load_int_immediate(ctx.emitter, "x10", NULL_SENTINEL);
+                ctx.emitter.instruction("cmp x9, x10");                          // was $seconds null?
+                ctx.emitter.instruction(&format!("b.ne {}", paired));            // a real timeout pairs with any microseconds
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");             // the $seconds argument, still spilled
+                abi::emit_load_int_immediate(ctx.emitter, "r11", NULL_SENTINEL);
+                ctx.emitter.instruction("cmp r10, r11");                         // was $seconds null?
+                ctx.emitter.instruction(&format!("jne {}", paired));             // a real timeout pairs with any microseconds
+            }
+        }
+        super::super::exceptions::emit_value_error_unless(
+            ctx,
+            super::super::exceptions::ValueGuard::SignedAtMost(result_reg, 0),
+            STREAM_SELECT_MICROSECONDS_WITHOUT_SECONDS_MESSAGE,
+        );
+        ctx.emitter.label(&paired);
     } else {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {

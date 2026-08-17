@@ -356,6 +356,33 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // restore obj pointer after the release call
     emitter.label("__rt_sfau_params_done");
 
+    // -- seed php_user_filter::$filtername, also before onCreate() observes $this --
+    // php reports the name the filter was ATTACHED under, not the class: the same class
+    // registered under two names answers each in turn. The bytes come from the registry slot
+    // rather than the caller's argument because the registry owns a persisted copy, so the
+    // property cannot outlive the string it names.
+    emitter.instruction("ldr x6, [x0]");                                        // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "x7", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x7, [x7, x6, lsl #3]");                            // per-class user-filter vtable
+    emitter.instruction("ldr x9, [x7, #40]");                                   // slot 5 = filtername property byte offset
+    emitter.instruction("cbz x9, __rt_sfau_filtername_done");                   // class without the inherited property
+    emitter.instruction("str x9, [sp, #40]");                                   // hold the offset across the boxing call
+    emitter.instruction("ldr x10, [sp, #24]");                                  // the resolved user-filter id
+    emitter.instruction("sub x10, x10, #128");                                  // slot_index = id - USER_FILTER_ID_BASE
+    abi::emit_symbol_address(emitter, "x11", "_user_filter_registry");
+    emitter.instruction("add x11, x11, x10, lsl #5");                           // registry entry = base + slot_index * 32
+    emitter.instruction("ldr x1, [x11]");                                       // the persisted filter-name pointer
+    emitter.instruction("ldr x2, [x11, #8]");                                   // and its length
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // x0 = boxed filter name
+    emitter.instruction("mov x10, x0");                                         // hold the boxed value
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the property offset
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the filter object
+    emitter.instruction("str x10, [x0, x9]");                                   // store the name in the inherited slot
+    emitter.instruction("add x11, x0, x9");                                     // the property slot address
+    emitter.instruction("str xzr, [x11, #8]");                                  // clear the high word of the Mixed pointer slot
+    emitter.label("__rt_sfau_filtername_done");
+
     // -- onCreate() lifecycle hook (vtable slot 1). When present, the
     //    user's filter class can refuse the attach by returning false.
     //    If the method is absent in the vtable, the slot is null and we
@@ -512,6 +539,30 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release params when the filter class lacks the slot
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore obj pointer after the release call
     emitter.label("__rt_sfau_params_done_x86");
+
+    // -- seed php_user_filter::$filtername, also before onCreate() — see the ARM64 path. --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-filter vtable
+    emitter.instruction("mov r9, QWORD PTR [r11 + 40]");                        // slot 5 = filtername property byte offset
+    emitter.instruction("test r9, r9");                                         // class without the inherited property
+    emitter.instruction("jz __rt_sfau_filtername_done_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // hold the offset across the boxing call
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the resolved user-filter id
+    emitter.instruction("sub r10, 128");                                        // slot_index = id - USER_FILTER_ID_BASE
+    emitter.instruction("shl r10, 5");                                          // slot offset = slot_index * 32
+    abi::emit_symbol_address(emitter, "r11", "_user_filter_registry");
+    emitter.instruction("add r11, r10");                                        // registry entry
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // the persisted filter-name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r11 + 8]");                        // and its length
+    emitter.instruction("mov rax, 1");                                          // runtime tag 1 = string
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // rax = boxed filter name
+    emitter.instruction("mov r10, rax");                                        // hold the boxed value
+    emitter.instruction("mov r9, QWORD PTR [rbp - 48]");                        // reload the property offset
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the filter object
+    emitter.instruction("mov QWORD PTR [rax + r9], r10");                       // store the name in the inherited slot
+    emitter.instruction("mov QWORD PTR [rax + r9 + 8], 0");                     // clear the high word
+    emitter.label("__rt_sfau_filtername_done_x86");
 
     // -- onCreate() lifecycle hook (vtable slot 1) — see ARM64 path. --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id at the head of the obj

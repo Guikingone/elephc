@@ -3214,6 +3214,195 @@ echo qp("caf\xe9 au lait");
     );
 }
 
+/// Verifies `Foo::class` names a stream wrapper/filter class as well as a string literal does.
+///
+/// `Foo::class` does not lower to `Op::ConstStr` — it is its own opcode indexing the class-name
+/// table — so the reachability rule that decides which classes keep their runtime metadata could
+/// not see it. The registration still SUCCEEDED and the scheme still appeared in
+/// `stream_get_wrappers()`, but the class carried no vtable, so every `fopen()` through it failed
+/// with no diagnostic at all. `Foo::class` is the refactor-safe spelling the manual and php-src's
+/// own tests use, so it has to bind the class exactly as `'Foo'` does.
+#[test]
+fn test_class_constant_names_a_registered_stream_class() {
+    let out = compile_and_run(
+        r#"<?php
+class ClassConstWrapper {
+    public $context;
+    private int $pos = 0;
+    private string $data = "wrapped!";
+    function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    function stream_read($n): string {
+        $out = substr($this->data, $this->pos, $n);
+        $this->pos += strlen($out);
+        return $out;
+    }
+    function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+    function stream_stat(): array { return []; }
+}
+class ClassConstFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+echo var_export(stream_wrapper_register("ccw", ClassConstWrapper::class), true), "|";
+$h = fopen("ccw://x", "r");
+echo ($h === false ? "OPEN-FAILED" : stream_get_contents($h)), "|";
+
+echo var_export(stream_filter_register("cc.up", ClassConstFilter::class), true), "|";
+$m = fopen("php://memory", "r+");
+$f = stream_filter_append($m, "cc.up", STREAM_FILTER_WRITE);
+echo ($f === false ? "ATTACH-FAILED" : ""), "";
+fwrite($m, "hello");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "true|wrapped!|true|HELLO");
+}
+
+/// Verifies the `data:` scheme is read by every reader, with or without the `//`.
+///
+/// RFC 2397 has no `//` and php makes it optional, so the canonical spelling is `data:,abc` /
+/// `data:text/plain;base64,...`. `fopen()` tested the five-byte scheme and read it, but
+/// `file_get_contents()` tested `data://` — so the canonical form fell through to the FILE reader
+/// and answered `false` with "No such file or directory". A URL built at run time missed as well:
+/// the dynamic route knows http/https/ftp/ftps and then reads a file, so nothing decoded it.
+#[test]
+fn test_data_uri_is_read_with_or_without_the_double_slash() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(file_get_contents("data:,abc"), true), "|";
+echo var_export(file_get_contents("data://,abc"), true), "|";
+echo var_export(file_get_contents("data:text/plain,abc"), true), "|";
+$h = fopen("data:,abc", "r");
+echo var_export(stream_get_contents($h), true), "|";
+fclose($h);
+// Built at run time, so the dynamic route decides it.
+$u = "data:," . str_repeat("A", 100);
+echo strlen((string) file_get_contents($u)), "|";
+echo var_export(file_get_contents("data://text/plain;base64,YWJj"), true);
+"#,
+    );
+    assert_eq!(out, "'abc'|'abc'|'abc'|'abc'|100|'abc'");
+}
+
+/// Verifies `stream_context_create()` enforces php's option-array shape.
+///
+/// php keeps only entries whose key is a STRING and whose value is an ARRAY, raising a catchable
+/// `ValueError` otherwise — measured: `['ssl' => "abc"]`, `['ssl' => 1]` and `[0 => ['a' => 1]]`
+/// all raise it, while `[]` and an absent argument do not. elephc stored the malformed map in
+/// silence, so a typo in a context array produced a context that simply carried nothing.
+///
+/// The empty array is its own case because `[]` is a PACKED array, not a hash: walking it as one
+/// would read a header that is not there, and a packed array with elements can only have integer
+/// keys, which php refuses.
+#[test]
+fn test_stream_context_create_enforces_the_option_shape() {
+    let out = compile_and_run(
+        r#"<?php
+function t(string $label, callable $fn): void {
+    echo $label, "=";
+    try { $fn(); echo "OK|"; }
+    catch (ValueError $e) { echo "ValueError|"; }
+}
+t("good",    fn() => stream_context_create(['http' => ['method' => 'POST']]));
+t("string",  fn() => stream_context_create(['ssl' => "abc"]));
+t("int",     fn() => stream_context_create(['ssl' => 1]));
+t("intkey",  fn() => stream_context_create([0 => ['a' => 1]]));
+t("empty",   fn() => stream_context_create([]));
+t("none",    fn() => stream_context_create());
+t("nested",  fn() => stream_context_create(['http' => [0 => 'v']]));
+echo (string) stream_context_get_options(stream_context_create(['http' => ['m' => 'v']]))["http"]["m"];
+"#,
+    );
+    assert_eq!(
+        out,
+        "good=OK|string=ValueError|int=ValueError|intkey=ValueError|empty=OK|none=OK|nested=OK|v"
+    );
+}
+
+/// Verifies `php_user_filter::$filtername` carries the ATTACHED name and `$closing` is a bool.
+///
+/// php seeds `$filtername` before `onCreate()` with the name the filter was attached under, so
+/// one class registered under two names reports each in turn; elephc left the property null.
+/// `$closing` is documented `bool`: an untyped parameter otherwise infers Int, so `var_dump()`
+/// printed `int(0)` where php prints `bool(false)` and `$closing === true` could never hold.
+#[test]
+fn test_user_filter_inherited_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class NameProbe extends php_user_filter {
+    public function onCreate(): bool {
+        echo "create:", var_export($this->filtername, true), "|";
+        return true;
+    }
+    public function filter($in, $out, &$consumed, $closing): int {
+        echo "filter:", var_export($this->filtername, true),
+             ":", var_export($closing, true),
+             ":", var_export($closing === true, true), "|";
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("np.one", "NameProbe");
+stream_filter_register("np.two", "NameProbe");
+$h = fopen("php://memory", "r+");
+stream_filter_append($h, "np.one", STREAM_FILTER_WRITE);
+fwrite($h, "x");
+fclose($h);
+$g = fopen("php://memory", "r+");
+stream_filter_append($g, "np.two", STREAM_FILTER_WRITE);
+fwrite($g, "y");
+fclose($g);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "create:'np.one'|filter:'np.one':false:false|filter:'np.one':true:true|",
+            "create:'np.two'|filter:'np.two':false:false|filter:'np.two':true:true|"
+        )
+    );
+}
+
+/// Verifies a non-zero `$microseconds` beside a null `$seconds` raises php's `ValueError`.
+///
+/// A null `$seconds` is php's "block forever", which no microsecond count can refine, so php
+/// refuses the pair rather than ignoring one half of it — `stream_select($r, $w, $e, null, 5)`
+/// throws. A microsecond count of exactly ZERO is still allowed, because php only rejects a
+/// non-zero one. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_select_microseconds_require_seconds() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("select_pair.txt", "x");
+$f = fopen("select_pair.txt", "r");
+$r = [$f]; $w = null; $e = null;
+try { stream_select($r, $w, $e, null, 5); echo "no throw|"; }
+catch (ValueError $x) { echo $x->getMessage(), "|"; }
+// Zero microseconds beside a null $seconds is accepted.
+$r2 = [$f]; $w2 = null; $e2 = null;
+echo var_export(stream_select($r2, $w2, $e2, null, 0), true);
+fclose($f);
+unlink("select_pair.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "stream_select(): Argument #5 ($microseconds) must be null when argument #4 ($seconds) is null|1"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `stream_filter_register()` refuses a name that is already taken, and a filter
 /// resource names itself.
 ///

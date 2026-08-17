@@ -336,9 +336,16 @@ fn emit_dynamic_php_filter_read_route(
             abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
             ctx.emitter.instruction(&format!("b {}", boxed));
             ctx.emitter.label(&try_data);
-            ctx.emitter.instruction("cmp x2, #8");                              // data:// plus at least a comma
+            // `data:` is the whole scheme — RFC 2397 has no `//`, and php makes it optional, so
+            // the canonical spelling php's own tests use is `data:,abc` and
+            // `data:text/plain;base64,...`. Matching `data://` here accepted only the rarer
+            // form, so `file_get_contents("data:,abc")` fell through to the FILE opener and
+            // answered false with "No such file or directory" — while `fopen()` on the same
+            // URL, which tests the five-byte scheme, read it. `data://` still matches: it
+            // starts with `data:` too.
+            ctx.emitter.instruction("cmp x2, #6");                              // `data:` plus at least a comma
             ctx.emitter.instruction(&format!("b.lt {}", try_http));
-            for (offset, byte) in b"data://".iter().enumerate() {
+            for (offset, byte) in b"data:".iter().enumerate() {
                 ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset));
                 ctx.emitter.instruction(&format!("cmp w9, #{}", byte));
                 ctx.emitter.instruction(&format!("b.ne {}", try_http));
@@ -384,9 +391,10 @@ fn emit_dynamic_php_filter_read_route(
             abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
             ctx.emitter.instruction(&format!("jmp {}", boxed));
             ctx.emitter.label(&try_data);
-            ctx.emitter.instruction("cmp rdx, 8");                              // data:// plus at least a comma
+            // See the AArch64 arm: the scheme is `data:`, and the `//` is optional in php.
+            ctx.emitter.instruction("cmp rdx, 6");                              // `data:` plus at least a comma
             ctx.emitter.instruction(&format!("jl {}", try_http));
-            for (offset, byte) in b"data://".iter().enumerate() {
+            for (offset, byte) in b"data:".iter().enumerate() {
                 ctx.emitter.instruction(&format!("cmp BYTE PTR [rax + {}], {}", offset, byte));
                 ctx.emitter.instruction(&format!("jne {}", try_http));
             }

@@ -144,10 +144,19 @@ impl Checker {
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
+    ///
+    /// `places_rewritable` says whether THIS call site's lowering can carry a non-local place.
+    /// `ir_lower::expr::ref_place_args` rewrites a FREE FUNCTION call — it reads the place into a
+    /// hidden temporary, calls with that, and writes the temporary back — and there is no such
+    /// rewrite for a method, a closure, or a `callable`. Accepting a property for those compiled
+    /// a call that RAN and dropped the write in silence: `$this->twiddle($box->data)` left the
+    /// property unchanged where php mutates it. The flag is what keeps the checker from
+    /// promising what one of its lowerings cannot deliver.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
         arg: &Expr,
         env: &TypeEnv,
+        places_rewritable: bool,
     ) -> Result<bool, CompileError> {
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
@@ -169,6 +178,9 @@ impl Checker {
             // exactly what it can lower: a scalar property keeps the existing diagnostic rather
             // than compiling into a write-back that never happens.
             ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                if !places_rewritable {
+                    return Ok(false);
+                }
                 Ok(matches!(
                     self.infer_type(arg, env)?.codegen_repr(),
                     PhpType::Array(_)
@@ -514,7 +526,7 @@ impl Checker {
             }
             if param_idx < regular_param_count {
                 if sig.ref_params.get(param_idx).copied().unwrap_or(false)
-                    && !self.is_by_ref_argument_lvalue(arg, caller_env)?
+                    && !self.is_by_ref_argument_lvalue(arg, caller_env, false)?
                 {
                     let param_name = sig
                         .params

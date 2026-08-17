@@ -216,12 +216,31 @@ pub(super) fn store_stream_context_options(
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
+    // php keeps only entries whose key is a STRING and whose value is an ARRAY, and raises a
+    // catchable `ValueError` for anything else — `['ssl' => "abc"]`, `['ssl' => 1]`,
+    // `['ssl' => null]` and `[0 => [...]]` all measured on `php -n` 8.5.6. elephc stored the
+    // malformed map in silence, so a typo in a context array produced a context carrying nothing.
+    // The guard runs on the LOADED pointer, before it is published, so a refused map never
+    // reaches the runtime slot.
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_stream_context_options_shape_ok");
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, 1),
+        STREAM_CONTEXT_OPTIONS_SHAPE_MESSAGE,
+    );
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
     }
     Ok(())
 }
+
+/// php-src's verbatim `ValueError` for a stream-context options array of the wrong shape.
+pub(super) const STREAM_CONTEXT_OPTIONS_SHAPE_MESSAGE: &str =
+    "Options should have the form [\"wrappername\"][\"optionname\"] = $value";
 
 /// Stores the loaded AArch64 options pointer into `_stream_context_options`.
 pub(super) fn store_stream_context_options_aarch64(ctx: &mut FunctionContext<'_>, clear_on_null: bool) {

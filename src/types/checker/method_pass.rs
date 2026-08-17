@@ -221,7 +221,7 @@ impl Checker {
         let Some(ci) = self.classes.get(&class.name).cloned() else {
             return;
         };
-        if !declares_stream_wrapper_marker(&ci) {
+        if !declares_stream_wrapper_marker(&ci) && !declares_stream_filter_marker(&ci) {
             return;
         }
         let key = crate::names::php_symbol_key(&method.name);
@@ -232,7 +232,7 @@ impl Checker {
             if type_ann.is_some() {
                 continue;
             }
-            let Some(ty) = contract.get(i) else { continue };
+            let Some(Some(ty)) = contract.get(i) else { continue };
             method_env.insert(pname.clone(), ty.clone());
             if let Some(ci_mut) = self.classes.get_mut(&class.name) {
                 if let Some(sig) = ci_mut.methods.get_mut(&key) {
@@ -654,29 +654,52 @@ fn declares_stream_wrapper_marker(class_info: &crate::types::schema::ClassInfo) 
         .any(|key| crate::codegen_support::runtime::is_user_wrapper_marker_method(key))
 }
 
+/// Whether a class carries the userspace stream-FILTER contract.
+///
+/// A filter declares `filter()`; unlike the wrapper hooks the name is not reserved on its own, so
+/// the class must also descend from `php_user_filter`, which is what `stream_filter_register()`
+/// requires of it.
+fn declares_stream_filter_marker(class_info: &crate::types::schema::ClassInfo) -> bool {
+    class_info.methods.contains_key("filter")
+        && class_info
+            .parent
+            .as_deref()
+            .is_some_and(|parent| {
+                crate::names::php_symbol_key(parent.trim_start_matches('\\')) == "php_user_filter"
+            })
+}
+
 /// The parameter types PHP documents for each `streamWrapper` contract method.
 ///
 /// Only methods that TAKE parameters appear; the rest need no seeding. `stream_open`'s fourth
 /// parameter is by-reference `?string`, and is seeded as a string because that is what the body
 /// may assign into it. Filter classes are deliberately absent: `filter()`'s first two parameters
 /// are bucket brigades, which have no PHP type to seed.
-fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<PhpType>> {
-    let ints = |n: usize| vec![PhpType::Int; n];
+fn stream_wrapper_contract_param_types(method_key: &str) -> Option<Vec<Option<PhpType>>> {
+    let ints = |n: usize| vec![Some(PhpType::Int); n];
+    let strs = |types: Vec<PhpType>| types.into_iter().map(Some).collect::<Vec<_>>();
     Some(match method_key {
-        "stream_open" => vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],
-        "stream_write" => vec![PhpType::Str],
+        "stream_open" => strs(vec![PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str]),
+        "stream_write" => strs(vec![PhpType::Str]),
         "stream_read" | "stream_truncate" | "stream_lock" | "stream_cast" => ints(1),
         "stream_seek" => ints(2),
         "stream_set_option" => ints(3),
-        "unlink" => vec![PhpType::Str],
-        "rename" => vec![PhpType::Str, PhpType::Str],
-        "url_stat" | "rmdir" | "dir_opendir" => vec![PhpType::Str, PhpType::Int],
-        "mkdir" => vec![PhpType::Str, PhpType::Int, PhpType::Int],
+        "unlink" => strs(vec![PhpType::Str]),
+        "rename" => strs(vec![PhpType::Str, PhpType::Str]),
+        "url_stat" | "rmdir" | "dir_opendir" => strs(vec![PhpType::Str, PhpType::Int]),
+        "mkdir" => strs(vec![PhpType::Str, PhpType::Int, PhpType::Int]),
+        // A FILTER's `filter($in, $out, &$consumed, $closing)`: the first three have no PHP type
+        // to pin — two bucket brigades and a by-reference counter whose ABI the dispatcher fixes
+        // — but `$closing` is documented `bool`, and an untyped parameter otherwise infers Int.
+        // The register value is the same 0/1 either way; the TYPE is what `var_dump($closing)`
+        // renders and what `$closing === true` compares, so php printed `bool(false)` where
+        // elephc printed `int(0)` and a strict comparison against `true` could never hold.
+        "filter" => vec![None, None, None, Some(PhpType::Bool)],
         // `$value` carries whatever the option needs: an [mtime, atime] array for
         // STREAM_META_TOUCH, an int for ACCESS/OWNER/GROUP, a string for the
         // *_NAME options. Only Mixed spans all three, and the ABI keeps a boxed
         // Mixed in one register, so the pair-carrying `$path` stays aligned.
-        "stream_metadata" => vec![PhpType::Str, PhpType::Int, PhpType::Mixed],
+        "stream_metadata" => strs(vec![PhpType::Str, PhpType::Int, PhpType::Mixed]),
         _ => return None,
     })
 }
