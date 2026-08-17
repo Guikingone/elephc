@@ -249,3 +249,43 @@ $i = []; fill($i); fill($i); echo implode(",", $i), "\n";
         "2:1,2\nx,y\n[1,\"s\",2.5]\n{\"k\":1,\"j\":2}\n1,2,1,2\n"
     );
 }
+
+/// Verifies a PROPERTY can be passed by reference to a user function.
+///
+/// `bump($obj->items)` was `Function 'bump' parameter $a must be passed a variable` — php has
+/// allowed a property there since forever. The rewrite that reads the place into a hidden
+/// temporary, calls with it, and writes it back already existed for builtin callees
+/// (`ir_lower::expr::ref_place_args`); it was gated off for user ones, and the checker refused
+/// the shape before it could run. Both halves now accept exactly what that rewrite can lower:
+/// array-typed properties and static properties.
+#[test]
+fn test_property_can_be_passed_by_reference_to_a_user_function() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public array $items = [1, 2];
+    public int $count = 0;
+    public string $label = "a";
+    public static array $shared = [3, 4];
+    public static int $total = 10;
+}
+function bump(array &$a): void { foreach ($a as $k => $v) { $a[$k] = $v + 1; } }
+function push_one(array &$a): void { $a[] = 99; }
+
+$o = new Holder(); bump($o->items); echo implode(",", $o->items), "\n";
+bump(Holder::$shared); echo implode(",", Holder::$shared), "\n";
+$p = new Holder(); push_one($p->items); echo implode(",", $p->items), "\n";
+$q = new Holder(); $alias = $q; bump($q->items); echo implode(",", $alias->items), "\n";
+
+// A SCALAR property is carried too, because a USER parameter declares the type the hidden
+// temporary and the write-back must agree on. A builtin that RE-TYPES its by-reference
+// argument (`settype`) is why the same shape stays off the builtin path.
+function inc(int &$n): void { $n = $n + 1; }
+function append(string &$s): void { $s = $s . "!"; }
+$s = new Holder(); inc($s->count); inc($s->count); append($s->label);
+echo $s->count, "|", $s->label, "\n";
+inc(Holder::$total); echo Holder::$total, "\n";
+"#,
+    );
+    assert_eq!(out, "2,3\n4,5\n1,2,99\n2,3\n2|a!\n11\n");
+}

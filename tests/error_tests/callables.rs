@@ -532,3 +532,19 @@ fn test_error_callable_parameter_rejects_runtime_string() {
         "a callable string must be a compile-time constant here",
     );
 }
+
+/// Verifies an ELEMENT of a property passed by reference keeps its diagnostic.
+///
+/// php allows `set($obj->items[1])`. elephc's by-reference argument lowering resolves a cell
+/// address only for an element of a plain LOCAL, and the place rewrite in
+/// `ir_lower::expr::ref_place_args` does not fire for it either — accepting the shape compiled a
+/// call that RAN and dropped the write in silence (`[1, 2, 3]` came back unchanged where php
+/// answers `[1, 9, 3]`). A property or static property itself IS accepted; only the element of
+/// one is not, and the refusal names the parameter.
+#[test]
+fn test_error_property_element_by_ref_argument_requires_a_variable() {
+    expect_error(
+        "<?php class Box { public array $items = [1, 2, 3]; } function set9(int &$n): void { $n = 9; } $c = new Box(); set9($c->items[1]);",
+        "parameter $n must be passed a variable",
+    );
+}
