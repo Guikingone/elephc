@@ -142,6 +142,20 @@ function mysqli_rollback(mixed $mysql, int $flags = 0, ?string $name = null): bo
     return $mysql->rollback($flags, $name);
 }
 
+function mysqli_savepoint(mixed $mysql, string $name): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_savepoint(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->savepoint($name);
+}
+
+function mysqli_release_savepoint(mixed $mysql, string $name): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_release_savepoint(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->release_savepoint($name);
+}
+
 function mysqli_autocommit(mixed $mysql, bool $enable): bool {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_autocommit(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");

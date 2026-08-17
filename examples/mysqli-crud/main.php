@@ -94,8 +94,11 @@ if ($rows instanceof mysqli_result && $count instanceof mysqli_result) {
 // Delete inside a transaction.
 $db->begin_transaction();
 $db->query("DELETE FROM mysqli_crud_demo WHERE score < 90");
+// Read affected_rows BEFORE commit: like php, a COMMIT's OK packet reports 0,
+// so the DELETE count must be captured from the statement that produced it.
+$deleted = $db->affected_rows;
 $db->commit();
-echo "Deleted low scores, ", $db->affected_rows, " row(s)\n";
+echo "Deleted low scores, ", $deleted, " row(s)\n";
 
 // Drop the demo table and close.
 $db->query("DROP TABLE mysqli_crud_demo");

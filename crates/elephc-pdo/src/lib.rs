@@ -2595,6 +2595,96 @@ pub extern "C" fn elephc_pdo_no_backslash_escapes(conn_id: i64) -> i64 {
     })
 }
 
+/// Returns the MySQL server connection (thread) id from the handshake, so the
+/// mysqli prelude's `thread_id` / `mysqli_thread_id()` needs no
+/// `SELECT CONNECTION_ID()` round-trip. `0` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_thread_id(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.thread_id(),
+            _ => 0,
+        }
+    })
+}
+
+/// Returns the number of parameter markers in a prepared statement (the
+/// server's `param_count`), so the mysqli prelude reports
+/// `mysqli_stmt::$param_count` exactly instead of scanning `?` in PHP. `-1` for
+/// a non-MySQL or unknown statement handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_param_count(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => s.param_count(),
+            _ => -1,
+        }
+    })
+}
+
+/// Returns `1` when `sql` contains a second non-empty statement after a
+/// top-level `;` (quoted regions, backtick identifiers, and comments skipped,
+/// with `/*! … */` executable comments correctly treated as live SQL), honoring
+/// the connection's `NO_BACKSLASH_ESCAPES` mode. `0` otherwise. The single
+/// authoritative multi-statement scanner the mysqli prelude's `query()` guard
+/// calls, replacing its own PHP re-implementation.
+///
+/// # Safety
+/// `sql` must expose at least `len` readable bytes and may only be null when
+/// `len` is zero.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
+    conn_id: i64,
+    sql: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(0, || {
+        let bytes = bytes_arg(sql, len);
+        let text = String::from_utf8_lossy(&bytes);
+        let no_backslash_escapes = {
+            let guard = lock_recover(conns());
+            matches!(guard.get(&conn_id), Some(Conn::Mysql(c)) if c.no_backslash_escape())
+        };
+        my::sql_has_multiple_statements(&text, no_backslash_escapes) as i64
+    })
+}
+
+/// Charset-aware `mysql_real_escape_string` for the mysqli prelude: escapes
+/// `data` for a `'…'` literal under the named `charset`, closing the GBK/Big5
+/// trailing-byte breakout that pure byte substitution leaves open, and honoring
+/// the connection's `NO_BACKSLASH_ESCAPES`. Writes the escaped bytes into the
+/// shared blob cell (read via `elephc_pdo_blob_data_ptr`) and returns their
+/// length; `-1` for a non-MySQL or unknown handle.
+///
+/// # Safety
+/// `data` must expose at least `len` readable bytes and may only be null when
+/// `len` is zero; `charset` must be a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_real_escape_string(
+    conn_id: i64,
+    charset: *const c_char,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let charset = cstr_arg(charset).unwrap_or("");
+        let input = bytes_arg(data, len);
+        let no_backslash_escapes = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => c.no_backslash_escape(),
+                _ => return -1,
+            }
+        };
+        let output = my::my_real_escape(&input, charset, no_backslash_escapes);
+        let length = output.len() as i64;
+        *lock_recover(blob_cell()) = output;
+        length
+    })
+}
+
 /// Creates a large object and returns its OID as text for a `pgsql:` connection
 /// (`Pdo\Pgsql::lobCreate()`); empty string for a non-PostgreSQL connection, an
 /// unknown handle, an error, or a caught panic.

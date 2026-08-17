@@ -60,9 +60,10 @@ class mysqli_stmt {
         $_statement->link = $link;
         $_statement->conn = $conn;
         $_statement->stmt = $stmt;
-        // The bridge has no server-side parameter counter; count `?` in the
-        // source, skipping string literals, identifiers, and comments.
-        $_statement->param_count = mysqli_stmt::__elephcCountPlaceholders($query);
+        // The bridge reports the server's exact parameter marker count off the
+        // prepared statement (no client-side `?`-scanning, which used to diverge
+        // from the multi-statement scanner on `--` comments / backslash rules).
+        $_statement->param_count = elephc_pdo_mysql_param_count($stmt);
         return $_statement;
     }
 
@@ -167,6 +168,7 @@ class mysqli_stmt {
         if ($_cols == 0) {
             $this->affected_rows = elephc_pdo_changes($this->conn);
             $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->refreshLink();
             // Rewind now so the statement is immediately re-executable.
             elephc_pdo_reset($this->stmt);
             $this->clearError();
@@ -177,11 +179,29 @@ class mysqli_stmt {
         $this->hasPending = true;
         $this->pendingStep = $_rc;
         $this->num_rows = 0;
+        $this->refreshLink();
         $this->clearError();
         return true;
     }
 
+    // php refreshes the OWNING connection's affected_rows / insert_id /
+    // warning_count from every command's OK packet, so the canonical
+    // `$stmt->execute(); $db->insert_id;` idiom reads the statement's value —
+    // not a stale one. Mirror the statement's freshly-updated copies onto the
+    // link (a no-op if the statement was detached from its connection).
+    private function refreshLink(): void {
+        if ($this->link !== null) {
+            $this->link->affected_rows = $this->affected_rows;
+            $this->link->insert_id = $this->insert_id;
+            $this->link->warning_count = elephc_pdo_warning_count($this->conn);
+        }
+    }
+
     public function get_result(): mysqli_result|false {
+        if ($this->stmt < 0) {
+            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
         if (!$this->hasPending) {
             return false;
         }
@@ -224,6 +244,10 @@ class mysqli_stmt {
     }
 
     public function store_result(): bool {
+        if ($this->stmt < 0) {
+            $this->syntheticFailure(2050, "mysqli_stmt object is already closed", "HY000");
+            return false;
+        }
         if (!$this->hasPending) {
             // Nothing pending (non-select execute, or already consumed):
             // php-src treats this as a successful no-op.
@@ -265,6 +289,10 @@ class mysqli_stmt {
             elephc_pdo_finalize($this->stmt);
             $this->stmt = -1;
         }
+        // Clear the pending-result flag too: a post-close get_result() /
+        // store_result() must see a closed statement (and raise the
+        // already-closed error), not drive the bridge with handle -1.
+        $this->hasPending = false;
         $this->link = null;
         return true;
     }
@@ -274,7 +302,9 @@ class mysqli_stmt {
         // safe even when the owning mysqli connection was closed first.
         if ($this->stmt >= 0) {
             elephc_pdo_finalize($this->stmt);
+            $this->stmt = -1;
         }
+        $this->hasPending = false;
         $this->link = null;
     }
 
@@ -298,61 +328,6 @@ class mysqli_stmt {
             return __elephc_ptr_read_string(elephc_pdo_column_data_ptr($this->stmt, $index), $_len);
         }
         return "";
-    }
-
-    // Counts `?` placeholders in the statement source, skipping single/double
-    // quoted literals (with backslash escapes), backtick identifiers, and
-    // `#`, `--`, and `/* */` comments. Conservative stand-in for the server's
-    // parameter count, which the bridge does not expose.
-    private static function __elephcCountPlaceholders(string $query): int {
-        $_len = strlen($query);
-        $_count = 0;
-        $_i = 0;
-        while ($_i < $_len) {
-            $_c = substr($query, $_i, 1);
-            if ($_c === "'" || $_c === "\"" || $_c === "`") {
-                $_quote = $_c;
-                $_i = $_i + 1;
-                while ($_i < $_len) {
-                    $_d = substr($query, $_i, 1);
-                    if ($_d === "\\" && $_quote !== "`") {
-                        $_i = $_i + 2;
-                        continue;
-                    }
-                    if ($_d === $_quote) {
-                        $_i = $_i + 1;
-                        break;
-                    }
-                    $_i = $_i + 1;
-                }
-                continue;
-            }
-            if ($_c === "#") {
-                while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
-                    $_i = $_i + 1;
-                }
-                continue;
-            }
-            if ($_c === "-" && substr($query, $_i, 2) === "--") {
-                while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
-                    $_i = $_i + 1;
-                }
-                continue;
-            }
-            if ($_c === "/" && substr($query, $_i, 2) === "/*") {
-                $_i = $_i + 2;
-                while ($_i + 1 < $_len && substr($query, $_i, 2) !== "*/") {
-                    $_i = $_i + 1;
-                }
-                $_i = $_i + 2;
-                continue;
-            }
-            if ($_c === "?") {
-                $_count = $_count + 1;
-            }
-            $_i = $_i + 1;
-        }
-        return $_count;
     }
 
     // Records a client-side failure that has no live bridge error state and

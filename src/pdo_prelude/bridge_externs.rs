@@ -265,6 +265,17 @@ extern "elephc_pdo" {
     // backslash-escaping is unsafe (an escaped quote does not actually escape)
     // and must fall back to ''-doubling only, matching mysqlnd's own behavior.
     function elephc_pdo_no_backslash_escapes(int $conn): int;
+    // v59: mysqli-surface helpers over the same MySQL connection. thread_id and
+    // param_count come straight from the handshake / prepared statement (no
+    // round-trip); real_escape_string is charset-aware (closes the GBK/Big5
+    // trailing-byte breakout that pure byte substitution leaves open) and writes
+    // the escaped bytes to the shared blob cell (read via blob_data_ptr);
+    // sql_has_multiple_statements is the one authoritative multi-statement
+    // scanner (with `/*! … */` executable comments treated as live SQL).
+    function elephc_pdo_mysql_thread_id(int $conn): int;
+    function elephc_pdo_mysql_param_count(int $stmt): int;
+    function elephc_pdo_sql_has_multiple_statements(int $conn, string $sql, int $len): int;
+    function elephc_pdo_real_escape_string(int $conn, string $charset, string $data, int $len): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

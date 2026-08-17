@@ -69,7 +69,9 @@ class mysqli {
     private int $optConnectTimeout = 0;
     private string $optInitCommand = "";
     private string $optCharsetName = "";
-    // Connection charset, lazily read from the server on first ask.
+    // Connection charset: set at connect from the handshake (utf8mb4) and
+    // updated by set_charset(); character_set_name() answers from it without a
+    // round-trip. Also passed to the bridge's charset-aware escape.
     private string $currentCharset = "";
     // Buffered result produced by real_query() and picked up by store_result()
     // (and, in the multi_query path, by next_result()).
@@ -213,11 +215,14 @@ class mysqli {
         $this->server_version = $this->versionStringToInt($this->server_info);
         $this->client_info = elephc_pdo_client_version($_conn);
         $this->client_version = $this->versionStringToInt($this->client_info);
-        $this->thread_id = $this->fetchIntScalar("SELECT CONNECTION_ID()");
-        // Read the session charset now: character_set_name() must answer like
-        // php-src from client-side state, without issuing a statement later
-        // (which would collide with the 2014 pending-results guard).
-        $this->currentCharset = $this->fetchStringScalar("SELECT @@character_set_client");
+        // Both come from the handshake with ZERO round-trips, like php-src (which
+        // reads them off the handshake packet): the server thread id straight
+        // from the bridge, and the negotiated client charset is utf8mb4 (the
+        // charset the mysql client sends in its handshake response for any server
+        // >= 5.5.3). character_set_name() then answers from this client-side
+        // state without ever issuing a statement (so it stays usable mid-batch).
+        $this->thread_id = elephc_pdo_mysql_thread_id($_conn);
+        $this->currentCharset = "utf8mb4";
         $this->warning_count = elephc_pdo_warning_count($_conn);
         if ($this->optCharsetName !== "") {
             // MYSQLI_SET_CHARSET_NAME collected before connect applies now.
@@ -313,32 +318,30 @@ class mysqli {
     }
 
     public function character_set_name(): string {
-        // Client-side state (read at connect, updated by set_charset): never
-        // issues a statement, so it stays usable mid-multi_query like php-src.
-        if ($this->conn < 0) {
-            return "";
-        }
+        // php 8: an Error on an unconnected object (not "").
+        $this->requireInitialized("mysqli::character_set_name");
+        // Client-side state (set at connect from the handshake charset, updated
+        // by set_charset): never issues a statement, so it stays usable
+        // mid-multi_query like php-src.
         return $this->currentCharset;
     }
 
     public function real_escape_string(string $string): string {
-        // The MySQL branch of PDO::quote() minus the wrapping quotes and the
-        // `_binary` introducer. Never calls quote(): mysqli's contract is the
-        // escaped payload WITHOUT surrounding quotes.
-        if ($this->conn >= 0 && elephc_pdo_no_backslash_escapes($this->conn) != 0) {
-            // SECURITY: under NO_BACKSLASH_ESCAPES a backslash is a literal, so
-            // backslash-escaping is unsafe (an "escaped" quote breaks out of
-            // the literal); mysqlnd switches to quote-doubling only.
-            return str_replace("'", "''", $string);
+        // php 8: real_escape_string on an unconnected object is an Error.
+        $this->requireInitialized("mysqli::real_escape_string");
+        // SECURITY: charset-aware escaping through the bridge — pure byte
+        // substitution is injectable under gbk/big5/sjis/cp932 (the classic
+        // trailing-byte breakout), so the bridge consults the connection charset
+        // and NO_BACKSLASH_ESCAPES state and writes the escaped bytes to the
+        // shared blob cell. The length-counted read preserves embedded NUL bytes.
+        $_len = elephc_pdo_real_escape_string($this->conn, $this->currentCharset, $string, strlen($string));
+        if ($_len < 0) {
+            return "";
         }
-        $_s = str_replace("\\", "\\\\", $string);
-        $_s = str_replace("'", "\\'", $_s);
-        $_s = str_replace("\"", "\\\"", $_s);
-        $_s = str_replace(chr(0), "\\0", $_s);
-        $_s = str_replace(chr(10), "\\n", $_s);
-        $_s = str_replace(chr(13), "\\r", $_s);
-        $_s = str_replace(chr(26), "\\Z", $_s);
-        return $_s;
+        if ($_len == 0) {
+            return "";
+        }
+        return __elephc_ptr_read_string(elephc_pdo_blob_data_ptr(), $_len);
     }
 
     public function escape_string(string $string): string {
@@ -346,90 +349,110 @@ class mysqli {
     }
 
     public function begin_transaction(int $flags = 0, ?string $name = null): bool {
+        // php-src: $name is a SQL COMMENT on START TRANSACTION, never a
+        // savepoint; the empty-name ValueError is raised BEFORE any SQL goes to
+        // the server (unlike the old ordering, which left an open transaction).
+        $_comment = $this->transactionComment("mysqli::begin_transaction", $name);
         if (!$this->requireConnection()) {
             return false;
         }
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        if (($flags & 4) != 0) {
-            // MYSQLI_TRANS_START_READ_ONLY (best effort: report on failure).
-            if (elephc_pdo_exec($this->conn, "SET TRANSACTION READ ONLY") < 0) {
-                return $this->opFailed();
-            }
-        } elseif (($flags & 2) != 0) {
-            // MYSQLI_TRANS_START_READ_WRITE.
-            if (elephc_pdo_exec($this->conn, "SET TRANSACTION READ WRITE") < 0) {
-                return $this->opFailed();
-            }
-        }
+        // php composes the whole statement once (captured wire:
+        // "START TRANSACTION WITH CONSISTENT SNAPSHOT, READ WRITE"); the bridge's
+        // note_transaction_sql updates in_transaction from raw START TRANSACTION
+        // too, so close()/__destruct still auto-rollback.
+        $_parts = [];
         if (($flags & 1) != 0) {
-            // MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT needs the explicit
-            // START TRANSACTION form; the bridge's begin is a plain BEGIN.
-            if (elephc_pdo_exec($this->conn, "START TRANSACTION WITH CONSISTENT SNAPSHOT") < 0) {
-                return $this->opFailed();
-            }
-        } else {
-            if (elephc_pdo_begin($this->conn) != 1) {
-                return $this->opFailed();
-            }
+            $_parts[] = "WITH CONSISTENT SNAPSHOT";
         }
-        if ($name !== null) {
-            if ($name === "") {
-                throw new ValueError("mysqli::begin_transaction(): Argument #2 (\$name) cannot be empty");
-            }
-            if (elephc_pdo_exec($this->conn, "SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
-                return $this->opFailed();
-            }
+        if (($flags & 2) != 0) {
+            $_parts[] = "READ WRITE";
+        } elseif (($flags & 4) != 0) {
+            $_parts[] = "READ ONLY";
         }
+        $_sql = "START TRANSACTION";
+        if (count($_parts) > 0) {
+            $_sql = $_sql . " " . implode(", ", $_parts);
+        }
+        $_sql = $_sql . $_comment;
+        if (elephc_pdo_exec($this->conn, $_sql) < 0) {
+            return $this->opFailed();
+        }
+        $this->refreshStatus();
         $this->clearError();
         return true;
     }
 
     public function commit(int $flags = 0, ?string $name = null): bool {
+        $_comment = $this->transactionComment("mysqli::commit", $name);
         if (!$this->requireConnection()) {
             return false;
         }
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        if ($name !== null) {
-            if ($name === "") {
-                throw new ValueError("mysqli::commit(): Argument #2 (\$name) cannot be empty");
-            }
-            if (elephc_pdo_exec($this->conn, "RELEASE SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
-                return $this->opFailed();
-            }
-            $this->clearError();
-            return true;
-        }
-        if (elephc_pdo_commit($this->conn) != 1) {
+        // php: COMMIT [AND [NO] CHAIN] [[NO] RELEASE] /*name*/ — a real COMMIT,
+        // never a RELEASE SAVEPOINT (the old code never actually committed).
+        $_sql = "COMMIT" . $this->transactionCorFlags($flags) . $_comment;
+        if (elephc_pdo_exec($this->conn, $_sql) < 0) {
             return $this->opFailed();
         }
+        $this->refreshStatus();
         $this->clearError();
         return true;
     }
 
     public function rollback(int $flags = 0, ?string $name = null): bool {
+        $_comment = $this->transactionComment("mysqli::rollback", $name);
         if (!$this->requireConnection()) {
             return false;
         }
         if (!$this->requireNoPendingResults()) {
             return false;
         }
-        if ($name !== null) {
-            if ($name === "") {
-                throw new ValueError("mysqli::rollback(): Argument #2 (\$name) cannot be empty");
-            }
-            if (elephc_pdo_exec($this->conn, "ROLLBACK TO `" . str_replace("`", "``", $name) . "`") < 0) {
-                return $this->opFailed();
-            }
-            $this->clearError();
-            return true;
-        }
-        if (elephc_pdo_rollback($this->conn) != 1) {
+        $_sql = "ROLLBACK" . $this->transactionCorFlags($flags) . $_comment;
+        if (elephc_pdo_exec($this->conn, $_sql) < 0) {
             return $this->opFailed();
         }
+        $this->refreshStatus();
+        $this->clearError();
+        return true;
+    }
+
+    public function savepoint(string $name): bool {
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        if ($name === "") {
+            throw new ValueError("mysqli::savepoint(): Argument #1 (\$name) cannot be empty");
+        }
+        if (elephc_pdo_exec($this->conn, "SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
+            return $this->opFailed();
+        }
+        $this->refreshStatus();
+        $this->clearError();
+        return true;
+    }
+
+    public function release_savepoint(string $name): bool {
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        if (!$this->requireNoPendingResults()) {
+            return false;
+        }
+        if ($name === "") {
+            throw new ValueError("mysqli::release_savepoint(): Argument #1 (\$name) cannot be empty");
+        }
+        if (elephc_pdo_exec($this->conn, "RELEASE SAVEPOINT `" . str_replace("`", "``", $name) . "`") < 0) {
+            return $this->opFailed();
+        }
+        $this->refreshStatus();
         $this->clearError();
         return true;
     }
@@ -664,85 +687,6 @@ class mysqli {
 
     // -- internal helpers ($_-prefixed locals; same checker rule as PDO) --
 
-    // Returns true when $query contains a second statement after a top-level
-    // `;`. String literals (with backslash escapes, disabled live when the
-    // session runs NO_BACKSLASH_ESCAPES so a literal backslash cannot hide a
-    // terminator), backtick identifiers, and `#`, `-- ` (MySQL requires the
-    // whitespace), and `/* */` comments are skipped; a trailing `;` followed
-    // only by whitespace/comments is still a single statement. There is
-    // deliberately NO exemption for compound-body DDL: telling a procedure
-    // body's semicolons apart from a statement separator needs a real
-    // BEGIN/END parser (END IF / END WHILE / bare END in CASE expressions),
-    // and any cheaper heuristic leaves a `... END; DROP ...` injection tail
-    // executable. `CREATE PROCEDURE ... BEGIN ...; ... END` therefore goes
-    // through multi_query(), which is the multi-statement path by contract.
-    private function queryHasMultipleStatements(string $query): bool {
-        $_len = strlen($query);
-        $_backslashEscapes = elephc_pdo_no_backslash_escapes($this->conn) == 0;
-        $_i = 0;
-        $_afterSeparator = false;
-        while ($_i < $_len) {
-            $_c = substr($query, $_i, 1);
-            if ($_c === "#") {
-                while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
-                    $_i = $_i + 1;
-                }
-                continue;
-            }
-            if ($_c === "-" && substr($query, $_i, 2) === "--") {
-                // MySQL's `--` comment requires trailing whitespace (or end of
-                // input); `a--b` is arithmetic, not a comment, and treating it
-                // as one would let a separator hide behind it.
-                $_next = substr($query, $_i + 2, 1);
-                if ($_next === "" || $_next === " " || $_next === "\t" || $_next === "\n" || $_next === "\r") {
-                    while ($_i < $_len && substr($query, $_i, 1) !== "\n") {
-                        $_i = $_i + 1;
-                    }
-                    continue;
-                }
-            }
-            if ($_c === "/" && substr($query, $_i, 2) === "/*") {
-                $_i = $_i + 2;
-                while ($_i + 1 < $_len && substr($query, $_i, 2) !== "*/") {
-                    $_i = $_i + 1;
-                }
-                $_i = $_i + 2;
-                continue;
-            }
-            if ($_c === " " || $_c === "\t" || $_c === "\n" || $_c === "\r") {
-                $_i = $_i + 1;
-                continue;
-            }
-            if ($_afterSeparator) {
-                return true;
-            }
-            if ($_c === ";") {
-                $_afterSeparator = true;
-                $_i = $_i + 1;
-                continue;
-            }
-            if ($_c === "'" || $_c === "\"" || $_c === "`") {
-                $_quote = $_c;
-                $_i = $_i + 1;
-                while ($_i < $_len) {
-                    $_d = substr($query, $_i, 1);
-                    if ($_d === "\\" && $_quote !== "`" && $_backslashEscapes) {
-                        $_i = $_i + 2;
-                        continue;
-                    }
-                    if ($_d === $_quote) {
-                        $_i = $_i + 1;
-                        break;
-                    }
-                    $_i = $_i + 1;
-                }
-                continue;
-            }
-            $_i = $_i + 1;
-        }
-        return false;
-    }
-
     // Guards statement-issuing operations while multi_query result sets (or a
     // real_query result) remain unconsumed: php-src raises
     // CR_COMMANDS_OUT_OF_SYNC (2014) there, and silently mixing the pending
@@ -755,15 +699,71 @@ class mysqli {
         return true;
     }
 
-    // Guards every operation that needs a live connection: an unconnected
-    // object records CR_SERVER_GONE_ERROR and reports it (false under
-    // ERROR/OFF, throw under STRICT), matching the locked "fail loudly" rule.
-    private function requireConnection(): bool {
-        if ($this->conn >= 0) {
-            return true;
+    // Renders a transaction $name as php-src's ` /*name*/` SQL comment suffix
+    // ("" when $name is null). Empty $name is a ValueError (raised before any
+    // SQL is sent); a name containing `*/` would close the comment early, so it
+    // is rejected as a ValueError too. $context names the calling method.
+    private function transactionComment(string $context, ?string $name): string {
+        if ($name === null) {
+            return "";
         }
-        $this->syntheticFailure(2006, "MySQL server has gone away", "HY000");
-        return false;
+        if ($name === "") {
+            throw new ValueError($context . "(): Argument #2 (\$name) cannot be empty");
+        }
+        if (strpos($name, "*/") !== false) {
+            throw new ValueError($context . "(): Argument #2 (\$name) cannot contain '*/'");
+        }
+        return " /*" . $name . "*/";
+    }
+
+    // Renders the COMMIT/ROLLBACK completion flags (MYSQLI_TRANS_COR_*), matching
+    // php-src's mysqlnd: AND [NO] CHAIN and [NO] RELEASE, each emitted only when
+    // its bit is set and its opposite is not.
+    private function transactionCorFlags(int $flags): string {
+        $_sql = "";
+        if (($flags & 1) != 0 && ($flags & 2) == 0) {
+            $_sql = $_sql . " AND CHAIN";
+        } elseif (($flags & 2) != 0 && ($flags & 1) == 0) {
+            $_sql = $_sql . " AND NO CHAIN";
+        }
+        if (($flags & 4) != 0 && ($flags & 8) == 0) {
+            $_sql = $_sql . " RELEASE";
+        } elseif (($flags & 8) != 0 && ($flags & 4) == 0) {
+            $_sql = $_sql . " NO RELEASE";
+        }
+        return $_sql;
+    }
+
+    // Refreshes the connection status fields from the last command's OK packet,
+    // matching php (which updates them after EVERY command). A control statement
+    // like COMMIT / BEGIN / SET NAMES reports affected_rows = 0, so this resets
+    // the DML count a prior query() left behind — e.g. `$db->affected_rows`
+    // read after commit() is 0, as in php, not the previous statement's count.
+    private function refreshStatus(): void {
+        $this->affected_rows = elephc_pdo_changes($this->conn);
+        $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+        $this->warning_count = elephc_pdo_warning_count($this->conn);
+    }
+
+    // php 8 raises `Error: mysqli object is not fully initialized` for any
+    // operation on a `mysqli_init()` / argument-less `new mysqli()` object (or a
+    // failed/closed connection), regardless of mysqli_report mode — it is an
+    // Error, not a connection warning. Throwing here (rather than the old
+    // silent 2006 `false`) closes the divergence where an unconnected
+    // real_escape_string returned a value with no signal at all.
+    private function requireInitialized(string $context): void {
+        if ($this->conn < 0) {
+            throw new Error($context . "(): mysqli object is not fully initialized");
+        }
+    }
+
+    // Guards every operation that needs a live connection. An unconnected object
+    // raises the same php Error as requireInitialized; always returns true when
+    // it does not throw so existing `if (!requireConnection())` call sites stay
+    // correct.
+    private function requireConnection(): bool {
+        $this->requireInitialized("mysqli");
+        return true;
     }
 
     // Records a client-side failure that has no live bridge error state
@@ -846,9 +846,13 @@ class mysqli {
         // toggles CLIENT_MULTI_STATEMENTS per multi_query call via
         // COM_SET_OPTION; the bridge keeps it enabled for the whole
         // connection), so a classic "1; DROP TABLE …" injection would
-        // otherwise EXECUTE here. Reject client-side; multi_query() is the
-        // one multi-statement path.
-        if ($this->queryHasMultipleStatements($query)) {
+        // otherwise EXECUTE here. The rejection uses the ONE authoritative
+        // bridge scanner (which treats `/*! … */` executable comments as live
+        // SQL, closing the comment-hidden separator bypass); a fast strpos
+        // skips the scan for the overwhelming majority of statements that carry
+        // no ';' at all. multi_query() is the one multi-statement path.
+        if (strpos($query, ";") !== false
+            && elephc_pdo_sql_has_multiple_statements($this->conn, $query, strlen($query)) != 0) {
             $this->syntheticFailure(1064, "elephc mysqli does not support multiple statements in mysqli::query(); use mysqli::multi_query()", "42000");
             return 0;
         }
@@ -1001,39 +1005,6 @@ class mysqli {
             return __elephc_ptr_read_string(elephc_pdo_column_data_ptr($stmt, $index), $_len);
         }
         return "";
-    }
-
-    // Runs a one-row one-column SELECT and returns its integer value (0 on any
-    // failure). Backs thread_id (SELECT CONNECTION_ID()).
-    private function fetchIntScalar(string $sql): int {
-        $_stmt = elephc_pdo_prepare($this->conn, $sql, 1);
-        if ($_stmt < 0) {
-            return 0;
-        }
-        $_value = 0;
-        if (elephc_pdo_step($_stmt) == 1) {
-            $_value = elephc_pdo_column_int($_stmt, 0);
-        }
-        elephc_pdo_finalize($_stmt);
-        return $_value;
-    }
-
-    // Runs a one-row one-column SELECT and returns its text value ("" on any
-    // failure). Length-counted copy so embedded NUL bytes would survive.
-    private function fetchStringScalar(string $sql): string {
-        $_stmt = elephc_pdo_prepare($this->conn, $sql, 1);
-        if ($_stmt < 0) {
-            return "";
-        }
-        $_value = "";
-        if (elephc_pdo_step($_stmt) == 1) {
-            $_len = elephc_pdo_column_data_len($_stmt, 0);
-            if ($_len > 0) {
-                $_value = __elephc_ptr_read_string(elephc_pdo_column_data_ptr($_stmt, 0), $_len);
-            }
-        }
-        elephc_pdo_finalize($_stmt);
-        return $_value;
     }
 
     // "8.0.36-log" -> 80036, php-src's major*10000 + minor*100 + patch. The

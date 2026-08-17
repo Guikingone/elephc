@@ -119,28 +119,34 @@ try {
     assert_eq!(out, "caught|msg|state");
 }
 
-/// Operations on an unconnected handle fail loudly but silently-with-`false`
-/// under REPORT_OFF, recording CR_SERVER_GONE_ERROR (2006) — and
-/// `real_escape_string` still escapes with the default (backslash) rules.
+/// Operations on an unconnected (`mysqli_init()`) object raise php 8's
+/// `Error: mysqli object is not fully initialized` — including
+/// `real_escape_string`, which previously returned a value with no signal at
+/// all. `options()` is the exception: it just records state and succeeds.
 #[test]
-fn test_mysqli_unconnected_ops_and_offline_escape() {
+fn test_mysqli_unconnected_ops_raise_error() {
     let out = compile_and_run(
         r#"<?php
 mysqli_report(MYSQLI_REPORT_OFF);
 $db = mysqli_init();
-echo $db->ping() ? "T" : "F";
-echo "|", $db->errno;
-echo "|", $db->select_db("nope") ? "T" : "F";
-echo "|", $db->real_escape_string("a'b\\c");
-echo "|", $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1) ? "T" : "F";
-echo "|", $db->options(99, 1) ? "T" : "F";
+$probe = function(callable $fn): string {
+    try { $fn(); return "no-err"; }
+    catch (Error $e) {
+        return strpos($e->getMessage(), "not fully initialized") !== false ? "err" : "err?";
+    }
+};
+echo $probe(fn() => $db->ping());
+echo "|", $probe(fn() => $db->select_db("nope"));
+echo "|", $probe(fn() => $db->real_escape_string("a'b"));
+echo "|", $probe(fn() => $db->character_set_name());
+echo "|", $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1) ? "opt-T" : "opt-F";
 "#,
     );
-    assert_eq!(out, r"F|2006|F|a\'b\\c|T|F");
+    assert_eq!(out, "err|err|err|err|opt-T");
 }
 
-/// An empty query string throws `ValueError` (php-src's message), and a query
-/// on an unconnected handle under REPORT_OFF returns `false` with `errno` set.
+/// An empty query string throws `ValueError` (php-src's message); a query on an
+/// unconnected object raises php 8's not-fully-initialized `Error`.
 #[test]
 fn test_mysqli_query_empty_string_and_unconnected() {
     let out = compile_and_run(
@@ -153,11 +159,15 @@ try {
 } catch (ValueError $e) {
     echo "ve";
 }
-echo "|", $db->query("SELECT 1") === false ? "F" : "ok";
-echo "|", $db->errno;
+try {
+    $db->query("SELECT 1");
+    echo "|no";
+} catch (Error $e) {
+    echo "|", strpos($e->getMessage(), "not fully initialized") !== false ? "err" : "err?";
+}
 "#,
     );
-    assert_eq!(out, "ve|F|2006");
+    assert_eq!(out, "ve|err");
 }
 
 /// Procedural aliases validate their link/result argument at runtime with a

@@ -796,6 +796,14 @@ fn scan_my_comment(bytes: &[u8], i: usize) -> Option<usize> {
             }
             Some(j)
         }
+        // `/*! ... */` (optionally `/*!NNNNN ...`) is a MySQL version-gated
+        // EXECUTABLE comment: the server strips the `/*!` marker and lexes the
+        // body as ordinary SQL, so a `;` inside it separates statements and a
+        // `?` inside it is a real placeholder. It must NOT be skipped as inert,
+        // or `SELECT 1/*!;DROP t*/` slips a second statement past the
+        // multi-statement guard. `/*!` is therefore not a comment here (the
+        // caller re-lexes its body); a plain `/* ... */` still is.
+        b'/' if i + 2 < len && bytes[i + 1] == b'*' && bytes[i + 2] == b'!' => None,
         b'/' if i + 1 < len && bytes[i + 1] == b'*' => {
             let mut j = i + 2;
             while j + 1 < len && !(bytes[j] == b'*' && bytes[j + 1] == b'/') {
@@ -887,7 +895,7 @@ fn sql_is_call_statement(sql: &str) -> bool {
 /// semicolon separator. Quoted regions and MySQL comments are skipped with the
 /// same escape rules as placeholder translation, so a semicolon inside data
 /// never trips `ATTR_MULTI_STATEMENTS = false`.
-fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool) -> bool {
+pub(crate) fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool) -> bool {
     let bytes = sql.as_bytes();
     let mut i = 0usize;
     let mut saw_statement = false;
@@ -936,6 +944,81 @@ fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool) -> bool {
         i += 1;
     }
     false
+}
+
+/// Returns whether `charset` is a multibyte encoding where a valid character's
+/// trailing byte can be `0x5C` (`\`) or `0x27` (`'`), so naive byte-substitution
+/// escaping is injectable (the classic GBK/Big5 breakout). Matches MySQL's own
+/// `escape_with_backslash_is_dangerous` charset set. Compared on the leading
+/// token of the charset name so `gbk`, `gb2312`, `gb18030`, `sjis`, `cp932`,
+/// `big5`, `euckr`, and `ujis`/`eucjpms` are all covered case-insensitively.
+fn charset_escape_is_dangerous(charset: &str) -> bool {
+    let name = charset.trim().to_ascii_lowercase();
+    let head: &str = name.split(|c| c == '_' || c == '-').next().unwrap_or(&name);
+    matches!(
+        head,
+        "gbk" | "gb2312" | "gb18030" | "big5" | "sjis" | "cp932" | "euckr" | "ujis" | "eucjpms"
+    )
+}
+
+/// Escapes `data` for embedding inside a `'…'` MySQL string literal, mirroring
+/// `mysql_real_escape_string`'s charset-aware behavior.
+///
+/// - Under `NO_BACKSLASH_ESCAPES`, only `'` is doubled (backslash is a literal
+///   there, so backslash-escaping would be unsafe — mysqlnd does the same).
+/// - Otherwise NUL, `\n`, `\r`, `\`, `'`, `"`, and Ctrl-Z are backslash-escaped.
+/// - For a `charset_escape_is_dangerous` encoding, a byte that begins a complete
+///   valid 2-byte character (lead `0x81..=0xFE`, trail `0x40..=0xFE`) is copied
+///   with its trailing byte verbatim, so an embedded `\`/`'` trailing byte is
+///   consumed as part of the character. A lead byte NOT forming a complete pair
+///   is itself backslash-escaped, which is what prevents it from later absorbing
+///   the backslash of an escaped quote (the breakout) and matches php byte for
+///   byte (`0xBF 0x27` → `\ 0xBF \ '`).
+pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: bool) -> Vec<u8> {
+    if no_backslash_escapes {
+        let mut out = Vec::with_capacity(data.len());
+        for &b in data {
+            if b == b'\'' {
+                out.push(b'\'');
+            }
+            out.push(b);
+        }
+        return out;
+    }
+    let dangerous = charset_escape_is_dangerous(charset);
+    let mut out = Vec::with_capacity(data.len() + 8);
+    let mut i = 0;
+    while i < data.len() {
+        let b = data[i];
+        if dangerous && b >= 0x81 {
+            // A complete 2-byte character (lead + valid trail) is opaque: copy
+            // both bytes so a trailing `\`/`'` cannot be mistaken for an escape.
+            if i + 1 < data.len() && (0x40..=0xFE).contains(&data[i + 1]) {
+                out.push(b);
+                out.push(data[i + 1]);
+                i += 2;
+                continue;
+            }
+            // Lone/invalid lead byte: escape it so it cannot swallow the
+            // backslash of a following escaped quote.
+            out.push(b'\\');
+            out.push(b);
+            i += 1;
+            continue;
+        }
+        match b {
+            0 => out.extend_from_slice(b"\\0"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\'' => out.extend_from_slice(b"\\'"),
+            b'"' => out.extend_from_slice(b"\\\""),
+            0x1A => out.extend_from_slice(b"\\Z"),
+            _ => out.push(b),
+        }
+        i += 1;
+    }
+    out
 }
 
 /// Scans a MySQL quoted region opened by `quote` (`'` or `"`) starting at
@@ -2090,6 +2173,18 @@ impl MyConn {
             .unwrap_or(self.no_backslash_escapes)
     }
 
+    /// Returns the server's connection (thread) id from the handshake, so
+    /// `mysqli::thread_id` / `mysqli_thread_id()` need no `SELECT CONNECTION_ID()`
+    /// round-trip (php reads it from the handshake too). `0` when the client is
+    /// momentarily owned by an unbuffered stream or the handle is unknown.
+    pub fn thread_id(&self) -> i64 {
+        self.conn
+            .0
+            .as_ref()
+            .map(|c| i64::from(c.connection_id()))
+            .unwrap_or(0)
+    }
+
     /// Prepares a statement: translates placeholders and prepares it server-side
     /// for column metadata. Returns the statement or an error message. Rejects a
     /// SQL text that mixes a positional `?` with a named `:name` placeholder
@@ -2465,6 +2560,13 @@ fn finish_mysql_stream_worker(
 }
 
 impl MyStmt {
+    /// Returns the number of parameter markers in the prepared statement — the
+    /// distinct bind slots, matching the server's `param_count` (and mysqli's
+    /// `mysqli_stmt::$param_count`), so no client-side `?`-scanning is needed.
+    pub fn param_count(&self) -> i64 {
+        self.binds.len() as i64
+    }
+
     /// Resolves a named placeholder to its 1-based slot (0 if unknown). The
     /// leading colon is optional.
     pub fn bind_parameter_index(&self, name: &str) -> i64 {
@@ -3349,6 +3451,60 @@ mod tests {
         ));
         assert!(sql_has_multiple_statements("SELECT 1; SELECT 2", false));
         assert!(sql_has_multiple_statements("SELECT `a;b`; CALL p()", false));
+    }
+
+    /// A `/*! ... */` version-gated executable comment is live SQL, so a `;`
+    /// inside it separates statements and must be detected — a plain `/* */`
+    /// comment stays inert.
+    #[test]
+    fn multi_statement_detection_sees_executable_comments() {
+        assert!(sql_has_multiple_statements("SELECT 1/*!;DROP TABLE t*/", false));
+        assert!(sql_has_multiple_statements(
+            "SELECT 1 /*!50000 ; SELECT 2 */",
+            false,
+        ));
+        assert!(!sql_has_multiple_statements("SELECT 1 /* ; SELECT 2 */", false));
+    }
+
+    /// Charset-aware escaping prevents the GBK/Big5 trailing-byte breakout: a
+    /// lone lead byte before a quote is itself escaped (matching php), a valid
+    /// two-byte character is copied opaquely, and an ASCII-safe charset uses
+    /// plain byte substitution.
+    #[test]
+    fn real_escape_is_charset_aware() {
+        // 0xBF 0x27 under gbk: php emits 5c bf 5c 27 (lead byte escaped too).
+        assert_eq!(
+            my_real_escape(&[0xBF, 0x27], "gbk", false),
+            vec![0x5C, 0xBF, 0x5C, 0x27]
+        );
+        // 0xBF 0x41 is a complete GBK character: copied opaquely, no escaping.
+        assert_eq!(
+            my_real_escape(&[0xBF, 0x41], "gbk", false),
+            vec![0xBF, 0x41]
+        );
+        // utf8mb4 is ASCII-safe: a bare quote is backslash-escaped, the multibyte
+        // char (é = c3 a9) is untouched (no ASCII byte hides in it).
+        assert_eq!(
+            my_real_escape(&[0x27, 0xC3, 0xA9], "utf8mb4", false),
+            vec![0x5C, 0x27, 0xC3, 0xA9]
+        );
+        // NO_BACKSLASH_ESCAPES: only the quote is doubled, backslash left literal.
+        assert_eq!(
+            my_real_escape(b"a'b\\c", "utf8mb4", true),
+            b"a''b\\c".to_vec()
+        );
+    }
+
+    /// The dangerous-charset classifier matches MySQL's own set on the leading
+    /// name token and nothing else.
+    #[test]
+    fn dangerous_charset_classification() {
+        for cs in ["gbk", "GBK", "big5", "sjis", "cp932", "gb18030", "euckr", "ujis"] {
+            assert!(charset_escape_is_dangerous(cs), "{cs} should be dangerous");
+        }
+        for cs in ["utf8mb4", "utf8", "latin1", "ascii", "binary", "utf8mb4_general_ci"] {
+            assert!(!charset_escape_is_dangerous(cs), "{cs} should be safe");
+        }
     }
 
     /// P2-3: a `charset=<name>` DSN key is captured (for `MyConn::open` to turn

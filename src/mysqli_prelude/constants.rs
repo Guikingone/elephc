@@ -54,6 +54,13 @@ const MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT = 1;
 const MYSQLI_TRANS_START_READ_WRITE = 2;
 const MYSQLI_TRANS_START_READ_ONLY = 4;
 
+// commit() / rollback() completion flags (composed into the SQL: AND [NO] CHAIN
+// and [NO] RELEASE).
+const MYSQLI_TRANS_COR_AND_CHAIN = 1;
+const MYSQLI_TRANS_COR_AND_NO_CHAIN = 2;
+const MYSQLI_TRANS_COR_RELEASE = 4;
+const MYSQLI_TRANS_COR_NO_RELEASE = 8;
+
 // Column types reported by mysqli_result::fetch_field()->type, mapped from the
 // bridge's native wire-type names (values match php-src / the MySQL protocol).
 const MYSQLI_TYPE_DECIMAL = 0;
