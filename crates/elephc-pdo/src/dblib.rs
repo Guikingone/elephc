@@ -129,7 +129,11 @@ extern "C" {
     fn dbsetlversion(login: *mut LoginRecord, version: c_uchar) -> c_int;
     fn dbsetlogintime(seconds: c_int) -> c_int;
     fn dbsettime(seconds: c_int) -> c_int;
-    fn dbopen(login: *mut LoginRecord, server: *const c_char) -> *mut DbProcess;
+    fn tdsdbopen(
+        login: *mut LoginRecord,
+        server: *const c_char,
+        msdblib: c_int,
+    ) -> *mut DbProcess;
     fn dbclose(process: *mut DbProcess);
     fn dbdead(process: *mut DbProcess) -> c_int;
     fn dbcmd(process: *mut DbProcess, sql: *const c_char) -> c_int;
@@ -378,7 +382,7 @@ fn parse_dsn(dsn: &str) -> Result<DsnOptions, String> {
     })
 }
 
-/// Builds the server name passed to `dbopen`, using FreeTDS's documented port override syntax.
+/// Builds the server name passed to `tdsdbopen`, using FreeTDS's documented port override syntax.
 fn server_name(options: &DsnOptions) -> String {
     match options.port {
         Some(port) => format!("{}:{}", options.host, port),
@@ -481,7 +485,7 @@ impl DblibConn {
             }
             let host = CString::new(server_name(&options))
                 .map_err(|_| "PDO_DBLIB: host contains NUL".to_string())?;
-            let link = dbopen(login, host.as_ptr());
+            let link = tdsdbopen(login, host.as_ptr(), 0);
             dbloginfree(login);
             if link.is_null() {
                 let message = open_error()
