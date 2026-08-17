@@ -56,21 +56,24 @@ jobs:
 
           echo "Found successful Build & Test check: ${CHECK_URL}"
 
-  build:
-    name: Build macOS ARM64
+  prepare:
+    name: Bump version on main
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: ubuntu-latest
     needs:
       - verify-ci
+    outputs:
+      # The bump commit every build job checks out, so all three targets build
+      # the same patched tree without re-applying (or racing to push) the
+      # version bump themselves.
+      sha: ${{ steps.bump.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.ref }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set version from tag and commit
+      - name: Set version from tag and push bump to main
+        id: bump
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           export VERSION
@@ -108,6 +111,34 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "chore: bump version to ${VERSION}" || true
           git push origin HEAD:main
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ${{ matrix.runner }}
+    needs:
+      - verify-ci
+      - prepare
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14  # Apple Silicon runner
+          # Linux release builds run on ubuntu-22.04 (glibc 2.35) rather than
+          # the ubuntu-24.04 generation CI tests on, so the published binaries
+          # also run on older distros (Ubuntu 22.04, Debian 12, RHEL 9, ...).
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build release binary
         run: cargo build --release
@@ -118,14 +149,11 @@ jobs:
       - name: Strip binary
         run: strip target/release/elephc
 
-      - name: Get version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-
       - name: Create tarball
         run: |
           cd target/release
-          tar czf elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz \
+          TARBALL="elephc-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          tar czf "$TARBALL" \
             elephc \
             libelephc_tls.a \
             libelephc_pdo.a \
@@ -135,28 +163,54 @@ jobs:
             libelephc_tz.a \
             libelephc_image.a \
             libelephc_web.a
-          shasum -a 256 elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz > elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$TARBALL" > "$TARBALL.sha256"
+          else
+            shasum -a 256 "$TARBALL" > "$TARBALL.sha256"
+          fi
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            target/release/elephc-*.tar.gz
+            target/release/elephc-*.tar.gz.sha256
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
+    runs-on: ubuntu-latest
+    needs:
+      - build
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz
-            target/release/elephc-${{ steps.version.outputs.version }}-aarch64-apple-darwin.tar.gz.sha256
+          files: dist/*
 
       - name: Update Homebrew tap
         env:
           TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${GITHUB_REF_NAME}"
           VERSION_NUM="${VERSION#v}"
           TARBALL="elephc-${VERSION}-aarch64-apple-darwin.tar.gz"
-          SHA256=$(cat target/release/${TARBALL}.sha256 | awk '{print $1}')
+          SHA256=$(awk '{print $1}' "dist/${TARBALL}.sha256")
           URL="https://github.com/illegalstudio/elephc/releases/download/${VERSION}/${TARBALL}"
 
           # Clone tap repo
-          git clone https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git /tmp/homebrew-tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/illegalstudio/homebrew-tap.git" /tmp/homebrew-tap
           mkdir -p /tmp/homebrew-tap/Formula
 
           # Generate formula
