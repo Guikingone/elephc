@@ -89,9 +89,10 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
             eval_builtin_signature_shape("fsockopen").map(|shape| shape.by_ref_params),
             Some(["error_code", "error_message"].as_slice())
         );
+        // php's third parameter caps the write: `fwrite($stream, string $data, ?int $length = null)`.
         assert_eq!(
             eval_declared_builtin_param_names("fwrite"),
-            Some(["stream", "data"].as_slice())
+            Some(["stream", "data", "length"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("fseek"),

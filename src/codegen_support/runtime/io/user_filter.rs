@@ -44,6 +44,35 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
 
+    // php refuses a name that is ALREADY TAKEN, and answers `false` rather than replacing the
+    // registration: `stream_filter_register('string.toupper', ...)` is false because php owns
+    // that name, and registering the same fresh name twice is false the second time. elephc
+    // stored into the first EMPTY slot without comparing names at all, so both answered true and
+    // a program branching on the result took the wrong path. Measured on `php -n` 8.5.6.
+    //
+    // php does NOT check that the CLASS exists here — a name registered against a missing class
+    // registers fine and only fails when a stream tries to attach it.
+    emitter.instruction("sub sp, sp, #48");                                     // frame for the built-in name probe
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // preserve the filter name across the probe
+    emitter.instruction("stp x2, x3, [sp, #16]");                               // and the class name
+    // php's filter hash holds the `string.*` trio, `dechunk` and `consumed` under their EXACT
+    // names, but the `convert.*`, `zlib.*` and `bzip2.*` families are WILDCARD factories whose
+    // literal names are not keys — so php lets a program register `convert.base64-encode` and
+    // refuses `string.toupper`. Measured on `php -n` 8.5.6. `__rt_builtin_filter_id` knows the
+    // convert names as exact ids (6..9), which is right for ATTACHING and wrong for this
+    // question, so those ids are excluded here rather than treated as taken.
+    abi::emit_call_label(emitter, "__rt_builtin_filter_id");                    // which built-in name is this, if any?
+    emitter.instruction("cbz x0, __rt_sfr_not_owned");                          // not a built-in name at all
+    emitter.instruction("sub x9, x0, #6");                                      // the convert.* family occupies ids 6..9
+    emitter.instruction("cmp x9, #4");
+    emitter.instruction("b.lo __rt_sfr_not_owned");                             // a wildcard family name IS registrable
+    emitter.instruction("b __rt_sfr_taken");                                    // php owns this exact name
+    emitter.label("__rt_sfr_not_owned");
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // reload the filter name
+    emitter.instruction("ldp x2, x3, [sp, #16]");                               // and the class name
+
     abi::emit_symbol_address(emitter, "x4", "_user_filter_registry");
     emitter.instruction("mov x5, #0");                                          // filter slot index
     emitter.label("__rt_sfr_scan");
@@ -52,18 +81,56 @@ pub fn emit_stream_filter_register(emitter: &mut Emitter) {
     emitter.instruction("add x6, x4, x5, lsl #5");                              // slot base = table + index * 32
     emitter.instruction("ldr x7, [x6]");                                        // load the slot's filter-name pointer
     emitter.instruction("cbz x7, __rt_sfr_store");                              // a null pointer marks an empty slot
+    // An occupied slot: compare its name with the one being registered.
+    emitter.instruction("ldr x8, [x6, #8]");                                    // the slot's name length
+    emitter.instruction("cmp x8, x1");                                          // a different length cannot match
+    emitter.instruction("b.ne __rt_sfr_next");
+    emitter.instruction("mov x9, #0");                                          // byte index
+    emitter.label("__rt_sfr_cmp_byte");
+    emitter.instruction("cmp x9, x1");                                          // compared every byte?
+    emitter.instruction("b.hs __rt_sfr_taken");                                 // the names agree
+    emitter.instruction("ldrb w10, [x0, x9]");                                  // one candidate byte
+    emitter.instruction("ldrb w11, [x7, x9]");                                  // the corresponding stored byte
+    emitter.instruction("cmp w10, w11");
+    emitter.instruction("b.ne __rt_sfr_next");                                  // this slot holds a different name
+    emitter.instruction("add x9, x9, #1");
+    emitter.instruction("b __rt_sfr_cmp_byte");
+    emitter.label("__rt_sfr_next");
     emitter.instruction("add x5, x5, #1");                                      // advance the slot index
     emitter.instruction("b __rt_sfr_scan");                                     // continue scanning
 
+    emitter.label("__rt_sfr_taken");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("mov x0, #0");                                          // php answers false for a name already taken
+    emitter.instruction("ret");
+
     emitter.label("__rt_sfr_store");
-    emitter.instruction("str x0, [x6]");                                        // filter-name pointer
-    emitter.instruction("str x1, [x6, #8]");                                    // filter-name length
+    // The registry OUTLIVES the call, so it cannot keep the caller's pointer: a name built at
+    // run time, or handed over from a `foreach` temporary, is storage the program reuses for the
+    // next iteration. The stored slot then described whatever occupied that memory later — which
+    // is what made a second registration of a DIFFERENT name compare equal to the first.
+    emitter.instruction("stp x6, x2, [sp, #-16]!");                             // hold the slot base and the class pointer
+    emitter.instruction("stp x3, x1, [sp, #-16]!");                             // and the class length and name length
+    emitter.instruction("mov x2, x1");                                          // __rt_str_persist takes the length in x2
+    emitter.instruction("mov x1, x0");                                          // and the pointer in x1
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // x1 = owned copy, x2 = its length
+    emitter.instruction("mov x7, x1");                                          // the owned name pointer
+    emitter.instruction("mov x8, x2");                                          // and its length
+    emitter.instruction("ldp x3, x9, [sp], #16");                               // reload the class length
+    emitter.instruction("ldp x6, x2, [sp], #16");                               // and the slot base and class pointer
+    emitter.instruction("str x7, [x6]");                                        // filter-name pointer
+    emitter.instruction("str x8, [x6, #8]");                                    // filter-name length
     emitter.instruction("str x2, [x6, #16]");                                   // class-name pointer
     emitter.instruction("str x3, [x6, #24]");                                   // class-name length
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #1");                                          // return true for a successful registration
     emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_sfr_full");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the frame
     emitter.instruction("mov x0, #0");                                          // return false when the registry is full
     emitter.instruction("ret");                                                 // return to the caller
 }
@@ -73,6 +140,30 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_filter_register ---");
     emitter.label_global("__rt_stream_filter_register");
+
+    // See the AArch64 arm: php answers `false` for a name that is already taken, whether php owns
+    // it or an earlier call registered it, and does NOT validate the class here.
+    emitter.instruction("push rbp");
+    emitter.instruction("mov rbp, rsp");
+    emitter.instruction("sub rsp, 48");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the filter name across the probe
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // and the class name
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");
+    // See the AArch64 arm: only the exact-name filters are php's; ids 6..9 are the wildcard
+    // `convert.*` family, which php lets a program register over.
+    abi::emit_call_label(emitter, "__rt_builtin_filter_id");                    // which built-in name is this, if any?
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sfr_not_owned_x86");                           // not a built-in name at all
+    emitter.instruction("sub rax, 6");                                          // the convert.* family occupies ids 6..9
+    emitter.instruction("cmp rax, 4");
+    emitter.instruction("jb __rt_sfr_not_owned_x86");                           // a wildcard family name IS registrable
+    emitter.instruction("jmp __rt_sfr_taken_x86");                              // php owns this exact name
+    emitter.label("__rt_sfr_not_owned_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the filter name
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // and the class name
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");
 
     abi::emit_symbol_address(emitter, "r8", "_user_filter_registry");           // registry base
     emitter.instruction("xor r9, r9");                                          // filter slot index
@@ -85,18 +176,48 @@ fn emit_stream_filter_register_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the slot's filter-name pointer
     emitter.instruction("test r11, r11");                                       // a null pointer marks an empty slot
     emitter.instruction("jz __rt_sfr_store_x86");                               // store here
+    // An occupied slot: compare its name with the one being registered.
+    emitter.instruction("cmp QWORD PTR [r10 + 8], rsi");                        // a different length cannot match
+    emitter.instruction("jne __rt_sfr_next_x86");
+    emitter.instruction("xor rax, rax");                                        // byte index
+    emitter.label("__rt_sfr_cmp_byte_x86");
+    emitter.instruction("cmp rax, rsi");                                        // compared every byte?
+    emitter.instruction("jae __rt_sfr_taken_x86");                              // the names agree
+    emitter.instruction("mov r12b, BYTE PTR [rdi + rax]");                      // one candidate byte
+    emitter.instruction("cmp r12b, BYTE PTR [r11 + rax]");                      // against the stored byte
+    emitter.instruction("jne __rt_sfr_next_x86");                               // this slot holds a different name
+    emitter.instruction("inc rax");
+    emitter.instruction("jmp __rt_sfr_cmp_byte_x86");
+    emitter.label("__rt_sfr_next_x86");
     emitter.instruction("inc r9");                                              // advance the slot index
     emitter.instruction("jmp __rt_sfr_scan_x86");                               // continue scanning
 
+    emitter.label("__rt_sfr_taken_x86");
+    emitter.instruction("leave");
+    emitter.instruction("xor eax, eax");                                        // php answers false for a name already taken
+    emitter.instruction("ret");
+
     emitter.label("__rt_sfr_store_x86");
-    emitter.instruction("mov QWORD PTR [r10], rdi");                            // filter-name pointer
-    emitter.instruction("mov QWORD PTR [r10 + 8], rsi");                        // filter-name length
+    // See the AArch64 arm: the registry outlives the call, so it must own the name rather than
+    // point at the caller's storage.
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // hold the slot base
+    emitter.instruction("mov rax, rdi");                                        // __rt_str_persist takes the pointer in rax
+    emitter.instruction("mov rdx, rsi");                                        // and the length in rdx
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // rax = owned copy, rdx = its length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the slot base
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the class name
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // filter-name pointer
+    emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                        // filter-name length
+    emitter.instruction("mov rdx, rdi");                                        // the class pointer goes in the next slot
     emitter.instruction("mov QWORD PTR [r10 + 16], rdx");                       // class-name pointer
     emitter.instruction("mov QWORD PTR [r10 + 24], rcx");                       // class-name length
+    emitter.instruction("leave");
     emitter.instruction("mov eax, 1");                                          // return true for a successful registration
     emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_sfr_full_x86");
+    emitter.instruction("leave");
     emitter.instruction("xor eax, eax");                                        // return false when the registry is full
     emitter.instruction("ret");                                                 // return to the caller
 }

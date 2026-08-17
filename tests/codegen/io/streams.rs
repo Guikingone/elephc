@@ -3214,6 +3214,65 @@ echo qp("caf\xe9 au lait");
     );
 }
 
+/// Verifies `stream_filter_register()` refuses a name that is already taken, and a filter
+/// resource names itself.
+///
+/// php answers `false` rather than replacing a registration: a name php itself owns
+/// (`string.toupper`, `zlib.deflate`) is never replaceable, and the second registration of a
+/// fresh name is false too. elephc stored into the first EMPTY slot without comparing names, so
+/// both answered `true` and a program branching on the result took the wrong path. An empty name
+/// or class is php's own catchable `ValueError`, raised before the registry is consulted — and
+/// php does NOT check that the class exists here at all.
+///
+/// The filter resource is checked in the same test because it is the same registry: php gives it
+/// its own type, `stream filter`, which `var_dump()` and `get_resource_type()` both report.
+#[test]
+fn test_stream_filter_register_refuses_a_taken_name() {
+    let out = compile_and_run(
+        r#"<?php
+class RegUpper extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = strtoupper($b->data);
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+// A name php owns EXACTLY is never replaceable; a WILDCARD family name is registrable, which
+// is why `zlib.deflate` and `convert.base64-encode` answer true and `string.toupper` does not.
+echo var_export(stream_filter_register("string.toupper", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("consumed", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("zlib.deflate", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("convert.base64-encode", "RegUpper"), true), "|";
+// A fresh name registers once, and only once.
+echo var_export(stream_filter_register("reg.upper", "RegUpper"), true), "|";
+echo var_export(stream_filter_register("reg.upper", "RegUpper"), true), "|";
+// Empty arguments are catchable ValueErrors, not registrations.
+try { stream_filter_register("", "RegUpper"); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+try { stream_filter_register("reg.other", ""); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+// The registered filter still works, and its resource names itself.
+$m = fopen("php://memory", "r+");
+$f = stream_filter_append($m, "reg.upper", STREAM_FILTER_WRITE);
+echo get_resource_type($f), "|";
+fwrite($m, "hello");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "false|false|true|true|true|false|",
+            "stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string|",
+            "stream_filter_register(): Argument #2 ($class) must be a non-empty string|",
+            "stream filter|HELLO"
+        )
+    );
+}
+
 /// Verifies an `a` mode on `php://memory`/`php://temp` sends every write to the END.
 ///
 /// php ignores the seek position for a write in append mode: writing `hello`, seeking to 0 and

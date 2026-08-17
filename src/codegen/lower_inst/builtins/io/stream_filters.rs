@@ -9,6 +9,14 @@
 
 use super::*;
 
+/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$filter_name`.
+const STREAM_FILTER_REGISTER_EMPTY_NAME_MESSAGE: &str =
+    "stream_filter_register(): Argument #1 ($filter_name) must be a non-empty string";
+
+/// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$class`.
+const STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE: &str =
+    "stream_filter_register(): Argument #2 ($class) must be a non-empty string";
+
 /// Lowers `stream_filter_register(filter_name, class)` into the user-filter registry helper.
 pub(crate) fn lower_stream_filter_register(
     ctx: &mut FunctionContext<'_>,
@@ -18,10 +26,24 @@ pub(crate) fn lower_stream_filter_register(
     let filter_name = expect_operand(inst, 0)?;
     let class_name = expect_operand(inst, 1)?;
     load_string_to_result(ctx, filter_name, "stream_filter_register filter_name")?;
+    // php rejects an empty name or class outright, before it looks at the registry at all.
+    // Both are `ValueError`s the caller can catch, so they are raised on the byte length rather
+    // than refused at compile time — the argument is a `string`, not a literal, in general.
+    let (_, name_len_reg) = abi::string_result_regs(ctx.emitter);
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(name_len_reg, 1),
+        STREAM_FILTER_REGISTER_EMPTY_NAME_MESSAGE,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             load_string_to_result(ctx, class_name, "stream_filter_register class")?;
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedAtLeast("x2", 1),
+                STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE,
+            );
             ctx.emitter.instruction("mov x3, x2");                              // pass the class-name byte length as the fourth registry argument
             ctx.emitter.instruction("mov x2, x1");                              // pass the class-name pointer as the third registry argument
             abi::emit_pop_reg_pair(ctx.emitter, "x0", "x1");
@@ -29,6 +51,11 @@ pub(crate) fn lower_stream_filter_register(
         Arch::X86_64 => {
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             load_string_to_result(ctx, class_name, "stream_filter_register class")?;
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedAtLeast("rdx", 1),
+                STREAM_FILTER_REGISTER_EMPTY_CLASS_MESSAGE,
+            );
             ctx.emitter.instruction("mov rcx, rdx");                            // pass the class-name byte length as the fourth registry argument
             ctx.emitter.instruction("mov rdx, rax");                            // pass the class-name pointer as the third registry argument
             abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
