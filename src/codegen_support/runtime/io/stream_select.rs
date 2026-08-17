@@ -44,7 +44,8 @@ pub fn emit_stream_select(emitter: &mut Emitter) {
 /// `[2056]` write_arr, `[2064]` except_arr, `[2072]` read_len, `[2080]` write_len,
 /// `[2088]` except_len, `[2096]` nfds, `[2104]` ready_count, `[2112]` timeout_ms,
 /// `[2120..2168]` spill slots for stream_cast, `[2168]` timeout seconds,
-/// `[2176]` timeout microseconds, `[2256]` x29, `[2264]` x30.
+/// `[2176]` timeout microseconds, `[2184]` castable tally, `[2192]` the synthetic fd a refused
+/// cast has to name in its diagnostics, `[2256]` x29, `[2264]` x30.
 fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     let linux = emitter.target.platform == Platform::Linux;
     emitter.blank();
@@ -158,6 +159,7 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     let after_unbox_l = format!("__rt_stream_select_build_{}_after_unbox", suffix);
     let cast_l = format!("__rt_stream_select_build_{}_cast", suffix);
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done", suffix);
+    let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
@@ -224,9 +226,20 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     // it needs the same descriptor resolution before poll() sees it. Without
     // this poll() got a handle, reported POLLNVAL, counted it in the ready
     // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("str x13, [sp, #2192]");                                 // the synthetic fd, for the diagnostics below
     emitter.instruction("bl __rt_user_wrapper_stream_cast");                      // resolve to the wrapper's underlying stream (or -1)
     emitter.instruction("bl __rt_stream_fd");                                    // cast result is a resource handle: resolve to its descriptor
     emitter.instruction("mov x13, x0");                                         // adopt the resolved descriptor
+    // php EXPLAINS a stream it cannot select on: `W::stream_cast is not implemented!` when the
+    // class defines no such method, then `Cannot represent a stream of type user-space as a
+    // select()able descriptor` either way. elephc raised neither, so the `ValueError` that follows
+    // arrived with nothing to say which stream caused it. Measured on `php -n` 8.5.6.
+    emitter.instruction("cmn x13, #1");                                          // did the cast refuse?
+    emitter.instruction(&format!("b.ne {}", cast_ok_l));
+    emitter.instruction("ldr x0, [sp, #2192]");                                  // the synthetic fd it refused
+    emitter.instruction("bl __rt_stream_select_cast_warning");
+    emitter.instruction("mov x13, #-1");                                         // the warning helper clobbers the result register
+    emitter.label(&cast_ok_l);
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
     emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
     emitter.instruction("ldr x11, [sp, #2136]");                                 // reload the element index
@@ -528,6 +541,7 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     let unbox_l = format!("__rt_stream_select_build_{}_unbox_x", suffix);
     let after_unbox_l = format!("__rt_stream_select_build_{}_after_unbox_x", suffix);
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done_x", suffix);
+    let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok_x", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done_x", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
@@ -588,10 +602,18 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     // it needs the same descriptor resolution before poll() sees it. Without
     // this poll() got a handle, reported POLLNVAL, counted it in the ready
     // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("mov QWORD PTR [rbp - 2192], rdi");                      // the synthetic fd, for the diagnostics below
     emitter.instruction("call __rt_user_wrapper_stream_cast");                   // resolve to the wrapper's underlying stream (or -1)
     emitter.instruction("mov rdi, rax");                                         // cast result is a resource handle
     emitter.instruction("call __rt_stream_fd");                                  // resolve it to its backend descriptor
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
+    // See the AArch64 counterpart: php EXPLAINS a stream it cannot select on.
+    emitter.instruction("cmp rdx, -1");                                          // did the cast refuse?
+    emitter.instruction(&format!("jne {}", cast_ok_l));
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 2192]");                      // the synthetic fd it refused
+    emitter.instruction("call __rt_stream_select_cast_warning");
+    emitter.instruction("mov rdx, -1");                                          // the warning helper clobbers the result register
+    emitter.label(&cast_ok_l);
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
     emitter.instruction("mov rsi, QWORD PTR [rbp - 2136]");                      // reload the element index

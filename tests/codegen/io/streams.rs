@@ -3266,6 +3266,70 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies php's two explanations for a stream `stream_select()` cannot represent.
+///
+/// The `ValueError` that follows was already right, but it arrived with nothing to say WHICH stream
+/// caused it. php names the class when it defines no `stream_cast()` — `W::stream_cast is not
+/// implemented!` — and then always reports `Cannot represent a stream of type user-space as a
+/// select()able descriptor`. A class that DOES define the method and simply answers `false` gets
+/// only the second, which is what separates the two here. Measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_select_explains_an_uncastable_stream() {
+    let missing = compile_and_run_expect_failure(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+}
+stream_wrapper_register("nocast2", "W");
+$h = fopen("nocast2://x", "rb");
+$r = [$h]; $w = null; $e = null;
+stream_select($r, $w, $e, 0, 0);
+"#,
+    );
+    assert!(
+        missing.contains("Warning: stream_select(): W::stream_cast is not implemented!"),
+        "missing-method warning absent: {missing}"
+    );
+    assert!(
+        missing.contains(
+            "Warning: stream_select(): Cannot represent a stream of type user-space \
+             as a select()able descriptor"
+        ),
+        "unrepresentable warning absent: {missing}"
+    );
+
+    // A class that defines the method and refuses gets ONLY the second warning.
+    let refusing = compile_and_run_expect_failure(
+        r#"<?php
+class C {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_cast($as) { return false; }
+}
+stream_wrapper_register("hascast3", "C");
+$h = fopen("hascast3://x", "rb");
+$r = [$h]; $w = null; $e = null;
+stream_select($r, $w, $e, 0, 0);
+"#,
+    );
+    assert!(
+        !refusing.contains("stream_cast is not implemented"),
+        "named a method the class defines: {refusing}"
+    );
+    assert!(
+        refusing.contains(
+            "Warning: stream_select(): Cannot represent a stream of type user-space \
+             as a select()able descriptor"
+        ),
+        "unrepresentable warning absent: {refusing}"
+    );
+}
+
 /// Verifies a wrapper is READ in chunks, and that php's last `stream_read()` is not skipped.
 ///
 /// `fgets()` asked the wrapper for ONE BYTE per iteration, so reading 100 bytes cost a HUNDRED
@@ -14153,7 +14217,9 @@ echo "n=", var_export($n, true), " waited=", var_export($ms >= 150, true);
 /// could cast and raises `ValueError: No stream arrays were passed` when that count is zero, so
 /// the only entry here leaves it at zero and the call THROWS. Measured on `php -n` 8.5.6, which
 /// also prints `NoCast::stream_cast is not implemented!` and `Cannot represent a stream of type
-/// user-space as a select()able descriptor` first — two warnings elephc does not emit yet.
+/// user-space as a select()able descriptor` first; both are asserted by
+/// `test_stream_select_explains_an_uncastable_stream`, which reads the diagnostic channel this
+/// test does not.
 #[test]
 fn test_stream_select_wrapper_without_stream_cast_excluded() {
     let out = compile_and_run(

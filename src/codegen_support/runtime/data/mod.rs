@@ -216,6 +216,21 @@ pub(crate) const WRAPPER_MISSING_HOOK_HEAD_FLOCK: &str = "Warning: flock(): ";
 /// `stream_write`'s tail; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_WRITE: &str = "::stream_write is not implemented!\n";
 
+/// `stream_select()`'s head; see [`WRAPPER_MISSING_HOOK_HEAD_FWRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_HEAD_SELECT: &str = "Warning: stream_select(): ";
+
+/// `stream_cast()`'s tail; see [`WRAPPER_MISSING_HOOK_TAIL_WRITE`].
+pub(crate) const WRAPPER_MISSING_HOOK_TAIL_CAST: &str = "::stream_cast is not implemented!\n";
+
+/// The second warning php raises for a stream it cannot `select()` on.
+///
+/// It follows the missing-hook one when the class defines no `stream_cast()`, and stands alone when
+/// the method exists and answers `false`. Measured on `php -n` 8.5.6 with both shapes.
+pub(crate) const SELECT_CAST_UNREPRESENTABLE: &str = concat!(
+    "Warning: stream_select(): Cannot represent a stream of type user-space",
+    " as a select()able descriptor\n"
+);
+
 /// `stream_eof`'s tail, the only one that also reports what php assumed.
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_EOF: &str =
     "::stream_eof is not implemented! Assuming EOF\n";
