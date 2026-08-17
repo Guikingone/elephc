@@ -658,6 +658,50 @@ pub(super) fn emit_boxed_filter_handle(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
+/// Throws php's `stream_filter_remove()` refusal unless the descriptor in the result register owns
+/// a legacy per-descriptor filter.
+///
+/// The two direction tables hold one byte per descriptor per slot, zero when nothing is attached.
+/// Reading all four is what separates a `zlib.deflate` handle — which the legacy teardown below
+/// still owns — from an ordinary stream the caller passed by mistake.
+fn emit_legacy_filter_presence_guard(ctx: &mut FunctionContext<'_>) {
+    let present = ctx.next_label("sfr_legacy_present");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
+            ctx.emitter.instruction("add x10, x0, #256");                       // the second slot for this descriptor
+            ctx.emitter.instruction("ldrb w11, [x9, x0]");                      // read-direction slot 0
+            ctx.emitter.instruction(&format!("cbnz w11, {present}"));
+            ctx.emitter.instruction("ldrb w11, [x9, x10]");                     // read-direction slot 1
+            ctx.emitter.instruction(&format!("cbnz w11, {present}"));
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
+            ctx.emitter.instruction("ldrb w11, [x9, x0]");                      // write-direction slot 0
+            ctx.emitter.instruction(&format!("cbnz w11, {present}"));
+            ctx.emitter.instruction("ldrb w11, [x9, x10]");                     // write-direction slot 1
+            ctx.emitter.instruction(&format!("cbnz w11, {present}"));
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters");
+            ctx.emitter.instruction("lea r10, [rax + 256]");                    // the second slot for this descriptor
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rax]");         // read-direction slot 0
+            ctx.emitter.instruction("test r11d, r11d");
+            ctx.emitter.instruction(&format!("jnz {present}"));
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + r10]");         // read-direction slot 1
+            ctx.emitter.instruction("test r11d, r11d");
+            ctx.emitter.instruction(&format!("jnz {present}"));
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters");
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rax]");         // write-direction slot 0
+            ctx.emitter.instruction("test r11d, r11d");
+            ctx.emitter.instruction(&format!("jnz {present}"));
+            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + r10]");         // write-direction slot 1
+            ctx.emitter.instruction("test r11d, r11d");
+            ctx.emitter.instruction(&format!("jnz {present}"));
+        }
+    }
+    emit_closed_stream_type_error(ctx, "stream_filter_remove");
+    ctx.emitter.label(&present);
+}
+
 /// Lowers `stream_filter_remove(resource)`.
 pub(crate) fn lower_stream_filter_remove(
     ctx: &mut FunctionContext<'_>,
@@ -747,6 +791,13 @@ pub(crate) fn lower_stream_filter_remove(
         }
     }
     load_stream_fd_to_result(ctx, filter, "stream_filter_remove")?;
+    // A descriptor carrying no legacy filter is not a filter resource at all, and php refuses it:
+    // `stream_filter_remove($stream)` on an ordinary handle throws rather than reporting success.
+    // elephc reached this path for ANY resource the chain lookup rejected — a plain stream, or a
+    // chain filter already removed — cleared four empty table slots and answered `true`. The four
+    // slots are the legacy per-descriptor filters, which still serve `zlib.*` and `bzip2.*`, so the
+    // path stays reachable for the handles that do own one.
+    emit_legacy_filter_presence_guard(ctx);
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }

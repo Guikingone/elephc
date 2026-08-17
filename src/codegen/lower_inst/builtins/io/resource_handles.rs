@@ -268,11 +268,22 @@ pub(super) fn emit_unbox_stream_or_type_error(ctx: &mut FunctionContext<'_>, fun
 }
 
 /// Emits the PHP diagnostic used when a resource handle no longer resolves to an open stream.
+///
+/// `stream_filter_remove()` words this one differently, and it is not a variation on the same
+/// sentence: php says `supplied resource is not a valid stream filter resource` for EVERY resource
+/// it will not accept — a live stream, a closed stream, or a filter already removed. The
+/// argument-name form is reserved there for a value that is not a resource at all, which
+/// `emit_stream_type_error_case` already spells with the catalog's `$stream_filter`. Measured on
+/// `php -n` 8.5.6.
 pub(super) fn emit_closed_stream_type_error(ctx: &mut FunctionContext<'_>, function_name: &str) {
-    let message = format!(
-        "{}(): Argument #1 ($stream) must be an open stream resource",
-        function_name
-    );
+    let message = if function_name == "stream_filter_remove" {
+        "stream_filter_remove(): supplied resource is not a valid stream filter resource".to_string()
+    } else {
+        format!(
+            "{}(): Argument #1 ($stream) must be an open stream resource",
+            function_name
+        )
+    };
     let (label, len) = ctx.data.add_string(message.as_bytes());
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

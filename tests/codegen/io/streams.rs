@@ -3266,6 +3266,53 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies `stream_filter_remove()` refuses a resource that is not a live filter, in php's words.
+///
+/// Passing an ordinary stream reported SUCCESS: the chain lookup rejected the handle, the legacy
+/// per-descriptor path cleared four already-empty table slots and answered `true`. php throws
+/// there, and again for a filter that was already removed. Its wording is not a variation on the
+/// generic one either — `supplied resource is not a valid stream filter resource`, with no
+/// argument name, for every resource it will not accept. Measured on `php -n` 8.5.6.
+///
+/// The legacy path stays reachable for the handles that DO own a per-descriptor filter, which is
+/// what `zlib.*` and `bzip2.*` still use; the guard only refuses a descriptor whose four slots are
+/// all empty.
+///
+/// A value that is not a resource AT ALL is not exercised here: php raises its `Argument #1
+/// ($stream_filter) must be of type resource` at run time, and elephc's checker refuses the same
+/// call at compile time, so no program reaches that run-time branch.
+#[test]
+fn test_stream_filter_remove_refuses_a_resource_that_is_not_a_filter() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+try {
+    stream_filter_remove($h);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+$f = stream_filter_append($h, "string.toupper", STREAM_FILTER_WRITE);
+var_dump(get_resource_type($f), stream_filter_remove($f), is_resource($f));
+// Removing it a second time is the same refusal: the resource is no longer a live filter.
+try {
+    stream_filter_remove($f);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource\n",
+            "string(13) \"stream filter\"\nbool(true)\nbool(false)\n",
+            "TypeError: stream_filter_remove(): supplied resource is not a valid stream filter resource\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a `$params` the filter cannot read is REFUSED, and only by the filters that read it.
 ///
 /// php's four `convert.*` filters parse `$params` as an array and reject anything else with two
