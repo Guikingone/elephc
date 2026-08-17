@@ -1254,6 +1254,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // one. php publishes `$this->stream` for the DURATION of each call and nowhere else — measured
     // on `php -n` 8.5.6 it is UNSET in `onCreate()`, a live resource in `filter()`, and NULL again
     // in `onClose()` — so the handle travels here rather than being retained on the instance.
+    // _zlib_flush_fn: the address of the inline `Z_SYNC_FLUSH` helper the deflate attachment
+    // publishes, or zero when no such filter was ever attached. `fflush()` calls through it, which
+    // is what keeps libz pay-for-use: the helper is part of the attachment, so a program that
+    // never attaches one never references `deflate` at all.
+    out.push_str(&comm_directive("_zlib_flush_fn", 8, target));
     out.push_str(&comm_directive("_user_filter_current_stream", 8, target));
     out.push_str(&comm_directive("_asf_line_length", 8, target));
     out.push_str(&comm_directive("_asf_break_ptr", 8, target));

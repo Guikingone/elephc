@@ -444,6 +444,34 @@ pub(crate) fn lower_fflush(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     load_stream_fd_to_result(ctx, stream, "fflush")?;
     let wrapper_label = ctx.next_label("fflush_user_wrapper");
     let done_label = ctx.next_label("fflush_done");
+    // php makes `fflush()` a flush point for a `zlib.deflate` filter too: a deflate stream holds
+    // its bytes until zlib's own window fills, and php pushes a `Z_SYNC_FLUSH` pass so what was
+    // written so far reaches the stream. Measured on `php -n` 8.5.6 over 400 bytes to a file,
+    // `filesize()` reads 0 after the write, 12 after `fflush()` and 14 after `fclose()`; elephc
+    // read 0, 0, 8 — nothing appeared until the stream closed, so a long-lived stream compressed
+    // everything and sent none of it. The helper returns at once for a stream carrying no filter.
+    let no_zlib_label = ctx.next_label("fflush_no_zlib");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_zlib_flush_fn");
+            ctx.emitter.instruction("ldr x9, [x9]");                            // the attachment publishes it, or it stays zero
+            ctx.emitter.instruction(&format!("cbz x9, {}", no_zlib_label));     // no deflate filter in this program at all
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("blr x9");                                  // push the sync-flush pass for this descriptor
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_zlib_flush_fn");
+            ctx.emitter.instruction("mov r9, QWORD PTR [r9]");                  // the attachment publishes it, or it stays zero
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", no_zlib_label));          // no deflate filter in this program at all
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdi, rax");                            // the descriptor to flush
+            ctx.emitter.instruction("call r9");                                 // push the sync-flush pass for this descriptor
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&no_zlib_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov w9, #0x4000");                         // materialize the high half of USER_WRAPPER_FD_BASE

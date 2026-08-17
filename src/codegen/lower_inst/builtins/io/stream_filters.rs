@@ -113,10 +113,12 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
     let fwrite_label = ctx.next_label("zlib_deflate_fwrite");
     let close_label = ctx.next_label("zlib_deflate_close");
     let skip_label = ctx.next_label("zlib_deflate_skip_helpers");
+    let flush_label = ctx.next_label("zlib_deflate_flush");
     let shape = crate::codegen::stream_filters::zlib::filter_shape(
         &fwrite_label,
         &close_label,
         &skip_label,
+        &flush_label,
         level,
     );
     match ctx.emitter.target.arch {
@@ -417,6 +419,7 @@ pub(super) fn emit_zlib_deflate_wrapper_attach_in_place(ctx: &mut FunctionContex
     let fwrite_label = ctx.next_label("zlib_gz_fwrite");
     let close_label = ctx.next_label("zlib_gz_close");
     let skip_label = ctx.next_label("zlib_gz_skip_helpers");
+    let flush_label = ctx.next_label("zlib_wrapper_flush");
     let shape = crate::codegen::stream_filters::zlib::DeflateShape {
         fwrite_label: &fwrite_label,
         close_label: &close_label,
@@ -424,6 +427,7 @@ pub(super) fn emit_zlib_deflate_wrapper_attach_in_place(ctx: &mut FunctionContex
         level: crate::codegen::stream_filters::zlib::DeflateLevel::Slot("_zlib_wrapper_level"),
         window_bits: 31,
         sync_flush_on_close: true,
+        flush_label: &flush_label,
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(ctx.emitter, shape),

@@ -3266,6 +3266,81 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies `fflush()` is a flush point for a `zlib.deflate` filter, as it is in php.
+///
+/// A deflate stream holds its bytes until zlib's own window fills, so nothing reached the stream
+/// until it CLOSED: a long-lived stream — a socket, say — compressed everything and sent none of
+/// it. php pushes a `Z_SYNC_FLUSH` pass on `fflush()`, which closes the current block and emits the
+/// `00 00 ff ff` marker. Measured on `php -n` 8.5.6 over 400 bytes to a file, `filesize()` reads 0
+/// after the write, 12 after `fflush()` and 14 after `fclose()` — the close adds only the finishing
+/// block; elephc read 0, 0, then 8.
+///
+/// The pass belongs to `fflush()` and NOT to the write path: with `Z_NO_FLUSH` per write, a
+/// write-then-close stream still answers exactly `gzdeflate()`, which is what php answers for the
+/// same program. Both are asserted, and so is the round trip through a mid-stream flush.
+#[test]
+fn test_fflush_pushes_the_deflate_sync_flush() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$data = str_repeat("a", 400);
+$p = "zflushtest.bin";
+$h = fopen($p, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+clearstatcache();
+printf("after write: %d\n", filesize($p));
+fflush($h);
+clearstatcache();
+printf("after fflush: %d\n", filesize($p));
+fclose($h);
+clearstatcache();
+printf("after close: %d\n", filesize($p));
+unlink($p);
+// Without a flush the stream is byte-for-byte gzdeflate(), which the write path must not change.
+$p2 = "zflushtest2.bin";
+$h = fopen($p2, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+fclose($h);
+$raw = file_get_contents($p2);
+unlink($p2);
+printf("no flush: %d equals gzdeflate=%s\n", strlen($raw), var_export($raw === gzdeflate($data), true));
+// A payload written across a flush still round-trips whole.
+$p3 = "zflushtest3.bin";
+$h = fopen($p3, "wb");
+stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+fwrite($h, $data);
+fflush($h);
+fwrite($h, $data);
+fclose($h);
+$raw = file_get_contents($p3);
+unlink($p3);
+printf("round trip: %s\n", var_export(gzinflate($raw) === $data . $data, true));
+// fflush on a stream carrying no filter is untouched.
+$p4 = "zflushtest4.bin";
+$h = fopen($p4, "wb");
+fwrite($h, "plain");
+fflush($h);
+clearstatcache();
+printf("unfiltered: %d\n", filesize($p4));
+fclose($h);
+unlink($p4);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "after write: 0\n",
+            "after fflush: 12\n",
+            "after close: 14\n",
+            "no flush: 8 equals gzdeflate=true\n",
+            "round trip: true\n",
+            "unfiltered: 5\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the closing dispatch delivers an EMPTY BRIGADE, so a mutating filter runs once.
 ///
 /// php gives a filter one final `filter(..., $closing = true)` with no buckets at all. elephc built
