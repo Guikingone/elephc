@@ -11334,6 +11334,165 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `parse_url` reproduces php-src over the shared fixture corpus, under Node.
+///
+/// The corpus is `tests/fixtures/parse_url_cases.json`, the same one the Magician scanner is
+/// held to, rendered so that a MISSING component and a PRESENT-BUT-EMPTY one cannot collapse
+/// into each other — the distinction the whole builtin turns on. It pins the answers a
+/// textbook URL splitter gets wrong: `http://host: 80` keeps port 80 because php tolerates
+/// whitespace inside the authority, `http://h:0/` really does report port ZERO, `[::1]`
+/// keeps its brackets AND its inner colons, `mailto:user@example.com` is a scheme plus a
+/// PATH with no host, `//example.com:80/path` is scheme-relative, a bare `scheme:` parses to
+/// nothing but a scheme, `#frag?still-frag` keeps the `?` inside the fragment because the
+/// fragment is split off FIRST, and control bytes become `_`. Five inputs are `false`.
+#[test]
+fn test_cli_wasm_parse_url_matches_php_fixture_corpus() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_parse_url");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, PARSE_URL_CORPUS).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the parse_url corpus to WASM");
+    assert!(
+        output.status.success(),
+        "parse_url compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the parse_url corpus under Node");
+    assert!(
+        run.status.success(),
+        "parse_url trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "scheme=<https> host=<example.com> port=<8080> user=<user> pass=<pass> path=</path/to> query=<query=1&x=2> fragment=<frag> \n",
+            "scheme=<http> host=<example.com> \n",
+            "scheme=<http> host=<example.com> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "scheme=<http> host=<host> port=<80> \n",
+            "FALSE\n",
+            "FALSE\n",
+            "host=<example.com> path=</path> \n",
+            "path=</just/path> query=<q=1> fragment=<f> \n",
+            "query=<query=1> \n",
+            "fragment=<frag> \n",
+            "path=<> \n",
+            "FALSE\n",
+            "FALSE\n",
+            "scheme=<http> host=<example.com> port=<0> \n",
+            "scheme=<http> host=<[::1]> port=<8080> path=</path> \n",
+            "scheme=<http> host=<host> user=<> pass=<pass> \n",
+            "scheme=<http> host=<example.com> fragment=<> \n",
+            "scheme=<http> host=<example.com> path=</path> query=<q> \n",
+            "FALSE\n",
+            "FALSE\n",
+            "scheme=<mailto> path=<user@example.com> \n",
+            "host=<example.com> port=<80> path=</path> \n",
+            "scheme=<scheme> \n",
+            "path=<user@host/path> \n",
+            "scheme=<http> host=<host> user=<user> \n",
+            "scheme=<http> host=<host> query=<> \n",
+            "scheme=<http> host=<host> path=</path> fragment=<frag?still-frag> \n",
+            "scheme=<http> host=<ho_st> path=</p_ath> \n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The fixture corpus as a PHP program, rendered to keep missing and present-empty apart.
+const PARSE_URL_CORPUS: &str = r#"<?php
+// Renders parse_url over the shared fixture corpus in a form that keeps MISSING and
+// PRESENT-BUT-EMPTY apart, which is the whole difficulty of this builtin.
+function show(string $u): void {
+    $r = parse_url($u);
+    if (!is_array($r)) { echo "FALSE\n"; return; }
+    $keys = ["scheme", "host", "port", "user", "pass", "path", "query", "fragment"];
+    foreach ($keys as $k) {
+        if (isset($r[$k])) { echo $k, "=<", $r[$k], "> "; }
+    }
+    echo "\n";
+}
+show('https://user:pass@example.com:8080/path/to?query=1&x=2#frag');
+show('http://example.com');
+show('http://example.com:80');
+show('http://host: 80');
+show('http://host:	80');
+show('http://host:
+80');
+show('http://host:80');
+show('http://host:80');
+show('http://host:
+80');
+show('http://host: +80');
+show('http://host:   80');
+show('http://host:    80');
+show('http://');
+show('//example.com/path');
+show('/just/path?q=1#f');
+show('?query=1');
+show('#frag');
+show('');
+show('http://example.com:-1');
+show('http://example.com:99999');
+show('http://example.com:0');
+show('http://[::1]:8080/path');
+show('http://:pass@host');
+show('http://example.com#');
+show('http://example.com/path?q');
+show('////example.com');
+show('http:///example.com');
+show('mailto:user@example.com');
+show('example.com:80/path');
+show('scheme:');
+show('user@host/path');
+show('http://user@host');
+show('http://host?');
+show('http://host/path#frag?still-frag');
+show('http://host/path');
+"#;
+
 /// Verifies base64 and url coding reproduce php-src, tolerant decoding included.
 ///
 /// The samples pin what separates these from a textbook implementation. `urlencode` folds a

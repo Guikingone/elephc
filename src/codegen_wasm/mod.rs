@@ -50,6 +50,7 @@ mod strict;
 mod symbols;
 mod traps;
 mod transfer;
+mod urls;
 mod values;
 mod wat;
 

@@ -58,6 +58,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_BASE64_ENCODE);
     wm.add_raw_func(RT_STR_BASE64_DECODE);
     wm.add_raw_func(RT_BASE64_DECODE);
+    super::urls::emit_url_runtime(wm);
     wm.add_raw_func(RT_STR_CASE_EDGE);
     wm.add_raw_func(RT_STR_UCWORDS);
     wm.add_raw_func(RT_STR_CMP);
@@ -1186,6 +1187,73 @@ fn base64_decode_shape_issue(function: &Function, call: &Instruction) -> Option<
     {
         return Some(format!(
             "base64_decode result {:?}/{:?} is not the Mixed cell PHP's string|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `parse_url`: a string, a CONSTANT component selector, and a Mixed cell out.
+///
+/// The selector must be a compile-time constant, and this is the one place that matters: a
+/// value ABOVE seven is php's catchable `ValueError`, not a result, and this target cannot
+/// raise one from inside a runtime helper. Refusing the dynamic form keeps the helper total
+/// over everything it does accept — any negative selects the whole array, `0..=7` selects one
+/// component — instead of inventing an answer for a case php refuses to answer at all.
+fn parse_url_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 1 | 2) {
+        return Some(format!(
+            "expected a url and an optional component selector, got {} operands",
+            call.operands.len()
+        ));
+    }
+    let Some(url) = function.value(call.operands[0]) else {
+        return Some("url operand is missing from the value table".to_string());
+    };
+    if url.ir_type != IrType::Str || url.php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "parse_url url is {:?}/{:?}, expected Str/Str",
+            url.ir_type,
+            url.php_type.codegen_repr()
+        ));
+    }
+    // The one-argument form carries no selector at all; its default is the whole array, which
+    // is the arity php's own signature declares and the one nothing can push out of range.
+    if let Some(&selector) = call.operands.get(1) {
+        let Some(component) = function.value(selector) else {
+            return Some("component operand is missing from the value table".to_string());
+        };
+        if component.ir_type != IrType::I64 || component.php_type.codegen_repr() != PhpType::Int {
+            return Some(format!(
+                "parse_url component is {:?}/{:?}, expected I64/Int",
+                component.ir_type,
+                component.php_type.codegen_repr()
+            ));
+        }
+        match constant_i64_operand(function, selector) {
+            Some(value) if value <= 7 => {}
+            Some(value) => {
+                return Some(format!(
+                    "component {value} is above PHP_URL_FRAGMENT, which php answers with a \
+                     catchable ValueError this target cannot raise from a runtime helper"
+                ))
+            }
+            None => {
+                return Some(
+                    "the component selector must be a compile-time constant, because a value \
+                     above PHP_URL_FRAGMENT is a catchable ValueError rather than a result"
+                        .to_string(),
+                )
+            }
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || call.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "parse_url result {:?}/{:?} is not the Mixed cell its array|string|int|false needs",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -4023,6 +4091,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
     matches!(
         target,
         RuntimeFnId::Base64Decode
+            | RuntimeFnId::ParseUrl
             | RuntimeFnId::Abs
             | RuntimeFnId::Gettype
             | RuntimeFnId::Floor
@@ -4239,6 +4308,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Base64Decode {
         return base64_decode_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ParseUrl {
+        return parse_url_shape_issue(function, call);
     }
     if target == RuntimeFnId::StrPad {
         return str_pad_shape_issue(function, call);
@@ -4581,6 +4653,18 @@ pub(super) fn lower_direct_builtin(
         ctx.emit_load_value(operand(inst, 0)?)?;
         ctx.fb
             .ins("call $__rt_base64_decode", "tolerant decode, boxed as string|false");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::ParseUrl {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        if inst.operands.len() == 2 {
+            ctx.emit_load_value(operand(inst, 1)?)?;
+        } else {
+            ctx.fb
+                .ins("i64.const -1", "no selector: php's default is the whole array");
+        }
+        ctx.fb
+            .ins("call $__rt_parse_url", "php_url_parse_ex2, boxed as array|string|int|false");
         return store_result(ctx, inst);
     }
     if target == RuntimeFnId::StrPad {
@@ -7628,6 +7712,115 @@ mod tests {
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
                 result_ir,
                 result_php,
+                Ownership::MaybeOwned,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies `base64_decode` and `parse_url` admit exactly the calls they can answer EXACTLY.
+    ///
+    /// Both declare a union whose second half only one arity can produce, and both refuse that
+    /// arity rather than approximate it. `RuntimeFnId::Base64Decode` takes the lax form only:
+    /// `$strict` decides between a string and `false` at RUN TIME, so a lowering that ignored it
+    /// would answer a string where php answers false. `RuntimeFnId::ParseUrl` needs a CONSTANT
+    /// selector, because a value above `PHP_URL_FRAGMENT` is a catchable `ValueError` rather than
+    /// a result — a `load_local` selector could carry one and is refused for that reason, while
+    /// the no-selector form is the whole array and cannot go out of range.
+    #[test]
+    fn base64_decode_and_parse_url_admit_only_the_calls_they_answer_exactly() {
+        let str_arg = (IrType::Str, PhpType::Str);
+        let bool_arg = (IrType::I64, PhpType::Bool);
+        let mixed = (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+
+        let lax = shaped_call(
+            RuntimeFnId::Base64Decode,
+            &[str_arg.clone()],
+            mixed.0,
+            mixed.1.clone(),
+        );
+        let call = lax.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&probe_module(), &lax, call, RuntimeFnId::Base64Decode),
+            None,
+        );
+
+        let strict = shaped_call(
+            RuntimeFnId::Base64Decode,
+            &[str_arg.clone(), bool_arg],
+            mixed.0,
+            mixed.1.clone(),
+        );
+        let call = strict.instructions.last().expect("the probe emitted a call");
+        assert!(
+            direct_builtin_shape_issue(&probe_module(), &strict, call, RuntimeFnId::Base64Decode)
+                .is_some_and(|issue| issue.contains("$strict")),
+            "the strict arity must be refused by NAME",
+        );
+
+        let whole = shaped_call(
+            RuntimeFnId::ParseUrl,
+            &[str_arg.clone()],
+            mixed.0,
+            mixed.1.clone(),
+        );
+        let call = whole.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&probe_module(), &whole, call, RuntimeFnId::ParseUrl),
+            None,
+        );
+
+        let dynamic = shaped_call(
+            RuntimeFnId::ParseUrl,
+            &[str_arg.clone(), (IrType::I64, PhpType::Int)],
+            mixed.0,
+            mixed.1.clone(),
+        );
+        let call = dynamic.instructions.last().expect("the probe emitted a call");
+        assert!(
+            direct_builtin_shape_issue(&probe_module(), &dynamic, call, RuntimeFnId::ParseUrl)
+                .is_some_and(|issue| issue.contains("compile-time constant")),
+            "a selector that is not a literal must be refused",
+        );
+
+        for (component, admitted) in [(1_i64, true), (-1, true), (7, true), (8, false)] {
+            let function = parse_url_constant_selector_call(component);
+            let call = function.instructions.last().expect("the probe emitted a call");
+            let issue =
+                direct_builtin_shape_issue(&probe_module(), &function, call, RuntimeFnId::ParseUrl);
+            assert_eq!(
+                issue.is_none(),
+                admitted,
+                "component {component} admitted={admitted}, got {issue:?}",
+            );
+        }
+    }
+
+    /// Builds a `parse_url($url, <literal>)` probe, whose selector really is a `const_i64`.
+    fn parse_url_constant_selector_call(component: i64) -> Function {
+        let mut function = Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(
+                Some("url".to_string()),
+                IrType::Str,
+                PhpType::Str,
+                crate::ir::LocalKind::PhpLocal,
+            );
+            let url = builder.emit_load_local(slot, IrType::Str, PhpType::Str);
+            let selector = builder.emit_const_i64(component);
+            builder.emit(
+                Op::RuntimeCall,
+                vec![url, selector],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::ParseUrl,
+                ))),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
                 Ownership::MaybeOwned,
             );
             builder.terminate(crate::ir::Terminator::Return { value: None });

@@ -7753,6 +7753,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Md5
         | RuntimeFnId::Htmlspecialchars
         | RuntimeFnId::Base64Decode
+        | RuntimeFnId::ParseUrl
         | RuntimeFnId::Gettype => true,
         // Added upstream after this backend's last audit; refused until each is
         // lowered and differentially tested here (fail-closed).
@@ -7777,7 +7778,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         RuntimeFnId::OpensslDecrypt |
         RuntimeFnId::OpensslEncrypt |
         RuntimeFnId::OpensslGetCipherMethods |
-        RuntimeFnId::ParseUrl |
         RuntimeFnId::StrWordCount |
         RuntimeFnId::Strncasecmp |
         RuntimeFnId::Strncmp |

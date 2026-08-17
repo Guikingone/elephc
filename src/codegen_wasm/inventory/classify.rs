@@ -443,6 +443,22 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_chr_and_ord_match_php",
             ][..],
         ),
+        RuntimeFnId::Base64Decode => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::base64_decode_and_parse_url_admit_only_the_calls_they_answer_exactly",
+                "codegen::cli::test_cli_wasm_base64_and_url_coding_match_php",
+            ][..],
+        ),
+        RuntimeFnId::ParseUrl => (
+            "codegen_wasm::urls",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::base64_decode_and_parse_url_admit_only_the_calls_they_answer_exactly",
+                "codegen::cli::test_cli_wasm_parse_url_matches_php_fixture_corpus",
+            ][..],
+        ),
         _ => return None,
     };
     Some(SupportedEvidence {

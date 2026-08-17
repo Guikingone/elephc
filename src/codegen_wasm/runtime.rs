@@ -43,8 +43,9 @@ pub(super) const FLOAT_SCRATCH_BASE: u32 = RT_SCRATCH_END;
 /// +4096); the ftoa/itoa scratch lands at +0x2000..+0x3000; syscall scratch and the
 /// per-fd stream tables sit at +0x3000..+0x4000; the per-fd stream METADATA table
 /// (16 bytes per fd, 256 fds — mode and uri as persisted-string ptr/len pairs
-/// recorded by `fopen`) fills +0x4000..+0x5000.
-pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x5000;
+/// recorded by `fopen`) fills +0x4000..+0x5000; the `parse_url` parts table (eight
+/// `(start, len)` pairs, a presence mask and the port) sits at +0x5000..+0x5100.
+pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x5100;
 
 /// First byte reserved for command-runtime fatal diagnostics.
 const COMMAND_DATA_BASE: u32 = FLOAT_SCRATCH_BASE + FLOAT_SCRATCH_SIZE;
