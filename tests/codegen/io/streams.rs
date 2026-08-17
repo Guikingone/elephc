@@ -13075,9 +13075,14 @@ echo "n=", var_export($n, true), " waited=", var_export($ms >= 150, true);
     assert_eq!(out, "n=0 waited=true");
 }
 
-/// A userspace wrapper that does not implement `stream_cast` cannot be
-/// represented as a select()-able descriptor, so `stream_select` excludes its
-/// synthetic fd (matching PHP) and drops it from the ready set without crashing.
+/// A userspace wrapper that does not implement `stream_cast` cannot be represented as a
+/// select()-able descriptor, so it contributes nothing to the descriptor set.
+///
+/// This test used to assert `n=0 kept=0`, which is not php's answer: php counts the streams it
+/// could cast and raises `ValueError: No stream arrays were passed` when that count is zero, so
+/// the only entry here leaves it at zero and the call THROWS. Measured on `php -n` 8.5.6, which
+/// also prints `NoCast::stream_cast is not implemented!` and `Cannot represent a stream of type
+/// user-space as a select()able descriptor` first — two warnings elephc does not emit yet.
 #[test]
 fn test_stream_select_wrapper_without_stream_cast_excluded() {
     let out = compile_and_run(
@@ -13091,11 +13096,11 @@ class NoCast {
 stream_wrapper_register("nocast", "NoCast");
 $w = fopen("nocast://x", "r");
 $r = [$w]; $wr = []; $e = [];
-$n = stream_select($r, $wr, $e, 0, 0);
-echo "n=" . $n . " kept=" . count($r);
+try { $n = stream_select($r, $wr, $e, 0, 0); echo "n=" . $n . " kept=" . count($r); }
+catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(); }
 "#,
     );
-    assert_eq!(out, "n=0 kept=0");
+    assert_eq!(out, "ValueError: No stream arrays were passed");
 }
 
 /// Verifies `fread()` of a payload larger than the 64 KiB concat scratch buffer returns the whole

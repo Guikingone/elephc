@@ -89,16 +89,22 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x9, x10");                                      // sum read + write lengths
     emitter.instruction("add x12, x12, x11");                                     // add except length
     emitter.instruction("str x12, [sp, #2096]");                                   // save total nfds
-    emitter.instruction("cbz x12, __rt_stream_select_return_zero");                // no descriptors → return 0
+    emitter.instruction("cbz x12, __rt_stream_select_no_castable");               // no entries at all → php's ValueError
     emitter.instruction("mov x13, #256");                                         // pollfd capacity ceiling
     emitter.instruction("cmp x12, x13");                                         // exceeds the stack-allocated capacity?
     emitter.instruction("b.gt __rt_stream_select_error");                          // too many fds → return -1
 
     // -- build the pollfd array: read (POLLIN), write (POLLOUT), except (POLLPRI) --
     emitter.instruction("mov x14, #0");                                          // running pollfd index
+    emitter.instruction("str xzr, [sp, #2184]");                                  // clear the castable-descriptor tally
     emit_build_pollfd_aarch64(emitter, 2048, 2072, POLLIN, "r");
     emit_build_pollfd_aarch64(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_aarch64(emitter, 2064, 2088, POLLPRI, "e");
+    // php counts the streams it could cast to a descriptor and raises `ValueError: No stream
+    // arrays were passed` when that count is zero — the same error an empty array gets, because
+    // php cannot tell "you passed nothing" from "nothing you passed is selectable".
+    emitter.instruction("ldr x9, [sp, #2184]");                                   // how many entries yielded a real descriptor?
+    emitter.instruction("cbz x9, __rt_stream_select_no_castable");                // none → php's ValueError
 
     // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_aarch64(emitter, linux);
@@ -130,8 +136,10 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #-1");                                         // return -1 on poll failure or overflow
     emitter.instruction("b __rt_stream_select_epilogue");                         // jump to the common epilogue
 
-    emitter.label("__rt_stream_select_return_zero");
-    emitter.instruction("mov x0, #0");                                          // return 0 when no descriptors were passed
+    emitter.label("__rt_stream_select_no_castable");
+    // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`. It has
+    // to be distinct from the -1 that means "poll failed", which php answers as `false`.
+    emitter.instruction("mov x0, #-2");                                         // nothing selectable was passed
 
     emitter.label("__rt_stream_select_epilogue");
     emitter.instruction("add x9, sp, #2256");                                     // compute the fp/lr restore address (offset > 504 needs add)
@@ -193,6 +201,14 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("ldr x12, [sp, #2152]");                                 // reload the data-region pointer
     emitter.instruction("ldr x14, [sp, #2160]");                                 // reload the running pollfd index
     // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --
+    // __rt_stream_fd answers -1 for a handle it cannot resolve, which is what a CLOSED stream
+    // gives. -1 has every bit set, so the synthetic-handle test below matched it and handed -1
+    // to the wrapper cast, which dereferenced it: `fclose($f); stream_select([$f], ...)`
+    // SEGFAULTED. php drops such an entry silently (`php_stream_from_zval_no_verify` yields
+    // NULL and the loop continues), so -1 goes straight to the store, where it is recorded as
+    // an unusable descriptor.
+    emitter.instruction("cmn x13, #1");                                          // is the resolved descriptor -1?
+    emitter.instruction(&format!("b.eq {}", cast_done_l));                       // unresolvable handle: never cast it
     emitter.instruction("tst x13, #0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("b.eq {}", cast_done_l));                       // ordinary OS fd → use it directly
     emitter.label(&cast_l);
@@ -226,6 +242,14 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("strh w16, [x15, #4]");                                   // store the events field (16-bit)
     emitter.instruction("strh wzr, [x15, #6]");                                  // clear the revents field
     emitter.instruction("add x14, x14, #1");                                     // advance the running pollfd index
+    // php counts only the entries it could CAST; the tally decides between running the poll and
+    // raising `No stream arrays were passed`. The pollfd slot is still written above, because the
+    // compact pass indexes by array position and the two loops must stay aligned.
+    emitter.instruction("cmn x13, #1");                                          // did this entry yield a real descriptor?
+    emitter.instruction(&format!("b.eq {}", next_l));                             // -1 contributes nothing to the tally
+    emitter.instruction("ldr x17, [sp, #2184]");                                 // load the castable-descriptor tally
+    emitter.instruction("add x17, x17, #1");                                     // one more selectable entry
+    emitter.instruction("str x17, [sp, #2184]");                                 // store it back
     emitter.label(&next_l);
     emitter.instruction("add x11, x11, #1");                                     // advance to the next element
     emitter.instruction(&format!("b {}", loop_l));                              // continue scanning the array
@@ -304,6 +328,10 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction("ldr x12, [sp, #2168]");                                 // reload the data-region pointer
     emitter.instruction("ldr x15, [sp, #2176]");                                 // reload the original slot value
     // -- resolve synthetic user-wrapper fds (idempotent with build) --
+    // The same -1 guard the build pass carries: this loop must reach `cast_done` on exactly the
+    // entries the build pass did, or the two disagree about which pollfd belongs to which slot.
+    emitter.instruction("cmn x16, #1");                                          // is the resolved descriptor -1?
+    emitter.instruction(&format!("b.eq {}", cast_done_l));                       // unresolvable handle: never cast it
     emitter.instruction("tst x16, #0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("b.eq {}", cast_done_l));                       // ordinary OS fd → use it directly
     emitter.instruction("str x9, [sp, #2120]");                                  // spill the array pointer across the cast call
@@ -438,16 +466,21 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r9, r10");                                          // sum read + write lengths
     emitter.instruction("add r9, r11");                                          // add except length
     emitter.instruction("mov QWORD PTR [rbp - 2096], r9");                       // save total nfds
-    emitter.instruction("test r9, r9");                                          // no descriptors?
-    emitter.instruction("jz __rt_stream_select_return_zero_x");                  // return 0 immediately
+    emitter.instruction("test r9, r9");                                          // no entries at all?
+    emitter.instruction("jz __rt_stream_select_no_castable_x");                  // → php's ValueError
     emitter.instruction("cmp r9, 256");                                          // exceeds the stack-allocated capacity?
     emitter.instruction("ja __rt_stream_select_error_x");                         // too many fds → return -1
 
     // -- build the pollfd array: read (POLLIN), write (POLLOUT), except (POLLPRI) --
     emitter.instruction("xor r14, r14");                                         // running pollfd index
+    emitter.instruction("mov QWORD PTR [rbp - 2184], 0");                        // clear the castable-descriptor tally
     emit_build_pollfd_x86(emitter, 2064, 2072, POLLIN, "r");
     emit_build_pollfd_x86(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_x86(emitter, 2048, 2088, POLLPRI, "e");
+    // php counts the streams it could cast and raises `ValueError: No stream arrays were passed`
+    // when that count is zero — it cannot tell "you passed nothing" from "nothing is selectable".
+    emitter.instruction("cmp QWORD PTR [rbp - 2184], 0");                        // did anything yield a real descriptor?
+    emitter.instruction("je __rt_stream_select_no_castable_x");                  // none → php's ValueError
 
     // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_x86(emitter, linux);
@@ -478,8 +511,10 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, -1");                                          // return -1 on poll failure or overflow
     emitter.instruction("jmp __rt_stream_select_epilogue_x");                     // jump to the common epilogue
 
-    emitter.label("__rt_stream_select_return_zero_x");
-    emitter.instruction("xor eax, eax");                                         // return 0 when no descriptors were passed
+    emitter.label("__rt_stream_select_no_castable_x");
+    // -2 is the lowering's cue to raise php's `ValueError: No stream arrays were passed`, kept
+    // distinct from the -1 that means "poll failed" and becomes `false`.
+    emitter.instruction("mov rax, -2");                                          // nothing selectable was passed
 
     emitter.label("__rt_stream_select_epilogue_x");
     emitter.instruction("leave");                                                // restore rbp + rsp
@@ -534,6 +569,12 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction("mov r12, QWORD PTR [rbp - 2144]");                      // reload the value_type tag
     emitter.instruction("mov r14, QWORD PTR [rbp - 2152]");                      // reload the running pollfd index
     // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --
+    // __rt_stream_fd answers -1 for a handle it cannot resolve, which is what a CLOSED stream
+    // gives. -1 has every bit set, so the synthetic-handle test below matched it and handed -1
+    // to the wrapper cast, which dereferenced it: `fclose($f); stream_select([$f], ...)`
+    // SEGFAULTED. php drops such an entry silently, so -1 goes straight to the store.
+    emitter.instruction("cmp rdx, -1");                                          // is the resolved descriptor -1?
+    emitter.instruction(&format!("je {}", cast_done_l));                          // unresolvable handle: never cast it
     emitter.instruction("test rdx, 0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("jz {}", cast_done_l));                          // ordinary OS fd → use it directly
     emitter.instruction("mov QWORD PTR [rbp - 2120], r11");                      // spill the array pointer across the cast call
@@ -565,6 +606,11 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction(&format!("mov WORD PTR [rax + 4], {}", events));         // store the events field (16-bit)
     emitter.instruction("mov WORD PTR [rax + 6], 0");                            // clear the revents field
     emitter.instruction("inc r14");                                             // advance the running pollfd index
+    // php counts only the entries it could CAST; see the AArch64 counterpart. The pollfd slot is
+    // still written above so the compact pass stays aligned with this one.
+    emitter.instruction("cmp rdx, -1");                                          // did this entry yield a real descriptor?
+    emitter.instruction(&format!("je {}", next_l));                              // -1 contributes nothing to the tally
+    emitter.instruction("inc QWORD PTR [rbp - 2184]");                           // one more selectable entry
     emitter.label(&next_l);
     emitter.instruction("inc rsi");                                             // advance to the next element
     emitter.instruction(&format!("jmp {}", loop_l));                             // continue scanning the array
@@ -635,6 +681,10 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction("mov r12, QWORD PTR [rbp - 2160]");                      // reload the value_type tag
     emitter.instruction("mov r13, QWORD PTR [rbp - 2168]");                      // reload the original slot value
     // -- resolve synthetic user-wrapper fds (idempotent with build) --
+    // The same -1 guard the build pass carries: this loop must reach `cast_done` on exactly the
+    // entries the build pass did, or the two disagree about which pollfd belongs to which slot.
+    emitter.instruction("cmp rdx, -1");                                          // is the resolved descriptor -1?
+    emitter.instruction(&format!("je {}", cast_done_l));                         // unresolvable handle: never cast it
     emitter.instruction("test rdx, 0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("jz {}", cast_done_l));                         // ordinary OS fd → use it directly
     emitter.instruction("mov QWORD PTR [rbp - 2120], r11");                      // spill the array pointer across the cast call

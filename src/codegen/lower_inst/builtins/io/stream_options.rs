@@ -88,6 +88,14 @@ const STREAM_SELECT_NEGATIVE_SECONDS_MESSAGE: &str =
 const STREAM_SELECT_NEGATIVE_MICROSECONDS_MESSAGE: &str =
     "stream_select(): Argument #5 ($microseconds) must be greater than or equal to 0";
 
+/// php-src's wording when nothing in the three arrays could be cast to a selectable descriptor.
+///
+/// `stream_array_to_fd_set()` counts the streams `php_stream_cast()` accepted and
+/// `PHP_FUNCTION(stream_select)` throws on a zero total, so php cannot distinguish "you passed
+/// no arrays" from "nothing you passed is selectable" — an empty array, an all-null call, a
+/// closed stream and a `php://memory` handle all produce this one message.
+const STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE: &str = "No stream arrays were passed";
+
 /// Lowers `stream_set_chunk_size(stream, size)` and returns the previous size.
 pub(crate) fn lower_stream_set_chunk_size(
     ctx: &mut FunctionContext<'_>,
@@ -353,6 +361,16 @@ pub(crate) fn lower_stream_select(
     // php-src answers `int|false`: the ready-descriptor count, or `false` when the underlying
     // `poll`/`select` itself failed. `__rt_stream_select` reports that failure as a negative
     // count, so the sign picks the branch.
+    //
+    // -2 is its separate report that NOTHING in the three arrays could be cast to a selectable
+    // descriptor, which php answers with a throw rather than a value — an empty array, a closed
+    // stream and a `php://memory` handle all land here. The guard runs before the sign test
+    // because `false` and the throw are both "negative" otherwise.
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(result_reg, -1),
+        STREAM_SELECT_NO_STREAM_ARRAYS_MESSAGE,
+    );
     let false_label = ctx.next_label("stream_select_failed");
     let boxed_label = ctx.next_label("stream_select_boxed");
     match ctx.emitter.target.arch {
