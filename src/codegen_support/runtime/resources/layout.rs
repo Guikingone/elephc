@@ -333,6 +333,17 @@ pub(crate) const FILTER_DIRECTION_WRITE: u64 = 2;
 /// Set once `onClose()` has run so stream teardown cannot invoke it twice.
 pub(crate) const FILTER_FLAG_ONCLOSE_CALLED: u64 = 1;
 
+/// Marks a node that exists for its RESOURCE identity alone.
+///
+/// `zlib.*`, `bzip2.*` and `convert.iconv.*` are compiled as an inline filter shape over the
+/// descriptor rather than as a chain node, so they filtered correctly but minted nothing —
+/// `stream_filter_append($h, "zlib.deflate", ...)` answered a value `is_resource()` called false
+/// where php answers a live `stream filter`. An inert node restores the identity php documents: it
+/// joins the chain so that closing the stream closes it too, carries no built-in id and no object
+/// so the applier passes it by, and tells `stream_filter_remove()` to clear the per-descriptor
+/// tables that do the actual filtering.
+pub(crate) const FILTER_FLAG_INERT: u64 = 2;
+
 const _: () = {
     assert!(RESOURCE_KIND_FREE == 0);
     assert!(RESOURCE_KIND_FILTER != RESOURCE_KIND_STREAM);

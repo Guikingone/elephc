@@ -79,6 +79,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_filter_absorb_params(emitter);
     io::emit_asf_params_load(emitter);
     io::emit_filter_param_warning(emitter);
+    io::emit_filter_mark_inert(emitter);
     io::emit_stream_context_options_shape_ok(emitter);
     io::emit_stream_get_meta_data(emitter);
     io::emit_gethostname(emitter);

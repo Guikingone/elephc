@@ -3266,6 +3266,57 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies the filters compiled as an inline shape still hand back the resource php documents.
+///
+/// `zlib.*`, `bzip2.*` and `convert.iconv.*` filter through code emitted over the DESCRIPTOR rather
+/// than through a chain node, so they filtered but minted nothing: `is_resource()` on the result
+/// answered false and `get_resource_type()` answered "Unknown", where php answers a live
+/// `stream filter`. Nothing observed the filter's lifetime — neither `stream_filter_remove()` nor
+/// the invalidation php performs when the owning stream closes.
+///
+/// The node minted for them is INERT: no built-in id and no `php_user_filter`, which is what makes
+/// the chain applier pass it by while the inline shape keeps doing the filtering. It joins the
+/// chain all the same, because that is what makes `fclose()` close it — the case this test pins
+/// with `closed`.
+#[test]
+fn test_inline_shape_filters_still_mint_their_resource() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function shape($r): string {
+    return var_export(is_resource($r), true) . " " . (is_resource($r) ? get_resource_type($r) : "-");
+}
+$h = fopen("php://memory", "w+");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+echo "deflate  ", shape($z), "\n";
+echo "remove   ", var_export(stream_filter_remove($z), true), " ", shape($z), "\n";
+fclose($h);
+$h = fopen("php://memory", "w+");
+$i = stream_filter_append($h, "zlib.inflate", STREAM_FILTER_READ);
+echo "inflate  ", shape($i), "\n";
+fclose($h);
+echo "closed   ", shape($i), "\n";
+$h = fopen("php://memory", "w+");
+echo "bzip2    ", shape(stream_filter_append($h, "bzip2.compress", STREAM_FILTER_WRITE)), "\n";
+fclose($h);
+$h = fopen("php://memory", "w+");
+echo "iconv    ", shape(stream_filter_append($h, "convert.iconv.utf-8/utf-8", STREAM_FILTER_WRITE)), "\n";
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "deflate  true stream filter\n",
+            "remove   true false -\n",
+            "inflate  true stream filter\n",
+            "closed   false -\n",
+            "bzip2    true stream filter\n",
+            "iconv    true stream filter\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `stream_filter_remove()` refuses a resource that is not a live filter, in php's words.
 ///
 /// Passing an ordinary stream reported SUCCESS: the chain lookup rejected the handle, the legacy

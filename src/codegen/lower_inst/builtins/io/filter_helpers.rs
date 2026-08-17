@@ -360,6 +360,32 @@ pub(super) fn materialize_stream_filter_params(
     Ok(())
 }
 
+/// Mints the `stream filter` resource php hands back for a filter compiled as an inline shape.
+///
+/// `zlib.*`, `bzip2.*` and `convert.iconv.*` filter through code emitted over the DESCRIPTOR rather
+/// than through a chain node, so they filtered correctly and minted nothing: `is_resource()` on the
+/// result answered false and `get_resource_type()` answered "Unknown", where php answers a live
+/// `stream filter`. The node created here carries no built-in id and no `php_user_filter`, which is
+/// already enough for the chain applier to pass it by, and joining the chain is what makes closing
+/// the stream close it too — php invalidates the filter resource on `fclose()`.
+///
+/// The stream operand is re-materialized, which is the pattern the surrounding lowerings already
+/// use for their diagnostics; every caller reaches this with the operand already evaluated once.
+pub(super) fn emit_inert_filter_resource(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    let stream = expect_operand(inst, 0)?;
+    load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_stream_filter_mode(ctx, inst, Some(0))?;
+    emit_attach_filter_node(ctx, Some(0), prepend, false, None)?;
+    abi::emit_call_label(ctx.emitter, "__rt_filter_mark_inert");
+    emit_boxed_filter_handle(ctx);
+    Ok(())
+}
+
 /// Boxes the new filter handle, or reports a refused `$params` and answers php's `false`.
 ///
 /// `__rt_filter_create` hands back 0 when the node's filter PARSES `$params` and was given

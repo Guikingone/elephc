@@ -120,6 +120,7 @@ pub(super) fn lower_zlib_deflate_stream_filter_attach(
         Arch::AArch64 => crate::codegen::stream_filters::zlib::emit_arm64(ctx.emitter, shape),
         Arch::X86_64 => crate::codegen::stream_filters::zlib::emit_x86_64(ctx.emitter, shape),
     }
+    emit_inert_filter_resource(ctx, inst, false)?;
     store_if_result(ctx, inst)
 }
 
@@ -131,6 +132,7 @@ pub(super) fn lower_zlib_inflate_stream_filter_attach(
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
     emit_zlib_inflate_attach_in_place(ctx);
+    emit_inert_filter_resource(ctx, inst, false)?;
     store_if_result(ctx, inst)
 }
 
@@ -204,6 +206,7 @@ pub(super) fn lower_bzip2_compress_stream_filter_attach(
             work_factor,
         ),
     }
+    emit_inert_filter_resource(ctx, inst, false)?;
     store_if_result(ctx, inst)
 }
 
@@ -215,6 +218,7 @@ pub(super) fn lower_bzip2_decompress_stream_filter_attach(
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
     emit_bzip2_decompress_attach_in_place(ctx);
+    emit_inert_filter_resource(ctx, inst, false)?;
     store_if_result(ctx, inst)
 }
 
@@ -531,11 +535,11 @@ pub(super) fn lower_iconv_stream_filter_attach(
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
     let Some((from, to)) = spec.split_once('/') else {
-        emit_boxed_stream_resource(ctx);
+        emit_inert_filter_resource(ctx, inst, false)?;
         return store_if_result(ctx, inst);
     };
     if from.is_empty() || to.is_empty() {
-        emit_boxed_stream_resource(ctx);
+        emit_inert_filter_resource(ctx, inst, false)?;
         return store_if_result(ctx, inst);
     }
     let from_cstr = format!("{}\0", from);
@@ -572,6 +576,7 @@ pub(super) fn lower_iconv_stream_filter_attach(
             ctx.emitter.label(&after_label);
         }
     }
+    emit_inert_filter_resource(ctx, inst, false)?;
     store_if_result(ctx, inst)
 }
 
