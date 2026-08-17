@@ -222,8 +222,16 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("orr x10, x10, x11");                                   // combine runtime bit flags
     emitter.instruction("str x10, [x0, #-8]");                                  // store runtime value
     // Push the boxed bucket onto the array.
+    // php's closing dispatch delivers an EMPTY BRIGADE, not one empty bucket. elephc pushed a
+    // bucket whatever the input length, so `while ($b = stream_bucket_make_writeable($in))` ran a
+    // second time over an empty `$b->data` — a filter that MUTATES its buckets applied twice, and
+    // `$b->data = $b->data . "|"` over "abc" answered "abc||" where php answers "abc|". A filter
+    // that only forwards its buckets cannot see the difference, which is why nothing caught it.
+    emitter.instruction("ldr x9, [sp, #16]");                                   // the input length
+    emitter.instruction("cbz x9, __rt_ufbi_empty_brigade");                     // no input: hand over no buckets
     emitter.instruction("ldr x1, [sp, #72]");                                   // mixed_bucket
     abi::emit_call_label(emitter, "__rt_array_push_int");                       // x0 = updated array
+    emitter.label("__rt_ufbi_empty_brigade");
     // Box the array as Mixed(indexed-array).
     emitter.instruction("mov x1, x0");                                          // prepare AArch64 call argument
     emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
@@ -490,9 +498,14 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or r10, r11");                                         // combine runtime bit flags
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // store runtime value
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
+    // See the AArch64 counterpart: php's closing dispatch delivers an EMPTY BRIGADE, and a filter
+    // that mutates its buckets applied twice without this.
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 0");                         // the input length
+    emitter.instruction("je __rt_ufbi_empty_brigade_x");                        // no input: hand over no buckets
     emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // mixed_bucket
     abi::emit_call_label(emitter, "__rt_array_push_int");
     emitter.instruction("mov rdi, rax");                                        // prepare SysV call argument
+    emitter.label("__rt_ufbi_empty_brigade_x");
     emitter.instruction("xor esi, esi");                                        // clear register value
     emitter.instruction("mov rax, 4");                                          // tag indexed-array
     abi::emit_call_label(emitter, "__rt_mixed_from_value");

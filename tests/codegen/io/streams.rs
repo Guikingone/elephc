@@ -3266,6 +3266,75 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies the closing dispatch delivers an EMPTY BRIGADE, so a mutating filter runs once.
+///
+/// php gives a filter one final `filter(..., $closing = true)` with no buckets at all. elephc built
+/// a bucket whatever the input length, so `while ($b = stream_bucket_make_writeable($in))` ran a
+/// second time over an empty `$b->data` and the filter applied TWICE: `$b->data = "<" . $b->data .
+/// ">"` over "abc" answered "<<abc>>" where php answers "<abc>".
+///
+/// A filter that only FORWARDS its buckets cannot see the difference — an extra empty bucket
+/// concatenates to nothing — which is why every existing test passed. The withholding filter is
+/// here because it is the case the empty brigade must not break: it answers `PSFS_FEED_ME` until
+/// `$closing`, and only then emits, so removing the bucket must not remove the dispatch.
+#[test]
+fn test_closing_dispatch_delivers_an_empty_brigade() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+class Mark extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $b->data = "<" . $b->data . ">";
+            $consumed += $b->datalen;
+            stream_bucket_append($out, $b);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("mark2", "Mark");
+$h = fopen("php://memory", "w+");
+fwrite($h, "abc");
+rewind($h);
+stream_filter_append($h, "mark2", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+$h = fopen("php://memory", "w+");
+stream_filter_append($h, "mark2", STREAM_FILTER_WRITE);
+fwrite($h, "xyz");
+rewind($h);
+var_dump(stream_get_contents($h));
+fclose($h);
+class Hold extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $this->buf .= $b->data;
+            $consumed += $b->datalen;
+        }
+        if ($closing) {
+            $b = stream_bucket_new($this->stream, strrev($this->buf));
+            stream_bucket_append($out, $b);
+            return PSFS_PASS_ON;
+        }
+        return PSFS_FEED_ME;
+    }
+}
+stream_filter_register("hold", "Hold");
+$h = fopen("php://memory", "w+");
+fwrite($h, "abcdef");
+rewind($h);
+stream_filter_append($h, "hold", STREAM_FILTER_READ);
+var_dump(stream_get_contents($h));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"<abc>\"\nstring(5) \"<xyz>\"\nstring(6) \"fedcba\"\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `php_user_filter::$stream` is the stream being filtered, for the duration of `filter()`.
 ///
 /// The property stayed null, so a filter could not reach the stream it was filtering — the manual's
