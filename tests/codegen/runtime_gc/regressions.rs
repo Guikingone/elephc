@@ -4695,3 +4695,43 @@ echo $total, "\n";
         out.stderr
     );
 }
+
+/// Regression test: an `array<T>` argument reaching an `array<mixed>` parameter used to be
+/// CONSUMED, once per call.
+///
+/// `__rt_array_to_mixed` opens with `__rt_array_ensure_unique`, which on a shared array clones
+/// it and drops one reference from the original — the caller's, if the caller owned one. The
+/// call sites handed it a BORROWED load, so that dropped reference came out of whatever else
+/// owned the array. Two calls took `$src` from two owners to none: `count($src)` then answered
+/// 0, and when the freed block was reused the free list became a cycle `__rt_heap_free` walked
+/// forever, so the program HUNG rather than crashing.
+///
+/// The fresh array the conversion answers has no other owner either — the callee increfs its
+/// array parameter on entry and releases it at exit, netting zero — so it also leaked one per
+/// call. Both halves are asserted: the values, and a clean heap.
+///
+/// Two calls is the minimum that shows it, which is why every call here is repeated.
+#[test]
+fn test_regression_widened_array_argument_is_not_consumed_per_call() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+interface Sink { public function take(array $items): int; }
+class Direct implements Sink {
+    public function take(array $items): int { return count($items); }
+}
+function through(Sink $s, array $items): int { return $s->take($items); }
+$src = ["a", "b", "c"];
+$keep = $src;
+$d = new Direct();
+echo through($d, $src), "|", through($d, $src), "|";
+echo count($src), "|", count($keep), "|", $src[0], $keep[2], "\n";
+"#,
+    );
+    assert!(out.success, "program failed (double free?): {}", out.stderr);
+    assert_eq!(out.stdout, "3|3|3|3|ac\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}

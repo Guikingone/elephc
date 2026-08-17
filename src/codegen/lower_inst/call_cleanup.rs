@@ -164,21 +164,38 @@ pub(super) fn plan_call_arg_temp_cleanups(
             continue;
         }
         let source_ty = ctx.raw_value_php_type(*value)?;
-        if direct_call_arg_creates_mixed_temp(&source_ty, param_ty) {
+        if let Some(ty) = direct_call_arg_temp_type(&source_ty, param_ty) {
             cleanups.push(CallArgTempCleanup {
                 param_index: index,
                 offset: cleanups.len() * 16,
-                ty: PhpType::Mixed,
+                ty,
             });
         }
     }
     Ok(cleanups)
 }
 
-/// Returns whether argument materialization allocates a caller-owned Mixed box.
-pub(super) fn direct_call_arg_creates_mixed_temp(source_ty: &PhpType, param_ty: &PhpType) -> bool {
-    matches!(param_ty.codegen_repr(), PhpType::Mixed)
+/// Returns the type of the caller-owned temporary argument materialization allocates, if any.
+///
+/// Two shapes reach a callee through a fresh allocation the caller must free once the call
+/// returns. A concrete scalar meeting a `mixed` parameter is BOXED, and the callee borrows the
+/// cell. An `array<T>` meeting an `array<mixed>` parameter is CONVERTED element-wise by
+/// `__rt_array_to_mixed`, and the callee's incref-on-entry/release-at-exit nets to zero — so
+/// that array has no other owner at all and leaked one per call until this covered it.
+pub(super) fn direct_call_arg_temp_type(source_ty: &PhpType, param_ty: &PhpType) -> Option<PhpType> {
+    if matches!(param_ty.codegen_repr(), PhpType::Mixed)
         && !matches!(source_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+    {
+        return Some(PhpType::Mixed);
+    }
+    let (PhpType::Array(param_elem), PhpType::Array(source_elem)) =
+        (param_ty.codegen_repr(), source_ty.codegen_repr())
+    else {
+        return None;
+    };
+    (param_elem.codegen_repr() == PhpType::Mixed
+        && source_elem.codegen_repr() != PhpType::Mixed)
+        .then(|| PhpType::Array(Box::new(PhpType::Mixed)))
 }
 
 /// Saves the current pointer result into the reserved call-argument cleanup area.

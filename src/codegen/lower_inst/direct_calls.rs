@@ -188,6 +188,7 @@ pub(super) fn materialize_direct_call_args_with_refs_and_borrowed_options(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
+            retain_array_argument_consumed_by_widening(ctx, *value, &source_ty, param_ty)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             if let Some(cleanup) = cleanup_slots
                 .iter()
@@ -261,6 +262,7 @@ pub(super) fn materialize_static_method_call_args_with_refs(
         } else {
             ctx.load_value_to_result(*value)?;
             let source_ty = ctx.raw_value_php_type(*value)?;
+            retain_array_argument_consumed_by_widening(ctx, *value, &source_ty, param_ty)?;
             let push_ty = materialize_direct_call_arg_for_param(ctx, &source_ty, param_ty)?;
             if let Some(cleanup) = cleanup_slots
                 .iter()
@@ -319,6 +321,42 @@ pub(super) fn materialize_called_class_id(
             );
         }
     }
+    Ok(())
+}
+
+/// Retains an array argument that the widening conversion is about to CONSUME.
+///
+/// `__rt_array_to_mixed` opens with `__rt_array_ensure_unique`, which on a shared array clones
+/// it and DROPS one reference from the original — the caller's, if the caller owned one. These
+/// sites hand it a borrowed load, so without this retain the dropped reference comes out of
+/// whatever else owns the array: `through($d, $src)` twice took `$src` from two owners to
+/// none, `count($src)` then answered 0, and a reused block turned the free list into a cycle
+/// that `__rt_heap_free` walks forever.
+///
+/// Skipped when the value can hand its own reference over — an owned temporary with no
+/// following release is exactly the reference the conversion should consume.
+fn retain_array_argument_consumed_by_widening(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    source_ty: &PhpType,
+    param_ty: &PhpType,
+) -> Result<()> {
+    let PhpType::Array(param_elem) = param_ty.codegen_repr() else {
+        return Ok(());
+    };
+    if param_elem.codegen_repr() != PhpType::Mixed {
+        return Ok(());
+    }
+    let PhpType::Array(source_elem) = source_ty.codegen_repr() else {
+        return Ok(());
+    };
+    if source_elem.codegen_repr() == PhpType::Mixed {
+        return Ok(()); // already the destination shape; no conversion runs
+    }
+    if ctx.value_can_transfer_ownership_to_consumer(value)? {
+        return Ok(());
+    }
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     Ok(())
 }
 
