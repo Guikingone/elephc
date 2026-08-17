@@ -8,6 +8,9 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::resources::layout::{
+    FILTER_FLAGS_OFFSET, FILTER_FLAG_INERT, FILTER_STREAM_HANDLE_OFFSET,
+};
 
 /// php-src's verbatim `ValueError` for an empty `stream_filter_register()` `$filter_name`.
 const STREAM_FILTER_REGISTER_EMPTY_NAME_MESSAGE: &str =
@@ -719,14 +722,24 @@ pub(crate) fn lower_stream_filter_remove(
     // remaining families move over.
     let legacy = ctx.next_label("sfr_legacy");
     let refused = ctx.next_label("sfr_refused");
+    let not_inert = ctx.next_label("sfr_not_inert");
     let done = ctx.next_label("sfr_done");
     load_stream_handle_to_result(ctx, filter, "stream_filter_remove")?;
-    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the candidate handle
             abi::emit_call_label(ctx.emitter, "__rt_filter_state");
             ctx.emitter.instruction(&format!("cbz x0, {}", legacy));            // not a chain filter: use the legacy teardown
+            // An INERT node stands for a filter whose real work is done by an inline shape over
+            // the descriptor, so unlinking the node alone would leave that shape RUNNING: the
+            // stream kept compressing after `stream_filter_remove()` said it had stopped. Both
+            // facts are read now, while the node is still live.
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{FILTER_FLAGS_OFFSET}]"));
+            ctx.emitter.instruction(&format!("and x9, x9, #{FILTER_FLAG_INERT}"));
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // is this node inert?
+            ctx.emitter.instruction(&format!("ldr x9, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]"));
+            ctx.emitter.instruction("str x9, [sp, #16]");                       // the stream whose tables it owns
             // PHP flushes a filter before removing it, and a PSFS_ERR_FATAL flush
             // CANCELS the removal: the filter stays attached and the call reports false.
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
@@ -747,16 +760,32 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            // Stop the inline shape too, or the stream keeps filtering after the removal.
+            ctx.emitter.instruction("ldr x9, [sp, #8]");
+            ctx.emitter.instruction(&format!("cbz x9, {}", not_inert));
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // the owning stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // x0 = its descriptor
+            // php flushes the encoder's TAIL when the filter is removed, not only when the stream
+            // closes: removing a `zlib.deflate` and then writing plain text puts the two-byte
+            // deflate sync marker BEFORE that text. elephc emitted it at `fclose()` instead, so the
+            // same bytes came out in the wrong order. The three helpers are the ones `fclose()`
+            // already uses and each skips a descriptor that has no such filter, so calling all
+            // three costs three loads for a filter that is none of them.
+            emit_zlib_flush_on_close_for_current_fd(ctx);
+            emit_bz2_flush_on_close_for_current_fd(ctx);
+            emit_iconv_flush_on_close_for_current_fd(ctx);
+            emit_legacy_filter_table_clear(ctx);
+            ctx.emitter.label(&not_inert);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("mov x0, #1");                              // stream_filter_remove() reports success
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&refused);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the node stays linked and live
+            abi::emit_release_temporary_stack(ctx.emitter, 32);                 // the node stays linked and live
             ctx.emitter.instruction("mov x0, #0");                              // a refused flush reports false
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&legacy);
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the candidate for the legacy path
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the candidate handle
@@ -764,6 +793,16 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_call_label(ctx.emitter, "__rt_filter_state");
             ctx.emitter.instruction("test rax, rax");
             ctx.emitter.instruction(&format!("jz {}", legacy));                 // not a chain filter: use the legacy teardown
+            // See the AArch64 counterpart: an inert node's real filtering lives in the tables.
+            ctx.emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {FILTER_FLAGS_OFFSET}]"
+            ));
+            ctx.emitter.instruction(&format!("and r9, {FILTER_FLAG_INERT}"));
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");             // is this node inert?
+            ctx.emitter.instruction(&format!(
+                "mov r9, QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}]"
+            ));
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r9");            // the stream whose tables it owns
             // See the AArch64 counterpart: a PSFS_ERR_FATAL flush cancels the removal.
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_filter_node_closing_flush");
@@ -783,16 +822,28 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            // Stop the inline shape too, or the stream keeps filtering after the removal.
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", not_inert));
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // the owning stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");                // rax = its descriptor
+            // See the AArch64 counterpart: php flushes the encoder tail at REMOVAL.
+            emit_zlib_flush_on_close_for_current_fd(ctx);
+            emit_bz2_flush_on_close_for_current_fd(ctx);
+            emit_iconv_flush_on_close_for_current_fd(ctx);
+            emit_legacy_filter_table_clear(ctx);
+            ctx.emitter.label(&not_inert);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("mov eax, 1");                              // stream_filter_remove() reports success
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&refused);
-            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the node stays linked and live
+            abi::emit_release_temporary_stack(ctx.emitter, 32);                 // the node stays linked and live
             ctx.emitter.instruction("xor eax, eax");                            // a refused flush reports false
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&legacy);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the candidate for the legacy path
-            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
     }
     load_stream_fd_to_result(ctx, filter, "stream_filter_remove")?;
@@ -807,6 +858,23 @@ pub(crate) fn lower_stream_filter_remove(
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }
     abi::emit_call_label(ctx.emitter, "__rt_user_filter_release_fd");
+    emit_legacy_filter_table_clear(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, #1"),                 // return true after removing the filter state
+        Arch::X86_64 => ctx.emitter.instruction("mov eax, 1"),
+    }
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Clears both per-descriptor filter slots in both directions, for the descriptor in the result
+/// register.
+///
+/// This is what actually STOPS a `zlib.*`, `bzip2.*` or `convert.iconv.*` filter: those five run as
+/// an inline shape keyed on the descriptor, not as a chain node, so unlinking their (inert) node
+/// only retires the resource. Removing one without this left the stream compressing after
+/// `stream_filter_remove()` had reported success.
+fn emit_legacy_filter_table_clear(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
@@ -816,7 +884,6 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction slot 0
             ctx.emitter.instruction("strb wzr, [x9, x10]");                     // clear the write-direction slot 1
-            ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
@@ -826,10 +893,7 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction slot 0
             ctx.emitter.instruction("mov BYTE PTR [r9 + r10], 0");              // clear the write-direction slot 1
-            ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
         }
     }
-    ctx.emitter.label(&done);
-    store_if_result(ctx, inst)
 }
 

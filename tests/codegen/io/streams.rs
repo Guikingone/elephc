@@ -3266,6 +3266,51 @@ fclose($m);
     assert_eq!(out, "true|wrapped!|true|HELLO");
 }
 
+/// Verifies removing a `zlib.deflate` STOPS it, and flushes its tail where php flushes it.
+///
+/// The filter runs as an inline shape keyed on the descriptor, so unlinking its node retired the
+/// resource and left the shape running: the stream went on compressing after
+/// `stream_filter_remove()` had reported success, and a following `fwrite("plain text here")`
+/// landed as deflate output.
+///
+/// The ORDER is the second half of the rule. php flushes the encoder's tail when the filter is
+/// REMOVED, so the two-byte deflate sync marker precedes the plain text; elephc emitted it at
+/// `fclose()`, which put the same bytes out back to front. Measured on `php -n` 8.5.6.
+#[test]
+fn test_removing_an_inline_shape_filter_stops_it_and_flushes_its_tail() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$p = "zdefremove.bin";
+$h = fopen($p, "wb");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+stream_filter_remove($z);
+fwrite($h, "plain text here");
+fclose($h);
+echo bin2hex(file_get_contents($p)), "\n";
+unlink($p);
+// The tail reaches a memory stream too, and only once the filter is removed.
+$h = fopen("php://memory", "w+");
+$z = stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE);
+$n = fwrite($h, str_repeat("a", 400));
+var_dump($n, ftell($h));
+stream_filter_remove($z);
+rewind($h);
+var_dump(strlen((string) stream_get_contents($h)));
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            // the deflate sync marker, THEN "plain text here"
+            "0300", "706c61696e2074657874206865726", "5\n",
+            "int(400)\nint(0)\n",
+            "int(8)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the filters compiled as an inline shape still hand back the resource php documents.
 ///
 /// `zlib.*`, `bzip2.*` and `convert.iconv.*` filter through code emitted over the DESCRIPTOR rather
