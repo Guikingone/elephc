@@ -996,3 +996,39 @@ var_dump(str_replace("a", "Z", "banana"));
         )
     );
 }
+
+/// Verifies `str_replace()` with an ARRAY `$subject`, which php answers with an array.
+///
+/// The call did not compile at all: the subject reached the shared string coercion, which has no
+/// array case. What makes this form different from the array `$search` landed alongside it is that
+/// the RESULT SHAPE moves — php replaces inside every element and hands back an array — so the
+/// builtin needed a `check` hook that reads the subject's type. A plain string subject still
+/// answers a string, which is what every existing call site relied on.
+///
+/// Both search forms go through the same loop, scalar and array, and the subject is re-dumped
+/// afterwards to pin that php replaces into a COPY rather than in place.
+#[test]
+fn test_str_replace_accepts_an_array_subject() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(str_replace("a", "X", ["abc", "aaa"]));
+var_dump(str_replace(["a", "b"], ["1", "2"], ["ab", "ba"]));
+var_dump(str_replace("a", "X", []));
+var_dump(str_replace(["a"], "Y", ["aa", "b"]));
+$subject = ["one", "two", "three"];
+var_dump(str_replace("t", "T", $subject));
+var_dump($subject);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n  [0]=>\n  string(3) \"Xbc\"\n  [1]=>\n  string(3) \"XXX\"\n}\n",
+            "array(2) {\n  [0]=>\n  string(2) \"12\"\n  [1]=>\n  string(2) \"21\"\n}\n",
+            "array(0) {\n}\n",
+            "array(2) {\n  [0]=>\n  string(2) \"YY\"\n  [1]=>\n  string(1) \"b\"\n}\n",
+            "array(3) {\n  [0]=>\n  string(3) \"one\"\n  [1]=>\n  string(3) \"Two\"\n  [2]=>\n  string(5) \"Three\"\n}\n",
+            "array(3) {\n  [0]=>\n  string(3) \"one\"\n  [1]=>\n  string(3) \"two\"\n  [2]=>\n  string(5) \"three\"\n}\n",
+        )
+    );
+}

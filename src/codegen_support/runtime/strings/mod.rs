@@ -45,6 +45,7 @@ mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
 mod str_replace_arrays;
+mod str_replace_subject;
 mod explode;
 mod implode;
 mod implode_bool;
@@ -178,6 +179,7 @@ pub use str_ends_with::emit_str_ends_with;
 /// Emit check for string suffix match.
 pub use str_replace::emit_str_replace;
 pub use str_replace_arrays::emit_str_replace_search_array;
+pub use str_replace_subject::emit_str_replace_subject_array;
 /// Emit string replace helper.
 pub use explode::emit_explode;
 /// Emit explode (split by delimiter) helper.

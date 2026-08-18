@@ -28,6 +28,13 @@ pub(crate) fn lower_string_replace(
     // with `str_replace string coercion for PHP type Array(Str)` — because the shared coercion
     // helper has no array case, and rightly so: an array is not a string. The array form gets its
     // own path instead.
+    // php's `$subject` decides the RESULT SHAPE: an array subject answers an array, with a
+    // replacement performed inside every element. It is checked FIRST because that path drives the
+    // search forms itself, scalar and array alike.
+    let subject = expect_operand(inst, 2)?;
+    if matches!(ctx.value_php_type(subject)?.codegen_repr(), PhpType::Array(_)) {
+        return lower_string_replace_array_subject(ctx, inst, name);
+    }
     let search = expect_operand(inst, 0)?;
     if matches!(ctx.value_php_type(search)?.codegen_repr(), PhpType::Array(_)) {
         return lower_string_replace_array_search(ctx, inst, name);
@@ -37,6 +44,99 @@ pub(crate) fn lower_string_replace(
         Arch::X86_64 => lower_string_replace_x86_64(ctx, inst, name)?,
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `str_replace()` with an ARRAY `$subject`, over `__rt_str_replace_subject_array`.
+///
+/// The helper performs a replacement inside every element and answers a fresh array, so this only
+/// has to materialize the three operands in the form it wants: each of `$search` and `$replace` as
+/// either an array pointer or a string pair, with a null array pointer selecting the scalar form.
+fn lower_string_replace_array_subject(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    let subject = expect_operand(inst, 2)?;
+    let search_is_array = matches!(ctx.value_php_type(search)?.codegen_repr(), PhpType::Array(_));
+    let replace_is_array = matches!(ctx.value_php_type(replace)?.codegen_repr(), PhpType::Array(_));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            if search_is_array {
+                ctx.load_value_to_result(search)?;
+                ctx.emitter.instruction("mov x9, x0");                          // the search array
+                ctx.emitter.instruction("mov x10, #0");                         // its scalar pair is unused
+                ctx.emitter.instruction("mov x11, #0");
+            } else {
+                load_string_arg_to_regs(ctx, inst, 0, name, "x10", "x11")?;     // the scalar search
+                ctx.emitter.instruction("mov x9, #0");                          // no search array
+            }
+            ctx.emitter.instruction("stp x9, x10, [sp, #-16]!");
+            ctx.emitter.instruction("str x11, [sp, #-16]!");
+            if replace_is_array {
+                ctx.load_value_to_result(replace)?;
+                ctx.emitter.instruction("mov x9, x0");                          // the replace array
+                ctx.emitter.instruction("mov x10, #0");                         // its scalar pair is unused
+                ctx.emitter.instruction("mov x11, #0");
+            } else {
+                load_string_arg_to_regs(ctx, inst, 1, name, "x10", "x11")?;     // the scalar replacement
+                ctx.emitter.instruction("mov x9, #0");                          // no replace array
+            }
+            ctx.emitter.instruction("stp x9, x10, [sp, #-16]!");
+            ctx.emitter.instruction("str x11, [sp, #-16]!");
+            ctx.load_value_to_result(subject)?;                                 // the subject array
+            ctx.emitter.instruction("mov x6, x0");
+            ctx.emitter.instruction("ldr x5, [sp], #16");                       // scalar replacement length
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // replace array, scalar pointer
+            ctx.emitter.instruction("ldr x2, [sp], #16");                       // scalar search length
+            ctx.emitter.instruction("ldp x0, x1, [sp], #16");                   // search array, scalar pointer
+        }
+        Arch::X86_64 => {
+            if search_is_array {
+                ctx.load_value_to_result(search)?;
+                ctx.emitter.instruction("mov r10, rax");                        // the search array
+                ctx.emitter.instruction("xor r11, r11");                        // its scalar pair is unused
+                abi::emit_push_reg_pair(ctx.emitter, "r10", "r11");
+                ctx.emitter.instruction("xor r11, r11");
+                abi::emit_push_reg(ctx.emitter, "r11");
+            } else {
+                load_string_arg_to_regs(ctx, inst, 0, name, "r10", "r11")?;     // the scalar search
+                ctx.emitter.instruction("mov rax, r10");
+                ctx.emitter.instruction("xor r10, r10");                        // no search array
+                abi::emit_push_reg_pair(ctx.emitter, "r10", "rax");
+                abi::emit_push_reg(ctx.emitter, "r11");
+            }
+            if replace_is_array {
+                ctx.load_value_to_result(replace)?;
+                ctx.emitter.instruction("mov r10, rax");                        // the replace array
+                ctx.emitter.instruction("xor r11, r11");                        // its scalar pair is unused
+                abi::emit_push_reg_pair(ctx.emitter, "r10", "r11");
+                ctx.emitter.instruction("xor r11, r11");
+                abi::emit_push_reg(ctx.emitter, "r11");
+            } else {
+                load_string_arg_to_regs(ctx, inst, 1, name, "r10", "r11")?;     // the scalar replacement
+                ctx.emitter.instruction("mov rax, r10");
+                ctx.emitter.instruction("xor r10, r10");                        // no replace array
+                abi::emit_push_reg_pair(ctx.emitter, "r10", "rax");
+                abi::emit_push_reg(ctx.emitter, "r11");
+            }
+            ctx.load_value_to_result(subject)?;                                 // the subject array
+            abi::emit_push_reg(ctx.emitter, "rax");                             // it travels on the stack
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov r11, rax");                            // hold it while the rest unwinds
+            abi::emit_pop_reg(ctx.emitter, "r9");                               // scalar replacement length
+            abi::emit_pop_reg_pair(ctx.emitter, "rcx", "r8");                   // replace array, scalar pointer
+            abi::emit_pop_reg(ctx.emitter, "rdx");                              // scalar search length
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // search array, scalar pointer
+            abi::emit_push_reg(ctx.emitter, "r11");                             // the subject as the seventh argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_replace_subject_array");
+    if matches!(ctx.emitter.target.arch, Arch::X86_64) {
+        abi::emit_release_temporary_stack(ctx.emitter, 8);                      // drop the stacked subject
+    }
     store_if_result(ctx, inst)
 }
 
