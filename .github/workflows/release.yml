@@ -143,6 +143,16 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
+      - name: Verify release binary version
+        run: |
+          EXPECTED="elephc ${GITHUB_REF_NAME#v}"
+          ACTUAL="$(target/release/elephc --version)"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::Release version mismatch: expected '${EXPECTED}', got '${ACTUAL}'."
+            exit 1
+          fi
+          echo "Verified release binary version: ${ACTUAL}"
+
       - name: Build release bridge staticlibs
         run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web
 
