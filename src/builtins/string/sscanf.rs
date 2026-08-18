@@ -59,14 +59,14 @@ builtin! {
     },
 }
 
-/// Returns php's 2-argument `sscanf` result type: `array|null`.
+/// Returns php's `sscanf` result type, which the `$vars` form changes.
 ///
 /// A check hook is required because the `builtin!` macro cannot express a parameterized
-/// array-or-null return type inline. The hook also refuses the by-ref `$vars` output form,
-/// which this backend cannot express and previously mis-executed in silence.
+/// array-or-null return type inline. With `$vars` present php answers an `int` instead — the
+/// number of conversions that consumed input — so the hook picks between the two shapes.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    reject_by_ref_vars(cx.name, cx.args.len(), cx.span)?;
-    Ok(scanf_result_type())
+    check_vars_arity(cx.name, cx.args.len(), cx.span)?;
+    Ok(scanf_result_type(cx.args.len()))
 }
 
 /// Returns the effect contract of a scanf builtin: those of the prelude call it lowers to.
@@ -79,17 +79,29 @@ pub(crate) fn engine_call_effects(
     Op::Call.default_effects()
 }
 
-/// Returns `array|null`, php's result for a scan that may hit end of input.
+/// Returns php's result type for the given argument count.
 ///
-/// Shared with `fscanf()`, which adds `false` for a stream already at EOF.
-pub(crate) fn scanf_result_type() -> PhpType {
+/// With no `$vars` the answer is `array|null`, php's result for a scan that may hit end of
+/// input. With `$vars` php fills them and answers an `int` instead — the number of conversions
+/// that consumed input, or `-1` when none did.
+///
+/// The arity decides the shape, so it is decided HERE rather than in the check hooks: the
+/// generated-docs extractor reads a hook's body to recover a return type more precise than the
+/// contract's `mixed`, and a bare `PhpType::Int` sitting in one arm of that hook made every page
+/// claim `sscanf(): int` for a builtin whose two-argument form answers an array.
+///
+/// Shared with `fscanf()`, which adds `false` for a stream already at EOF in both shapes.
+pub(crate) fn scanf_result_type(arg_count: usize) -> PhpType {
+    if arg_count > 2 {
+        return PhpType::Int;
+    }
     PhpType::Union(vec![
         PhpType::Array(Box::new(PhpType::Mixed)),
         PhpType::Void,
     ])
 }
 
-/// Lowers `sscanf(string, format)` to a direct call into the injected scanf prelude.
+/// Lowers `sscanf(string, format, ...$vars)` to a direct call into the injected scanf prelude.
 fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
@@ -106,8 +118,21 @@ pub(crate) fn lower_scanf_engine_call(
     call: &NormalizedBuiltinCall<'_>,
     function: &str,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    let operands = vec![call.operand(0)?, call.operand(1)?];
-    let name = ctx.intern_function_name(function);
+    let vars = call.operands.len().saturating_sub(2);
+    let mut operands = vec![call.operand(0)?, call.operand(1)?];
+    // The `$vars` form goes to a DIFFERENT prelude entry point, one per arity: each is a plain
+    // PHP function with that many by-reference parameters. A by-reference variadic would be the
+    // obvious shape and is not usable here — it collects addresses into an array, and a write to
+    // an element of that array replaces the address instead of following it.
+    let target = if vars == 0 {
+        function.to_string()
+    } else {
+        format!("{function}_vars_{vars}")
+    };
+    for index in 0..vars {
+        operands.push(call.operand(index + 2)?);
+    }
+    let name = ctx.intern_function_name(&target);
     Ok(ctx.emit_value(
         Op::Call,
         operands,
@@ -118,24 +143,29 @@ pub(crate) fn lower_scanf_engine_call(
     ))
 }
 
-/// Refuses the `scanf` by-ref `$vars` output form for `sscanf()`/`fscanf()`.
+/// Bounds the `$vars` count to the arities the prelude declares.
 ///
 /// Shared by both builtins so the two stay on one wording. `arg_count` is the full argument
 /// count including the two leading required parameters, so anything past 2 is a `$vars` entry.
-pub(crate) fn reject_by_ref_vars(
+/// Each arity is its own prelude function, so a call past the last one has nothing to reach and
+/// is refused with a message that names the limit — the alternative was scanning into nothing.
+pub(crate) fn check_vars_arity(
     name: &str,
     arg_count: usize,
     span: crate::span::Span,
 ) -> Result<(), CompileError> {
-    if arg_count <= 2 {
+    let vars = arg_count.saturating_sub(2);
+    if vars <= crate::scanf_prelude::SCANF_MAX_VARS {
         return Ok(());
     }
     Err(CompileError::new(
         span,
         &format!(
-            "{}(): the by-ref $vars output form is not supported; \
+            "{}(): at most {} output variables are supported, got {}; \
              call it with only the format and read the returned array",
-            name
+            name,
+            crate::scanf_prelude::SCANF_MAX_VARS,
+            vars
         ),
     ))
 }

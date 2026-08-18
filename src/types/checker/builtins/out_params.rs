@@ -45,7 +45,15 @@ pub(crate) fn write_only_variable_args(builtin_name: &str, args: &[Expr]) -> Vec
             ),
             _ => (arg, def.spec.params.get(index)),
         };
-        let Some(written) = param.and_then(|param| param.writes) else {
+        // Past the fixed parameters the argument belongs to the variadic TAIL, which carries
+        // its own write-only declaration: `sscanf($s, '%d %s', $n, $w)` fills both variables and
+        // neither has to exist beforehand.
+        let written = match param {
+            Some(param) => param.writes,
+            None if index >= def.spec.params.len() => def.spec.variadic_writes,
+            None => None,
+        };
+        let Some(written) = written else {
             continue;
         };
         let ExprKind::Variable(variable) = &target.kind else {
@@ -86,7 +94,15 @@ pub(crate) fn check_write_only_args(
             ),
             _ => (arg, def.spec.params.get(index)),
         };
-        let Some(param) = param.filter(|param| param.writes.is_some()) else {
+        let write_only_name = match param {
+            Some(param) if param.writes.is_some() => Some(param.name),
+            // A variadic write-only tail names itself the way php's manual does.
+            None if index >= def.spec.params.len() && def.spec.variadic_writes.is_some() => {
+                def.spec.variadic
+            }
+            _ => None,
+        };
+        let Some(param_name) = write_only_name else {
             continue;
         };
         if matches!(target.kind, ExprKind::Variable(_) | ExprKind::Null) {
@@ -97,7 +113,7 @@ pub(crate) fn check_write_only_args(
             &format!(
                 "{}() parameter ${} must be passed a variable",
                 builtin_name.trim_start_matches('\\'),
-                param.name
+                param_name
             ),
         ));
     }

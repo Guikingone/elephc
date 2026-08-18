@@ -49,12 +49,18 @@
 //! - `fscanf()` reads ONE LINE per call through `fgets()`, newline included, exactly as php's
 //!   `php_stream_get_line` does: `fscanf($h, '%[^z]')` on `"a\n"` returns `["a\n"]`. End of file
 //!   is `false`; an EMPTY line is `NULL`, since scanning `"\n"` reaches EOF without assigning.
-//! - THE BY-REF `$vars` FORM IS STILL REFUSED, in `sscanf`/`fscanf`'s check hooks rather than
-//!   here. It cannot live in this prelude: elephc requires a caller variable passed to a
-//!   `mixed &$param` to ALREADY have mixed storage and does not auto-vivify an undefined one,
-//!   so php's own idiom `fscanf($h, '%s %d', $name, $age)` would not compile. Delivering it
-//!   needs the registry's write-only out-parameter machinery (`ParamSpec::writes`) extended to
-//!   a variadic tail, which is what binds `$errno`/`$errstr` for `stream_socket_client()`.
+//! - THE BY-REF `$vars` FORM lives here too, as one wrapper per arity — see
+//!   `scanf_vars_wrappers`. It could not before for two reasons, both now gone: the contract's
+//!   `variadic: Some("vars")` was a bare NAME with no way to say the tail is written, so
+//!   `fscanf($h, '%s %d', $name, $age)` was rejected for reading undefined variables
+//!   (`variadic_writes` says it now, the same way `ParamSpec::writes` binds `$errno`/`$errstr`
+//!   for `stream_socket_client()`); and a caller variable holding `null` did not receive a
+//!   by-reference write at all, silently, which is fixed in the checker's parameter widening.
+//! - THE COUNT THE `$vars` FORM ANSWERS IS NOT `count($values)`. php counts every conversion
+//!   that consumed input, SUPPRESSED ones included: `sscanf('1 2 3', '%d %*d %d', $a, $b)`
+//!   answers 3 while filling two variables. That number is `$assigned`, which the engine already
+//!   tracks and `__elephc_scanf_ref()` now returns beside the values. Input exhausted before any
+//!   conversion succeeded answers `-1` here where the array form answers `null`.
 
 mod detect;
 
@@ -292,7 +298,7 @@ function __elephc_scanf_is_conversion(string $conv): bool
         || $conv === 's' || $conv === 'u' || $conv === 'x' || $conv === 'X';
 }
 
-function __elephc_scanf(string $s, string $fmt): array|null
+function __elephc_scanf_ref(string $s, string $fmt): array
 {
     $sl = strlen($s);
     $fl = strlen($fmt);
@@ -522,10 +528,23 @@ function __elephc_scanf(string $s, string $fmt): array|null
         }
     }
 
-    if ($eof && $assigned === 0) {
+    $exhausted = $eof && $assigned === 0;
+    return [$exhausted ? -1 : $assigned, $values, $exhausted ? 1 : 0, count($values)];
+}
+
+function __elephc_scanf(string $s, string $fmt): array|null
+{
+    $r = __elephc_scanf_ref($s, $fmt);
+    if ($r[2] === 1) {
         return null;
     }
-    return $values;
+    $values = $r[1];
+    $n = (int) $r[3];
+    $out = [];
+    for ($i = 0; $i < $n; $i++) {
+        $out[] = $values[$i];
+    }
+    return $out;
 }
 
 function __elephc_fscanf(mixed $stream, string $format): array|false|null
@@ -536,7 +555,91 @@ function __elephc_fscanf(mixed $stream, string $format): array|false|null
     }
     return __elephc_scanf($line, $format);
 }
+
+function __elephc_scanf_arity(int $found, int $wanted): void
+{
+    if ($found > $wanted) {
+        throw new \ValueError('Different numbers of variable names and field specifiers');
+    }
+    if ($found < $wanted) {
+        throw new \ValueError('Variable is not assigned by any conversion specifiers');
+    }
+}
 "#;
+
+/// The largest `$vars` count the by-reference `sscanf()`/`fscanf()` form accepts.
+///
+/// php takes any number. Each one here is a distinct PHP function with that many by-reference
+/// parameters, because this backend has no way to write THROUGH the elements of a by-reference
+/// variadic — `&...$vars` collects addresses into an array and a write to `$vars[$i]` replaces
+/// the address rather than following it. Eight covers every scanf call the PHP manual and the
+/// wild show; past it the builtin refuses with a message that names the limit rather than
+/// scanning into nothing.
+pub(crate) const SCANF_MAX_VARS: usize = 8;
+
+/// Builds the by-reference `$vars` wrappers, one pair per arity.
+///
+/// Each wrapper runs the shared engine once, checks the variable count against the format's
+/// conversion count the way php does, assigns every variable — including the ones no conversion
+/// reached, which php sets to `null` — and answers the count php answers.
+///
+/// That count is NOT `count($values)`: php counts every conversion that consumed input, the
+/// SUPPRESSED ones included, so `sscanf("1 2 3", "%d %*d %d", $a, $b)` answers 3 while handing
+/// back two variables. The engine already tracks exactly that number; it is the first element of
+/// what `__elephc_scanf_ref()` returns. Input exhausted before any conversion succeeded is `-1`,
+/// where the array form answers `null`. Both measured on `php -n` 8.5.6.
+fn scanf_vars_wrappers() -> String {
+    let mut out = String::new();
+    for count in 1..=SCANF_MAX_VARS {
+        // DECLARED `mixed`, not left untyped. An untyped by-reference parameter takes its type
+        // from the call site, and a prelude function is resolved before any call site is seen —
+        // so it fell back to the `int` placeholder, the caller handed over a Mixed cell pointer,
+        // and the callee wrote an int through it. The declaration is what pins the two together.
+        let params: String = (0..count)
+            .map(|index| format!(", mixed &$v{index}"))
+            .collect();
+        // The element goes through an OWNED local before it crosses the reference. Assigning
+        // `$vals[$i]` straight to `&$vN` stored a BORROWED pointer into the caller's slot, and
+        // the callee's own cleanup then freed the array it pointed into — the caller read freed
+        // memory and the program segfaulted on the first use of the variable.
+        let assigns: String = (0..count)
+            .map(|index| {
+                format!("    $t{index} = $vals[{index}];\n    $v{index} = $t{index};\n")
+            })
+            .collect();
+        out.push('\n');
+        out.push_str(&format!(
+            "function __elephc_scanf_vars_{count}(string $s, string $fmt{params}): int\n"
+        ));
+        out.push_str("{\n");
+        out.push_str("    $r = __elephc_scanf_ref($s, $fmt);\n");
+        out.push_str("    $vals = $r[1];\n");
+        out.push_str(&format!(
+            "    __elephc_scanf_arity((int) $r[3], {count});\n"
+        ));
+        out.push_str(&assigns);
+        out.push_str("    return (int) $r[0];\n");
+        out.push_str("}\n");
+        out.push('\n');
+        out.push_str(&format!(
+            "function __elephc_fscanf_vars_{count}(mixed $stream, string $fmt{params}): int|false\n"
+        ));
+        out.push_str("{\n");
+        out.push_str("    $line = fgets($stream);\n");
+        out.push_str("    if ($line === false) {\n");
+        out.push_str("        return false;\n");
+        out.push_str("    }\n");
+        out.push_str("    $r = __elephc_scanf_ref($line, $fmt);\n");
+        out.push_str("    $vals = $r[1];\n");
+        out.push_str(&format!(
+            "    __elephc_scanf_arity((int) $r[3], {count});\n"
+        ));
+        out.push_str(&assigns);
+        out.push_str("    return (int) $r[0];\n");
+        out.push_str("}\n");
+    }
+    out
+}
 
 /// Injects the scanf prelude when the program references `sscanf()` or `fscanf()`, leaving
 /// every other program untouched.
@@ -548,7 +651,8 @@ pub fn inject_if_used(program: crate::parser::ast::Program) -> crate::parser::as
     if !detect::program_references_scanf(&program) {
         return program;
     }
-    let tokens = crate::lexer::tokenize(SCANF_PRELUDE_SRC).expect("scanf prelude must tokenize");
+    let source = format!("{}{}", SCANF_PRELUDE_SRC, scanf_vars_wrappers());
+    let tokens = crate::lexer::tokenize(&source).expect("scanf prelude must tokenize");
     let mut combined = crate::parser::parse_internal(&tokens).expect("scanf prelude must parse");
     combined.extend(program);
     combined

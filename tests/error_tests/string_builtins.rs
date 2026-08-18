@@ -446,19 +446,17 @@ fn test_error_sscanf_wrong_args() {
     );
 }
 
-/// Regression: `sscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+/// Regression: `sscanf()`'s by-ref `$vars` form is bounded, and says so past the bound.
 ///
-/// Measured with `php -n` (8.5.6): `$name = "unset"; $age = -1;
-/// $n = sscanf("alice 30", "%s %d", $name, $age);` yields `int(2)`, `"alice"`, `int(30)`.
-/// This backend compiled the call, returned the ARRAY `["alice", "30"]` as `$n`, and left both
-/// variables untouched — wrong on the return value AND on every assignment, with no diagnostic.
-/// The by-ref tail cannot be expressed today: `ParamSpec` carries `by_ref`, but the contract's
-/// `variadic: Some("vars")` is a bare NAME with no by-ref marker.
+/// The form itself works now — `sscanf("alice 30", "%s %d", $name, $age)` assigns both variables
+/// and answers `int(2)`, as php does. Each arity is its own prelude function with that many
+/// by-reference parameters, so a call with more variables than the last declared arity has
+/// nothing to reach and is refused with a message that names the limit.
 #[test]
-fn test_error_sscanf_by_ref_vars_form_is_refused() {
+fn test_error_sscanf_refuses_more_output_variables_than_it_declares() {
     expect_error(
-        r#"<?php $name = "unset"; $age = -1; sscanf("alice 30", "%s %d", $name, $age);"#,
-        "sscanf(): the by-ref $vars output form is not supported",
+        r#"<?php sscanf("1", "%d %d %d %d %d %d %d %d %d", $a, $b, $c, $d, $e, $f, $g, $h, $i);"#,
+        "sscanf(): at most 8 output variables are supported, got 9",
     );
 }
 

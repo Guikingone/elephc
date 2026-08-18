@@ -330,6 +330,11 @@ pub(super) fn lower_builtin_call_args(
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {
+            if let Some(values) =
+                lower_write_only_variadic_builtin_args(ctx, &canonical, sig, args)
+            {
+                return values;
+            }
             let mut values = lower_positional_builtin_args_with_signature(ctx, sig, args);
             // Named/spread spellings skip the wrap and fail the consumer's own gate loudly at
             // compile time — an honest refusal, where the wrap's absence at RUN time would
@@ -390,6 +395,80 @@ pub(super) fn lower_positional_builtin_args_with_signature(
             }
         })
         .collect()
+}
+
+
+/// Lowers a builtin whose VARIADIC TAIL is write-only, auto-vivifying each output variable.
+///
+/// `sscanf($s, '%d %s', $n, $w)` fills both variables and neither has to exist beforehand — php
+/// binds an undeclared variable to a by-reference parameter by materializing it as `null` first.
+/// Two things go wrong without that. An undeclared caller slot holds whatever the frame held, and
+/// the callee's store into a `mixed` reference releases the previous occupant, so the call
+/// SEGFAULTED on a garbage pointer. A declared one holding `null` fares no better: the lowering
+/// keeps its own local-type map, so the load after the call still read `php=null` and every use
+/// of it constant-folded to `NULL` while the write went through the pointer unseen.
+///
+/// Storing a freshly boxed `null` fixes both at once: the slot is initialized AND re-typed, which
+/// is exactly what `variadic_writes` promises about the tail.
+fn lower_write_only_variadic_builtin_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    canonical: &str,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<Vec<crate::ir::ValueId>> {
+    let def = crate::builtins::registry::lookup(canonical)?;
+    let written = def.spec.variadic_writes?;
+    let sig = sig?;
+    let regular = crate::types::call_args::regular_param_count(sig);
+    if args.len() <= regular {
+        return None;
+    }
+    let written = crate::builtins::convert::type_spec_to_php(&written);
+    let mut values = Vec::with_capacity(args.len());
+    for (index, arg) in args.iter().enumerate() {
+        if index < regular {
+            values.push(lower_arg_with_signature(ctx, sig, index, arg));
+            continue;
+        }
+        values.push(lower_write_only_out_arg(ctx, arg, &written));
+    }
+    Some(values)
+}
+
+/// Materializes one write-only output variable as a fresh `null` in the caller's storage.
+fn lower_write_only_out_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    arg: &Expr,
+    written: &PhpType,
+) -> crate::ir::ValueId {
+    let ExprKind::Variable(name) = &arg.kind else {
+        // Anything that is not a plain variable has no slot to write back through; the checker
+        // rejects those separately, and lowering it as a value keeps that diagnostic the one the
+        // caller sees.
+        return lower_expr(ctx, arg).value;
+    };
+    let null = ctx.emit_value(
+        Op::ConstNull,
+        Vec::new(),
+        None,
+        PhpType::Void,
+        Op::ConstNull.default_effects(),
+        Some(arg.span),
+    );
+    let initial = if matches!(written.codegen_repr(), PhpType::Mixed) {
+        ctx.emit_value(
+            Op::MixedBox,
+            vec![null.value],
+            None,
+            PhpType::Mixed,
+            Op::MixedBox.default_effects(),
+            Some(arg.span),
+        )
+    } else {
+        null
+    };
+    ctx.store_call_normalized_local(name, initial, written.clone(), Some(arg.span));
+    ctx.load_local(name, Some(arg.span)).value
 }
 
 /// Lowers `count()` arguments, dropping a statically-default mode argument.

@@ -47,6 +47,7 @@ macro_rules! surface {
             kind: BuiltinKind::$kind,
             params: &[$($param),*],
             variadic: $variadic,
+            variadic_writes: None,
             min_args: None,
             max_args: None,
             arity_error: None,

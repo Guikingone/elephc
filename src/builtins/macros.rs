@@ -118,6 +118,7 @@ macro_rules! builtin {
                             PARAMS
                         },
                         variadic: builtin!(@opt_str $($variadic)?),
+                        variadic_writes: None,
                         max_args: builtin!(@opt_usize $($max_args)?),
                         min_args: builtin!(@opt_usize $($min_args)?),
                         arity_error: builtin!(@opt_str $($arity_error)?),

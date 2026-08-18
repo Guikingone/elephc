@@ -162,17 +162,18 @@ fn test_error_formatted_stream_io_wrong_args() {
     }
 }
 
-/// Regression: `fscanf()`'s by-ref `$vars` form must be REFUSED, not mis-executed in silence.
+/// Regression: `fscanf()`'s by-ref `$vars` form is bounded, and says so past the bound.
 ///
-/// Measured with `php -n` (8.5.6): `fscanf($f, "%s %d", $name, $age)` assigns both variables and
-/// returns `int(2)`. This backend compiled the call, returned the matched-fields ARRAY, and
-/// assigned nothing — the same silent double divergence `sscanf()` had, on the same cause: the
-/// contract's `variadic: Some("vars")` is a bare NAME carrying no by-ref marker.
+/// The form itself works now — each arity is its own prelude function with that many
+/// by-reference parameters, because a by-reference VARIADIC collects addresses into an array and
+/// a write to an element replaces the address instead of following it. Nine variables reaches
+/// past the last declared arity, and a call that cannot be lowered has to name the limit rather
+/// than scan into nothing.
 #[test]
-fn test_error_fscanf_by_ref_vars_form_is_refused() {
+fn test_error_fscanf_refuses_more_output_variables_than_it_declares() {
     expect_error(
-        r#"<?php $name = "unset"; $age = -1; fscanf(STDIN, "%s %d", $name, $age);"#,
-        "fscanf(): the by-ref $vars output form is not supported",
+        r#"<?php fscanf(STDIN, "%d %d %d %d %d %d %d %d %d", $a, $b, $c, $d, $e, $f, $g, $h, $i);"#,
+        "fscanf(): at most 8 output variables are supported, got 9",
     );
 }
 
