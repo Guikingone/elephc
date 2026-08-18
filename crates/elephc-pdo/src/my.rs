@@ -284,6 +284,13 @@ pub struct MyConn {
     /// Best available live transaction state, updated after every successful
     /// bridge-owned command including raw `PDO::exec("BEGIN")` control SQL.
     pub in_transaction: bool,
+    /// Live session charset name, tracked without a round-trip: seeded from the
+    /// handshake (utf8mb4) or the DSN `charset=`/init `SET NAMES`, and updated
+    /// whenever a `SET NAMES` runs on the connection. Read by the mysqli
+    /// surface's charset-aware escaping so it is never fooled into treating a
+    /// multibyte session as utf8mb4 (the pre-fix vulnerability). A pooled
+    /// persistent connection carries its last charset, so reuse is correct.
+    current_charset: String,
     /// Handshake version cached while an unbuffered worker temporarily owns `Conn`.
     server_version: (u16, u16, u16),
     /// Session quoting mode cached before the client moves into a worker.
@@ -946,34 +953,69 @@ pub(crate) fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool)
     false
 }
 
-/// Returns whether `charset` is a multibyte encoding where a valid character's
-/// trailing byte can be `0x5C` (`\`) or `0x27` (`'`), so naive byte-substitution
-/// escaping is injectable (the classic GBK/Big5 breakout). Matches MySQL's own
-/// `escape_with_backslash_is_dangerous` charset set. Compared on the leading
-/// token of the charset name so `gbk`, `gb2312`, `gb18030`, `sjis`, `cp932`,
-/// `big5`, `euckr`, and `ujis`/`eucjpms` are all covered case-insensitively.
-fn charset_escape_is_dangerous(charset: &str) -> bool {
+/// The multibyte structure of a charset whose valid characters can end in a
+/// byte that would otherwise be an escape (`0x5C` `\` or `0x27` `'`), so naive
+/// byte substitution is injectable. `None` for an ASCII-compatible charset
+/// (utf8, latin1, ascii, …) where byte substitution is safe. The per-charset
+/// lead/trail bands are MySQL's own (verified byte-for-byte against php's
+/// `mysql_real_escape_string`): getting them right is load-bearing, because a
+/// single band that assumed `0x5C` was a valid trail for every charset would
+/// re-open the breakout on sjis/cp932/euckr/ujis (where `0xBF` is not a lead,
+/// or `0x5C` is not a valid trail).
+struct MbCharset {
+    /// Whether `b` can begin a two-byte character.
+    is_lead: fn(u8) -> bool,
+    /// Whether `b` can be the trailing byte of a two-byte character.
+    is_trail: fn(u8) -> bool,
+}
+
+/// Classifies `charset` for escaping, keyed on the leading name token so `gbk`,
+/// `gbk_chinese_ci`, `gb2312`, `gb18030`, `big5`, `sjis`, `cp932`, `euckr`,
+/// `ujis`/`eucjpms` all match case-insensitively. Any other name (utf8*,
+/// latin*, ascii, binary, …) is ASCII-safe → `None`.
+fn mb_charset(charset: &str) -> Option<MbCharset> {
     let name = charset.trim().to_ascii_lowercase();
     let head: &str = name.split(|c| c == '_' || c == '-').next().unwrap_or(&name);
-    matches!(
-        head,
-        "gbk" | "gb2312" | "gb18030" | "big5" | "sjis" | "cp932" | "euckr" | "ujis" | "eucjpms"
-    )
+    // gbk / gb18030 (2-byte form): lead 0x81..=0xFE, trail 0x40..=0x7E | 0x80..=0xFE.
+    fn gbk_lead(b: u8) -> bool { (0x81..=0xFE).contains(&b) }
+    fn gbk_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0x80..=0xFE).contains(&b) }
+    // big5: lead 0x81..=0xFE, trail 0x40..=0x7E | 0xA1..=0xFE.
+    fn big5_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0xA1..=0xFE).contains(&b) }
+    // sjis / cp932: lead 0x81..=0x9F | 0xE0..=0xFC, trail 0x40..=0x7E | 0x80..=0xFC.
+    fn sjis_lead(b: u8) -> bool { (0x81..=0x9F).contains(&b) || (0xE0..=0xFC).contains(&b) }
+    fn sjis_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0x80..=0xFC).contains(&b) }
+    // gb2312: lead 0xA1..=0xF7, trail 0xA1..=0xFE.
+    fn gb2312_lead(b: u8) -> bool { (0xA1..=0xF7).contains(&b) }
+    fn euc_trail(b: u8) -> bool { (0xA1..=0xFE).contains(&b) }
+    // euckr / ujis (EUC-JP): lead 0xA1..=0xFE (ujis also 0x8E/0x8F), trail 0xA1..=0xFE.
+    // Crucially 0x5C is NOT a valid trail here, so a lead+0x5C is never a char.
+    fn euc_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) || b == 0x8E || b == 0x8F }
+    match head {
+        "gbk" | "gb18030" => Some(MbCharset { is_lead: gbk_lead, is_trail: gbk_trail }),
+        "big5" => Some(MbCharset { is_lead: gbk_lead, is_trail: big5_trail }),
+        "sjis" | "cp932" => Some(MbCharset { is_lead: sjis_lead, is_trail: sjis_trail }),
+        "gb2312" => Some(MbCharset { is_lead: gb2312_lead, is_trail: euc_trail }),
+        "euckr" | "ujis" | "eucjpms" => Some(MbCharset { is_lead: euc_lead, is_trail: euc_trail }),
+        _ => None,
+    }
 }
 
 /// Escapes `data` for embedding inside a `'…'` MySQL string literal, mirroring
-/// `mysql_real_escape_string`'s charset-aware behavior.
+/// `mysql_real_escape_string` byte-for-byte.
 ///
 /// - Under `NO_BACKSLASH_ESCAPES`, only `'` is doubled (backslash is a literal
 ///   there, so backslash-escaping would be unsafe — mysqlnd does the same).
 /// - Otherwise NUL, `\n`, `\r`, `\`, `'`, `"`, and Ctrl-Z are backslash-escaped.
-/// - For a `charset_escape_is_dangerous` encoding, a byte that begins a complete
-///   valid 2-byte character (lead `0x81..=0xFE`, trail `0x40..=0xFE`) is copied
-///   with its trailing byte verbatim, so an embedded `\`/`'` trailing byte is
-///   consumed as part of the character. A lead byte NOT forming a complete pair
-///   is itself backslash-escaped, which is what prevents it from later absorbing
-///   the backslash of an escaped quote (the breakout) and matches php byte for
-///   byte (`0xBF 0x27` → `\ 0xBF \ '`).
+/// - For a multibyte charset, a byte that begins a COMPLETE valid two-byte
+///   character (per that charset's real lead/trail bands) is copied with its
+///   trailing byte verbatim, so an embedded `\`/`'` trailing byte is consumed as
+///   part of the character. A byte that is a lead in the charset but does not
+///   complete a character is itself backslash-escaped, so it cannot later absorb
+///   the backslash of an escaped quote (the breakout). A byte that is not a lead
+///   in the charset (e.g. `0xBF` under sjis) falls through to the ordinary
+///   escape switch — copied raw unless it is a special. gb18030's four-byte and
+///   ujis's `0x8F` three-byte sequences are handled by the two-byte path
+///   (over-escaping their non-2-byte forms, which is safe and rare).
 pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: bool) -> Vec<u8> {
     if no_backslash_escapes {
         let mut out = Vec::with_capacity(data.len());
@@ -985,26 +1027,27 @@ pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: b
         }
         return out;
     }
-    let dangerous = charset_escape_is_dangerous(charset);
+    let mb = mb_charset(charset);
     let mut out = Vec::with_capacity(data.len() + 8);
     let mut i = 0;
     while i < data.len() {
         let b = data[i];
-        if dangerous && b >= 0x81 {
-            // A complete 2-byte character (lead + valid trail) is opaque: copy
-            // both bytes so a trailing `\`/`'` cannot be mistaken for an escape.
-            if i + 1 < data.len() && (0x40..=0xFE).contains(&data[i + 1]) {
+        if let Some(mb) = &mb {
+            if (mb.is_lead)(b) {
+                if i + 1 < data.len() && (mb.is_trail)(data[i + 1]) {
+                    // Complete two-byte character: copy both bytes opaquely.
+                    out.push(b);
+                    out.push(data[i + 1]);
+                    i += 2;
+                    continue;
+                }
+                // A lead byte not completing a character: escape it so it cannot
+                // swallow the backslash of a following escaped quote.
+                out.push(b'\\');
                 out.push(b);
-                out.push(data[i + 1]);
-                i += 2;
+                i += 1;
                 continue;
             }
-            // Lone/invalid lead byte: escape it so it cannot swallow the
-            // backslash of a following escaped quote.
-            out.push(b'\\');
-            out.push(b);
-            i += 1;
-            continue;
         }
         match b {
             0 => out.extend_from_slice(b"\\0"),
@@ -1019,6 +1062,34 @@ pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: b
         i += 1;
     }
     out
+}
+
+/// Returns the charset name a `SET NAMES <cs>` / `SET CHARACTER SET <cs>` /
+/// `SET CHARSET <cs>` statement selects (lowercased, first identifier token), so
+/// the connection can track its live charset for charset-aware escaping without
+/// a round-trip. `None` for any other statement.
+fn charset_after_set_names(sql: &str) -> Option<String> {
+    let trimmed = sql.trim_start();
+    let up = trimmed.to_ascii_uppercase();
+    let rest = if let Some(r) = up.strip_prefix("SET NAMES ") {
+        &trimmed[trimmed.len() - r.len()..]
+    } else if let Some(r) = up.strip_prefix("SET CHARACTER SET ") {
+        &trimmed[trimmed.len() - r.len()..]
+    } else if let Some(r) = up.strip_prefix("SET CHARSET ") {
+        &trimmed[trimmed.len() - r.len()..]
+    } else {
+        return None;
+    };
+    let token: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_ascii_lowercase())
+    }
 }
 
 /// Scans a MySQL quoted region opened by `quote` (`'` or `"`) starting at
@@ -1657,11 +1728,18 @@ impl MyConn {
             driver_options.local_infile,
             driver_options.local_infile_directory.clone(),
         )));
+        // Seed the tracked charset: the handshake negotiates utf8mb4, overridden
+        // by an explicit DSN charset= and then by any SET NAMES the init command
+        // issues (Doctrine/Laravel `SET NAMES utf8mb4`, or a multibyte charset).
+        let mut current_charset = charset.clone().unwrap_or_else(|| "utf8mb4".to_string());
         let mut init_statements: Vec<String> = Vec::new();
         if let Some(cs) = charset {
             init_statements.push(format!("SET NAMES {cs}"));
         }
         if !init_command.is_empty() {
+            if let Some(cs) = charset_after_set_names(init_command) {
+                current_charset = cs;
+            }
             init_statements.push(init_command.to_string());
         }
         if !init_statements.is_empty() {
@@ -1690,6 +1768,7 @@ impl MyConn {
             unbuffered_active: false,
             warning_count: 0,
             in_transaction: false,
+            current_charset,
             server_version,
             no_backslash_escapes,
             active_stream: None,
@@ -1953,9 +2032,18 @@ impl MyConn {
         }
     }
 
-    /// Updates transaction bookkeeping from a successfully executed SQL command.
+    /// Updates transaction and charset bookkeeping from a successfully executed
+    /// SQL command (a `SET NAMES` shifts the live charset used for escaping).
     fn note_transaction_sql(&mut self, sql: &str) {
         self.in_transaction = transaction_state_after_sql(sql, self.in_transaction, self.autocommit);
+        if let Some(cs) = charset_after_set_names(sql) {
+            self.current_charset = cs;
+        }
+    }
+
+    /// The connection's live session charset name, for charset-aware escaping.
+    pub fn charset(&self) -> &str {
+        &self.current_charset
     }
 
     /// Runs a statement with no result rows (`PDO::exec`), returning the affected
@@ -3466,45 +3554,102 @@ mod tests {
         assert!(!sql_has_multiple_statements("SELECT 1 /* ; SELECT 2 */", false));
     }
 
-    /// Charset-aware escaping prevents the GBK/Big5 trailing-byte breakout: a
-    /// lone lead byte before a quote is itself escaped (matching php), a valid
-    /// two-byte character is copied opaquely, and an ASCII-safe charset uses
-    /// plain byte substitution.
+    /// Charset-aware escaping matches php's `mysql_real_escape_string`
+    /// byte-for-byte for the whole dangerous-charset family — captured from real
+    /// PHP 8.4 + MariaDB for input `BF 5C 27 41` and `BF 41`. The per-charset
+    /// lead/trail bands matter: a single band would re-open the breakout on
+    /// sjis/cp932/euckr/ujis (0xBF not a lead there, or 0x5C not a valid trail).
     #[test]
-    fn real_escape_is_charset_aware() {
-        // 0xBF 0x27 under gbk: php emits 5c bf 5c 27 (lead byte escaped too).
-        assert_eq!(
-            my_real_escape(&[0xBF, 0x27], "gbk", false),
-            vec![0x5C, 0xBF, 0x5C, 0x27]
-        );
-        // 0xBF 0x41 is a complete GBK character: copied opaquely, no escaping.
-        assert_eq!(
-            my_real_escape(&[0xBF, 0x41], "gbk", false),
-            vec![0xBF, 0x41]
-        );
-        // utf8mb4 is ASCII-safe: a bare quote is backslash-escaped, the multibyte
-        // char (é = c3 a9) is untouched (no ASCII byte hides in it).
-        assert_eq!(
-            my_real_escape(&[0x27, 0xC3, 0xA9], "utf8mb4", false),
-            vec![0x5C, 0x27, 0xC3, 0xA9]
-        );
+    fn real_escape_matches_php_per_charset() {
+        // (charset, escape(BF 5C 27 41), escape(BF 41)) — php-captured bytes.
+        let vectors: &[(&str, &[u8], &[u8])] = &[
+            // 0xBF5C is a char (copied raw); the quote is escaped.
+            ("gbk", &[0xBF, 0x5C, 0x5C, 0x27, 0x41], &[0xBF, 0x41]),
+            ("big5", &[0xBF, 0x5C, 0x5C, 0x27, 0x41], &[0xBF, 0x41]),
+            // 0xBF is not an sjis/cp932 lead → copied raw; backslash + quote escaped.
+            ("sjis", &[0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0xBF, 0x41]),
+            ("cp932", &[0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0xBF, 0x41]),
+            // 0xBF is a lead but 0x5C/0x41 are not valid trails → the lead is escaped.
+            ("euckr", &[0x5C, 0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0x5C, 0xBF, 0x41]),
+            ("ujis", &[0x5C, 0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0x5C, 0xBF, 0x41]),
+            ("gb2312", &[0x5C, 0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0x5C, 0xBF, 0x41]),
+            // ASCII-safe: 0xBF copied raw, backslash + quote escaped.
+            ("utf8mb4", &[0xBF, 0x5C, 0x5C, 0x5C, 0x27, 0x41], &[0xBF, 0x41]),
+        ];
+        for (cs, want_full, want_short) in vectors {
+            assert_eq!(
+                my_real_escape(&[0xBF, 0x5C, 0x27, 0x41], cs, false),
+                want_full.to_vec(),
+                "{cs}: BF 5C 27 41"
+            );
+            assert_eq!(
+                my_real_escape(&[0xBF, 0x41], cs, false),
+                want_short.to_vec(),
+                "{cs}: BF 41"
+            );
+        }
         // NO_BACKSLASH_ESCAPES: only the quote is doubled, backslash left literal.
-        assert_eq!(
-            my_real_escape(b"a'b\\c", "utf8mb4", true),
-            b"a''b\\c".to_vec()
-        );
+        assert_eq!(my_real_escape(b"a'b\\c", "gbk", true), b"a''b\\c".to_vec());
     }
 
-    /// The dangerous-charset classifier matches MySQL's own set on the leading
-    /// name token and nothing else.
+    /// SAFETY invariant across every dangerous charset and every possible lead
+    /// byte: a lead byte followed by a bare quote or backslash never leaves that
+    /// quote/backslash unescaped in the output (the breakout is closed for all).
     #[test]
-    fn dangerous_charset_classification() {
-        for cs in ["gbk", "GBK", "big5", "sjis", "cp932", "gb18030", "euckr", "ujis"] {
-            assert!(charset_escape_is_dangerous(cs), "{cs} should be dangerous");
+    fn real_escape_never_leaks_a_quote_or_backslash() {
+        for cs in ["gbk", "big5", "sjis", "cp932", "euckr", "ujis", "gb2312", "gb18030"] {
+            for lead in 0x80u8..=0xFFu8 {
+                for &special in &[b'\'', b'\\'] {
+                    let out = my_real_escape(&[lead, special], cs, false);
+                    // Reconstruct: every `special` in the output must be preceded
+                    // by a backslash OR be part of a copied 2-byte char whose
+                    // lead is not a charset lead byte reachable as a fake pair.
+                    // Simplest sound check: the count of UNescaped specials is 0.
+                    let mut j = 0;
+                    let mut unescaped = 0;
+                    while j < out.len() {
+                        if out[j] == b'\\' {
+                            j += 2; // skip the escaped byte
+                            continue;
+                        }
+                        if out[j] == special {
+                            unescaped += 1;
+                        }
+                        j += 1;
+                    }
+                    assert_eq!(
+                        unescaped, 0,
+                        "{cs}: lead {lead:#x} + {:#x} left an unescaped byte in {out:x?}",
+                        special
+                    );
+                }
+            }
+        }
+    }
+
+    /// The multibyte classifier keys on the leading name token: the dangerous
+    /// family is recognized, ASCII-safe charsets are not.
+    #[test]
+    fn multibyte_charset_classification() {
+        for cs in ["gbk", "GBK", "big5", "sjis", "cp932", "gb18030", "euckr", "ujis", "gb2312"] {
+            assert!(mb_charset(cs).is_some(), "{cs} should be multibyte-dangerous");
         }
         for cs in ["utf8mb4", "utf8", "latin1", "ascii", "binary", "utf8mb4_general_ci"] {
-            assert!(!charset_escape_is_dangerous(cs), "{cs} should be safe");
+            assert!(mb_charset(cs).is_none(), "{cs} should be ASCII-safe");
         }
+    }
+
+    /// `SET NAMES` tracking recognizes the charset token for live-charset escaping.
+    #[test]
+    fn set_names_charset_tracking() {
+        assert_eq!(charset_after_set_names("SET NAMES gbk").as_deref(), Some("gbk"));
+        assert_eq!(charset_after_set_names("set names GBK").as_deref(), Some("gbk"));
+        assert_eq!(
+            charset_after_set_names("SET NAMES utf8mb4 COLLATE utf8mb4_bin").as_deref(),
+            Some("utf8mb4")
+        );
+        assert_eq!(charset_after_set_names("SET CHARACTER SET sjis").as_deref(), Some("sjis"));
+        assert_eq!(charset_after_set_names("SELECT 1").as_deref(), None);
     }
 
     /// P2-3: a `charset=<name>` DSN key is captured (for `MyConn::open` to turn

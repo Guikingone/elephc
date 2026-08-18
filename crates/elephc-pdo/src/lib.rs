@@ -417,6 +417,12 @@ fn server_info_cell() -> &'static Mutex<CString> {
     C.get_or_init(|| Mutex::new(CString::default()))
 }
 
+/// Static buffer for the most recent `elephc_pdo_mysql_charset` result.
+fn mysql_charset_cell() -> &'static Mutex<CString> {
+    static C: OnceLock<Mutex<CString>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(CString::default()))
+}
+
 /// Static buffer for the most recent `elephc_pdo_connection_status` result.
 fn connection_status_cell() -> &'static Mutex<CString> {
     static C: OnceLock<Mutex<CString>> = OnceLock::new();
@@ -2624,12 +2630,30 @@ pub extern "C" fn elephc_pdo_mysql_param_count(stmt_id: i64) -> i64 {
     })
 }
 
+/// Returns the connection's live session charset name (tracked from the
+/// handshake, the DSN `charset=`, and every `SET NAMES`), so the mysqli surface
+/// reports `character_set_name()` and escapes without a round-trip and without
+/// assuming utf8mb4. Empty string for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_charset(conn_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => store_cstr(mysql_charset_cell(), c.charset()),
+            _ => static_cstr(b"\0"),
+        }
+    })
+}
+
 /// Returns `1` when `sql` contains a second non-empty statement after a
 /// top-level `;` (quoted regions, backtick identifiers, and comments skipped,
 /// with `/*! … */` executable comments correctly treated as live SQL), honoring
 /// the connection's `NO_BACKSLASH_ESCAPES` mode. `0` otherwise. The single
 /// authoritative multi-statement scanner the mysqli prelude's `query()` guard
 /// calls, replacing its own PHP re-implementation.
+///
+/// Fails CLOSED: the panic-guard fallback is `1` ("is multiple"), so a caught
+/// panic rejects the statement rather than admitting a possibly-multi one.
 ///
 /// # Safety
 /// `sql` must expose at least `len` readable bytes and may only be null when
@@ -2640,7 +2664,7 @@ pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
     sql: *const c_char,
     len: i64,
 ) -> i64 {
-    ffi_guard(0, || {
+    ffi_guard(1, || {
         let bytes = bytes_arg(sql, len);
         let text = String::from_utf8_lossy(&bytes);
         let no_backslash_escapes = {
@@ -2652,33 +2676,29 @@ pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
 }
 
 /// Charset-aware `mysql_real_escape_string` for the mysqli prelude: escapes
-/// `data` for a `'…'` literal under the named `charset`, closing the GBK/Big5
-/// trailing-byte breakout that pure byte substitution leaves open, and honoring
-/// the connection's `NO_BACKSLASH_ESCAPES`. Writes the escaped bytes into the
-/// shared blob cell (read via `elephc_pdo_blob_data_ptr`) and returns their
-/// length; `-1` for a non-MySQL or unknown handle.
+/// `data` for a `'…'` literal using the connection's OWN tracked charset (so it
+/// can never be fooled into treating a multibyte session as utf8mb4), closing
+/// the GBK/Big5 trailing-byte breakout that pure byte substitution leaves open,
+/// and honoring the connection's `NO_BACKSLASH_ESCAPES`. Writes the escaped
+/// bytes into the shared blob cell (read via `elephc_pdo_blob_data_ptr`) and
+/// returns their length; `-1` for a non-MySQL or unknown handle.
 ///
 /// # Safety
 /// `data` must expose at least `len` readable bytes and may only be null when
-/// `len` is zero; `charset` must be a valid NUL-terminated string.
+/// `len` is zero.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_pdo_real_escape_string(
     conn_id: i64,
-    charset: *const c_char,
     data: *const c_char,
     len: i64,
 ) -> i64 {
     ffi_guard(-1, || {
-        let charset = cstr_arg(charset).unwrap_or("");
         let input = bytes_arg(data, len);
-        let no_backslash_escapes = {
-            let guard = lock_recover(conns());
-            match guard.get(&conn_id) {
-                Some(Conn::Mysql(c)) => c.no_backslash_escape(),
-                _ => return -1,
-            }
+        let guard = lock_recover(conns());
+        let Some(Conn::Mysql(c)) = guard.get(&conn_id) else {
+            return -1;
         };
-        let output = my::my_real_escape(&input, charset, no_backslash_escapes);
+        let output = my::my_real_escape(&input, c.charset(), c.no_backslash_escape());
         let length = output.len() as i64;
         *lock_recover(blob_cell()) = output;
         length

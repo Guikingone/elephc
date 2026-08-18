@@ -83,6 +83,70 @@ echo $db->real_escape_string("a'b\\c");
     assert_eq!(out, r"a\'b\\c");
 }
 
+/// SECURITY: charset-aware escaping is correct for the WHOLE dangerous family,
+/// not just GBK — byte-for-byte against php's captured output for `BF 5C 27 41`.
+/// A single lead/trail band would re-open the breakout on sjis/cp932/euckr/ujis;
+/// and the charset is tracked live (a raw `SET NAMES sjis` is honored, so the
+/// escape is never fooled into treating a multibyte session as utf8mb4).
+#[test]
+#[ignore]
+fn test_mysqli_escape_is_charset_aware_per_family() {
+    let out = compile_and_run(&my_program(
+        r#"
+$in = "\xBF\x5C\x27\x41";
+$want = [
+    "gbk" => "bf5c5c2741",
+    "sjis" => "bf5c5c5c2741",
+    "cp932" => "bf5c5c5c2741",
+    "euckr" => "5cbf5c5c5c2741",
+    "ujis" => "5cbf5c5c5c2741",
+    "gb2312" => "5cbf5c5c5c2741",
+    "utf8mb4" => "bf5c5c5c2741",
+];
+$ok = 0;
+$bad = "";
+foreach ($want as $cs => $exp) {
+    $db->set_charset($cs);
+    $got = bin2hex($db->real_escape_string($in));
+    if ($got === $exp) { $ok++; } else { $bad = $bad . $cs . ":" . $got . " "; }
+}
+echo $ok === count($want) ? "all-match" : ("MISMATCH " . $bad);
+// Live charset tracking: a raw SET NAMES (not set_charset) is honored too.
+$db->query("SET NAMES sjis");
+echo "|", $db->character_set_name();
+echo "|", bin2hex($db->real_escape_string("\xBF\x5C"));
+$db->set_charset("utf8mb4");
+"#,
+    ));
+    // sjis under a raw SET NAMES: 0xBF standalone (raw) + escaped backslash.
+    assert_eq!(out, "all-match|sjis|bf5c5c");
+}
+
+/// SECURITY: a transaction `$name` cannot inject an executable `/*! … */`
+/// comment. php strips the name to its allowlist; elephc does the same, so a
+/// `!`-prefixed name carrying a `;`-separated DROP is neutralized (the table
+/// survives), while an empty name is a `ValueError` before any SQL is sent.
+#[test]
+#[ignore]
+fn test_mysqli_transaction_name_cannot_inject() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS victims");
+$db->query("CREATE TABLE victims (i INT)");
+$db->begin_transaction(0, "!50000 ; DROP TABLE victims");
+$db->commit();
+$db->rollback(0, "M!50000 ; DROP TABLE victims");
+$r = $db->query("SELECT COUNT(*) c FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'victims'");
+echo ($r instanceof mysqli_result) ? ("survived=" . $r->fetch_column(0)) : "no";
+try { $db->begin_transaction(0, ""); echo "|no-throw"; }
+catch (ValueError $e) { echo "|empty-ve"; }
+$db->query("DROP TABLE victims");
+"#,
+    ));
+    assert_eq!(out, "survived=1|empty-ve");
+}
+
 /// The core result-identity guarantee: `query()` returns a `mysqli_result`
 /// that OWNS its rows, so a later query on the same connection leaves an
 /// earlier result fully usable (`data_seek`, `fetch_assoc`, `num_rows`).

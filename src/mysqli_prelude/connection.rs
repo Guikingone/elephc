@@ -69,10 +69,6 @@ class mysqli {
     private int $optConnectTimeout = 0;
     private string $optInitCommand = "";
     private string $optCharsetName = "";
-    // Connection charset: set at connect from the handshake (utf8mb4) and
-    // updated by set_charset(); character_set_name() answers from it without a
-    // round-trip. Also passed to the bridge's charset-aware escape.
-    private string $currentCharset = "";
     // Buffered result produced by real_query() and picked up by store_result()
     // (and, in the multi_query path, by next_result()).
     private ?mysqli_result $pendingResult = null;
@@ -124,7 +120,6 @@ class mysqli {
             elephc_pdo_release($this->conn, 0);
             $this->conn = -1;
             $this->pendingResult = null;
-            $this->currentCharset = "";
         }
         $_host = $hostname === null ? "localhost" : $hostname;
         $_persistent = 0;
@@ -223,7 +218,6 @@ class mysqli {
         // >= 5.5.3). character_set_name() then answers from this client-side
         // state without ever issuing a statement (so it stays usable mid-batch).
         $this->thread_id = elephc_pdo_mysql_thread_id($_conn);
-        $this->currentCharset = "utf8mb4";
         $this->warning_count = elephc_pdo_warning_count($_conn);
         if ($this->optCharsetName !== "") {
             // MYSQLI_SET_CHARSET_NAME collected before connect applies now.
@@ -313,7 +307,6 @@ class mysqli {
         if (elephc_pdo_exec($this->conn, "SET NAMES " . $charset) < 0) {
             return $this->opFailed();
         }
-        $this->currentCharset = $charset;
         $this->clearError();
         return true;
     }
@@ -321,21 +314,21 @@ class mysqli {
     public function character_set_name(): string {
         // php 8: an Error on an unconnected object (not "").
         $this->requireInitialized("mysqli::character_set_name");
-        // Client-side state (set at connect from the handshake charset, updated
-        // by set_charset): never issues a statement, so it stays usable
-        // mid-multi_query like php-src.
-        return $this->currentCharset;
+        // The connection's live charset, tracked by the bridge from the
+        // handshake + every SET NAMES (no round-trip); true even after a
+        // MYSQLI_INIT_COMMAND "SET NAMES …" or a reused persistent connection.
+        return elephc_pdo_mysql_charset($this->conn);
     }
 
     public function real_escape_string(string $string): string {
         // php 8: real_escape_string on an unconnected object is an Error.
         $this->requireInitialized("mysqli::real_escape_string");
-        // SECURITY: charset-aware escaping through the bridge — pure byte
-        // substitution is injectable under gbk/big5/sjis/cp932 (the classic
-        // trailing-byte breakout), so the bridge consults the connection charset
-        // and NO_BACKSLASH_ESCAPES state and writes the escaped bytes to the
-        // shared blob cell. The length-counted read preserves embedded NUL bytes.
-        $_len = elephc_pdo_real_escape_string($this->conn, $this->currentCharset, $string, strlen($string));
+        // SECURITY: charset-aware escaping through the bridge, which uses the
+        // connection's OWN tracked charset (never assuming utf8mb4) and its
+        // NO_BACKSLASH_ESCAPES state — pure byte substitution is injectable
+        // under gbk/big5/sjis/cp932/euckr/… (the trailing-byte breakout). The
+        // length-counted read preserves embedded NUL bytes.
+        $_len = elephc_pdo_real_escape_string($this->conn, $string, strlen($string));
         if ($_len < 0) {
             return "";
         }
@@ -556,7 +549,7 @@ class mysqli {
         // exact.
         $this->requireInitialized("mysqli::get_charset");
         $_info = new stdClass();
-        $_info->{"charset"} = $this->currentCharset;
+        $_info->{"charset"} = elephc_pdo_mysql_charset($this->conn);
         $_info->{"collation"} = "";
         $_info->{"dir"} = "";
         $_info->{"min_length"} = 0;
@@ -728,19 +721,36 @@ class mysqli {
 
     // Renders a transaction $name as php-src's ` /*name*/` SQL comment suffix
     // ("" when $name is null). Empty $name is a ValueError (raised before any
-    // SQL is sent); a name containing `*/` would close the comment early, so it
-    // is rejected as a ValueError too. $context names the calling method.
+    // SQL is sent, matching php's message). Otherwise the name is STRIPPED to
+    // php's allowlist [A-Za-z0-9 \-_=] before it is wrapped: blocklisting `*/`
+    // was not enough because a name starting with `!` (or MariaDB's `M!`) opens
+    // an EXECUTABLE `/*! … */` comment whose body the server runs — a `;` inside
+    // it would then execute a second statement, and this path (exec, not
+    // runQuery) never sees the multi-statement guard. Stripping to the allowlist
+    // closes every comment dialect at once, exactly as php sanitises the name.
     private function transactionComment(string $context, ?string $name): string {
         if ($name === null) {
             return "";
         }
         if ($name === "") {
-            throw new ValueError($context . "(): Argument #2 (\$name) cannot be empty");
+            throw new ValueError($context . "(): Argument #2 (\$name) must not be empty");
         }
-        if (strpos($name, "*/") !== false) {
-            throw new ValueError($context . "(): Argument #2 (\$name) cannot contain '*/'");
+        $_clean = "";
+        $_len = strlen($name);
+        for ($_i = 0; $_i < $_len; $_i++) {
+            $_c = substr($name, $_i, 1);
+            $_o = ord($_c);
+            if (($_o >= 48 && $_o <= 57)          // 0-9
+                || ($_o >= 65 && $_o <= 90)       // A-Z
+                || ($_o >= 97 && $_o <= 122)      // a-z
+                || $_c === " " || $_c === "-" || $_c === "_" || $_c === "=" || $_c === "\\") {
+                $_clean = $_clean . $_c;
+            }
         }
-        return " /*" . $name . "*/";
+        // php raises an E_WARNING ("Transaction name has been truncated …") when
+        // it drops characters; elephc has no E_WARNING channel, so the stripping
+        // is silent (documented divergence — the security behaviour is identical).
+        return " /*" . $_clean . "*/";
     }
 
     // Renders the COMMIT/ROLLBACK completion flags (MYSQLI_TRANS_COR_*), matching

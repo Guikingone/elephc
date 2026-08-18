@@ -60,6 +60,32 @@ echo "|", mysqli_thread_safe() === false ? "not-ts" : "ts";
     assert_eq!(out, "all-fns|methods|field_seek|cor|not-ts");
 }
 
+/// The transaction-name allowlist rule needs no server: an empty name is a
+/// `ValueError` (php's exact message), and a name carrying an executable-comment
+/// injection payload is silently sanitized rather than throwing (php strips it),
+/// so the call is accepted — the actual neutralization is asserted live.
+#[test]
+fn test_mysqli_transaction_name_validation_offline() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+// Empty name throws before any connection is even required.
+try { $db->begin_transaction(0, ""); echo "no"; }
+catch (ValueError $e) {
+    echo strpos($e->getMessage(), "must not be empty") !== false ? "empty-ve" : "ve?";
+}
+// A malicious name does NOT throw (php strips, does not reject); on an
+// unconnected object the strip happens first, then the connection Error.
+try { $db->begin_transaction(0, "!50000 ; DROP"); echo "|no-strip-throw"; }
+catch (ValueError $e) { echo "|stripped-threw-ve"; }
+catch (Error $e) { echo "|conn-error"; }
+"#,
+    );
+    // The name is stripped (no ValueError), then the unconnected object errors.
+    assert_eq!(out, "empty-ve|conn-error");
+}
+
 /// A mysqli-only program declares the mysqli surface (class, procedural alias,
 /// constants) and does NOT leak the PDO classes. The `new mysqli()` is the
 /// detection trigger: capability probes are string literals and deliberately

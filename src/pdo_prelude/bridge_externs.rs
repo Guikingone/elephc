@@ -274,8 +274,9 @@ extern "elephc_pdo" {
     // scanner (with `/*! … */` executable comments treated as live SQL).
     function elephc_pdo_mysql_thread_id(int $conn): int;
     function elephc_pdo_mysql_param_count(int $stmt): int;
+    function elephc_pdo_mysql_charset(int $conn): string;
     function elephc_pdo_sql_has_multiple_statements(int $conn, string $sql, int $len): int;
-    function elephc_pdo_real_escape_string(int $conn, string $charset, string $data, int $len): int;
+    function elephc_pdo_real_escape_string(int $conn, string $data, int $len): int;
     // v22: a live transaction-state read backing PDO::inTransaction() /
     // beginTransaction()'s already-active guard (P1-g). SQLite reads native
     // autocommit; PostgreSQL/MySQL use bridge-maintained state updated after every

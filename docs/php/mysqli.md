@@ -160,10 +160,16 @@ $db->commit(MYSQLI_TRANS_COR_AND_CHAIN, "job42");                 // COMMIT AND 
 
 The `$name` argument of `begin_transaction()` / `commit()` / `rollback()` is a
 SQL **comment** (`/*name*/`), exactly as php-src emits it — it is *not* a
-savepoint. Savepoints are the separate `savepoint()` / `release_savepoint()`
-methods (and `mysqli_savepoint()` / `mysqli_release_savepoint()`), which emit
-`SAVEPOINT` / `RELEASE SAVEPOINT`. The `$flags` are composed into the SQL:
-`MYSQLI_TRANS_START_*` on `begin_transaction()` (`READ ONLY`, `READ WRITE`,
+savepoint. Like php, the name is **stripped to `[A-Za-z0-9 \-_=]`** before it is
+wrapped (an empty name is a `ValueError`): this is a security measure, not
+cosmetics — an unfiltered name beginning with `!` (or MariaDB's `M!`) would open
+an executable `/*! … */` comment and a `;` inside it would run a second
+statement. php raises an `E_WARNING` when it truncates; elephc strips silently
+(no `E_WARNING` channel — documented divergence, identical security behavior).
+Savepoints are the separate `savepoint()` / `release_savepoint()` methods (and
+`mysqli_savepoint()` / `mysqli_release_savepoint()`), which emit `SAVEPOINT` /
+`RELEASE SAVEPOINT` with backtick quoting. The `$flags` are composed into the
+SQL: `MYSQLI_TRANS_START_*` on `begin_transaction()` (`READ ONLY`, `READ WRITE`,
 `WITH CONSISTENT SNAPSHOT`) and `MYSQLI_TRANS_COR_*` on `commit()` / `rollback()`
 (`AND [NO] CHAIN`, `[NO] RELEASE`).
 
@@ -193,14 +199,18 @@ property protected behind the getter; elephc exposes both).
 ## Escaping
 
 `real_escape_string()` / `escape_string()` return the escaped payload
-**without** wrapping quotes. Escaping is **charset-aware** (through the bridge,
-using the connection charset): backslash-escaping of `\`, `'`, `"`, NUL, `\n`,
-`\r`, and ctrl-Z for ASCII-compatible charsets; for an ASCII-incompatible
-multibyte charset (`gbk`, `big5`, `sjis`, `cp932`, …) a lead byte that does not
-begin a complete character is escaped too, closing the classic trailing-byte
-breakout (`0xBF 0x27` → `\ 0xBF \ '`, matching `mysql_real_escape_string`).
-Under `NO_BACKSLASH_ESCAPES` only `'` is doubled (backslash is a literal there;
-this mirrors mysqlnd).
+**without** wrapping quotes. Escaping is **charset-aware** and matches
+`mysql_real_escape_string` byte-for-byte, using the connection's own live
+charset (tracked in the bridge from the handshake and every `SET NAMES` —
+including a `MYSQLI_INIT_COMMAND` `SET NAMES …` or a reused persistent
+connection — so it is never fooled into treating a multibyte session as
+`utf8mb4`). For an ASCII-incompatible multibyte charset (`gbk`, `big5`, `sjis`,
+`cp932`, `euckr`, `ujis`, `gb2312`, `gb18030`) the escape uses that charset's
+real lead/trail byte ranges: a byte that completes a valid two-byte character is
+copied opaquely, and a lead byte that does not is itself escaped — closing the
+classic trailing-byte breakout for the whole family, not just GBK. Under
+`NO_BACKSLASH_ESCAPES` only `'` is doubled (backslash is a literal there; this
+mirrors mysqlnd).
 
 ## Divergences from php-src
 
