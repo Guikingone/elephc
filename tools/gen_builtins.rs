@@ -247,7 +247,11 @@ fn default_json(default: DefaultSpec) -> Value {
         DefaultSpec::EmptyArray => json!([]),
         DefaultSpec::Constant(name) => json!({ "constant": name }),
         DefaultSpec::Expr(source) => json!({ "expr": source }),
-        DefaultSpec::ClassConstant { class, name } => json!(format!("{class}::{name}")),
+        DefaultSpec::ClassConstant { class, name } => json!({
+            "kind": "class_constant",
+            "class": class,
+            "name": name,
+        }),
     }
 }
 
