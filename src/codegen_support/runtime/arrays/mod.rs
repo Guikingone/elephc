@@ -129,6 +129,7 @@ mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
+mod hash_key_compare;
 mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
@@ -153,14 +154,15 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_cast_array;
 mod mixed_clone;
-mod mixed_from_value;
-mod mixed_instanceof;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
 mod mixed_intval_base;
 mod mixed_cast_string;
+mod mixed_from_value;
+mod mixed_instanceof;
 mod mixed_free_deep;
 mod mixed_count;
 mod mixed_is_empty;
@@ -462,12 +464,14 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+/// Emit boxed-Mixed-to-array cast helper.
+pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
-pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed from value conversion helper.
-pub use mixed_instanceof::emit_mixed_instanceof;
+pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed instanceof check helper.
+pub use mixed_instanceof::emit_mixed_instanceof;
 pub use mixed_cast_bool::emit_mixed_cast_bool;
 /// Emit Mixed-to-boolean cast helper.
 pub use mixed_cast_float::emit_mixed_cast_float;

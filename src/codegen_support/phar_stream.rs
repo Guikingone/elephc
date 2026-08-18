@@ -28,10 +28,11 @@
 //!   `manifest_start + 4 + manifest_len`, holding each entry's bytes
 //!   consecutively in manifest order.
 
-/// PHAR per-entry flag bit: the entry's data is stored as raw DEFLATE (what PHP
-/// writes for gzip-compressed entries — no zlib or gzip header).
+/// PHAR per-entry flag bit used by the writer-template parser tests for raw DEFLATE.
+#[cfg(test)]
 const PHAR_FLAG_GZIP: u32 = 0x0000_1000;
-/// PHAR per-entry flag bit: the entry's data is bzip2 compressed.
+/// PHAR per-entry flag bit used by the writer-template parser tests for bzip2.
+#[cfg(test)]
 const PHAR_FLAG_BZIP2: u32 = 0x0000_2000;
 
 /// Splits a `phar://<archive>/<entry>` write URL into `(archive_path, entry)`.
@@ -59,14 +60,7 @@ pub(crate) fn resolve_write_target(url: &str) -> Option<(String, String)> {
 /// Extracts the bytes for a literal `phar://` URL from a native, tar-based, or
 /// zip-based PHAR archive.
 pub(crate) fn extract_phar_entry(url: &str) -> Option<Vec<u8>> {
-    if let Some(bytes) = elephc_phar::extract_url_bytes(url.as_bytes()) {
-        return Some(bytes);
-    }
-    let rest = url.strip_prefix("phar://")?;
-    let (archive, entry) = split_archive_entry(rest)?;
-    let archive_bytes = std::fs::read(archive).ok()?;
-    let entry = entry.strip_prefix('/').unwrap_or(entry);
-    parse_phar_entry(&archive_bytes, entry)
+    elephc_phar::extract_url_bytes(url.as_bytes())
 }
 
 /// Splits a `phar://` body into `(archive_path, inner_entry)` by taking the
@@ -87,6 +81,7 @@ fn split_archive_entry(rest: &str) -> Option<(&str, &str)> {
 
 /// Parses the native PHAR manifest in `data` and returns the uncompressed bytes
 /// of `entry`, or `None` if the archive is malformed or the entry is absent.
+#[cfg(test)]
 fn parse_phar_entry(data: &[u8], entry: &str) -> Option<Vec<u8>> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
@@ -145,6 +140,7 @@ fn parse_phar_entry(data: &[u8], entry: &str) -> Option<Vec<u8>> {
 /// the entry `flags`: raw-DEFLATE for gzip entries and bzip2 for bzip2 entries
 /// (each verified against the entry's recorded `uncompressed` size), passthrough
 /// for uncompressed entries, and `None` on a malformed compressed stream.
+#[cfg(test)]
 fn decode_entry(stored: &[u8], flags: u32, uncompressed: usize) -> Option<Vec<u8>> {
     if flags & PHAR_FLAG_GZIP != 0 {
         let mut out = Vec::with_capacity(uncompressed);
@@ -168,12 +164,14 @@ fn decode_entry(stored: &[u8], flags: u32, uncompressed: usize) -> Option<Vec<u8
 }
 
 /// Reads a little-endian `u32` at `off`, or `None` if fewer than 4 bytes remain.
+#[cfg(test)]
 fn le32(data: &[u8], off: usize) -> Option<u32> {
     let b = data.get(off..off + 4)?;
     Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
 }
 
 /// Returns the index of the first occurrence of `needle` in `hay`, or `None`.
+#[cfg(test)]
 fn find_subslice(hay: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || hay.len() < needle.len() {
         return None;

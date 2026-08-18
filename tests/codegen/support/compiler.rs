@@ -274,6 +274,7 @@ fn try_compile_source_to_asm_with_defines_repr(
         &exported_functions,
         regalloc_linear,
         false,
+        elephc::codegen::WebIsolation::Worker,
     );
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =

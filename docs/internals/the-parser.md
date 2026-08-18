@@ -288,7 +288,7 @@ assignment          7          6         RIGHT (lvalue targets)
 |  (bitwise OR)    15         16         left
 ^  (bitwise XOR)   17         18         left
 &  (bitwise AND)   19         20         left
-== != === !==      21         22         left
+== != <> === !==   21         22         left
 < > <= >= <=>      23         24         left
 |>                 24         25         left (dedicated Pipe node)
 << >>              25         26         left

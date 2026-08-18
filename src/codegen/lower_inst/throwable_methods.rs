@@ -291,7 +291,9 @@ pub(super) fn lower_throwable_get_previous(
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // missing previous → null
+            ctx.emitter.instruction(
+                &format!("test {}, {}", result_reg, result_reg)
+            );                                                                  // missing previous → null
             ctx.emitter
                 .instruction(&format!("jz {}", null_label));
             if result_reg != "rax" {

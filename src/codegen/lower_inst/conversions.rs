@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, IrType, ValueId};
+use crate::ir::{Immediate, Instruction, IrHeapKind, IrType, ValueId};
 use crate::names::{label_fragment, method_symbol};
 use crate::types::PhpType;
 
@@ -61,11 +61,25 @@ pub(super) fn lower_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
         IrType::I64 => lower_cast_to_int(ctx, inst),
         IrType::F64 => lower_cast_to_float(ctx, inst),
         IrType::Str => lower_cast_to_string(ctx, inst),
+        IrType::Heap(IrHeapKind::Hash) => {
+            super::builtins::types::lower_object_array_cast(ctx, inst)
+        }
+        IrType::Heap(IrHeapKind::Mixed) if inst.result_php_type == PhpType::Mixed => {
+            lower_mixed_array_cast(ctx, inst)
+        }
         target => Err(CodegenIrError::unsupported(format!(
             "cast to EIR type {:?}",
             target
         ))),
     }
+}
+
+/// Lowers a runtime-typed PHP array cast through the tag-dispatch helper.
+fn lower_mixed_array_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_array");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an explicit cast to PHP int for concrete scalar operands.

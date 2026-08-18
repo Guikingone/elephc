@@ -11,6 +11,7 @@
 //! - Round-trips go through both helpers so a regression in either is caught.
 
 use crate::support::*;
+use elephc::codegen_support::platform::Target;
 
 /// Verifies `serialize()` formats each scalar type exactly like PHP's wire format.
 #[test]
@@ -93,6 +94,71 @@ var_dump(unserialize(""));
 "#,
     );
     assert_eq!(out, "bool(false)\nbool(false)\n");
+}
+
+/// Verifies truncated scalar wire values are rejected before any declared
+/// length or delimiter can advance the parser beyond the source buffer.
+#[test]
+fn test_unserialize_rejects_truncated_scalar_wire_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo unserialize('s:100:"A";') === false ? 'false' : 'accepted', "|";
+echo unserialize('s:3:"ab";') === false ? 'false' : 'accepted', "|";
+echo unserialize('i:123') === false ? 'false' : 'accepted', "|";
+echo unserialize('d:1.25') === false ? 'false' : 'accepted';
+"#,
+    );
+    assert_eq!(out, "false|false|false|false");
+}
+
+/// Verifies truncated container, reference, null, and boolean encodings fail
+/// before nested keys, values, or fixed punctuation are read past the input.
+#[test]
+fn test_unserialize_rejects_truncated_structural_wire_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo unserialize('a:1:{i:0;s:1:"x";') === false ? 'false' : 'accepted', "|";
+echo unserialize('a:1:{i:0;') === false ? 'false' : 'accepted', "|";
+echo unserialize('R:1') === false ? 'false' : 'accepted', "|";
+echo unserialize('N') === false ? 'false' : 'accepted', "|";
+echo unserialize('b:1') === false ? 'false' : 'accepted';
+"#,
+    );
+    assert_eq!(out, "false|false|false|false|false");
+}
+
+/// Verifies an object missing its closing delimiter is rejected without
+/// invoking lifecycle hooks on a partially parsed instance.
+#[test]
+fn test_unserialize_does_not_wakeup_truncated_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class Probe {
+    public function __wakeup(): void { echo "WAKEUP"; }
+}
+
+echo unserialize('O:5:"Probe":0:{') === false ? 'false' : 'accepted';
+"#,
+    );
+    assert_eq!(out, "false");
+}
+
+/// Verifies semantically invalid nested values fail the containing object parse
+/// without dereferencing a null child box or invoking object lifecycle hooks.
+#[test]
+fn test_unserialize_rejects_invalid_nested_object_values() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public $value; }
+class Magic {
+    public function __unserialize(array $data): void { echo "HOOK"; }
+}
+
+echo unserialize('O:5:"Plain":1:{s:5:"value";d:nope;}') === false ? 'false' : 'accepted', "|";
+echo unserialize('O:5:"Magic":1:{s:5:"value";d:nope;}') === false ? 'false' : 'accepted';
+"#,
+    );
+    assert_eq!(out, "false|false");
 }
 
 /// Verifies `serialize()` of indexed and associative arrays matches PHP's a:n:{...} form.
@@ -389,6 +455,666 @@ echo $rw->a, " ", $rw->b, " ", $rw->sum, "\n";
     assert_eq!(out, "x=7 tag=woke\n10 20 30\n");
 }
 
+/// Verifies `allowed_classes=false` prevents object hydration and suppresses
+/// `__wakeup`, matching PHP's `__PHP_Incomplete_Class` safety boundary.
+#[test]
+fn test_unserialize_allowed_classes_false_blocks_object_hydration() {
+    let out = compile_and_run(
+        r#"<?php
+class GuardedPayload {
+    public int $value = 7;
+    public function __wakeup(): void { echo "WAKE"; }
+}
+$wire = serialize(new GuardedPayload());
+$value = unserialize($wire, ['allowed_classes' => false]);
+echo get_class($value), "\n";
+"#,
+    );
+    assert_eq!(out, "__PHP_Incomplete_Class\n");
+}
+
+/// Verifies an `allowed_classes` allow-list hydrates and wakes only the named
+/// class while representing every other serialized object as incomplete.
+#[test]
+fn test_unserialize_allowed_classes_allow_list_is_enforced() {
+    let out = compile_and_run(
+        r#"<?php
+class AllowedPayload {
+    public function __wakeup(): void { echo "ALLOWED_WAKE\n"; }
+}
+class BlockedPayload {
+    public function __wakeup(): void { echo "BLOCKED_WAKE\n"; }
+}
+$wire = serialize([new AllowedPayload(), new BlockedPayload()]);
+$values = unserialize($wire, ['allowed_classes' => ['AllowedPayload']]);
+echo get_class($values[0]), "|", get_class($values[1]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ALLOWED_WAKE\nAllowedPayload|__PHP_Incomplete_Class\n"
+    );
+}
+
+/// Verifies `allowed_classes` accepts associative arrays and inspects their
+/// values as class names without imposing packed integer keys.
+#[test]
+fn test_unserialize_allowed_classes_accepts_associative_value_lists() {
+    let out = compile_and_run(
+        r#"<?php
+class AssociativeAllowedPayload { public int $value = 7; }
+$wire = serialize(new AssociativeAllowedPayload());
+$decoded = unserialize($wire, [
+    'allowed_classes' => ['primary' => 'AssociativeAllowedPayload'],
+]);
+echo get_class($decoded), ':', $decoded->value;
+"#,
+    );
+    assert_eq!(out, "AssociativeAllowedPayload:7");
+}
+
+/// Verifies object entries in `allowed_classes` raise PHP's conversion `Error`
+/// with the offending class name instead of an allow-list `TypeError`.
+#[test]
+fn test_unserialize_allowed_classes_object_entry_reports_conversion_error() {
+    let out = compile_and_run(
+        r#"<?php
+class InvalidAllowedClassEntry {}
+try {
+    unserialize('i:1;', ['allowed_classes' => [new InvalidAllowedClassEntry()]]);
+    echo 'NO_ERROR';
+} catch (Throwable $e) {
+    echo get_class($e), '|', $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error|Object of class InvalidAllowedClassEntry could not be converted to string"
+    );
+}
+
+/// Verifies stringable object entries are converted to class names before the
+/// `allowed_classes` membership check, matching PHP's object conversion rules.
+#[test]
+fn test_unserialize_allowed_classes_accepts_stringable_object_entries() {
+    let out = compile_and_run(
+        r#"<?php
+class StringableAllowedPayload { public int $value = 9; }
+class AllowedClassName {
+    public function __toString(): string { return 'StringableAllowedPayload'; }
+}
+$wire = serialize(new StringableAllowedPayload());
+$decoded = unserialize($wire, ['allowed_classes' => [new AllowedClassName()]]);
+echo get_class($decoded), ':', $decoded->value;
+"#,
+    );
+    assert_eq!(out, "StringableAllowedPayload:9");
+}
+
+/// Verifies a nested `unserialize()` triggered by an allowed hydration hook
+/// cannot replace the outer call's `allowed_classes` policy. The later blocked
+/// object must remain incomplete and its hook must never run.
+#[test]
+fn test_unserialize_allowed_classes_survives_reentrant_wakeup() {
+    let out = compile_and_run(
+        r#"<?php
+class ReentrantAllowedPayload {
+    public function __wakeup(): void {
+        try { throw new Exception("caught inside hook"); }
+        catch (Exception $e) { echo "HOOK_CAUGHT\n"; }
+        unserialize('i:1;');
+        echo "ALLOWED_WAKE\n";
+    }
+}
+class ReentrantBlockedPayload {
+    public function __wakeup(): void { echo "BLOCKED_WAKE\n"; }
+}
+$wire = serialize([new ReentrantAllowedPayload(), new ReentrantBlockedPayload()]);
+$values = unserialize($wire, ['allowed_classes' => ['ReentrantAllowedPayload']]);
+echo get_class($values[0]), "|", get_class($values[1]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "HOOK_CAUGHT\nALLOWED_WAKE\nReentrantAllowedPayload|__PHP_Incomplete_Class\n"
+    );
+}
+
+/// Verifies the options operand is type-checked before runtime hash access,
+/// matching PHP's `TypeError` for a scalar second argument.
+#[test]
+fn test_unserialize_rejects_scalar_options_without_memory_access() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Payload {}
+$wire = serialize(new Payload());
+unserialize($wire, "not-an-array");
+"#,
+    );
+    assert!(
+        err.contains("Argument #2") && err.contains("array"),
+        "expected the PHP-compatible options TypeError, got: {err}"
+    );
+}
+
+/// Verifies a scalar hidden behind a runtime `mixed` value is tag-checked before
+/// `__rt_hash_get`, not only rejected when its AST type is statically obvious.
+#[test]
+fn test_unserialize_rejects_runtime_mixed_scalar_options() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+function runtime_options(int $mode): mixed {
+    if ($mode > 0) { return "not-an-array"; }
+    return [];
+}
+class Payload {}
+$wire = serialize(new Payload());
+unserialize($wire, runtime_options($argc));
+"#,
+    );
+    assert!(
+        err.contains("Argument #2") && err.contains("array"),
+        "expected runtime options tag validation, got: {err}"
+    );
+}
+
+/// Verifies a caught TypeError for statically invalid options closes the
+/// unserialize context, so later fiber suspension and parsing still work.
+#[test]
+fn test_unserialize_static_options_type_error_cleans_runtime_state() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    unserialize('i:1;', 42);
+    echo "NO_TYPE_ERROR|";
+} catch (TypeError $e) {
+    echo "TYPE_ERROR|";
+}
+
+$fiber = new Fiber(function(): void {
+    Fiber::suspend("READY");
+});
+try {
+    echo $fiber->start(), "|";
+} catch (FiberError $e) {
+    echo "POISONED:", $e->getMessage(), "|";
+}
+echo unserialize('i:2;');
+"#,
+    );
+    assert_eq!(out, "TYPE_ERROR|READY|2");
+}
+
+/// Verifies options hidden behind `mixed` raise the same catchable TypeError as
+/// statically invalid options and leave the next unserialize call operational.
+#[test]
+fn test_unserialize_runtime_mixed_options_type_error_is_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_invalid_options(int $mode): mixed {
+    if ($mode > 0) { return 42; }
+    return [];
+}
+
+try {
+    unserialize('i:1;', runtime_invalid_options($argc));
+    echo "NO_TYPE_ERROR|";
+} catch (TypeError $e) {
+    echo "TYPE_ERROR|";
+}
+echo unserialize('i:2;');
+"#,
+    );
+    assert_eq!(out, "TYPE_ERROR|2");
+}
+
+/// Verifies an invalid `allowed_classes` policy raises a catchable TypeError
+/// and releases its unserialize context before the next parser invocation.
+#[test]
+fn test_unserialize_allowed_classes_type_error_is_catchable() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    unserialize('i:1;', ['allowed_classes' => 'Payload']);
+    echo "NO_TYPE_ERROR|";
+} catch (TypeError $e) {
+    echo "TYPE_ERROR|";
+}
+echo unserialize('i:2;');
+"#,
+    );
+    assert_eq!(out, "TYPE_ERROR|2");
+}
+
+/// Verifies invalid options, policies, and allow-list entries report PHP's exact
+/// catchable TypeError messages, including the offending runtime type.
+#[test]
+fn test_unserialize_option_type_errors_match_php_messages() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_invalid_unserialize_options(): mixed { return 42; }
+
+try { unserialize('i:1;', 42); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+
+try { unserialize('i:1;', runtime_invalid_unserialize_options()); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+
+try { unserialize('i:1;', ['allowed_classes' => 'Payload']); }
+catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+
+try { unserialize('i:1;', ['allowed_classes' => ['stdClass', 42]]); }
+catch (TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "unserialize(): Argument #2 ($options) must be of type array, int given\n",
+            "unserialize(): Argument #2 ($options) must be of type array, int given\n",
+            "unserialize(): Option \"allowed_classes\" must be of type array|bool, string given\n",
+            "unserialize(): Option \"allowed_classes\" must be an array of class names, int given",
+        )
+    );
+}
+
+/// Verifies empty indexed options arrays are accepted both with a concrete
+/// array type and when boxed behind `mixed`, without calling the hash runtime
+/// on an indexed-array payload.
+#[test]
+fn test_unserialize_accepts_empty_indexed_options_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+class Payload {}
+function runtime_options(): mixed { return []; }
+$wire = serialize(new Payload());
+echo get_class(unserialize($wire, [])), "\n";
+echo get_class(unserialize($wire, runtime_options())), "\n";
+"#,
+    );
+    assert_eq!(out, "Payload\nPayload\n");
+}
+
+/// Verifies every `allowed_classes` allow-list element is validated as a class
+/// name before the runtime can interpret scalar payload bytes as pointers.
+#[test]
+fn test_unserialize_rejects_non_string_allowed_class_entries() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Payload {}
+$wire = serialize(new Payload());
+unserialize($wire, ['allowed_classes' => [1, 2, 3]]);
+"#,
+    );
+    assert!(
+        err.contains("allowed_classes") && err.contains("class names"),
+        "expected a controlled allow-list TypeError, got: {err}"
+    );
+}
+
+/// Verifies an invalid scalar `allowed_classes` value fails closed instead of
+/// silently reverting to the allow-all policy.
+#[test]
+fn test_unserialize_rejects_scalar_allowed_classes_policy() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Payload {}
+$wire = serialize(new Payload());
+unserialize($wire, ['allowed_classes' => 'Payload']);
+"#,
+    );
+    assert!(
+        err.contains("allowed_classes") && err.contains("array|bool"),
+        "expected a controlled allowed_classes TypeError, got: {err}"
+    );
+}
+
+/// Verifies the linux-x86_64 allow-list scan derives its 16-byte string-cell
+/// offset with encodable instructions instead of an invalid x86 scale factor.
+#[test]
+fn test_unserialize_x86_64_allowed_classes_uses_encodable_string_stride() {
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is a supported target");
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target);
+
+    for expected in [
+        "mov rax, r10",
+        "shl rax, 4",
+        "add r11, rax",
+        "add r11, 24",
+    ] {
+        assert!(
+            runtime_asm.contains(expected),
+            "x86_64 unserialize allow-list scan is missing {expected}"
+        );
+    }
+    assert!(
+        !runtime_asm.contains("lea r11, [r11 + r10 * 16 + 24]"),
+        "x86_64 unserialize emitted an invalid scale-16 address operand"
+    );
+}
+
+/// Verifies allowed-class scans extract the array element tag from header bits 8 through 14.
+#[test]
+fn test_unserialize_allowed_classes_extracts_the_encoded_element_tag() {
+    let arm_target = Target::parse("macos-aarch64").expect("macos-aarch64 is supported");
+    let arm_runtime = elephc::codegen::generate_runtime(8_388_608, arm_target);
+    assert!(
+        arm_runtime.contains("ubfx x11, x11, #8, #7"),
+        "AArch64 allow-list scan does not extract the encoded element tag"
+    );
+
+    let x86_target = Target::parse("linux-x86_64").expect("linux-x86_64 is supported");
+    let x86_runtime = elephc::codegen::generate_runtime(8_388_608, x86_target);
+    assert!(
+        x86_runtime.contains("shr r11, 8") && x86_runtime.contains("and r11, 0x7f"),
+        "x86_64 allow-list scan does not extract the encoded element tag"
+    );
+}
+
+/// Verifies the linux-x86_64 incomplete-object allocator materializes the
+/// full-width heap marker in a register before storing it into memory.
+#[test]
+fn test_unserialize_x86_64_incomplete_object_uses_encodable_heap_marker_store() {
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is a supported target");
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target);
+
+    assert!(
+        runtime_asm.contains("mov r10, 0x454c504800000004"),
+        "x86_64 incomplete object is missing its full-width heap marker"
+    );
+    assert!(
+        runtime_asm.contains("mov QWORD PTR [rax - 8], r10"),
+        "x86_64 incomplete object does not store the materialized heap marker"
+    );
+    assert!(
+        !runtime_asm.contains("mov QWORD PTR [rax - 8], 0x454c504800000004"),
+        "x86_64 incomplete object emitted an unencodable imm64 memory store"
+    );
+}
+
+/// Verifies a dynamically computed but valid string allow-list is accepted;
+/// eager validation must not reject every non-literal policy expression.
+#[test]
+fn test_unserialize_accepts_runtime_string_allowed_class_list() {
+    let out = compile_and_run(
+        r#"<?php
+class Payload { public int $value = 7; }
+function runtime_allow_list(): array { return ['Payload']; }
+$wire = serialize(new Payload());
+$decoded = unserialize($wire, ['allowed_classes' => runtime_allow_list()]);
+echo get_class($decoded), ':', $decoded->value;
+"#,
+    );
+    assert_eq!(out, "Payload:7");
+}
+
+/// Verifies a dynamically computed integer allow-list is rejected from its
+/// runtime array value-type tag before any element is read as string storage.
+#[test]
+fn test_unserialize_rejects_runtime_integer_allowed_class_list() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Payload {}
+function runtime_allow_list(): array { return [1, 2, 3]; }
+$wire = serialize(new Payload());
+unserialize($wire, ['allowed_classes' => runtime_allow_list()]);
+"#,
+    );
+    assert!(
+        err.contains("allowed_classes") && err.contains("class names"),
+        "expected a controlled runtime allow-list TypeError, got: {err}"
+    );
+}
+
+/// Verifies a dynamically computed heterogeneous allow-list validates every
+/// boxed Mixed element instead of assuming the string pointer/length layout.
+#[test]
+fn test_unserialize_rejects_runtime_mixed_allowed_class_list() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+class Payload {}
+function runtime_allow_list(): array { return ['Payload', 1]; }
+$wire = serialize(new Payload());
+unserialize($wire, ['allowed_classes' => runtime_allow_list()]);
+"#,
+    );
+    assert!(
+        err.contains("allowed_classes") && err.contains("class names"),
+        "expected per-element runtime allow-list validation, got: {err}"
+    );
+}
+
+/// Verifies blocked objects retain their serialized properties and original
+/// class name when re-serialized as `__PHP_Incomplete_Class`.
+#[test]
+fn test_unserialize_incomplete_class_preserves_wire_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Payload { public int $value = 7; }
+$wire = serialize(new Payload());
+$blocked = unserialize($wire, ['allowed_classes' => false]);
+echo serialize($blocked);
+"#,
+    );
+    assert_eq!(out, "O:7:\"Payload\":1:{s:5:\"value\";i:7;}");
+}
+
+/// Verifies incomplete-object properties are re-serialized semantically so
+/// nested back-reference indices are rebased to the new outer value graph.
+#[test]
+fn test_unserialize_incomplete_class_rebases_nested_references() {
+    let out = compile_and_run(
+        r#"<?php
+class Child { public int $v = 1; }
+class Payload { public mixed $first; public mixed $again; }
+$child = new Child();
+$payload = new Payload();
+$payload->first = $child;
+$payload->again = $child;
+$blocked = unserialize(serialize($payload), ['allowed_classes' => false]);
+echo serialize([$blocked]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:1:{i:0;O:7:\"Payload\":2:{s:5:\"first\";O:5:\"Child\":1:{s:1:\"v\";i:1;}s:5:\"again\";r:3;}}"
+    );
+}
+
+/// Verifies releasing a blocked object uses its synthetic payload layout rather
+/// than indexing class metadata with the reserved class id `-2`.
+#[test]
+fn test_unserialize_incomplete_class_can_be_destroyed_safely() {
+    let out = compile_and_run(
+        r#"<?php
+class Payload { public int $value = 7; }
+$blocked = unserialize(
+    'O:7:"Payload":1:{s:5:"value";i:7;}',
+    ['allowed_classes' => false]
+);
+unset($blocked);
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies PHP-visible object introspection exposes the original class name
+/// and retained properties of an `__PHP_Incomplete_Class` value.
+#[test]
+fn test_unserialize_incomplete_class_exposes_retained_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Payload { public int $first = 42; }
+$blocked = unserialize(serialize(new Payload()), ['allowed_classes' => false]);
+$cast = (array) $blocked;
+$vars = get_object_vars($blocked);
+echo $cast['__PHP_Incomplete_Class_Name'], "|", $cast['first'], "|";
+echo $vars['__PHP_Incomplete_Class_Name'], "|", $vars['first'];
+"#,
+    );
+    assert_eq!(out, "Payload|42|Payload|42");
+}
+
+/// Verifies the native builtin keeps PHP's case-insensitive lookup and
+/// namespace fallback while exposing ordinary public object properties.
+#[test]
+fn test_get_object_vars_is_case_insensitive_with_namespace_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace AuditFixture;
+class Payload { public int $value = 7; }
+$vars = GET_OBJECT_VARS(new Payload());
+echo $vars['value'];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies native `get_object_vars()` follows PHP's lexical visibility for
+/// global, child-class, and parent-class call sites.
+#[test]
+fn test_get_object_vars_respects_lexical_class_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class BaseProfile {
+    private int $basePrivate = 1;
+    protected int $baseProtected = 2;
+    public int $basePublic = 3;
+
+    public function baseView(): string {
+        $vars = get_object_vars($this);
+        ksort($vars);
+        return implode(',', array_keys($vars));
+    }
+}
+
+class ChildProfile extends BaseProfile {
+    private int $childPrivate = 4;
+    protected int $childProtected = 5;
+    public int $childPublic = 6;
+
+    public function childView(): string {
+        $vars = get_object_vars($this);
+        ksort($vars);
+        return implode(',', array_keys($vars));
+    }
+}
+
+$profile = new ChildProfile();
+$global = get_object_vars($profile);
+ksort($global);
+echo implode(',', array_keys($global)), "\n";
+echo $profile->childView(), "\n";
+echo $profile->baseView();
+"#,
+    );
+    assert_eq!(
+        out,
+        "basePublic,childPublic\nbaseProtected,basePublic,childPrivate,childProtected,childPublic\nbasePrivate,baseProtected,basePublic,childProtected,childPublic"
+    );
+}
+
+/// Verifies protected properties are visible between sibling subclasses when
+/// their lexical scope descends from the property's declaring base class.
+#[test]
+fn test_get_object_vars_uses_protected_property_declaring_class_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class SharedBase {
+    protected string $shared = 'visible';
+}
+
+class Inspector extends SharedBase {
+    public static function inspect(SharedBase $object): void {
+        $vars = get_object_vars($object);
+        ksort($vars);
+        echo implode(',', array_keys($vars));
+    }
+}
+
+class Sibling extends SharedBase {}
+Inspector::inspect(new Sibling());
+"#,
+    );
+    assert_eq!(out, "shared");
+}
+
+/// Verifies a closure declared inside a method inherits that method's class
+/// scope when `get_object_vars()` projects private and protected properties.
+#[test]
+fn test_get_object_vars_closure_inherits_method_lexical_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class ScopedBox {
+    private string $private = 'p';
+    protected string $protected = 'q';
+    public string $public = 'r';
+
+    public function inspect(): void {
+        $inspect = function (): void {
+            $vars = get_object_vars($this);
+            ksort($vars);
+            echo implode(',', array_keys($vars));
+        };
+        $inspect();
+    }
+}
+
+(new ScopedBox())->inspect();
+"#,
+    );
+    assert_eq!(out, "private,protected,public");
+}
+
+/// Verifies numeric-string dynamic property names retain PHP's integer hash
+/// keys when projected by `get_object_vars()` or an object-to-array cast.
+#[test]
+fn test_object_projection_preserves_numeric_dynamic_property_keys() {
+    let out = compile_and_run(
+        r#"<?php
+$object = new stdClass();
+$object->{'9'} = 'nine';
+echo serialize(get_object_vars($object)), "\n";
+echo serialize((array) $object);
+"#,
+    );
+    assert_eq!(
+        out,
+        "a:1:{i:9;s:4:\"nine\";}\na:1:{i:9;s:4:\"nine\";}"
+    );
+}
+
+/// Verifies an array cast of a runtime `mixed` value preserves PHP semantics
+/// for scalar, null, and already-array payload tags.
+#[test]
+fn test_mixed_array_cast_dispatches_non_object_runtime_tags() {
+    let out = compile_and_run(
+        r#"<?php
+function runtime_value(int $case): mixed {
+    if ($case === 0) { return 7; }
+    if ($case === 1) { return null; }
+    if ($case === 2) { return 'x'; }
+    return [4, 5];
+}
+
+for ($case = 0; $case < 4; $case++) {
+    echo serialize((array) runtime_value($case)), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "a:1:{i:0;i:7;}\n",
+            "a:0:{}\n",
+            "a:1:{i:0;s:1:\"x\";}\n",
+            "a:2:{i:0;i:4;i:1;i:5;}\n",
+        )
+    );
+}
+
 /// Verifies object-identity back-references in `serialize()` (Stage D): a repeated
 /// object emits `r:<index>;` using PHP's global value counter (every value,
 /// including scalars and the array container, consumes an index; keys do not).
@@ -437,5 +1163,42 @@ echo serialize($arr), "\n";
     assert_eq!(
         out,
         "77\nsame\na:2:{i:0;O:1:\"P\":1:{s:1:\"v\";i:7;}i:1;r:2;}\n",
+    );
+}
+
+/// Verifies object boxes enter the value registry before their bodies are
+/// decoded, preserving direct self-references for both hydration paths.
+#[test]
+fn test_unserialize_object_self_references() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public $self; }
+$plain = unserialize('O:5:"Plain":1:{s:4:"self";r:1;}');
+echo serialize($plain), "|";
+
+class Magic {
+    public $self;
+    public function __unserialize(array $data): void { $this->self = $data['self']; }
+}
+$magic = unserialize('O:5:"Magic":1:{s:4:"self";r:1;}');
+echo $magic->self === $magic ? "magic-same" : "magic-diff";
+"#,
+    );
+    assert_eq!(out, "O:5:\"Plain\":1:{s:4:\"self\";r:1;}|magic-same");
+}
+
+/// Verifies unknown serialized classes use PHP's incomplete-object container
+/// and can still resolve references to the object currently being decoded.
+#[test]
+fn test_unserialize_unknown_class_becomes_incomplete_object() {
+    let out = compile_and_run(
+        r#"<?php
+$value = unserialize('O:7:"Missing":1:{s:4:"self";r:1;}');
+echo get_class($value), "|", serialize($value);
+"#,
+    );
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class|O:7:\"Missing\":1:{s:4:\"self\";r:1;}",
     );
 }

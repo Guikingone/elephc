@@ -1,6 +1,6 @@
 //! Purpose:
-//! Emits the `__rt_hash_spread` runtime helper that flattens an associative
-//! array into a destination hash using PHP `[...$source]` spread semantics.
+//! Emits hash-copy helpers for PHP spread semantics and object-property
+//! projection semantics.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::arrays`.
@@ -11,11 +11,13 @@
 //!   string keys, and lets later operands overwrite earlier ones on key collision.
 //! - The destination hash takes its own owned copy of each value: strings are
 //!   persisted, refcounted payloads are retained, and scalars are copied as-is.
+//! - `__rt_hash_project_spread` preserves integer keys and normalizes numeric
+//!   string property names to the integer keys produced by PHP array casts.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits `__rt_hash_spread` for the active target.
+/// Emits `__rt_hash_spread` and `__rt_hash_project_spread` for the active target.
 ///
 /// Iterates `source` in insertion order and inserts each entry into `dest`:
 /// integer keys are replaced with the next automatic integer key (derived from
@@ -23,6 +25,8 @@ use crate::codegen_support::platform::Arch;
 /// entry), and string keys are preserved. Each value is retained/persisted so
 /// the destination owns an independent reference. Duplicate keys overwrite the
 /// existing destination entry (later spread operand wins).
+/// The companion projection entry preserves existing integer keys and normalizes
+/// numeric string keys before inserting the same independently retained values.
 ///
 /// # Inputs (ARM64)
 /// - `x0`: destination hash pointer
@@ -41,6 +45,11 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_spread ---");
     emitter.label_global("__rt_hash_spread");
+    emitter.instruction("mov x2, #0");                                          // select PHP array-spread key semantics
+    emitter.instruction("b __rt_hash_spread_entry");                            // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_project_spread");
+    emitter.instruction("mov x2, #1");                                          // select object-projection key normalization semantics
+    emitter.label_shared("__rt_hash_spread_entry");
 
     // -- set up stack frame --
     // Stack layout:
@@ -53,6 +62,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     //   [sp, #48] = borrowed source value low word
     //   [sp, #56] = borrowed source value high word
     //   [sp, #64] = borrowed source value runtime tag
+    //   [sp, #72] = key mode (0 = array spread, 1 = object projection)
     //   [sp, #80] = saved x29
     //   [sp, #88] = saved x30
     emitter.instruction("sub sp, sp, #96");                                     // reserve spill slots for the spread walk state
@@ -60,6 +70,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish a stable frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the destination hash pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save the source hash pointer
+    emitter.instruction("str x2, [sp, #72]");                                   // save the selected key transformation mode
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
     emitter.instruction("ldr x5, [x0, #8]");                                    // load the destination hash capacity as the scan bound
@@ -144,6 +155,7 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_value_ref");
     emitter.instruction("ldr x0, [sp, #48]");                                   // load the borrowed refcounted child pointer
     emitter.instruction("bl __rt_incref");                                      // retain the child for the destination owner
+    emitter.instruction("str xzr, [sp, #56]");                                  // canonicalize the retained reference's unused high payload word
     emitter.instruction("ldr x3, [sp, #48]");                                   // reload the retained child value low word
     emitter.instruction("mov x4, xzr");                                         // refcounted hash values store only the low payload word
     emitter.instruction("ldr x5, [sp, #64]");                                   // reload the refcounted value runtime tag
@@ -154,10 +166,21 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("cmn x2, #1");                                          // is this an inline integer source key?
     emitter.instruction("b.eq __rt_hash_spread_int_key");                       // integer source keys are reindexed to the running counter
     emitter.instruction("ldr x1, [sp, #32]");                                   // reload the borrowed source string key pointer
-    // x2 already holds the source string key length; __rt_hash_set persists it
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
+    emitter.instruction("cbz x9, __rt_hash_spread_set");                        // array spread preserves string keys verbatim
+    emitter.instruction("bl __rt_hash_normalize_key");                          // normalize numeric property names to PHP integer array keys
+    emitter.instruction("ldr x3, [sp, #48]");                                   // restore the retained value low word after key normalization
+    emitter.instruction("ldr x4, [sp, #56]");                                   // restore the retained value high word after key normalization
+    emitter.instruction("ldr x5, [sp, #64]");                                   // restore the retained value tag after key normalization
     emitter.instruction("b __rt_hash_spread_set");                              // insert with the preserved string key
 
     emitter.label("__rt_hash_spread_int_key");
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
+    emitter.instruction("cbz x9, __rt_hash_spread_reindex_int_key");            // array spread reindexes integer source keys
+    emitter.instruction("ldr x1, [sp, #32]");                                   // object projection preserves the source integer key payload
+    emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks the preserved integer key
+    emitter.instruction("b __rt_hash_spread_set");                              // insert the preserved object-projection integer key
+    emitter.label("__rt_hash_spread_reindex_int_key");
     emitter.instruction("ldr x1, [sp, #16]");                                   // load the running next integer key
     emitter.instruction("mov x2, #-1");                                         // key_hi sentinel marks an integer key
 
@@ -168,6 +191,8 @@ pub fn emit_hash_spread(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --
+    emitter.instruction("ldr x9, [sp, #72]");                                   // reload the key transformation mode
+    emitter.instruction("cbnz x9, __rt_hash_spread_loop");                      // object projection never advances a reindex counter
     emitter.instruction("ldr x9, [sp, #40]");                                   // reload the source key length / integer sentinel
     emitter.instruction("cmn x9, #1");                                          // was the just-inserted source key an integer key?
     emitter.instruction("b.ne __rt_hash_spread_loop");                          // string keys do not advance the running integer counter
@@ -193,6 +218,11 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_spread ---");
     emitter.label_global("__rt_hash_spread");
+    emitter.instruction("xor edx, edx");                                        // select PHP array-spread key semantics
+    emitter.instruction("jmp __rt_hash_spread_x86_entry");                      // share the ownership-preserving hash copy implementation
+    emitter.label_global("__rt_hash_project_spread");
+    emitter.instruction("mov rdx, 1");                                          // select object-projection key normalization semantics
+    emitter.label("__rt_hash_spread_x86_entry");
 
     // -- set up stack frame --
     // Frame layout:
@@ -205,11 +235,13 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp - 56]  = borrowed source value low word
     //   [rbp - 64]  = borrowed source value high word
     //   [rbp - 72]  = borrowed source value runtime tag
+    //   [rbp - 80]  = key mode (0 = array spread, 1 = object projection)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving spread spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the spread walk state
-    emitter.instruction("sub rsp, 80");                                         // reserve aligned spill space while keeping nested calls ABI-aligned
+    emitter.instruction("sub rsp, 96");                                         // reserve aligned spill space while keeping nested calls ABI-aligned
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the destination hash pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the source hash pointer
+    emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save the selected key transformation mode
 
     // -- derive the starting next integer key by scanning the destination for its largest integer key --
     emitter.instruction("mov r10, rdi");                                        // keep the destination hash pointer stable across the scan
@@ -294,6 +326,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_hash_spread_x86_value_ref");
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the borrowed refcounted child pointer
     emitter.instruction("call __rt_incref");                                    // retain the child for the destination owner
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // canonicalize the retained reference's unused high payload word
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the retained child value low word
     emitter.instruction("xor r8d, r8d");                                        // refcounted hash values store only the low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // reload the refcounted value runtime tag
@@ -304,10 +337,23 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rdx, -1");                                         // is this an inline integer source key?
     emitter.instruction("je __rt_hash_spread_x86_int_key");                     // integer source keys are reindexed to the running counter
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the borrowed source string key pointer
-    // rdx already holds the source string key length; __rt_hash_set persists it
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether object-projection key normalization is enabled
+    emitter.instruction("je __rt_hash_spread_x86_set");                         // array spread preserves string keys verbatim
+    emitter.instruction("mov rax, rsi");                                        // move the string key pointer into the normalizer input register
+    emitter.instruction("call __rt_hash_normalize_key");                        // normalize numeric property names to PHP integer array keys
+    emitter.instruction("mov rsi, rax");                                        // move the normalized key payload into the hash-set ABI register
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // restore the retained value low word after key normalization
+    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // restore the retained value high word after key normalization
+    emitter.instruction("mov r9, QWORD PTR [rbp - 72]");                        // restore the retained value tag after key normalization
     emitter.instruction("jmp __rt_hash_spread_x86_set");                        // insert with the preserved string key
 
     emitter.label("__rt_hash_spread_x86_int_key");
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether the source integer key must be preserved
+    emitter.instruction("je __rt_hash_spread_x86_reindex_int_key");             // array spread reindexes integer source keys
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // object projection preserves the source integer key payload
+    emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks the preserved integer key
+    emitter.instruction("jmp __rt_hash_spread_x86_set");                        // insert the preserved object-projection integer key
+    emitter.label("__rt_hash_spread_x86_reindex_int_key");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // load the running next integer key
     emitter.instruction("mov rdx, -1");                                         // key_hi sentinel marks an integer key
 
@@ -318,6 +364,8 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the possibly reallocated destination hash pointer
 
     // -- advance the running integer key only when an integer source key was reindexed --
+    emitter.instruction("cmp QWORD PTR [rbp - 80], 0");                         // check whether object-projection key semantics are active
+    emitter.instruction("jne __rt_hash_spread_x86_loop");                       // object projection never advances a reindex counter
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the source key length / integer sentinel
     emitter.instruction("cmp r10, -1");                                         // was the just-inserted source key an integer key?
     emitter.instruction("jne __rt_hash_spread_x86_loop");                       // string keys do not advance the running integer counter
@@ -329,7 +377,7 @@ fn emit_hash_spread_linux_x86_64(emitter: &mut Emitter) {
     // -- return the updated destination hash --
     emitter.label("__rt_hash_spread_x86_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // return the updated destination hash pointer
-    emitter.instruction("add rsp, 80");                                         // release the spread walk spill slots
+    emitter.instruction("add rsp, 96");                                         // release the spread walk spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return to generated code
 }

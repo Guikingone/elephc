@@ -345,12 +345,14 @@ used as a class constant, a default parameter value, a `match` subject or an arr
 key all reach the same object. Covered by the LAZY ENUM CASE MATERIALIZATION block
 in `tests/var_dump_object_tests.rs`.
 
-Under `--web` the slots are per-process BSS: a prefork worker gets a private copy
-the moment it writes one, the parent never runs user code before forking, and
-requests are served serially inside a worker, so no slot is ever raced.
-`__rt_web_reset` clears every slot between requests, which keeps the pre-existing
-per-request lifecycle — the handler prologue used to re-run the eager initializers
-and overwrite each slot every request, so a case object never spanned two requests.
+Under `--web` the slots are per-process BSS. In default `worker` isolation the
+prefork worker owns them; `pool` gives each persistent handler child its own
+copy; `request` gives each disposable child a forked copy. A process executes
+only one PHP handler at a time, so no slot is raced even when isolated modes run
+several handler processes concurrently. `__rt_web_reset` clears every slot
+between requests, which keeps the pre-existing per-request lifecycle — the
+handler prologue used to re-run the eager initializers and overwrite each slot
+every request, so a case object never spanned two requests.
 
 **Residual divergence — a discarded pure call that would have materialized a
 case.** A call whose result is unused and whose body has no observable effect is

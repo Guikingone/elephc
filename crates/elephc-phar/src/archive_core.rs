@@ -10,6 +10,7 @@
 use super::*;
 
 /// Parses archive bytes into decoded entries and reports the archive family.
+#[cfg(test)]
 pub(super) fn parse_archive_entries(data: &[u8]) -> Option<(Vec<ArchiveEntry>, ArchiveFormat)> {
     parse_archive(data).map(|archive| (archive.entries, archive.format))
 }

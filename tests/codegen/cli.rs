@@ -326,6 +326,84 @@ fn test_cli_web_prunes_unused_session_surface_from_assembly() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies compile-time web isolation selects one bridge symbol and leaves the default
+/// assembly byte-identical to an explicit `worker` selection.
+#[test]
+fn test_cli_web_isolation_selects_entry_symbol_at_compile_time() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_symbols");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let compile = |flags: &[&str]| {
+        let output = elephc_cli_command(&dir)
+            .args(flags)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile web-isolation fixture");
+        assert!(
+            output.status.success(),
+            "web-isolation compile failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        fs::read_to_string(dir.join("main.s")).expect("failed to read web-isolation assembly")
+    };
+
+    let default_worker = compile(&["--web"]);
+    let explicit_worker = compile(&["--web", "--web-isolation=worker"]);
+    assert_eq!(
+        default_worker, explicit_worker,
+        "plain --web must emit exactly the explicit worker entry path"
+    );
+    assert!(default_worker.contains("elephc_web_run"));
+    assert!(!default_worker.contains("elephc_web_run_pool"));
+    assert!(!default_worker.contains("elephc_web_run_request"));
+
+    let pool = compile(&["--web", "--web-isolation=pool"]);
+    assert!(pool.contains("elephc_web_run_pool"));
+    assert!(!pool.contains("elephc_web_run_request"));
+
+    let request = compile(&["--web", "--web-isolation=request"]);
+    assert!(request.contains("elephc_web_run_request"));
+    assert!(!request.contains("elephc_web_run_pool"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies web-isolation is rejected without web mode and reports invalid model names.
+#[test]
+fn test_cli_web_isolation_validation_errors_are_focused() {
+    let dir = make_cli_test_dir("elephc_cli_web_isolation_errors");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'ok';").unwrap();
+
+    let without_web = elephc_cli_command(&dir)
+        .arg("--web-isolation=pool")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run web-isolation validation fixture");
+    assert!(!without_web.status.success());
+    assert!(
+        String::from_utf8_lossy(&without_web.stderr).contains("--web-isolation requires --web"),
+        "unexpected missing-web diagnostic: {}",
+        String::from_utf8_lossy(&without_web.stderr)
+    );
+
+    let invalid = elephc_cli_command(&dir)
+        .args(["--web", "--web-isolation=banana"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to run invalid web-isolation fixture");
+    assert!(!invalid.status.success());
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr)
+            .contains("expected worker|pool|request"),
+        "unexpected invalid-mode diagnostic: {}",
+        String::from_utf8_lossy(&invalid.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies repeated boxed-Mixed callable sites reuse module-wide descriptor
 /// wrappers instead of regenerating the full candidate set in every function.
 #[test]

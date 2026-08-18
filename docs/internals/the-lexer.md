@@ -120,7 +120,8 @@ Extends  Implements  Interface  Abstract  Final  Inf  Nan  PhpIntMax
 PhpIntMin  PhpFloatMax  MPi  ME  MSqrt2  MPi2  MPi4  MLog2e
 MLog10e  PhpFloatMin  PhpFloatEpsilon  Print  Switch  Case  Default  Match
 Include  IncludeOnce  Require  RequireOnce  Stdin  Stdout  Stderr  Fn
-Use  Namespace  Const  Global  Declare  EndDeclare  Static  Self_
+Use  Namespace  Const  Global  Declare  EndDeclare  EndIf  EndWhile  EndFor
+EndForeach  EndSwitch  Goto  Static  Self_
 Trait  Parent  InsteadOf  InstanceOf  PhpEol  PhpOs  DirectorySeparator  DunderDir
 DunderFile  DunderLine  DunderFunction  DunderClass  DunderMethod  DunderNamespace  DunderTrait  Class
 Enum  New  Clone  Public  Protected  Private  ReadOnly  This
@@ -129,7 +130,7 @@ Star  StarStar  Slash  Percent  Dot  Comma  Backslash  LBracket
 RBracket  Question  Colon  PlusAssign  MinusAssign  StarAssign  StarStarAssign  SlashAssign
 DotAssign  PercentAssign  AmpAssign  PipeAssign  CaretAssign  LessLessAssign  GreaterGreaterAssign  PlusPlus
 MinusMinus  AndAnd  OrOr  And  Or  Xor  Bang  EqualEqual
-EqualEqualEqual  NotEqual  NotEqualEqual  Less  Greater  LessEqual  GreaterEqual  Spaceship
+EqualEqualEqual  NotEqual  LessGreater  NotEqualEqual  Less  Greater  LessEqual  GreaterEqual  Spaceship
 Ampersand  Pipe  Caret  Tilde  At  LessLess  GreaterGreater  Arrow
 QuestionArrow  DoubleColon  QuestionQuestion  QuestionQuestionAssign  PipeArrow  Ellipsis  Eof
 ```
@@ -166,11 +167,12 @@ echo  if  else  elseif  while  do  for  foreach  as
 break  continue  function  return  include  require
 include_once  require_once  true  false  null  print
 switch  case  default  match  try  catch  finally  throw  yield  fn  use  namespace  ifdef  extern  const
-global  static  declare  enddeclare  self  class  abstract  final  interface  trait  extends  implements  new  clone
+global  static  declare  enddeclare  endif  endwhile  endfor  endforeach  endswitch  goto
+self  class  abstract  final  interface  trait  extends  implements  new  clone
 public  protected  private  readonly  parent  insteadof  instanceof  enum  packed
 ```
 
-Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly` and `enddeclare` is `Token::EndDeclare`. `declare` / `enddeclare` drive the `declare(directive=literal)` statement and its alternative `declare(...): ... enddeclare;` block form. Keywords are matched case-insensitively; non-canonical casing is preserved in `TokenMetadata` (see [Token metadata](#token-metadata)).
+Each keyword is a distinct token variant (e.g., `Token::If`, `Token::While`, `Token::Switch`). Multi-word keyword spellings use camel-cased variants such as `Token::IncludeOnce` and `Token::RequireOnce`; `readonly` is `Token::ReadOnly`, while the alternative-syntax terminators map to `Token::EndDeclare`, `Token::EndIf`, `Token::EndWhile`, `Token::EndFor`, `Token::EndForeach`, and `Token::EndSwitch`. `declare` / `enddeclare` drive the `declare(directive=literal)` statement and its alternative `declare(...): ... enddeclare;` block form. Keywords are matched case-insensitively; non-canonical casing is preserved in `TokenMetadata` (see [Token metadata](#token-metadata)).
 
 ### Constants (keyword tokens)
 
@@ -197,7 +199,7 @@ PHP magic constants are tokenized as `Token::DunderDir`, `Token::DunderFile`, `T
 ```
 +  -  *  **  /  %  .
 =  =>  +=  -=  *=  **=  /=  .=  %=  &=  |=  ^=  <<=  >>=  ??=
-==  ===  !=  !==  <  >  <=  >=  <=>
+==  ===  !=  <>  !==  <  >  <=  >=  <=>
 &&  ||  and  or  xor  !
 instanceof
 &  |  ^  ~  @  <<  >>

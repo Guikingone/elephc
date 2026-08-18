@@ -396,9 +396,8 @@ pub(super) enum KeySortOrder {
 /// which relink the table's insertion-order chain and therefore keep each key attached to
 /// its own value. An indexed array stores its keys implicitly as slot positions `0..n-1`,
 /// which are already in ascending key order, so `ksort()` on one is a genuine no-op, as is
-/// either sort over a statically empty indexed array. `krsort()` over a non-empty indexed
-/// array is rejected instead of silently leaving the receiver untouched, because that
-/// storage has no room for a descending key order.
+/// either sort over a statically empty indexed array. EIR argument lowering promotes a
+/// non-empty packed receiver to an integer-keyed hash before `krsort()` reaches this layer.
 pub(super) fn lower_array_key_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -422,7 +421,7 @@ pub(super) fn lower_array_key_sort(
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
+                1,
             );
             store_if_result(ctx, inst)
         }

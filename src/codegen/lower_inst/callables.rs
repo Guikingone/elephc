@@ -213,14 +213,20 @@ fn lower_mixed_callable_descriptor_invoke(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");              // unbox → x0=tag, x1=payload lo, x2=payload hi
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // dispatch a boxed string-name callable
-            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
+            ctx.emitter.instruction(
+                &format!("cmp x0, #{}", MIXED_TAG_CALLABLE)
+            );                                                                  // is the boxed Mixed payload a callable descriptor?
             ctx.emitter.instruction(&format!("b.eq {}", callable_label));       // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
+                ctx.emitter.instruction(
+                    &format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)
+                );                                                              // is the boxed Mixed payload a two-element callable array?
                 ctx.emitter.instruction(&format!("b.eq {}", array_label));      // dispatch a boxed instance/static-method callable array
             }
             if let Some(object_label) = &object_label {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
+                ctx.emitter.instruction(
+                    &format!("cmp x0, #{}", MIXED_TAG_OBJECT)
+                );                                                              // is the boxed Mixed payload an invokable object?
                 ctx.emitter.instruction(&format!("b.eq {}", object_label));     // dispatch the object's public __invoke method
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
@@ -232,14 +238,20 @@ fn lower_mixed_callable_descriptor_invoke(
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");             // unbox → rax=tag, rdi=payload lo, rdx=payload hi
             ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // is the boxed Mixed payload a string function name?
             ctx.emitter.instruction(&format!("je {}", string_label));           // dispatch a boxed string-name callable
-            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // is the boxed Mixed payload a callable descriptor?
+            ctx.emitter.instruction(
+                &format!("cmp rax, {}", MIXED_TAG_CALLABLE)
+            );                                                                  // is the boxed Mixed payload a callable descriptor?
             ctx.emitter.instruction(&format!("je {}", callable_label));         // dispatch a boxed closure/first-class callable descriptor
             if let Some(array_label) = &array_label {
-                ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)); // is the boxed Mixed payload a two-element callable array?
+                ctx.emitter.instruction(
+                    &format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)
+                );                                                              // is the boxed Mixed payload a two-element callable array?
                 ctx.emitter.instruction(&format!("je {}", array_label));        // dispatch a boxed instance/static-method callable array
             }
             if let Some(object_label) = &object_label {
-                ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_OBJECT)); // is the boxed Mixed payload an invokable object?
+                ctx.emitter.instruction(
+                    &format!("cmp rax, {}", MIXED_TAG_OBJECT)
+                );                                                              // is the boxed Mixed payload an invokable object?
                 ctx.emitter.instruction(&format!("je {}", object_label));       // dispatch the object's public __invoke method
             }
             abi::emit_jump(ctx.emitter, &fatal_label);
@@ -364,33 +376,45 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         Arch::AArch64 => {
             ctx.load_value_to_reg(callable, "x0")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));    // return the existing descriptor payload
+            ctx.emitter.instruction(
+                &format!("cmp x0, #{}", MIXED_TAG_CALLABLE)
+            );                                                                  // classify an existing callable descriptor
+            ctx.emitter.instruction(&format!("b.eq {}", descriptor_label));     // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("b.eq {}", string_label));        // resolve the callable name through the descriptor table
+            ctx.emitter.instruction(&format!("b.eq {}", string_label));         // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
+                ctx.emitter.instruction(
+                    &format!("cmp x0, #{}", MIXED_TAG_INDEXED_ARRAY)
+                );                                                              // classify a two-element callable array
                 ctx.emitter.instruction(&format!("b.eq {}", array_label));      // resolve an instance/static method descriptor
             }
             if let Some(object_label) = &object_label {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("b.eq {}", object_label));    // bind the public __invoke descriptor
+                ctx.emitter.instruction(
+                    &format!("cmp x0, #{}", MIXED_TAG_OBJECT)
+                );                                                              // classify an invokable object
+                ctx.emitter.instruction(&format!("b.eq {}", object_label));     // bind the public __invoke descriptor
             }
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(callable, "rax")?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-            ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_CALLABLE)); // classify an existing callable descriptor
-            ctx.emitter.instruction(&format!("je {}", descriptor_label));      // return the existing descriptor payload
+            ctx.emitter.instruction(
+                &format!("cmp rax, {}", MIXED_TAG_CALLABLE)
+            );                                                                  // classify an existing callable descriptor
+            ctx.emitter.instruction(&format!("je {}", descriptor_label));       // return the existing descriptor payload
             ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_STRING)); // classify a runtime callable name
-            ctx.emitter.instruction(&format!("je {}", string_label));          // resolve the callable name through the descriptor table
+            ctx.emitter.instruction(&format!("je {}", string_label));           // resolve the callable name through the descriptor table
             if let Some(array_label) = &array_label {
-                ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)); // classify a two-element callable array
-                ctx.emitter.instruction(&format!("je {}", array_label));       // resolve an instance/static method descriptor
+                ctx.emitter.instruction(
+                    &format!("cmp rax, {}", MIXED_TAG_INDEXED_ARRAY)
+                );                                                              // classify a two-element callable array
+                ctx.emitter.instruction(&format!("je {}", array_label));        // resolve an instance/static method descriptor
             }
             if let Some(object_label) = &object_label {
-                ctx.emitter.instruction(&format!("cmp rax, {}", MIXED_TAG_OBJECT)); // classify an invokable object
-                ctx.emitter.instruction(&format!("je {}", object_label));      // bind the public __invoke descriptor
+                ctx.emitter.instruction(
+                    &format!("cmp rax, {}", MIXED_TAG_OBJECT)
+                );                                                              // classify an invokable object
+                ctx.emitter.instruction(&format!("je {}", object_label));       // bind the public __invoke descriptor
             }
         }
     }
@@ -399,7 +423,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
     ctx.emitter.label(&descriptor_label);
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // return the unboxed descriptor payload
-        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),               // return the unboxed descriptor payload
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // return the unboxed descriptor payload
     }
     if retain_existing_descriptor {
         callable_descriptor::emit_retain_current_descriptor(ctx.emitter);
@@ -1614,16 +1638,24 @@ fn emit_boxed_callable_array_selector_slots(
     emit_load_callable_array_base(ctx, source, array_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
-            ctx.emitter.instruction(&format!("lsr {}, {}, #8", stamp_reg, stamp_reg)); // move the value-type byte into the low bits
-            ctx.emitter.instruction(&format!("and {}, {}, #0x7f", stamp_reg, stamp_reg)); // isolate the callable-array slot representation
+            ctx.emitter.instruction(
+                &format!("ldr {}, [{}, #-8]", stamp_reg, array_reg)
+            );                                                                  // load the indexed-array packed value-type stamp
+            ctx.emitter.instruction(
+                &format!("lsr {}, {}, #8", stamp_reg, stamp_reg)
+            );                                                                  // move the value-type byte into the low bits
+            ctx.emitter.instruction(
+                &format!("and {}, {}, #0x7f", stamp_reg, stamp_reg)
+            );                                                                  // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, #7", stamp_reg));         // do the array slots contain boxed Mixed cells?
             ctx.emitter.instruction(&format!("b.eq {}", mixed_label));          // decode each selector through __rt_mixed_unbox
             ctx.emitter.instruction(&format!("cmp {}, #1", stamp_reg));         // do the array slots contain string pointer/length pairs?
             ctx.emitter.instruction(&format!("b.eq {}", string_label));         // synthesize string-tagged selectors from typed slots
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", stamp_reg, array_reg)); // load the indexed-array packed value-type stamp
+            ctx.emitter.instruction(
+                &format!("mov {}, QWORD PTR [{} - 8]", stamp_reg, array_reg)
+            );                                                                  // load the indexed-array packed value-type stamp
             ctx.emitter.instruction(&format!("shr {}, 8", stamp_reg));          // move the value-type byte into the low bits
             ctx.emitter.instruction(&format!("and {}, 0x7f", stamp_reg));       // isolate the callable-array slot representation
             ctx.emitter.instruction(&format!("cmp {}, 7", stamp_reg));          // do the array slots contain boxed Mixed cells?
@@ -1725,10 +1757,14 @@ fn emit_unbox_mixed_callable_array_slot(
     emit_load_callable_array_base(ctx, source, array_reg)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("ldr x0, [{}, #{}]", array_reg, offset)); // load the boxed callable-array selector slot
+            ctx.emitter.instruction(
+                &format!("ldr x0, [{}, #{}]", array_reg, offset)
+            );                                                                  // load the boxed callable-array selector slot
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)); // load the boxed callable-array selector slot
+            ctx.emitter.instruction(
+                &format!("mov rax, QWORD PTR [{} + {}]", array_reg, offset)
+            );                                                                  // load the boxed callable-array selector slot
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -1761,7 +1797,7 @@ fn emit_load_callable_array_base(
                     ctx.emitter.instruction(&format!("mov {}, x1", array_reg)); // borrow the unboxed indexed-array pointer as the selector base
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("mov {}, rdi", array_reg)); // borrow the unboxed indexed-array pointer as the selector base
+                    ctx.emitter.instruction(&format!("mov {}, rdi", array_reg));// borrow the unboxed indexed-array pointer as the selector base
                 }
             }
             Ok(())
@@ -1799,15 +1835,21 @@ fn emit_require_callable_array_pair_in_reg(ctx: &mut FunctionContext<'_>, array_
     let invalid_label = ctx.next_label("callable_array_pair_invalid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", array_reg, invalid_label)); // reject a null callable-array pointer before reading its header
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", array_reg, invalid_label)
+            );                                                                  // reject a null callable-array pointer before reading its header
             ctx.emitter.instruction(&format!("ldr x10, [{}]", array_reg));      // load the callable-array element count
             ctx.emitter.instruction("cmp x10, #2");                             // require exactly [receiver, method]
             ctx.emitter.instruction(&format!("b.eq {}", valid_label));          // read selectors only for a valid pair
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("test {}, {}", array_reg, array_reg)); // reject a null callable-array pointer before reading its header
+            ctx.emitter.instruction(
+                &format!("test {}, {}", array_reg, array_reg)
+            );                                                                  // reject a null callable-array pointer before reading its header
             ctx.emitter.instruction(&format!("je {}", invalid_label));          // avoid dereferencing a null callable-array pointer
-            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [{}]", array_reg)); // load the callable-array element count
+            ctx.emitter.instruction(
+                &format!("mov r10, QWORD PTR [{}]", array_reg)
+            );                                                                  // load the callable-array element count
             ctx.emitter.instruction("cmp r10, 2");                              // require exactly [receiver, method]
             ctx.emitter.instruction(&format!("je {}", valid_label));            // read selectors only for a valid pair
         }

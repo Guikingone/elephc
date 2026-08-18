@@ -1,14 +1,13 @@
 //! Purpose:
 //! Lowers EIR buffer allocation and direct buffer opcodes for the ASM backend.
-//! Covers the scalar buffer allocation path needed before indexed reads/writes land.
+//! Public Buffer values are generation-safe scalar handles resolved by the runtime.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Buffers are heap headers whose first words match the legacy runtime layout:
-//!   logical length, element stride, then contiguous zero-initialized payload.
-//! - This module delegates allocation and length checks to target-aware runtime helpers.
+//! - Only a validated descriptor may supply payload, length, or stride metadata.
+//! - Buffer get/set preserve PHP source evaluation order while spilling call-clobbered values.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -38,7 +37,7 @@ pub(super) fn lower_buffer_new(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Lowers `buffer_len(buffer)` by delegating live-header validation to the runtime.
+/// Lowers `buffer_len(buffer)` by delegating handle resolution and length access to the runtime.
 pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "buffer_len", 1)?;
     let buffer = expect_operand(inst, 0)?;
@@ -47,7 +46,7 @@ pub(super) fn lower_buffer_len(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_if_result(ctx, inst)
 }
 
-/// Lowers `buffer_free(buffer)` by freeing the header and nulling the source local slot.
+/// Lowers `buffer_free(buffer)` by releasing non-null local handles and nulling the owner slot.
 pub(super) fn lower_buffer_free(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "buffer_free", 1)?;
     let buffer = expect_operand(inst, 0)?;
@@ -55,14 +54,28 @@ pub(super) fn lower_buffer_free(ctx: &mut FunctionContext<'_>, inst: &Instructio
         CodegenIrError::unsupported("buffer_free argument that is not a local load")
     })?;
     require_buffer(ctx.load_value_to_result(buffer)?, "buffer_free")?;
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            let already_freed = ctx.next_label("buffer_free_already_freed");
+            ctx.emitter.instruction(&format!("cbz x0, {}", already_freed));     // treat a repeated free of the nulled owner slot as a no-op
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_free");
+            ctx.emitter.label(&already_freed);
+        }
+        Arch::X86_64 => {
+            let already_freed = ctx.next_label("buffer_free_already_freed");
+            ctx.emitter.instruction("test rax, rax");                           // distinguish the nulled owner slot from a live generation-safe handle
+            ctx.emitter.instruction(&format!("jz {}", already_freed));          // repeated frees are defined as an idempotent no-op
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_free");
+            ctx.emitter.label(&already_freed);
+        }
+    }
     let offset = ctx.local_offset(slot)?;
     abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
     emit_void_result(ctx);
     store_if_result(ctx, inst)
 }
 
-/// Lowers `BufferGet` by checking the buffer header and loading the addressed scalar element.
+/// Lowers `BufferGet` by resolving its handle, checking descriptor bounds, and loading a scalar element.
 pub(super) fn lower_buffer_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "buffer_get", 2)?;
     let buffer = expect_operand(inst, 0)?;
@@ -71,12 +84,13 @@ pub(super) fn lower_buffer_get(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let elem_ty = require_buffer(buffer_ty, "buffer_get")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     require_int(ctx.load_value_to_result(index)?, "buffer_get index")?;
-    let address_reg = materialize_checked_element_address(ctx)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    let address_reg = materialize_resolved_element_address_for_get(ctx);
     load_element_value(ctx, &elem_ty, address_reg)?;
     store_if_result(ctx, inst)
 }
 
-/// Lowers `BufferSet` by checking the buffer header and storing the addressed scalar element.
+/// Lowers `BufferSet` by resolving its handle after source-order buffer, index, and RHS evaluation.
 pub(super) fn lower_buffer_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "buffer_set", 3)?;
     let buffer = expect_operand(inst, 0)?;
@@ -88,7 +102,10 @@ pub(super) fn lower_buffer_set(ctx: &mut FunctionContext<'_>, inst: &Instruction
     require_int(ctx.load_value_to_result(index)?, "buffer_set index")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_set_value(ctx, value, &elem_ty)?;
-    let address_reg = materialize_checked_element_address_for_set(ctx)?;
+    push_buffer_set_value(ctx, &elem_ty)?;
+    let address_reg = materialize_resolved_element_address_for_set(ctx);
+    pop_buffer_set_value(ctx, &elem_ty)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
     store_element_value(ctx, &elem_ty, address_reg)?;
     store_if_result(ctx, inst)
 }
@@ -139,7 +156,7 @@ fn buffer_stride(ctx: &FunctionContext<'_>, buffer_ty: &PhpType) -> Result<usize
     }
 }
 
-/// Verifies a value is represented as a runtime buffer header pointer.
+/// Verifies a value is represented as a generation-safe scalar Buffer handle.
 fn require_buffer(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Buffer(elem_ty) => Ok(*elem_ty),
@@ -170,88 +187,124 @@ fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<O
     Ok(None)
 }
 
-/// Materializes a checked payload address for a buffer read.
-fn materialize_checked_element_address(ctx: &mut FunctionContext<'_>) -> Result<&'static str> {
-    let buffer_reg = abi::symbol_scratch_reg(ctx.emitter);
+/// Resolves the stacked Buffer handle and returns a bounds-checked payload address for a read.
+fn materialize_resolved_element_address_for_get(ctx: &mut FunctionContext<'_>) -> &'static str {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x10, x0");                             // preserve the requested index while restoring the buffer header pointer
-            abi::emit_pop_reg(ctx.emitter, buffer_reg);
-            emit_checked_address_arm64(ctx, buffer_reg, "x10");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            emit_checked_address_arm64(ctx, "x0", "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, rax");                            // preserve the requested index while restoring the buffer header pointer
-            abi::emit_pop_reg(ctx.emitter, buffer_reg);
-            emit_checked_address_x86_64(ctx, buffer_reg, "r10");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            emit_checked_address_x86_64(ctx, "rax", "r10");
         }
     }
-    Ok(buffer_reg)
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x11",
+        Arch::X86_64 => "r11",
+    }
 }
 
-/// Materializes a checked payload address for a buffer write with value/index slots preserved.
-fn materialize_checked_element_address_for_set(ctx: &mut FunctionContext<'_>) -> Result<&'static str> {
-    let buffer_reg = abi::symbol_scratch_reg(ctx.emitter);
+/// Resolves the stacked Buffer handle and returns a bounds-checked payload address for a write.
+/// The RHS remains at the top of the temporary stack until after resolver and bounds checks.
+fn materialize_resolved_element_address_for_set(ctx: &mut FunctionContext<'_>) -> &'static str {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x10, [sp]");                           // reload the requested buffer index from the preserved stack slot
-            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // reload the buffer header pointer from the preserved stack slot
-            emit_checked_address_arm64(ctx, buffer_reg, "x10");
-            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 32);
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 16);
+            emit_checked_address_arm64(ctx, "x0", "x10");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the requested buffer index from the preserved stack slot
-            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 16]");           // reload the buffer header pointer from the preserved stack slot
-            emit_checked_address_x86_64(ctx, buffer_reg, "r10");
-            abi::emit_release_temporary_stack(ctx.emitter, 32);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 32);
+            abi::emit_call_label(ctx.emitter, "__rt_buffer_resolve");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 16);
+            emit_checked_address_x86_64(ctx, "rax", "r10");
         }
     }
-    Ok(buffer_reg)
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x11",
+        Arch::X86_64 => "r11",
+    }
 }
 
-/// Emits ARM64 null, bounds, and payload-address checks for a buffer element.
-fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, buffer_reg: &str, index_reg: &str) {
-    let uaf_ok = ctx.next_label("buffer_uaf_ok");
+/// Emits ARM64 descriptor bounds checks and computes its payload element address.
+fn emit_checked_address_arm64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
     let non_negative = ctx.next_label("buffer_index_non_negative");
     let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    ctx.emitter.instruction(&format!("cbnz {}, {}", buffer_reg, uaf_ok));       // continue only when the buffer header pointer is live
-    ctx.emitter.instruction("b __rt_buffer_use_after_free");                    // abort on use after buffer_free() nulled the local
-    ctx.emitter.label(&uaf_ok);
     ctx.emitter.instruction(&format!("cmp {}, #0", index_reg));                 // reject negative buffer indexes before touching the payload
     ctx.emitter.instruction(&format!("b.ge {}", non_negative));                 // continue once the requested index is non-negative
     ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on a negative buffer index
     ctx.emitter.label(&non_negative);
-    abi::emit_load_from_address(ctx.emitter, "x11", buffer_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, x11", index_reg));                // compare the requested index against the logical buffer length
+    abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 8);
+    ctx.emitter.instruction(&format!("cmp {}, x12", index_reg));                // compare requested index against validated descriptor logical length
     ctx.emitter.instruction(&format!("b.lo {}", bounds_ok));                    // continue once the requested index is within bounds
     ctx.emitter.instruction("b __rt_buffer_bounds_fail");                       // abort immediately on an out-of-range buffer index
     ctx.emitter.label(&bounds_ok);
-    abi::emit_load_from_address(ctx.emitter, "x11", buffer_reg, 8);
-    ctx.emitter.instruction(&format!("add {}, {}, #16", buffer_reg, buffer_reg)); // skip the buffer header to reach the contiguous payload base
-    ctx.emitter.instruction(&format!("madd {}, {}, x11, {}", buffer_reg, index_reg, buffer_reg)); // compute payload base + index * stride
+    abi::emit_load_from_address(ctx.emitter, "x11", descriptor_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, "x12", descriptor_reg, 16);
+    ctx.emitter.instruction(&format!("madd x11, {}, x12, x11", index_reg));     // compute payload base plus index multiplied by descriptor stride
 }
 
-/// Emits x86_64 null, bounds, and payload-address checks for a buffer element.
-fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, buffer_reg: &str, index_reg: &str) {
-    let uaf_ok = ctx.next_label("buffer_uaf_ok");
+/// Emits x86_64 descriptor bounds checks and computes its payload element address.
+fn emit_checked_address_x86_64(ctx: &mut FunctionContext<'_>, descriptor_reg: &str, index_reg: &str) {
     let non_negative = ctx.next_label("buffer_index_non_negative");
     let bounds_ok = ctx.next_label("buffer_index_in_bounds");
-    ctx.emitter.instruction(&format!("test {}, {}", buffer_reg, buffer_reg));   // check whether the buffer header pointer is live
-    ctx.emitter.instruction(&format!("jne {}", uaf_ok));                        // continue only when the buffer local was not nulled
-    ctx.emitter.instruction("jmp __rt_buffer_use_after_free");                  // abort on use after buffer_free() nulled the local
-    ctx.emitter.label(&uaf_ok);
     ctx.emitter.instruction(&format!("cmp {}, 0", index_reg));                  // reject negative buffer indexes before touching the payload
     ctx.emitter.instruction(&format!("jge {}", non_negative));                  // continue once the requested index is non-negative
     ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");                     // abort immediately on a negative buffer index
     ctx.emitter.label(&non_negative);
-    abi::emit_load_from_address(ctx.emitter, "rcx", buffer_reg, 0);
-    ctx.emitter.instruction(&format!("cmp {}, rcx", index_reg));                // compare the requested index against the logical buffer length
-    ctx.emitter.instruction(&format!("jl {}", bounds_ok));                      // continue once the requested index is within bounds
+    abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 8);
+    ctx.emitter.instruction(&format!("cmp {}, rcx", index_reg));                // compare requested index against validated descriptor logical length
+    ctx.emitter.instruction(&format!("jb {}", bounds_ok));                      // continue once the requested unsigned index is within bounds
     ctx.emitter.instruction("jmp __rt_buffer_bounds_fail");                     // abort immediately on an out-of-range buffer index
     ctx.emitter.label(&bounds_ok);
-    abi::emit_load_from_address(ctx.emitter, "rcx", buffer_reg, 8);
+    abi::emit_load_from_address(ctx.emitter, "r11", descriptor_reg, 0);
+    abi::emit_load_from_address(ctx.emitter, "rcx", descriptor_reg, 16);
     ctx.emitter.instruction(&format!("imul {}, rcx", index_reg));               // scale the requested index by the element stride in bytes
-    ctx.emitter.instruction(&format!("add {}, 16", buffer_reg));                // skip the buffer header to reach the contiguous payload base
-    ctx.emitter.instruction(&format!("add {}, {}", buffer_reg, index_reg));     // compute payload base + index * stride
+    ctx.emitter.instruction(&format!("add r11, {}", index_reg));                // compute payload base plus index multiplied by descriptor stride
+}
+
+/// Pushes the materialized BufferSet RHS so resolver and bounds code cannot clobber it.
+fn push_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
+    match elem_ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Resource(_) => {
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "buffer_set stack spill for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Restores the BufferSet RHS after resolver and bounds code have produced the payload address.
+fn pop_buffer_set_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) -> Result<()> {
+    match elem_ty.codegen_repr() {
+        PhpType::Float => {
+            abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Pointer(_) | PhpType::Resource(_) => {
+            abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "buffer_set stack restore for PHP type {:?}",
+            other
+        ))),
+    }
 }
 
 /// Loads a scalar element from the checked payload address.
@@ -270,10 +323,14 @@ fn load_element_value(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType, address_
             if result_reg != address_reg {
                 match ctx.emitter.target.arch {
                     Arch::AArch64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(
+                            &format!("mov {}, {}", result_reg, address_reg)
+                        );                                                      // return the checked packed-element address as the packed receiver pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction(&format!("mov {}, {}", result_reg, address_reg)); // return the checked packed-element address as the packed receiver pointer
+                        ctx.emitter.instruction(
+                            &format!("mov {}, {}", result_reg, address_reg)
+                        );                                                      // return the checked packed-element address as the packed receiver pointer
                     }
                 }
             }

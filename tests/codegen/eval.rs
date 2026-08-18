@@ -6186,6 +6186,26 @@ echo function_exists("asort") && function_exists("arsort") && function_exists("k
     );
 }
 
+/// Verifies Magician key sorting delegates mixed-key `SORT_REGULAR` comparison
+/// to the same PHP comparator as AOT instead of ordering by an internal tag rank.
+#[test]
+fn test_eval_key_sort_mixed_keys_matches_aot() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$dynamic = [10 => "a", "9" => "b", "apple" => "c", "Banana" => "d", 2 => "e", "" => "f"];
+ksort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }
+echo "|";
+krsort($dynamic);
+foreach ($dynamic as $key => $value) { echo $key, "=", $value, ";"; }');
+"#,
+    );
+    assert_eq!(
+        out,
+        "=f;2=e;9=b;10=a;Banana=d;apple=c;|apple=c;Banana=d;10=a;9=b;2=e;=f;"
+    );
+}
+
 /// Verifies eval natural sort builtins preserve keys and use natural string order.
 #[test]
 fn test_eval_dispatches_natural_sort_builtin_calls() {
@@ -8051,7 +8071,8 @@ echo is_executable("/bin/sh") ? "exec" : "bad"; echo ":";
 echo is_link("eval-stat.txt") ? "bad" : "notlink"; echo ":";
 echo fileatime("missing-stat.txt") === false ? "missing-atime" : "bad"; echo ":";
 echo filetype("missing-stat.txt") === false ? "missing-type" : "bad"; echo ":";
-echo filemtime("missing-stat.txt") === 0 ? "missing-mtime" : "bad"; echo ":";
+echo filemtime("missing-stat.txt") === false ? "missing-mtime" : "bad"; echo ":";
+echo filesize("missing-stat.txt") === false ? "missing-size" : "bad"; echo ":";
 echo call_user_func("filetype", "eval-stat.txt") . ":";
 echo call_user_func_array("fileinode", ["filename" => "eval-stat.txt"]) > 0 ? "callinode" : "bad"; echo ":";
 echo function_exists("filemtime"); echo function_exists("fileatime");
@@ -8064,7 +8085,7 @@ unlink("eval-stat.txt");');
     );
     assert_eq!(
         out,
-        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:file:callinode:1111111111"
+        "mtime:atime:ctime:perms:owner:group:inode:file:dir:exec:notlink:missing-atime:missing-type:missing-mtime:missing-size:file:callinode:1111111111"
     );
 }
 
@@ -18967,6 +18988,39 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     public function __unserialize(): void {}
 }');"#,
     );
+}
+
+/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+#[test]
+fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+    let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+echo openssl_cipher_iv_length("aes-128-cbc") . ":";
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo openssl_cipher_iv_length("aes-256-gcm");';
+eval($code);
+"#,
+    )
+    .expect("write AOT and eval OpenSSL fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("compile AOT and eval OpenSSL fixture");
+    assert!(
+        compile.status.success(),
+        "AOT and eval OpenSSL link failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .output()
+        .expect("run AOT and eval OpenSSL fixture");
+
+    assert!(run.status.success(), "AOT and eval OpenSSL fixture failed");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "16:12");
 }
 
 /// Verifies eval rejects non-array `__debugInfo` return declarations.

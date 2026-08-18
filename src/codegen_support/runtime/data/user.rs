@@ -438,6 +438,27 @@ pub(crate) fn emit_runtime_data_user(
         }
     }
 
+    // Dense class-id-indexed __toString table for runtime string coercions that
+    // cannot know the concrete class during EIR lowering (notably
+    // unserialize()'s allowed_classes values).
+    out.push_str(".globl _class_tostring_count\n_class_tostring_count:\n");
+    out.push_str(&format!(
+        "    .quad {}\n",
+        max_class_id.map_or(0, |class_id| class_id + 1)
+    ));
+    out.push_str(".globl _class_tostring_ptrs\n_class_tostring_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        let tostring_key = php_symbol_key("__toString");
+        for class_id in 0..=max_class_id {
+            let entry = class_info_by_id
+                .get(&class_id)
+                .and_then(|class_info| class_info.method_impl_classes.get(&tostring_key))
+                .map(|impl_class| method_symbol(impl_class, &tostring_key))
+                .unwrap_or_else(|| "0".to_string());
+            out.push_str(&format!("    .quad {}\n", entry));
+        }
+    }
+
     // Per-class serialize-magic symbol tables — consulted by __rt_serialize_object
     // and __rt_unser_at_object. Each is a dense class_id-indexed table whose entry
     // resolves through the implementing class (so an inherited magic method
@@ -493,6 +514,20 @@ pub(crate) fn emit_runtime_data_user(
                 out.push_str(&format!("    .quad _class_serprop_{}\n", class_id));
             } else {
                 out.push_str("    .quad _class_serprop_missing\n");
+            }
+        }
+    }
+
+    // Parallel class-id-indexed property declaring-class tables used by
+    // get_object_vars() to evaluate protected visibility against each property's
+    // declaration scope instead of the runtime object's concrete class.
+    out.push_str(".globl _class_serprop_declaring_ptrs\n_class_serprop_declaring_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_serprop_declaring_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_serprop_declaring_missing\n");
             }
         }
     }
@@ -557,6 +592,8 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_serprop_missing\n_class_serprop_missing:\n");
     out.push_str("    .quad 0\n"); // property count = 0
+    out.push_str(".globl _class_serprop_declaring_missing\n_class_serprop_declaring_missing:\n");
+    out.push_str("    .quad -1\n"); // no declaring class for a missing descriptor
     // _class_json_desc_missing: zero flags, zero properties, no jsonSerialize.
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_json_desc_missing\n_class_json_desc_missing:\n");
@@ -992,6 +1029,23 @@ pub(crate) fn emit_runtime_data_user(
             out.push_str(&format!("    .quad {}\n", mangled_len)); // mangled key byte length
             out.push_str(&format!("    .quad {}\n", offset)); // byte offset within the object
             out.push_str(&format!("    .quad {}\n", tag)); // runtime value tag
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_serprop_declaring_{}\n_class_serprop_declaring_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        for (prop_name, _) in &class_info.properties {
+            let declaring_class = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            let declaring_class_id = all_class_id_by_name
+                .get(declaring_class)
+                .copied()
+                .unwrap_or(class_info.class_id);
+            out.push_str(&format!("    .quad {}\n", declaring_class_id));
         }
 
         // var_dump property-info table: one row per RENDERED property, carrying the

@@ -1141,8 +1141,11 @@ fn ir_backend_handles_scalar_builtins() {
         ),
         (
             "substr_strings",
+            // `substr('Hello', 1, -2)` is "el": PHP reads a negative length as bytes omitted from
+            // the end, not as an error. This expectation used to be "[]", written from an
+            // implementation that clamped every negative length to zero.
             "<?php echo substr('Hello World', 6); echo ':'; echo substr('Hello World', 0, 5); echo ':'; echo substr('Hello World', -5); echo ':'; echo '['; echo substr('Hello', 50); echo ']'; echo ':'; echo '['; echo substr('Hello', 1, -2); echo ']';",
-            "World:Hello:World:[]:[]",
+            "World:Hello:World:[]:[el]",
         ),
         (
             "substr_replace_strings",
@@ -6977,4 +6980,26 @@ fn unique_test_id() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time should be after unix epoch")
         .as_nanos()
+}
+
+/// Verifies that an assignment used as the right operand of a comparison evaluates with PHP
+/// semantics: the assignment happens first and its value is what the comparison sees.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_comparison() {
+    let source = "<?php $s = \"a/b/c\"; if (false !== $pos = strrpos($s, \"/\")) { echo $pos; }";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_comparison", source),
+        "3"
+    );
+}
+
+/// Verifies that a chained assignment inside an arithmetic expression assigns the inner
+/// variable and folds its value into the surrounding sum, matching PHP.
+#[test]
+fn ir_backend_evaluates_assignment_as_right_operand_of_arithmetic() {
+    let source = "<?php $x = 1 + $y = 2; echo $x; echo $y;";
+    assert_eq!(
+        compile_and_run_ir_backend("assign_in_arithmetic", source),
+        "32"
+    );
 }

@@ -971,7 +971,7 @@ and 0.x validation rather than by speculative pass work.
 - [x] Move historical codegen doc to `docs/internals/legacy-codegen.md`; refresh `docs/internals/the-codegen.md` to describe the IR pipeline
 - [x] Refresh `docs/internals/the-ir.md` as the canonical, non-preview IR contract for v1.0
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
-- [ ] Installation / packaging documentation for the supported host platforms
+- [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
 
 ## Later 0.x product tracks
 
@@ -1010,6 +1010,13 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 4.1** — compile-time handler isolation: plain `--web` preserves the
+  original in-process `worker` path and performance; `--web-isolation=pool`
+  selects persistent supervised handler children; `request` selects a tracked,
+  disposable child per request. Isolated modes add configurable handler
+  concurrency, body/response deadlines, streaming output, exact dispatch-ID
+  cancellation, PID reaping/replacement, pool-child quotas, and descendant-safe
+  shutdown without adding request-time branching or IPC to the default mode.
 - [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
   `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
   `session_write_close()` (auto-called at handler end via a finally block),

@@ -23,6 +23,7 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use socket2::{Domain, Protocol, Socket, Type};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 
 use crate::request_state;
 use crate::session::upload_progress;
@@ -45,6 +46,14 @@ fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
 static SERVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Records one completed handler and broadcasts a graceful recycle at the quota.
+fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
+    if max_requests > 0 && served >= max_requests {
+        let _ = recycle.send(true);
+    }
+}
 
 /// Exit code a worker child uses for a planned `--max-requests` recycle.
 /// Distinct from 0 (clean exit), 1 (worker setup/handler errors), and 2 (usage
@@ -147,21 +156,40 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                 std::process::exit(1);
             }
         };
+        let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut connections = Vec::new();
         loop {
+            connections.retain(|connection: &tokio::task::JoinHandle<_>| {
+                !connection.is_finished()
+            });
             // --max-requests recycling: stop accepting once the cap is reached so
             // the master respawns a fresh worker (bounds memory growth over time).
-            if max_requests > 0 && SERVED.load(Ordering::Relaxed) >= max_requests {
+            if *recycle_requested.borrow() {
                 break;
             }
-            let (stream, peer) = match listener.accept().await {
+            let accepted = tokio::select! {
+                changed = recycle_requested.changed() => {
+                    if changed.is_err() || *recycle_requested.borrow() {
+                        break;
+                    }
+                    continue;
+                }
+                accepted = listener.accept() => accepted,
+            };
+            let (stream, peer) = match accepted {
                 Ok(pair) => pair,
                 Err(_) => continue,
             };
             let io = TokioIo::new(stream);
-            tokio::task::spawn_local(http1::Builder::new()
-                .timer(TokioTimer::new())
-                .header_read_timeout(Duration::from_secs(30))
-                .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| async move {
+            let request_recycle = recycle.clone();
+            let mut connection_recycle = recycle.subscribe();
+            connections.push(tokio::task::spawn_local(async move {
+                let connection = http1::Builder::new()
+                    .timer(TokioTimer::new())
+                    .header_read_timeout(Duration::from_secs(30))
+                    .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
+                        let request_recycle = request_recycle.clone();
+                        async move {
                     // Seed session deployment config before upload-progress body
                     // draining. The PHP prelude repeats this reset immediately
                     // before the handler, so both phases see identical values and
@@ -254,7 +282,13 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                         .iter()
                         .any(|(n, _)| n.eq_ignore_ascii_case("content-encoding"));
                     let gzipped = if accepts_gzip && !already_encoded && resp_body.len() >= GZIP_MIN_LEN {
-                        gzip_bytes(&resp_body)
+                        let compressed = gzip_bytes(&resp_body);
+                        if compressed.is_some() {
+                            resp_headers.retain(|(name, _)| {
+                                !name.eq_ignore_ascii_case("content-length")
+                            });
+                        }
+                        compressed
                     } else {
                         None
                     };
@@ -280,8 +314,24 @@ pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
                             started.elapsed().as_millis()
                         );
                     }
+                    record_completed_request(max_requests, &request_recycle);
                     Ok::<_, Infallible>(response)
-                })));
+                }}));
+                tokio::pin!(connection);
+                tokio::select! {
+                    _ = &mut connection => {}
+                    changed = connection_recycle.changed() => {
+                        if changed.is_ok() && *connection_recycle.borrow() {
+                            connection.as_mut().graceful_shutdown();
+                            let _ = connection.await;
+                        }
+                    }
+                }
+            }));
+        }
+        drop(listener);
+        for connection in connections {
+            let _ = connection.await;
         }
     });
 }
@@ -338,6 +388,5 @@ fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
     if secs > 0 {
         unsafe { libc::alarm(0); }
     }
-    SERVED.fetch_add(1, Ordering::Relaxed);
     request_state::take_body()
 }

@@ -288,6 +288,24 @@ mod tests {
         }
     }
 
+    /// Pins the AArch64 eval key-sort bridge to the shared AOT regular comparator.
+    #[test]
+    fn aarch64_eval_key_sort_uses_native_regular_comparator() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let body = body_of(&asm, "__elephc_eval_value_regular_key_compare");
+        assert!(body.contains("bl __rt_mixed_unbox"), "{body}");
+        assert!(body.contains("bl __rt_key_compare_regular"), "{body}");
+    }
+
+    /// Pins the x86_64 eval key-sort bridge to the shared AOT regular comparator.
+    #[test]
+    fn x86_64_eval_key_sort_uses_native_regular_comparator() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let body = body_of(&asm, "__elephc_eval_value_regular_key_compare");
+        assert!(body.contains("call __rt_mixed_unbox"), "{body}");
+        assert!(body.contains("call __rt_key_compare_regular"), "{body}");
+    }
+
     /// Returns the instruction lines following `label` up to the next exported helper.
     ///
     /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so

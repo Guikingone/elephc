@@ -127,11 +127,16 @@ pub(super) fn emit_file_exists_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lowers `filesize()` through userspace `url_stat()['size']` before filesystem stat.
+///
+/// Both arms of `emit_url_stat_field_or_fallback` now leave an int|false success flag beside the
+/// payload, so a path that cannot be stat'ed boxes PHP `false` instead of the `0` it used to
+/// report — a legitimate size for an empty file, and therefore indistinguishable from success.
 pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "filesize", 1)?;
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "filesize")?;
     emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+    box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -145,6 +150,12 @@ pub(super) fn lower_is_file_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &I
 }
 
 /// Emits a wrapper url_stat field lookup with a native filesystem fallback.
+///
+/// SHARED between `filesize()` (field 0) and `is_file()` (field 1). Both arms leave an int|false
+/// success flag in `x1`/`rdx` next to the payload — `__rt_user_wrapper_url_stat_field` on the
+/// wrapper arm, the runtime helper on the fallback arm. `is_file()` reads the payload register
+/// only, so the flag is inert for it; do not remove it on the assumption that this composer has
+/// one caller.
 pub(super) fn emit_url_stat_field_or_fallback(
     ctx: &mut FunctionContext<'_>,
     fallback_runtime: &str,

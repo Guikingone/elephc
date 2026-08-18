@@ -9,7 +9,7 @@ elephc compiles PHP to standalone native binaries for the supported targets — 
 
 ## Getting Started
 
-- [Installation](getting-started/installation.md) — install elephc via Homebrew or from source
+- [Installation](getting-started/installation.md) — install and manage elephc versions with elvm, or use Homebrew, a source build, or a release download
 - [Your First Program](getting-started/your-first-program.md) — write, compile, and run your first PHP binary
 - [Benchmark Suite](https://github.com/illegalstudio/elephc/blob/main/benchmarks/README.md) — compare elephc against PHP and equivalent C fixtures
 
@@ -73,7 +73,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [FFI & Extern](beyond-php/extern.md) — calling C libraries, extern functions/globals/classes, callbacks
 - [Conditional Compilation](beyond-php/ifdef.md) — ifdef blocks, compile-time feature flags, CLI flags
 - [Shared Libraries (cdylib)](beyond-php/cdylib.md) — --emit cdylib, #[Export] C-ABI functions, dlopen lifecycle
-- [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone prefork HTTP server binary
+- [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs
 
 ## Compiler Internals

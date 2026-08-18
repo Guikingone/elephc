@@ -333,9 +333,11 @@ fn emit_materializer_prologue(emitter: &mut Emitter, symbol: &str, what: &str) {
                     emitter.instruction(&format!(
                         "stp {}, {}, [sp, #-{}]!",
                         lo, hi, AARCH64_SAVE_AREA
-                    )); // open the caller-saved save area and store the first pair
+                    ));                                                         // open the caller-saved save area and store the first pair
                 } else {
-                    emitter.instruction(&format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16)); // preserve one more caller-saved integer pair
+                    emitter.instruction(
+                        &format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16)
+                    );                                                          // preserve one more caller-saved integer pair
                 }
             }
         }
@@ -370,9 +372,11 @@ fn emit_materializer_epilogue(emitter: &mut Emitter, done: &str) {
                     emitter.instruction(&format!(
                         "ldp {}, {}, [sp], #{}",
                         lo, hi, AARCH64_SAVE_AREA
-                    )); // restore the first pair and close the caller-saved save area
+                    ));                                                         // restore the first pair and close the caller-saved save area
                 } else {
-                    emitter.instruction(&format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16)); // restore one more caller-saved integer pair
+                    emitter.instruction(
+                        &format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16)
+                    );                                                          // restore one more caller-saved integer pair
                 }
             }
         }
@@ -449,7 +453,7 @@ fn emit_enum_object_allocation(emitter: &mut Emitter, class_id: u64, property_co
             emitter.instruction(&format!(
                 "mov r10, 0x{:x}",
                 crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
-            )); // materialize the x86_64 object heap kind word
+            ));                                                                 // materialize the x86_64 object heap kind word
             emitter.instruction("mov QWORD PTR [rax - 8], r10");                // stamp the heap header before the enum singleton payload
             emitter.instruction("call __rt_object_handle_acquire");             // bind the new object to its PHP object handle
             emitter.instruction(&format!("mov r10, {}", class_id));             // materialize the enum class id

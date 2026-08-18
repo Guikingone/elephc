@@ -64,6 +64,7 @@ pub(crate) fn compile(config: CliConfig) {
         defines,
         strict_php,
         web,
+        web_isolation,
         with_crates,
         quiet,
         ini_overrides,
@@ -439,22 +440,23 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::phase("opt-prop");
     let phase_started = Instant::now();
-    let ast = optimize::propagate_constants(ast);
+    let post_typecheck_optimizer = optimize::PostTypecheckOptimizer::new(&ast);
+    let ast = post_typecheck_optimizer.propagate(ast);
     timings.record_since("opt-prop", phase_started);
 
     crate::progress::phase("opt-post");
     let phase_started = Instant::now();
-    let ast = optimize::prune_constant_control_flow(ast);
+    let ast = post_typecheck_optimizer.prune(ast);
     timings.record_since("opt-post", phase_started);
 
     crate::progress::phase("opt-norm");
     let phase_started = Instant::now();
-    let ast = optimize::normalize_control_flow(ast);
+    let ast = post_typecheck_optimizer.normalize(ast);
     timings.record_since("opt-norm", phase_started);
 
     crate::progress::phase("dce");
     let phase_started = Instant::now();
-    let ast = optimize::eliminate_dead_code(ast);
+    let ast = post_typecheck_optimizer.eliminate_dead_code(ast);
     timings.record_since("dce", phase_started);
 
     if emit_ir {
@@ -499,6 +501,7 @@ pub(crate) fn compile(config: CliConfig) {
         with_crates: &with_crates,
         ir_module,
         web,
+        web_isolation,
         extra_link_libs: &extra_link_libs,
         extra_link_paths: &extra_link_paths,
         extra_frameworks: &extra_frameworks,

@@ -322,6 +322,7 @@ pub(crate) fn lower_class_method(
         return_ir_type(&method_body_return_type),
         method_body_return_type.clone(),
     );
+    function.lexical_class = Some(class_name.to_string());
     function.flags = FunctionFlags {
         is_method: true,
         is_static,
@@ -804,6 +805,7 @@ fn lower_closure_function_with_signature(
         return_ir_type(&closure_body_return_type),
         closure_body_return_type.clone(),
     );
+    function.lexical_class = parent.current_class.clone();
     function.flags = FunctionFlags {
         is_closure: true,
         by_ref_return: signature.by_ref_return,

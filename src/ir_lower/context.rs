@@ -2020,6 +2020,19 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             return false;
         }
+        if matches!(
+            self.builder.value_defining_instruction(value.value)
+                .and_then(|inst| inst.immediate.as_ref()),
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(_)
+                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_),
+            ))
+        ) {
+            // This helper installs the hash in an owned Mixed cell and returns only a borrow of
+            // that cell's payload. Unlike ArrayFetchForWrite, the generic RuntimeCall fallback
+            // must not turn that borrow into a release obligation at the builtin call boundary.
+            return false;
+        }
         if self.value_is_owning_builtin_temporary(value.value) {
             return true;
         }
@@ -2030,6 +2043,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return true;
         }
         if self.value_is_owning_mixed_string_cast(value.value) {
+            return true;
+        }
+        if self.value_is_owning_array_cast(value.value) {
             return true;
         }
         if self.value_is_owning_container_read(value.value) {
@@ -2344,6 +2360,20 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_php_type(source).codegen_repr(),
             PhpType::Mixed | PhpType::Union(_)
         )
+    }
+
+    /// Returns whether an array cast produced fresh or freshly boxed owning storage.
+    fn value_is_owning_array_cast(&self, value: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(value) else {
+            return false;
+        };
+        inst.op == Op::Cast
+            && matches!(
+                inst.immediate,
+                Some(Immediate::CastTarget(IrType::Heap(
+                    crate::ir::IrHeapKind::Hash | crate::ir::IrHeapKind::Mixed
+                )))
+            )
     }
 
     /// Returns whether a retained local/global store should release its source value.

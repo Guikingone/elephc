@@ -3043,6 +3043,20 @@ mod tests {
         assert!(!mixed);
     }
 
+    /// Verifies a colon following a MySQL backslash-escaped quote remains
+    /// literal text while the later named placeholder receives the first slot.
+    #[test]
+    fn mysql_backslash_escaped_quote_does_not_open_placeholder_scanning() {
+        let sql = r"SELECT 'it\'s :literal', :bound";
+        let (translated, named, order, mixed) = translate_placeholders(sql, false);
+
+        assert_eq!(translated, r"SELECT 'it\'s :literal', ?");
+        assert_eq!(named.len(), 1);
+        assert_eq!(named.get("bound"), Some(&1));
+        assert_eq!(order, vec![1]);
+        assert!(!mixed);
+    }
+
     /// Emulated interpolation skips quoted/comment markers and escapes a real
     /// placeholder value through mysql_common's protocol-aware literal renderer.
     #[test]
@@ -3488,5 +3502,38 @@ mod tests {
         assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_DATETIME2), "");
         assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_TIME2), "");
         assert_eq!(native_type_name(ColumnType::MYSQL_TYPE_UNKNOWN), "");
+    }
+
+    /// Verifies default-mode MySQL double-quoted strings and backtick-quoted
+    /// identifiers cannot expose colon text as PDO named placeholders.
+    #[test]
+    fn mysql_all_quote_forms_hide_literal_colons_from_placeholder_scanning() {
+        let sql = r#"SELECT "value :literal", `column:literal`, :bound"#;
+        let (translated, named, order, mixed) = translate_placeholders(sql, false);
+
+        assert_eq!(translated, r#"SELECT "value :literal", `column:literal`, ?"#);
+        assert_eq!(named.len(), 1);
+        assert_eq!(named.get("bound"), Some(&1));
+        assert_eq!(order, vec![1]);
+        assert!(!mixed);
+    }
+
+    /// Verifies odd and even backslash runs preserve MySQL quote boundaries:
+    /// an odd run escapes the quote, while an even run lets it close the string.
+    #[test]
+    fn mysql_backslash_run_parity_controls_quote_termination() {
+        let cases = [
+            (r"SELECT 'odd\' :literal', :bound", r"SELECT 'odd\' :literal', ?"),
+            (r"SELECT 'even\\', :bound", r"SELECT 'even\\', ?"),
+        ];
+
+        for (sql, expected) in cases {
+            let (translated, named, order, mixed) = translate_placeholders(sql, false);
+            assert_eq!(translated, expected, "SQL fixture: {sql}");
+            assert_eq!(named.len(), 1, "SQL fixture: {sql}");
+            assert_eq!(named.get("bound"), Some(&1), "SQL fixture: {sql}");
+            assert_eq!(order, vec![1], "SQL fixture: {sql}");
+            assert!(!mixed, "SQL fixture: {sql}");
+        }
     }
 }

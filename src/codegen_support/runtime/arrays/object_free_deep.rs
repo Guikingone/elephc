@@ -66,6 +66,20 @@ pub fn emit_object_free_deep(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_call_object_destructor");                      // run the class's __destruct hook if one is declared
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer after the destructor returns
 
+    // -- incomplete objects own a persisted original class name plus a semantic
+    // property hash instead of declared class property slots; release both --
+    emitter.instruction("ldr x10, [x0]");                                       // x10 = receiver class_id
+    emitter.instruction("mov x11, #-2");                                        // synthetic __PHP_Incomplete_Class id
+    emitter.instruction("cmp x10, x11");                                        // does this payload hold preserved serialized wire bytes?
+    emitter.instruction("b.ne __rt_object_free_deep_not_incomplete");           // ordinary objects follow their class-specific cleanup
+    emitter.instruction("ldr x0, [x0, #8]");                                    // original class-name persisted string pointer
+    emitter.instruction("bl __rt_decref_any");                                  // balance class-name persistence during unserialize
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload incomplete-object payload after name release
+    emitter.instruction("ldr x0, [x0, #24]");                                   // semantic property hash pointer
+    emitter.instruction("bl __rt_decref_any");                                  // release retained property keys and boxed Mixed values
+    emitter.instruction("b __rt_object_free_deep_no_dyn_props");                // synthetic class id must not index declared-class layout tables
+    emitter.label("__rt_object_free_deep_not_incomplete");
+
     // -- Fiber special case: release the per-fiber stack before the standard struct free path --
     // The Fiber object has zero declared PHP properties. Its payload past the class_id is made
     // of runtime-managed fields, not Mixed/array/string slots, so walking those bytes through
@@ -310,6 +324,19 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // load the object pointer as $this for the destructor call
     emitter.instruction("call __rt_call_object_destructor");                    // run the class's __destruct hook if one is declared
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the object pointer after the destructor returns
+
+    // -- incomplete objects own a persisted original class name plus a semantic
+    // property hash instead of declared class property slots; release both --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id
+    emitter.instruction("cmp r10, -2");                                         // synthetic __PHP_Incomplete_Class id
+    emitter.instruction("jne __rt_object_free_deep_not_incomplete_x");          // ordinary objects follow their class-specific cleanup
+    emitter.instruction("mov rax, QWORD PTR [rax + 8]");                        // original class-name persisted string pointer
+    emitter.instruction("call __rt_decref_any");                                // balance class-name persistence during unserialize
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload incomplete-object payload after name release
+    emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // semantic property hash pointer
+    emitter.instruction("call __rt_decref_any");                                // release retained property keys and boxed Mixed values
+    emitter.instruction("jmp __rt_object_free_deep_no_dyn_props");              // synthetic class id must not index declared-class layout tables
+    emitter.label("__rt_object_free_deep_not_incomplete_x");
 
     // -- Fiber special case: release the per-fiber stack before the standard struct free path --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // r10 = receiver class_id

@@ -355,10 +355,14 @@ pub(super) fn emit_empty_string_result(ctx: &mut FunctionContext<'_>) {
 pub(super) fn move_string_result_to_regs(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
     let (result_ptr_reg, result_len_reg) = abi::string_result_regs(ctx.emitter);
     if ptr_reg != result_ptr_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", ptr_reg, result_ptr_reg)); // move the cast string pointer into the requested argument register
+        ctx.emitter.instruction(
+            &format!("mov {}, {}", ptr_reg, result_ptr_reg)
+        );                                                                      // move the cast string pointer into the requested argument register
     }
     if len_reg != result_len_reg {
-        ctx.emitter.instruction(&format!("mov {}, {}", len_reg, result_len_reg)); // move the cast string length into the requested argument register
+        ctx.emitter.instruction(
+            &format!("mov {}, {}", len_reg, result_len_reg)
+        );                                                                      // move the cast string length into the requested argument register
     }
 }
 

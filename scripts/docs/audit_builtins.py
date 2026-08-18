@@ -8,7 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
-6. Backend availability and all 14 non-registry contract routes remain coherent.
+6. Backend availability and all 13 non-registry contract routes remain coherent.
 7. User-facing pages contain no runs of multiple blank lines.
 
 Exits 0 on success, 1 on any failure.
@@ -90,10 +90,10 @@ def _check_backend_contracts(
         "language-construct": 5,
         "dedicated-syntax": 1,
         "prelude": 4,
-        "none": 4,
+        "none": 3,
     }
-    if len(non_registry) != 14:
-        errors.append(f"expected 14 non-registry contracts, found {len(non_registry)}")
+    if len(non_registry) != 13:
+        errors.append(f"expected 13 non-registry contracts, found {len(non_registry)}")
     if dict(route_counts) != expected_counts:
         errors.append(
             f"non-registry AOT route counts differ: expected {expected_counts}, "

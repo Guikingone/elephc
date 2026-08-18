@@ -61,7 +61,8 @@ const ITERATOR_ITERATOR_DOWNCAST_MESSAGE: &str =
     "Class to downcast to not found or not base class or does not implement Traversable";
 
 /// Resolved declared-property storage metadata for a known object receiver.
-struct PropertySlot {
+#[derive(Clone)]
+pub(super) struct PropertySlot {
     class_name: String,
     property: String,
     php_type: PhpType,
@@ -205,6 +206,26 @@ pub(super) use runtime_property_writes::{
 };
 pub(super) use clone_and_spl::lower_object_clone_shallow;
 
+/// Resolves the declared property slot targeted by a direct container mutation.
+pub(super) fn resolve_mutated_container_property(
+    ctx: &FunctionContext<'_>,
+    object: ValueId,
+    inst: &Instruction,
+) -> Result<PropertySlot> {
+    let property = property_name_immediate(ctx, inst)?;
+    resolve_property_slot(ctx, object, property, inst)
+}
+
+/// Stores a mutating builtin's retained container result through the object-lowering facade.
+pub(super) fn store_mutated_container_property_owner(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    slot: &PropertySlot,
+    value: ValueId,
+) -> Result<()> {
+    store_mutated_container_property(ctx, object, slot, value)
+}
+
 /// Stamps a declared property slot with the uninitialized-typed-property marker.
 ///
 /// The payload word is zeroed and the high word receives
@@ -262,7 +283,7 @@ fn lower_dynamic_prop_unset(
             ctx.emitter.instruction(&format!(
                 "mov rdi, QWORD PTR [{} + {}]",
                 object_reg, hash_offset
-            )); // load the dynamic-property hash pointer from the receiver
+            ));                                                                 // load the dynamic-property hash pointer from the receiver
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_hash_unset");

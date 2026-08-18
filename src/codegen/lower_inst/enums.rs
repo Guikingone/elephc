@@ -454,7 +454,9 @@ fn emit_throw_value_error_from_string_result_aarch64(ctx: &mut FunctionContext<'
 fn emit_throw_value_error_from_string_result_x86_64(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+    ctx.emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+    );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
     ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_value_error_class_id", 0);
@@ -523,7 +525,9 @@ fn emit_string_result_to_int_checked(ctx: &mut FunctionContext<'_>, invalid_labe
     // for an int parameter, 0 otherwise; rejected strings throw `TypeError`.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz {}, {}", int_reg, invalid_label)); // non-numeric string throws TypeError
+            ctx.emitter.instruction(
+                &format!("cbz {}, {}", int_reg, invalid_label)
+            );                                                                  // non-numeric string throws TypeError
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", int_reg, int_reg)); // set flags from the numeric-validity result
@@ -704,7 +708,9 @@ fn emit_throw_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
             abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-            ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+            ctx.emitter.instruction(
+                &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+            );                                                                  // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);
@@ -755,7 +761,9 @@ fn emit_throw_enum_from_type_error_x86_64(
 ) {
     abi::emit_load_int_immediate(ctx.emitter, "rax", 56); // compact Throwable: message/code/previous
     abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
+    ctx.emitter.instruction(
+        &format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))
+    );                                                                          // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp allocation as a runtime object
     ctx.emitter.instruction("call __rt_object_handle_acquire");                 // bind the new object to its PHP object handle
     abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_type_error_class_id", 0);

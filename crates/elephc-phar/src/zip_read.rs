@@ -9,13 +9,55 @@
 
 use super::*;
 
-/// Parses a ZIP archive central directory and returns a store/deflate entry.
-pub(super) fn parse_zip_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
-    parse_zip_archive(data)?
-        .entries
-        .into_iter()
-        .find(|candidate| candidate.name == entry)
-        .map(|candidate| candidate.payload)
+/// Authenticates a ZIP PHAR and decodes only the requested non-control entry.
+pub(super) fn parse_zip_entry_with_public_key(
+    data: &[u8],
+    entry: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Vec<u8>> {
+    verify_zip_phar_signature(data, public_key)?;
+    let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
+    let mut p = central_dir_offset;
+    for _ in 0..entry_count {
+        if le32(data, p)? != 0x0201_4b50 {
+            return None;
+        }
+        let method = le16(data, p + 10)?;
+        let mut compressed_size = le32(data, p + 20)? as usize;
+        let mut uncompressed_size = le32(data, p + 24)? as usize;
+        let name_len = le16(data, p + 28)? as usize;
+        let extra_len = le16(data, p + 30)? as usize;
+        let entry_comment_len = le16(data, p + 32)? as usize;
+        let mut local_offset = le32(data, p + 42)? as usize;
+        let name_start = p.checked_add(46)?;
+        let name = data.get(name_start..name_start.checked_add(name_len)?)?;
+        apply_zip64_central_extra(
+            data,
+            name_start.checked_add(name_len)?,
+            extra_len,
+            &mut uncompressed_size,
+            &mut compressed_size,
+            &mut local_offset,
+        )?;
+        let central_end = name_start
+            .checked_add(name_len)?
+            .checked_add(extra_len)?
+            .checked_add(entry_comment_len)?;
+        if name == entry && !is_phar_control_entry(name) {
+            let (encrypted, check_byte) = zip_entry_crypto(data, p)?;
+            return decode_zip_local_entry(
+                data,
+                local_offset,
+                method,
+                compressed_size,
+                uncompressed_size,
+                encrypted,
+                check_byte,
+            );
+        }
+        p = central_end;
+    }
+    None
 }
 
 /// Parses a zip-based phar into entries plus its global metadata and stub.
@@ -23,7 +65,17 @@ pub(super) fn parse_zip_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
 /// Global metadata is read from the EOCD archive comment; the reserved
 /// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
 /// hidden from the entry listing.
+#[cfg(test)]
 pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
+    parse_zip_archive_with_public_key(data, None)
+}
+
+/// Parses a zip-based PHAR and authenticates an OpenSSL signature with `public_key`.
+pub(super) fn parse_zip_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
+    verify_zip_phar_signature(data, public_key)?;
     let eocd = find_zip_eocd(data)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
     let comment_len = le16(data, eocd + 20)? as usize;
@@ -222,6 +274,9 @@ pub(super) fn decode_zip_local_entry(
     encrypted: bool,
     check_byte: u8,
 ) -> Option<Vec<u8>> {
+    if uncompressed_size > MAX_PHAR_ENTRY_DECOMPRESSED_BYTES {
+        return None;
+    }
     if le32(data, local_offset)? != 0x0403_4b50 {
         return None;
     }
@@ -243,11 +298,17 @@ pub(super) fn decode_zip_local_entry(
         stored
     };
     match method {
-        ZIP_METHOD_STORE => Some(body.to_vec()),
+        ZIP_METHOD_STORE => (body.len() == uncompressed_size).then(|| body.to_vec()),
         ZIP_METHOD_DEFLATE => {
-            let mut out = Vec::with_capacity(uncompressed_size);
-            let mut decoder = flate2::read::DeflateDecoder::new(body);
-            decoder.read_to_end(&mut out).ok()?;
+            if uncompressed_size > body.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
+                return None;
+            }
+            let mut out = Vec::new();
+            let decoder = flate2::read::DeflateDecoder::new(body);
+            decoder
+                .take(u64::try_from(uncompressed_size.checked_add(1)?).ok()?)
+                .read_to_end(&mut out)
+                .ok()?;
             (out.len() == uncompressed_size).then_some(out)
         }
         _ => None,

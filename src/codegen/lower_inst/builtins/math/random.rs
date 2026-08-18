@@ -147,11 +147,15 @@ fn emit_inverted_range_policy(
             let ok_label = ctx.next_label("random_range_ok");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", min_reg, max_reg)); // is the requested range inverted?
+                    ctx.emitter.instruction(
+                        &format!("cmp {}, {}", min_reg, max_reg)
+                    );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("b.le {}", ok_label));     // an ordered range samples normally
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", min_reg, max_reg)); // is the requested range inverted?
+                    ctx.emitter.instruction(
+                        &format!("cmp {}, {}", min_reg, max_reg)
+                    );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("jle {}", ok_label));      // an ordered range samples normally
                 }
             }
@@ -162,16 +166,24 @@ fn emit_inverted_range_policy(
             let ok_label = ctx.next_label("random_range_ordered");
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", min_reg, max_reg)); // is the requested range inverted?
+                    ctx.emitter.instruction(
+                        &format!("cmp {}, {}", min_reg, max_reg)
+                    );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("b.le {}", ok_label));     // an ordered range needs no swap
                     ctx.emitter.instruction(&format!("mov x10, {}", min_reg));  // park the larger bound while the pair is exchanged
-                    ctx.emitter.instruction(&format!("mov {}, {}", min_reg, max_reg)); // the smaller bound becomes the range minimum
+                    ctx.emitter.instruction(
+                        &format!("mov {}, {}", min_reg, max_reg)
+                    );                                                          // the smaller bound becomes the range minimum
                     ctx.emitter.instruction(&format!("mov {}, x10", max_reg));  // the larger bound becomes the range maximum
                 }
                 Arch::X86_64 => {
-                    ctx.emitter.instruction(&format!("cmp {}, {}", min_reg, max_reg)); // is the requested range inverted?
+                    ctx.emitter.instruction(
+                        &format!("cmp {}, {}", min_reg, max_reg)
+                    );                                                          // is the requested range inverted?
                     ctx.emitter.instruction(&format!("jle {}", ok_label));      // an ordered range needs no swap
-                    ctx.emitter.instruction(&format!("xchg {}, {}", min_reg, max_reg)); // exchange the inverted bounds so the width stays positive
+                    ctx.emitter.instruction(
+                        &format!("xchg {}, {}", min_reg, max_reg)
+                    );                                                          // exchange the inverted bounds so the width stays positive
                 }
             }
             ctx.emitter.label(&ok_label);
