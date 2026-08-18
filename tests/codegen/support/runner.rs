@@ -561,7 +561,7 @@ pub(crate) fn link_binary(
             ld_cmd.arg(bin_path);
             ld_cmd.arg(obj_path);
             ld_cmd.arg(runtime_obj);
-            // Resolve FreeTDS's `dbopen` before libSystem's Berkeley DB symbol.
+            // Link FreeTDS with the other native dependencies before libSystem.
             if needs_dblib {
                 for path in ["/opt/homebrew/opt/freetds/lib", "/usr/local/opt/freetds/lib"] {
                     if Path::new(path).exists() {

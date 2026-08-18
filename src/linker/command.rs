@@ -173,8 +173,7 @@ fn render_macos_command(
         }
     }
     append_link_inputs(&mut args, plan, Platform::MacOS);
-    // FreeTDS also exports `dbopen`; keeping native dependencies before libSystem
-    // prevents ld64 from binding PDO_DBLIB to Berkeley DB's incompatible symbol.
+    // Keep native dependencies before the platform runtime in the final link order.
     args.push(OsString::from("-lSystem"));
     append_frameworks(&mut args, plan);
 
