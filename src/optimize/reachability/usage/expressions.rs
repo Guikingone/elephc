@@ -68,9 +68,27 @@ impl Scanner<'_> {
                 );
             }
             ExprKind::NewScopedObject { receiver, args } => {
-                let classes: HashSet<_> = self.receiver_class(receiver).into_iter().collect();
-                if let Some(class) = classes.iter().next() {
-                    self.usage.classes.insert(class.clone()); self.usage.instantiated_classes.insert(class.clone());
+                let lexical_class = self.receiver_class(receiver);
+                let classes = if matches!(receiver, StaticReceiver::Static) {
+                    lexical_class
+                        .as_deref()
+                        .and_then(|class| {
+                            self.call_signatures
+                                .map(|signatures| signatures.subclasses_including(class))
+                        })
+                        .filter(|classes| !classes.is_empty())
+                        .unwrap_or_else(|| lexical_class.iter().cloned().collect())
+                } else {
+                    lexical_class.iter().cloned().collect()
+                };
+                if let Some(class) = lexical_class {
+                    if matches!(receiver, StaticReceiver::Static) {
+                        self.usage.instantiated_subclass_roots.insert(class);
+                    }
+                    self.usage.classes.extend(classes.iter().cloned());
+                    self.usage
+                        .instantiated_classes
+                        .extend(classes.iter().cloned());
                 } else if matches!(receiver, StaticReceiver::Parent) {
                     self.usage.hazards.dynamic_method = true;
                 }
@@ -354,12 +372,18 @@ impl Scanner<'_> {
         let Some(definition) = crate::builtins::registry::lookup(name) else {
             return;
         };
-        let input = crate::builtins::semantics::BuiltinRequirementInput { args };
         let requirements = match definition.spec.semantics.requirements {
             crate::builtins::semantics::BuiltinRequirements::Static(requirements) => {
                 requirements.to_vec()
             }
-            crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => resolve(&input),
+            crate::builtins::semantics::BuiltinRequirements::Shared(resolve) => {
+                let normalized = self
+                    .normalized_builtin_arguments(name, args)
+                    .unwrap_or_else(|| args.to_vec());
+                resolve(&crate::builtins::semantics::BuiltinRequirementInput {
+                    args: &normalized,
+                })
+            }
         };
         for requirement in requirements {
             match requirement {
@@ -413,10 +437,30 @@ impl Scanner<'_> {
 
     /// Records `method_exists` literal method probes without treating them as dynamic lookup.
     pub(super) fn method_exists(&mut self, args: &[Expr]) {
-        let Some(method) = args.get(1).map(unwrap_named_arg) else { self.usage.hazards.dynamic_method = true; return; };
-        let ExprKind::StringLiteral(method) = &method.kind else { self.usage.hazards.dynamic_method = true; return; };
+        let Some(normalized) = self.normalized_builtin_arguments("method_exists", args) else {
+            self.usage.hazards.dynamic_class = true;
+            self.usage.hazards.dynamic_method = true;
+            return;
+        };
+        let Some(target) = normalized.first().map(unwrap_named_arg) else {
+            self.usage.hazards.dynamic_class = true;
+            self.usage.hazards.dynamic_method = true;
+            return;
+        };
+        let classes = self.expr_classes(target);
+        self.usage.classes.extend(classes.iter().cloned());
+        let Some(method) = normalized.get(1).map(unwrap_named_arg) else {
+            self.usage.hazards.dynamic_method = true;
+            return;
+        };
+        let ExprKind::StringLiteral(method) = &method.kind else {
+            self.usage.hazards.dynamic_method = true;
+            if classes.is_empty() {
+                self.usage.hazards.dynamic_class = true;
+            }
+            return;
+        };
         let method = php_symbol_key(method);
-        let classes = args.first().map(unwrap_named_arg).map(|expr| self.expr_classes(expr)).unwrap_or_default();
         if classes.is_empty() {
             self.usage.wildcard_methods.insert((method.clone(), false));
             self.usage.wildcard_methods.insert((method, true));
@@ -695,8 +739,27 @@ impl Scanner<'_> {
     fn normalized_function_arguments(&self, function: &str, args: &[Expr]) -> Vec<Expr> {
         self.call_signatures
             .and_then(|signatures| signatures.function(function))
+            .or_else(|| crate::builtins::registry::function_sig(function))
             .map(|signature| self.normalized_arguments(&signature, args))
             .unwrap_or_else(|| args.to_vec())
+    }
+
+    /// Normalizes one registry builtin exactly like checker-side builtin validation.
+    fn normalized_builtin_arguments(&self, function: &str, args: &[Expr]) -> Option<Vec<Expr>> {
+        let signature = crate::builtins::registry::function_sig(function)?;
+        let call_span = args
+            .first()
+            .map(|argument| argument.span)
+            .unwrap_or_else(crate::span::Span::dummy);
+        crate::types::call_args::plan_call_args(
+            &signature,
+            args,
+            call_span,
+            true,
+            false,
+        )
+        .ok()
+        .map(|plan| plan.normalized_args())
     }
 
     /// Uses the shared argument planner to find storage that a reachable callable may rebind.

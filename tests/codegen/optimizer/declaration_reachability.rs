@@ -109,6 +109,18 @@ fn test_method_exists_literal_keeps_static_method() {
     assert_eq!(out, "y");
 }
 
+/// Verifies reordered named arguments retain the class and method probed by `method_exists`.
+#[test]
+fn test_method_exists_named_arguments_keep_static_method() {
+    let out = compile_and_run(
+        "<?php
+        class NamedMethodProbe { public static function hidden(): int { return 1; } }
+        echo method_exists(method: 'hidden', object_or_class: 'NamedMethodProbe') ? 'y' : 'n';
+        ",
+    );
+    assert_eq!(out, "y");
+}
+
 /// Verifies a class-string property probe retains otherwise unreachable class metadata.
 #[test]
 fn test_property_exists_class_string_keeps_class_metadata() {
@@ -286,6 +298,46 @@ fn test_by_ref_constructor_parameter_keeps_runtime_receiver_method_body() {
         $receiver = new A();
         new Replacer(slot: $receiver);
         echo $receiver->foo();
+        ",
+    );
+    assert_eq!(out, "B");
+}
+
+/// Verifies late-static construction retains and invokes an overriding child constructor.
+#[test]
+fn test_new_static_keeps_runtime_subclass_constructor() {
+    let out = compile_and_run(
+        "<?php
+        class BaseFactory {
+            public static function make(): static { return new static(); }
+        }
+        class ChildFactory extends BaseFactory {
+            public function __construct() { echo 'child'; }
+        }
+        ChildFactory::make();
+        ",
+    );
+    assert_eq!(out, "child");
+}
+
+/// Verifies descendant constructor signatures invalidate late-static by-ref arguments.
+#[test]
+fn test_new_static_uses_runtime_subclass_constructor_signature() {
+    let out = compile_and_run(
+        "<?php
+        class A { public function value(): string { return 'A'; } }
+        class B extends A { public function value(): string { return 'B'; } }
+        class BaseFactory {
+            public function __construct(A $slot) {}
+            public static function make(A $slot): string {
+                new static(slot: $slot);
+                return $slot->value();
+            }
+        }
+        class ChildFactory extends BaseFactory {
+            public function __construct(A &$slot) { $slot = new B(); }
+        }
+        echo ChildFactory::make(new A());
         ",
     );
     assert_eq!(out, "B");

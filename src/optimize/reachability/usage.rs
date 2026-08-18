@@ -240,6 +240,7 @@ struct Scanner<'a> {
 pub(super) struct CallSignatureIndex {
     functions: HashMap<String, FunctionSig>,
     methods: HashMap<(String, String, bool), FunctionSig>,
+    class_parents: HashMap<String, Option<String>>,
 }
 
 impl CallSignatureIndex {
@@ -292,7 +293,21 @@ impl CallSignatureIndex {
                     }))
             })
             .collect();
-        Self { functions, methods }
+        let class_parents = check_result
+            .classes
+            .iter()
+            .map(|(class, info)| {
+                (
+                    php_symbol_key(class),
+                    info.parent.as_deref().map(php_symbol_key),
+                )
+            })
+            .collect();
+        Self {
+            functions,
+            methods,
+            class_parents,
+        }
     }
 
     /// Returns the signature of one direct free-function call.
@@ -321,8 +336,31 @@ impl CallSignatureIndex {
                         .get(&(class.clone(), method.to_string(), is_static))
                         .cloned()
                 })
-                .collect()
+            .collect()
         }
+    }
+
+    /// Returns every checker-known class equal to or descending from one late-static root.
+    fn subclasses_including(&self, root: &str) -> HashSet<String> {
+        let root = php_symbol_key(root);
+        self.class_parents
+            .keys()
+            .filter(|class| {
+                let mut current = Some((*class).clone());
+                let mut seen = HashSet::new();
+                while let Some(candidate) = current {
+                    if !seen.insert(candidate.clone()) {
+                        return false;
+                    }
+                    if candidate == root {
+                        return true;
+                    }
+                    current = self.class_parents.get(&candidate).cloned().flatten();
+                }
+                false
+            })
+            .cloned()
+            .collect()
     }
 }
 

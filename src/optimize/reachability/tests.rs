@@ -433,6 +433,32 @@ fn scan_literal_property_exists_class_is_a_reference_not_a_hazard() {
     assert!(!usage.hazards.dynamic_class);
 }
 
+/// Verifies named `method_exists` arguments are mapped by signature rather than source order.
+#[test]
+fn scan_normalizes_named_method_exists_arguments() {
+    let usage = scan_program(&parse(
+        "<?php echo method_exists(method: 'hidden', object_or_class: 'Visible') ? 'y' : 'n';",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Visible")));
+    assert!(usage.methods.contains(&(
+        php_symbol_key("Visible"),
+        php_symbol_key("hidden"),
+        false,
+    )));
+    assert!(!usage.hazards.dynamic_class);
+    assert!(!usage.hazards.dynamic_method);
+}
+
+/// Verifies a dynamic method probe still roots its literal target before widening methods.
+#[test]
+fn prune_dynamic_method_exists_keeps_literal_target_methods() {
+    let (program, _) = prune(
+        "<?php class Visible { public static function hidden(): int { return 1; } } $method = $argc > 0 ? 'hidden' : 'missing'; echo method_exists('Visible', $method) ? 'y' : 'n';",
+    );
+    assert!(has_class(&program, "Visible"));
+    assert!(has_method(&program, "Visible", "hidden"));
+}
+
 /// Verifies Reflection references conservatively widen functions, methods, and classes.
 #[test]
 fn scan_reflection_reference_widens_all_declaration_hazards() {
@@ -651,6 +677,31 @@ fn prune_recomputes_builtin_required_libraries() {
             .iter()
             .all(|library| library != "elephc_crypto")
     );
+}
+
+/// Verifies named builtin arguments preserve a live conditional bridge after dead-call pruning.
+#[test]
+fn prune_normalizes_builtin_arguments_before_recomputing_libraries() {
+    let (_, check) = prune(
+        "<?php function unused(): void { fopen('https://example.com/dead', 'rb'); } fopen(mode: 'rb', filename: 'https://example.com/live');",
+    );
+    assert!(
+        check
+            .required_libraries
+            .iter()
+            .any(|library| library == "elephc_tls"),
+        "the surviving named fopen call still requires the TLS bridge"
+    );
+}
+
+/// Verifies `new static` retains an overriding constructor on a runtime-selected subclass.
+#[test]
+fn prune_new_static_keeps_descendant_constructor() {
+    let (program, _) = prune(
+        "<?php class BaseFactory { public static function make(): static { return new static(); } } class ChildFactory extends BaseFactory { public function __construct() { echo 'child'; } } ChildFactory::make();",
+    );
+    assert!(has_class(&program, "ChildFactory"));
+    assert!(has_method(&program, "ChildFactory", "__construct"));
 }
 
 /// Verifies a dynamic method name retains every method on each live class.

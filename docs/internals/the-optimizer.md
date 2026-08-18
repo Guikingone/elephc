@@ -286,9 +286,11 @@ retains methods on live classes, and `unserialize`, dynamic class names, and
 Reflection retain class-like declarations conservatively. Literal
 `function_exists`, `class_exists`, `method_exists`, and class-string
 `property_exists` probes retain the named declaration instead of triggering a
-global widening. Registry parameters with a callable type or the conventional
-`callback` name add callable edges using the shared argument planner, including
-named arguments and conservative dynamic-spread fallback. Explicit prelude requests
+global widening. The same shared argument planner maps reordered named arguments
+before introspection targets, callbacks, or argument-dependent builtin link
+requirements are inspected. Registry parameters with a callable type or the
+conventional `callback` name add callable edges, including named arguments and
+conservative dynamic-spread fallback. Explicit prelude requests
 such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
 inventory group; `--with-crypto` only force-links the bridge, and `--web` is
 demand-pruned from its executable bootstrap roots.
@@ -316,6 +318,12 @@ Two-element array literals are treated as possible callable arrays even when
 they are ordinary data, for the same reason: the resulting over-retention is
 safe, while rejecting a runtime callable would not be.
 
+Late-static construction is also a family-wide runtime edge. A reachable
+`new static(...)` roots the lexical class and each checker-known descendant that
+could be selected by the called-class id. Their constructor bodies and signatures
+participate in the fixed point, so an override cannot disappear and callable or
+by-reference constructor parameters retain the same dependencies as direct calls.
+
 Compiler-internal declaration factories are scanned at their semantic call
 site. In particular, the runtime class selected by `PDO::prepare` roots the
 instantiable `PDOStatement` subclass family, while other non-literal
@@ -329,7 +337,9 @@ related method maps, resolves inherited implementations through
 `method_impl_classes`, scans trait-imported bodies from each consuming class's
 flattened declarations, rebuilds instance and static vtable slots in survivor
 order, removes dead extern schemas and link requirements, and keeps the checked
-metadata synchronized with the remaining AST.
+metadata synchronized with the remaining AST. Conditional builtin requirements
+are rescanned from normalized parameter-order arguments before a bridge or system
+library is removed.
 
 Linker dead stripping is deliberately secondary. Linux user functions already
 live in separate text sections. The macOS runtime object uses

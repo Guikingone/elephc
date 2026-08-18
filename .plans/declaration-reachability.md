@@ -128,10 +128,11 @@ From a live declaration body (and from top-level statements), record:
 | `foo()` / first-class `foo(...)` | function `foo` |
 | call to an include-loaded `FunctionVariantGroup` | every concrete function variant selectable by its runtime dispatcher |
 | `new C` / `C::class` / `instanceof C` / `catch (C)` / type hints on live callables | class/interface/enum `C` |
+| `new static(...)` inside a live method | the lexical class and every instantiable descendant, including each possible constructor body and argument signature |
 | `$obj->m()` / `C::m()` / first-class `C::m(...)` / `[$obj, 'm']` / `['C', 'm']` | method `(C, m)` plus class `C` |
 | Registry builtin parameter with a callable type or the conventional `callback` name | callable edge from the argument bound by the shared call-argument planner; unknown/spread values widen callable hazards |
 | `function_exists('foo')` / `is_callable('foo')` / `call_user_func('foo')` with a **string literal** | function `foo` |
-| `method_exists($x, 'm')` / `class_exists('C')` / `property_exists('C', 'p')` with a **string literal** | method `m` on every live type that could be `$x`, or class `C` |
+| `method_exists($x, 'm')` / `class_exists('C')` / `property_exists('C', 'p')` with a **string literal** | method `m` on every live type that could be `$x`, or class `C`; named arguments are normalized before selecting the target |
 | `elephc_pdo_*()` / any extern call | that extern function |
 | `extends` / `implements` / trait use on a live class | parent, interfaces, used traits |
 | `parent::m()` / `$this->m()` inside a live method | implementation owner selected by `ClassInfo.method_impl_classes` / `static_method_impl_classes` |
@@ -246,7 +247,7 @@ After the AST rewrite, mutate `CheckResult` in place:
 5. Drop AST-declared `extern_functions` that no remaining AST node calls. Preserve synthetic
    extern metadata not represented by the declaration index. Recompute `required_libraries` as the union of:
    - libraries still named by remaining `extern_functions`
-   - libraries still required by remaining builtin call sites (`builtin_call_types` / program walk)
+   - libraries still required by remaining builtin call sites after shared named/spread argument normalization (`builtin_call_types` / program walk)
    Do **not** keep `elephc_pdo` only because the prelude once declared the extern block.
 6. Leave `warnings` and `throw_access_sites` alone. They already fired.
 
@@ -1336,6 +1337,9 @@ These are the cases that must stay green. If a later simplification would break 
 | `new PDO` + `query` | `PDO`, `PDOStatement` as needed, `query` / fetch methods actually called, `__construct`, exception classes if thrown |
 | `function_exists('pdo_drivers')` | `pdo_drivers` |
 | `method_exists($pdo, 'beginTransaction')` | `PDO::beginTransaction` |
+| `method_exists(method: 'run', object_or_class: 'Worker')` | `Worker::run` |
+| `new static()` reached through `Child::factory()` | the runtime-selected child constructor and its signature dependencies |
+| live `fopen(mode: 'rb', filename: 'https://...')` after a dead positional `fopen` call | `elephc_tls` |
 | `$pdo->$m()` | every method of live PDO classes |
 | `eval('...')` or `--with-eval` | every user-visible declaration |
 | `--with-pdo` and no PDO syntax | entire PDO group |
