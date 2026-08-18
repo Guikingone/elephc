@@ -425,6 +425,41 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_fgetcsv_push_reset");                         // -> push empty field, reset
     emitter.instruction("cmp w0, w27");                                         // c == enc (opening quote)?
     emitter.instruction("b.eq __rt_fgetcsv_s0_enc");                            // -> enter quoted field
+    // Whitespace in front of an opening enclosure is NOT data: php looks ahead from the start of
+    // the field and, if the first byte that is neither the separator nor whitespace is the
+    // enclosure, it starts the field there instead (`php_fgetcsv`, file.c). So ` "a",b` reads as
+    // `a`, while ` a,b` — no enclosure ahead — keeps the space and reads as ` a`.
+    //
+    // The lookahead is bounded by the BUFFER, which is what makes the two callers differ for free:
+    // `fgetcsv` holds one line, so it cannot reach a quote on the next one, while `str_getcsv`
+    // holds the whole subject and can. Both were measured on `php -n` 8.5.6.
+    emitter.instruction("cmp w0, #0x20");                                       // c == space?
+    emitter.instruction("b.eq __rt_fgetcsv_s0_ws");                             // -> look for an enclosure ahead
+    emitter.instruction("sub w1, w0, #0x09");                                   // 0x09..0x0d -> 0..4
+    emitter.instruction("cmp w1, #4");                                          // tab, newline, vtab, formfeed, return?
+    emitter.instruction("b.hi __rt_fgetcsv_s0_ws_no");                          // not whitespace: ordinary data
+    emitter.label("__rt_fgetcsv_s0_ws");
+    emitter.instruction("mov x10, x21");                                        // tmp = the first unconsumed byte
+    emitter.label("__rt_fgetcsv_s0_ws_scan");
+    emitter.instruction("cmp x10, x22");                                        // tmp >= end_ptr?
+    emitter.instruction("b.ge __rt_fgetcsv_s0_ws_no");                          // ran out of buffer: no enclosure
+    emitter.instruction("ldrb w1, [x10]");                                      // the byte under tmp
+    emitter.instruction("cmp w1, w26");                                         // the separator ends the walk
+    emitter.instruction("b.eq __rt_fgetcsv_s0_ws_no");
+    emitter.instruction("cmp w1, w27");                                         // an enclosure: the field starts here
+    emitter.instruction("b.eq __rt_fgetcsv_s0_ws_yes");
+    emitter.instruction("cmp w1, #0x20");                                       // still whitespace?
+    emitter.instruction("b.eq __rt_fgetcsv_s0_ws_next");
+    emitter.instruction("sub w2, w1, #0x09");                                   // 0x09..0x0d -> 0..4
+    emitter.instruction("cmp w2, #4");
+    emitter.instruction("b.hi __rt_fgetcsv_s0_ws_no");                          // ordinary byte: no enclosure
+    emitter.label("__rt_fgetcsv_s0_ws_next");
+    emitter.instruction("add x10, x10, #1");                                    // skip this whitespace byte
+    emitter.instruction("b __rt_fgetcsv_s0_ws_scan");
+    emitter.label("__rt_fgetcsv_s0_ws_yes");
+    emitter.instruction("add x21, x10, #1");                                    // scan_ptr = past the opening quote
+    emitter.instruction("b __rt_fgetcsv_s0_enc");                               // -> enter quoted field
+    emitter.label("__rt_fgetcsv_s0_ws_no");
     emitter.instruction("ldr x9, [sp, #104]");                                 // is a newline ordinary data here?
     emitter.instruction("cbnz x9, __rt_fgetcsv_st0_data");                     // `str_getcsv` keeps it as data
     emitter.instruction("cmp w0, #0x0a");                                      // c == newline (0x0A)?
@@ -476,11 +511,14 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fgetcsv_loop");                                 // continue loop
 
     // -- state 3: AfterEscape (esc mode only) --
+    //
+    // The escape byte is KEPT, whatever it precedes. php never unescapes on read: all the escape
+    // character does is stop the next byte from closing the field, and both bytes land in the
+    // value. `"a\"b"` reads back as `a\"b`, four bytes, on `php -n` 8.5.6 — the same string
+    // `fputcsv()` wrote. Dropping it before the enclosure, as this did, silently shortened every
+    // round trip through a quoted field that contained one.
     emitter.label("__rt_fgetcsv_st3");
-    emitter.instruction("cmp w0, w27");                                         // c == enc?
-    emitter.instruction("b.eq __rt_fgetcsv_s3_enc");                            // -> write c only (drop esc)
-    emitter.instruction("strb w28, [x24], #1");                                 // *write_ptr++ = esc (keep esc for non-enc)
-    emitter.label("__rt_fgetcsv_s3_enc");
+    emitter.instruction("strb w28, [x24], #1");                                 // *write_ptr++ = esc (php keeps it)
     emitter.instruction("strb w0, [x24], #1");                                  // *write_ptr++ = c (literal)
     emitter.instruction("mov w25, #2");                                         // state = InQuotedField
     emitter.instruction("b __rt_fgetcsv_loop");                                 // continue loop
@@ -498,7 +536,10 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp w0, #0x0d");                                      // c == carriage return (0x0D)?
     emitter.instruction("b.eq __rt_fgetcsv_push_end");                         // -> push field, end
     emitter.label("__rt_fgetcsv_st4_data");
-    emitter.instruction("strb w27, [x24], #1");                                // *write_ptr++ = enc (restore close quote)
+    // The closing enclosure is GONE, even when data follows it. php reads `"ab"cd` as `abcd`, not
+    // as `ab"cd`: the quote that closed the field is consumed and everything after it is ordinary
+    // data, quotes included — `"ab"c"d"` reads back as `abc"d"`. Restoring it here, as this did,
+    // added a byte php never keeps.
     emitter.instruction("strb w0, [x24], #1");                                 // *write_ptr++ = c (accumulate)
     emitter.instruction("mov w25, #1");                                         // state = InField
     emitter.instruction("b __rt_fgetcsv_loop");                                 // continue loop
@@ -812,6 +853,39 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx ecx, BYTE PTR [rbp - 16]");                      // load enc
     emitter.instruction("cmp al, cl");                                          // c == enc (opening quote)?
     emitter.instruction("je __rt_fgetcsv_x_s0_enc");                            // -> enter quoted field
+    // See the AArch64 counterpart: whitespace in front of an opening enclosure is skipped, and the
+    // walk is bounded by the buffer, which is what separates `fgetcsv` from `str_getcsv`.
+    emitter.instruction("cmp al, 0x20");                                        // c == space?
+    emitter.instruction("je __rt_fgetcsv_x_s0_ws");                             // -> look for an enclosure ahead
+    emitter.instruction("mov edx, eax");
+    emitter.instruction("sub edx, 0x09");                                       // 0x09..0x0d -> 0..4
+    emitter.instruction("cmp edx, 4");                                          // tab, newline, vtab, formfeed, return?
+    emitter.instruction("ja __rt_fgetcsv_x_s0_ws_no");                          // not whitespace: ordinary data
+    emitter.label("__rt_fgetcsv_x_s0_ws");
+    emitter.instruction("mov r10, r12");                                        // tmp = the first unconsumed byte
+    emitter.label("__rt_fgetcsv_x_s0_ws_scan");
+    emitter.instruction("cmp r10, r13");                                        // tmp >= end_ptr?
+    emitter.instruction("jae __rt_fgetcsv_x_s0_ws_no");                         // ran out of buffer: no enclosure
+    emitter.instruction("movzx r11d, BYTE PTR [r10]");                          // the byte under tmp
+    emitter.instruction("movzx ecx, BYTE PTR [rbp - 8]");                       // load sep
+    emitter.instruction("cmp r11b, cl");                                        // the separator ends the walk
+    emitter.instruction("je __rt_fgetcsv_x_s0_ws_no");
+    emitter.instruction("movzx ecx, BYTE PTR [rbp - 16]");                      // load enc
+    emitter.instruction("cmp r11b, cl");                                        // an enclosure: the field starts here
+    emitter.instruction("je __rt_fgetcsv_x_s0_ws_yes");
+    emitter.instruction("cmp r11d, 0x20");                                      // still whitespace?
+    emitter.instruction("je __rt_fgetcsv_x_s0_ws_next");
+    emitter.instruction("mov edx, r11d");
+    emitter.instruction("sub edx, 0x09");                                       // 0x09..0x0d -> 0..4
+    emitter.instruction("cmp edx, 4");
+    emitter.instruction("ja __rt_fgetcsv_x_s0_ws_no");                          // ordinary byte: no enclosure
+    emitter.label("__rt_fgetcsv_x_s0_ws_next");
+    emitter.instruction("add r10, 1");                                          // skip this whitespace byte
+    emitter.instruction("jmp __rt_fgetcsv_x_s0_ws_scan");
+    emitter.label("__rt_fgetcsv_x_s0_ws_yes");
+    emitter.instruction("lea r12, [r10 + 1]");                                  // scan_ptr = past the opening quote
+    emitter.instruction("jmp __rt_fgetcsv_x_s0_enc");                           // -> enter quoted field
+    emitter.label("__rt_fgetcsv_x_s0_ws_no");
     emitter.instruction("cmp QWORD PTR [rbp - 96], 0");                         // is a newline ordinary data here?
     emitter.instruction("jne __rt_fgetcsv_x_st0_data");                            // `str_getcsv` keeps it as data
     emitter.instruction("cmp al, 0x0a");                                        // c == newline (0x0A)?
@@ -870,14 +944,12 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fgetcsv_x_loop");                             // continue loop
 
     // -- state 3: AfterEscape (esc mode only) --
+    //
+    // See the AArch64 counterpart: php KEEPS the escape byte whatever it precedes.
     emitter.label("__rt_fgetcsv_x_st3");
-    emitter.instruction("movzx ecx, BYTE PTR [rbp - 16]");                      // load enc
-    emitter.instruction("cmp al, cl");                                          // c == enc?
-    emitter.instruction("je __rt_fgetcsv_x_s3_enc");                           // -> write c only (drop esc)
     emitter.instruction("movzx ecx, BYTE PTR [rbp - 24]");                      // load esc
-    emitter.instruction("mov BYTE PTR [r15], cl");                              // *write_ptr = esc (keep esc for non-enc)
+    emitter.instruction("mov BYTE PTR [r15], cl");                              // *write_ptr = esc (php keeps it)
     emitter.instruction("add r15, 1");                                          // write_ptr++
-    emitter.label("__rt_fgetcsv_x_s3_enc");
     emitter.instruction("mov BYTE PTR [r15], al");                              // *write_ptr = c (literal)
     emitter.instruction("add r15, 1");                                          // write_ptr++
     emitter.instruction("mov QWORD PTR [rbp - 32], 2");                        // state = InQuotedField
@@ -898,9 +970,7 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp al, 0x0d");                                        // c == carriage return (0x0D)?
     emitter.instruction("je __rt_fgetcsv_x_push_end");                         // -> push field, end
     emitter.label("__rt_fgetcsv_x_st4_data");
-    emitter.instruction("movzx ecx, BYTE PTR [rbp - 16]");                      // load enc
-    emitter.instruction("mov BYTE PTR [r15], cl");                              // *write_ptr = enc (restore close quote)
-    emitter.instruction("add r15, 1");                                          // write_ptr++
+    // See the AArch64 counterpart: the closing enclosure is consumed, never written back.
     emitter.instruction("mov BYTE PTR [r15], al");                              // *write_ptr = c
     emitter.instruction("add r15, 1");                                          // write_ptr++
     emitter.instruction("mov QWORD PTR [rbp - 32], 1");                        // state = InField

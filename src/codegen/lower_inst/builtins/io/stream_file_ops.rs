@@ -653,7 +653,6 @@ const STRING_CSV_CONTROLS: [CsvControl; 3] = [
 /// runtime helper, passing separator/enclosure/escape as a packed `csv_opts` word.
 pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fgetcsv", 1, 5)?;
-    emit_csv_escape_deprecation(ctx, inst, "fgetcsv", 4);
     let stream = expect_operand(inst, 0)?;
     let arch = ctx.emitter.target.arch;
     load_open_stream_handle_to_result(ctx, stream, "fgetcsv")?;
@@ -661,6 +660,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
     // -- extract first byte of separator / enclosure / escape (or default) --
     emit_csv_control_bytes(ctx, inst, "fgetcsv", &STREAM_CSV_CONTROLS)?;
+    emit_csv_escape_deprecation(ctx, inst, "fgetcsv", 4);
 
     // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
     match arch {
@@ -710,7 +710,6 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// argument here may be a literal in read-only memory.
 pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "str_getcsv", 1, 4)?;
-    emit_csv_escape_deprecation(ctx, inst, "str_getcsv", 3);
     let subject = expect_operand(inst, 0)?;
     let arch = ctx.emitter.target.arch;
 
@@ -720,6 +719,7 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // 4180 doubling: php's `str_getcsv($s)` uses `"\\"`, the same byte `fgetcsv()` defaults to,
     // and only an explicitly EMPTY `$escape` asks for doubling.
     emit_csv_control_bytes(ctx, inst, "str_getcsv", &STRING_CSV_CONTROLS)?;
+    emit_csv_escape_deprecation(ctx, inst, "str_getcsv", 3);
     match arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x0");                                // escape byte
@@ -772,6 +772,11 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
 /// It is also VERSION-GATED, which the rest of the diagnostic surface already is and this was
 /// not: PHP 8.2 and 8.3 print nothing here, so `--php-version 8.3` printing the notice made
 /// elephc noisier than the interpreter it is asked to imitate.
+///
+/// And it comes LAST, after the control characters are validated. php checks the separator, the
+/// enclosure and the escape for being a single character before it reaches the notice, so a call
+/// that throws `ValueError` never prints one: `fgetcsv($h, 0, ";;")` is one line on `php -n`
+/// 8.5.6 and was two here. Every caller must emit it after `emit_csv_control_bytes()`.
 fn emit_csv_escape_deprecation(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -933,7 +938,6 @@ fn emit_csv_field_tag_from_header(ctx: &mut FunctionContext<'_>) {
 /// passing separator/enclosure/escape as a packed `csv_opts` word and eol as (ptr, len).
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
-    emit_csv_escape_deprecation(ctx, inst, "fputcsv", 4);
     let stream = expect_operand(inst, 0)?;
     let fields = expect_operand(inst, 1)?;
     let arch = ctx.emitter.target.arch;
@@ -980,6 +984,7 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     // to doubling made `fputcsv($h, ['a\\"b'])` write `"a\""b"` where php writes `"a\"b"`: the
     // escape already neutralizes the quote, so php never doubles it.
     emit_csv_control_bytes(ctx, inst, "fputcsv", &STREAM_CSV_CONTROLS)?;
+    emit_csv_escape_deprecation(ctx, inst, "fputcsv", 4);
 
     // -- pack csv_opts = (esc << 16) | (enc << 8) | sep --
     match arch {

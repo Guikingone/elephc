@@ -16129,3 +16129,151 @@ echo stream_select($r, $w, $x, 0), "\n";
         )
     );
 }
+
+/// Verifies the CSV reader KEEPS the escape byte, which php never removes.
+///
+/// `"a\"b"` reads back as `a\"b` on `php -n` 8.5.6 — four bytes, exactly what `fputcsv()` wrote.
+/// All the escape character does is stop the next byte from closing the field; both bytes land in
+/// the value. The parser dropped it when it preceded the ENCLOSURE and kept it everywhere else,
+/// so every round trip through a quoted field containing one silently lost a byte. The three
+/// other rows pin the cases that already worked, so the fix cannot be a swap of which byte is
+/// lost. `str_getcsv()` shares the state machine and is checked alongside.
+#[test]
+fn test_fgetcsv_keeps_the_escape_byte_it_reads() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["\"a\\\"b\"\n", "\"x\\\"\",y\n", "\"a\\\\b\"\n", "\"a\\,b\"\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "|";
+    fclose($h);
+    echo json_encode(str_getcsv(rtrim($text, "\n"), ",", "\"", "\\")), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"a\\\\\\\"b\"]|[\"a\\\\\\\"b\"]\n",
+            "[\"x\\\\\\\"\",\"y\"]|[\"x\\\\\\\"\",\"y\"]\n",
+            "[\"a\\\\\\\\b\"]|[\"a\\\\\\\\b\"]\n",
+            "[\"a\\\\,b\"]|[\"a\\\\,b\"]\n",
+        )
+    );
+}
+
+/// Verifies the enclosure that CLOSES a field is consumed, even when data follows it.
+///
+/// php reads `"ab"cd` as `abcd`: the closing quote is gone and everything after it is ordinary
+/// data, quotes included — `"ab"c"d"` reads back as `abc"d"`. The parser wrote the quote back
+/// before resuming, which added a byte php never keeps. The doubled-quote row is here because it
+/// runs through the same state and must NOT change: `"ab""cd"` is still `ab"cd`.
+#[test]
+fn test_fgetcsv_drops_the_closing_enclosure_when_data_follows_it() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["\"ab\"cd\n", "\"ab\"cd,e\n", "\"ab\"c\"d\"\n", "\"ab\" cd\n", "\"ab\"\"cd\"\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "\n";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"abcd\"]\n",
+            "[\"abcd\",\"e\"]\n",
+            "[\"abc\\\"d\\\"\"]\n",
+            "[\"ab cd\"]\n",
+            "[\"ab\\\"cd\"]\n",
+        )
+    );
+}
+
+/// Verifies whitespace in FRONT of an opening enclosure is skipped, and only then.
+///
+/// php looks ahead from the start of a field: if the first byte that is neither the separator nor
+/// whitespace is the enclosure, the field starts there and the whitespace is dropped. So
+/// `" \"a\",b"` reads as `a`, while `" a,b"` — no enclosure ahead — keeps the space and reads as
+/// `" a"`. The reader had no lookahead at all and kept the space in both.
+///
+/// The last row is the reason the lookahead is bounded by the BUFFER rather than by a newline
+/// test: `str_getcsv()` holds the whole subject, so it CAN reach a quote past a newline and php
+/// answers `["a"]`, while `fgetcsv()` holds one line and cannot. One bound gives both.
+#[test]
+fn test_fgetcsv_skips_whitespace_before_an_opening_enclosure() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [" \"a\",b\n", "\t\"a\",b\n", " a,b\n", "a, \"b\"\n", " x\"a\",b\n", " \"a\" ,b\n"];
+foreach ($cases as $text) {
+    $h = fopen("php://memory", "r+");
+    fwrite($h, $text);
+    rewind($h);
+    echo json_encode(fgetcsv($h, 0, ",", "\"", "\\")), "\n";
+    fclose($h);
+}
+echo json_encode(str_getcsv(" \n\"a\"", ",", "\"", "\\")), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "[\"a\",\"b\"]\n",
+            "[\"a\",\"b\"]\n",
+            "[\" a\",\"b\"]\n",
+            "[\"a\",\"b\"]\n",
+            "[\" x\\\"a\\\"\",\"b\"]\n",
+            "[\"a \",\"b\"]\n",
+            "[\"a\"]\n",
+        )
+    );
+}
+
+/// Verifies the `$escape` deprecation comes AFTER the control characters are validated.
+///
+/// php checks the separator, enclosure and escape for being a single character before it reaches
+/// the notice, so a call that throws `ValueError` never prints one. elephc emitted the notice
+/// first, which made every rejected call two lines where php prints one — and on the CSV family
+/// that is the whole diagnostic. The successful call at the end is what proves the notice was
+/// moved rather than lost.
+#[test]
+fn test_csv_escape_deprecation_comes_after_the_control_validation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "a,b\n");
+rewind($h);
+try { fgetcsv($h, 0, ";;"); } catch (ValueError $e) { echo "1:", $e->getMessage(), "\n"; }
+try { fputcsv($h, ["a"], ";;"); } catch (ValueError $e) { echo "2:", $e->getMessage(), "\n"; }
+try { str_getcsv("a,b", ";;"); } catch (ValueError $e) { echo "3:", $e->getMessage(), "\n"; }
+rewind($h);
+echo "4:", json_encode(fgetcsv($h)), "\n";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "1:fgetcsv(): Argument #3 ($separator) must be a single character\n",
+            "2:fputcsv(): Argument #3 ($separator) must be a single character\n",
+            "3:str_getcsv(): Argument #2 ($separator) must be a single character\n",
+            "4:[\"a\",\"b\"]\n",
+        )
+    );
+    let notices = out
+        .stderr
+        .matches("the $escape parameter must be provided")
+        .count();
+    assert_eq!(
+        notices, 1,
+        "only the call that survived validation may warn, got stderr={}",
+        out.stderr
+    );
+}
