@@ -772,6 +772,7 @@ dependencies = [
  "elephc-builtin-contract",
  "elephc-crypto",
  "elephc-iconv",
+ "elephc-pcntl",
  "elephc-phar",
  "flate2",
  "inventory",

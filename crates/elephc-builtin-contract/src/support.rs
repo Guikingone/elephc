@@ -328,36 +328,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "hexdec",
     "join",
     "octdec",
-    "pcntl_alarm",
-    "pcntl_async_signals",
-    "pcntl_exec",
-    "pcntl_errno",
-    "pcntl_fork",
-    "pcntl_get_last_error",
-    "pcntl_getcpu",
-    "pcntl_getcpuaffinity",
-    "pcntl_getpriority",
-    "pcntl_setcpuaffinity",
-    "pcntl_setns",
-    "pcntl_setpriority",
-    "pcntl_signal",
-    "pcntl_signal_dispatch",
-    "pcntl_signal_get_handler",
-    "pcntl_sigprocmask",
-    "pcntl_sigtimedwait",
-    "pcntl_sigwaitinfo",
-    "pcntl_strerror",
-    "pcntl_unshare",
-    "pcntl_wait",
-    "pcntl_waitid",
-    "pcntl_waitpid",
-    "pcntl_wexitstatus",
-    "pcntl_wifcontinued",
-    "pcntl_wifexited",
-    "pcntl_wifsignaled",
-    "pcntl_wifstopped",
-    "pcntl_wstopsig",
-    "pcntl_wtermsig",
     "serialize",
     "strncasecmp",
     "strncmp",
@@ -412,18 +382,18 @@ mod tests {
         // The thirty-four prelude-provided `curl_*` contracts are published only
         // with the `curl` feature; see `crate::catalog_curl`'s module doc.
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
-        assert_eq!(eval_registry, 484 + curl_surface);
+        assert_eq!(eval_registry, 516 + curl_surface);
         // 82 compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use.
         assert_eq!(eval_internal, 99);
         // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 387);
+        assert_eq!(eval_pending, 357);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
         // entry points.
-        assert_eq!(aot_registry, 614);
+        assert_eq!(aot_registry, 616);
         // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
         // name-resolver-rewritten contracts, and the curl prelude when published.
         assert_eq!(aot_external, 353 + curl_surface);
@@ -474,8 +444,8 @@ mod tests {
         let curl_surface = if cfg!(feature = "curl") { 34 } else { 0 };
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
-        assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 486);
+        assert_eq!(interpreter_adapter, 495 + curl_surface);
+        assert_eq!(unsupported, 456);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

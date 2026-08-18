@@ -76,6 +76,9 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
     name: &str,
 ) -> Option<EvalPredefinedConstant> {
     let name = name.trim_start_matches('\\');
+    if let Some(value) = elephc_pcntl::host_pcntl_int_constant(name) {
+        return Some(EvalPredefinedConstant::Int(value));
+    }
     if let Some(value) = eval_target_dependent_constant(name) {
         return Some(value);
     }
