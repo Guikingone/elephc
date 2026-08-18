@@ -143,7 +143,7 @@ So elephc is not a drop-in replacement for an entire dynamic framework today. Th
 
 ## Requirements
 
-- Rust toolchain (`cargo`)
+- Rust toolchain (`cargo`) only when building elephc from source
 - A native assembler and linker for your host/target
 - On macOS: Xcode Command Line Tools (`xcode-select --install`)
 - On Linux: a standard native toolchain (`as`, `ld`, libc development files)
@@ -154,13 +154,46 @@ PCRE2 package is not a production prerequisite.
 
 ## Install
 
-### Homebrew (recommended)
+### elvm (recommended)
+
+[`elvm`](https://github.com/getelephc/elvm) installs elephc versions side by
+side and selects the right compiler through a project or global version. Install
+the version manager first:
+
+```bash
+curl -fsSL https://get.elephc.dev | sh
+```
+
+The installer prompts to add `~/.elvm/bin` to your `PATH`; start a new shell
+after accepting. It installs `elvm` itself, not a compiler version. Install the
+latest elephc release and make it the default with:
+
+```bash
+elvm install latest
+elvm use latest --global
+elvm current
+```
+
+To pin a project to a specific compiler, install that version and select it in
+the project directory:
+
+```bash
+elvm install 0.26.4
+elvm use 0.26.4
+```
+
+The second command writes `.elephc-version`. Commit that file so contributors
+and CI can install the same compiler with `elvm install`. See the
+[installation guide](docs/getting-started/installation.md) for version
+selection and troubleshooting.
+
+### Homebrew (alternative, macOS)
 
 ```bash
 brew install illegalstudio/tap/elephc
 ```
 
-### From source
+### From source (alternative)
 
 ```bash
 git clone https://github.com/illegalstudio/elephc.git
@@ -170,7 +203,7 @@ cargo build --release
 
 The binary is at `./target/release/elephc`.
 
-### Manual download
+### Manual download (alternative)
 
 Pre-built binaries are available on the [Releases](https://github.com/illegalstudio/elephc/releases) page. If macOS blocks the binary, run:
 
