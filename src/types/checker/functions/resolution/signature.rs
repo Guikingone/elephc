@@ -338,6 +338,12 @@ impl Checker {
             let Some(exit_ty) = local_env.get(pname) else {
                 continue;
             };
+            if let Some(widened_ty) = null_entry_by_ref_param_widens(entry_ty, exit_ty) {
+                widened[index].1 = widened_ty;
+                widened_indexes.push(index);
+                any = true;
+                continue;
+            }
             if !array_element_representation_widens(entry_ty, exit_ty) {
                 continue;
             }
@@ -504,4 +510,35 @@ fn callable_return_codegen_sig(mut sig: FunctionSig) -> FunctionSig {
         }
     }
     sig
+}
+
+/// Widens a by-reference parameter whose caller passed NULL and whose body writes something else.
+///
+/// `function f(&$a) { $a = 5; }` called as `$x = null; f($x);` is php's out-parameter idiom, and
+/// the whole point of it is that `$x` is `int(5)` afterwards. elephc typed the parameter from the
+/// caller — `null` — and left it there, so the body's write went through the pointer while the
+/// CALLER kept reading its slot as null-typed. Every later read constant-folded to `NULL`:
+/// `var_dump($x)` printed NULL and `if ($x === null)` took the wrong branch, with no diagnostic
+/// anywhere. The call site's EIR was byte-identical to the case that works, because the
+/// difference was never in the EIR.
+///
+/// The widened type is `mixed`, not the narrower `<written>|null` union it might look like it
+/// should be. Both are boxed, but a nullable SCALAR union has its own inline representation — a
+/// payload word plus a tag word, sixteen bytes — while the caller's slot was laid out for the
+/// eight-byte null it was holding, so the callee's write ran past the end of it and the program
+/// segfaulted. `mixed` is one pointer whatever the payload, which is the only representation
+/// both sides of the boundary agree on here.
+///
+/// Only a `null` entry widens. A parameter the caller passed a real value to keeps elephc's
+/// monomorphized contract: `$x = 1; f($x)` with an `$a = "s"` body is still the reassignment
+/// error it has always been, because widening THAT silently would change what the backend
+/// compiles for every existing by-reference call.
+fn null_entry_by_ref_param_widens(entry_ty: &PhpType, exit_ty: &PhpType) -> Option<PhpType> {
+    if !matches!(entry_ty, PhpType::Void) {
+        return None;
+    }
+    if matches!(exit_ty, PhpType::Void | PhpType::Never) {
+        return None;
+    }
+    Some(PhpType::Mixed)
 }

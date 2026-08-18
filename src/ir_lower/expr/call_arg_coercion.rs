@@ -27,8 +27,54 @@ pub(super) fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    if let Some(value) = lower_by_ref_null_out_arg_with_signature(ctx, sig, index, arg) {
+        return value;
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Re-types a local holding NULL that is passed to a by-reference parameter the callee WRITES.
+///
+/// This is php's out-parameter idiom — `$x = null; f($x);` with `function f(&$a) { $a = 5; }` —
+/// and the whole point of it is that `$x` is `int(5)` afterwards. The checker widened the
+/// parameter to `mixed` when it saw the body write, and re-typed its own view of the caller's
+/// variable; the LOWERING keeps its own local-type map, so without this the load after the call
+/// still carried `php=null` and every read of it constant-folded to NULL. The write itself
+/// always happened — the callee stores through the pointer — which is why nothing warned.
+pub(super) fn lower_by_ref_null_out_arg_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let (_, param_ty) = sig.params.get(index)?;
+    if !matches!(param_ty, PhpType::Mixed) {
+        return None;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return None;
+    };
+    if !matches!(ctx.local_type(name), PhpType::Void) {
+        return None;
+    }
+    let local = ctx.load_local(name, Some(arg.span));
+    // The slot really is converted, not merely re-typed: the callee writes a boxed value through
+    // the pointer, so what the caller hands over has to already be a Mixed cell. This mirrors the
+    // `ArrayToMixed` the by-reference array path emits for the same reason.
+    let boxed = ctx.emit_value(
+        Op::MixedBox,
+        vec![local.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(arg.span),
+    );
+    ctx.store_call_normalized_local(name, boxed, PhpType::Mixed, Some(arg.span));
+    Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
 /// Coerces a positional argument to storage owned explicitly by EIR when required.

@@ -626,12 +626,22 @@ impl Checker {
             let Some((_, param_ty)) = sig.params.get(index) else {
                 continue;
             };
-            if !matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-                continue;
-            }
             let Some(current) = env.get(variable).cloned() else {
                 continue;
             };
+            // A variable that held NULL and reached a by-reference parameter the callee WRITES
+            // comes back holding whatever was written. The signature already says so — the
+            // parameter was widened to `mixed` when the body was checked — so adopting it here
+            // is what finally makes the write visible: leaving the caller typed `null`
+            // constant-folded every later read to NULL, so `var_dump($x)` printed NULL after
+            // `f($x)` had put an int there and `if ($x === null)` took the wrong branch.
+            if matches!(current, PhpType::Void) && matches!(param_ty, PhpType::Mixed) {
+                env.insert(variable.clone(), param_ty.clone());
+                continue;
+            }
+            if !matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
+                continue;
+            }
             if crate::types::checker::array_element_representation_widens(&current, param_ty) {
                 env.insert(variable.clone(), param_ty.clone());
             }
