@@ -213,7 +213,7 @@ impl Scanner<'_> {
         match name {
             "class_attribute_args" | "class_attribute_names" | "class_get_attributes"
             | "ptr_sizeof" | "class_implements" | "class_parents" | "class_uses"
-            | "get_parent_class" | "spl_autoload" | "spl_autoload_call" => {
+            | "get_parent_class" | "property_exists" | "spl_autoload" | "spl_autoload_call" => {
                 self.scan_class_argument(name, args, 0, false);
             }
             "is_a" | "is_subclass_of" => {
@@ -292,7 +292,7 @@ impl Scanner<'_> {
         first
     }
 
-    /// Records arguments bound to registry parameters named `callback`.
+    /// Records arguments bound to registry parameters recognized as callbacks.
     pub(super) fn scan_builtin_callback_arguments(&mut self, name: &str, args: &[Expr]) {
         let Some(definition) = crate::builtins::registry::lookup(name) else {
             return;
@@ -301,7 +301,9 @@ impl Scanner<'_> {
             .params
             .iter()
             .enumerate()
-            .filter_map(|(index, (param, _))| (param == "callback").then_some(index))
+            .filter_map(|(index, (param, ty))| {
+                builtin_parameter_may_be_callback(param, ty).then_some(index)
+            })
             .collect();
         if callback_indices.is_empty() {
             return;
@@ -793,6 +795,11 @@ impl Scanner<'_> {
 
 }
 
+/// Returns whether registry metadata identifies one parameter as callback-bearing.
+fn builtin_parameter_may_be_callback(param: &str, ty: &crate::types::PhpType) -> bool {
+    param == "callback" || php_type_may_be_callable(ty)
+}
+
 /// Returns whether a declared PHP parameter type can receive a callable descriptor.
 fn php_type_may_be_callable(ty: &crate::types::PhpType) -> bool {
     match ty {
@@ -805,4 +812,27 @@ fn php_type_may_be_callable(ty: &crate::types::PhpType) -> bool {
 /// Removes a named-argument wrapper when inspecting builtin control arguments.
 fn unwrap_named_arg(expr: &Expr) -> &Expr {
     if let ExprKind::NamedArg { value, .. } = &expr.kind { value } else { expr }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::builtin_parameter_may_be_callback;
+    use crate::types::PhpType;
+
+    /// Verifies callable registry types identify callbacks independently of parameter spelling.
+    #[test]
+    fn builtin_callback_parameters_are_recognized_structurally() {
+        assert!(builtin_parameter_may_be_callback(
+            "handler",
+            &PhpType::Callable
+        ));
+        assert!(builtin_parameter_may_be_callback(
+            "callback",
+            &PhpType::Mixed
+        ));
+        assert!(!builtin_parameter_may_be_callback(
+            "value",
+            &PhpType::Mixed
+        ));
+    }
 }

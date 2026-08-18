@@ -284,10 +284,11 @@ The scanner deliberately widens the keep-set for PHP-observable dynamic lookup:
 `eval` and unknown function calls retain free functions, unknown method lookup
 retains methods on live classes, and `unserialize`, dynamic class names, and
 Reflection retain class-like declarations conservatively. Literal
-`function_exists`, `class_exists`, and `method_exists` probes retain the named
-declaration instead of triggering a global widening. Registry parameters named
-`callback` add callable edges using the shared argument planner, including named
-arguments and conservative dynamic-spread fallback. Explicit prelude requests
+`function_exists`, `class_exists`, `method_exists`, and class-string
+`property_exists` probes retain the named declaration instead of triggering a
+global widening. Registry parameters with a callable type or the conventional
+`callback` name add callable edges using the shared argument planner, including
+named arguments and conservative dynamic-spread fallback. Explicit prelude requests
 such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
 inventory group; `--with-crypto` only force-links the bridge, and `--web` is
 demand-pruned from its executable bootstrap roots.

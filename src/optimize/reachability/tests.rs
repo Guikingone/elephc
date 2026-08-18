@@ -423,6 +423,16 @@ fn scan_literal_class_exists_is_a_reference_not_a_hazard() {
     assert!(!usage.hazards.dynamic_class);
 }
 
+/// Verifies a literal `property_exists` class target retains exact class metadata.
+#[test]
+fn scan_literal_property_exists_class_is_a_reference_not_a_hazard() {
+    let usage = scan_program(&parse(
+        "<?php echo property_exists('Visible', 'property') ? 'y' : 'n';",
+    ));
+    assert!(usage.classes.contains(&php_symbol_key("Visible")));
+    assert!(!usage.hazards.dynamic_class);
+}
+
 /// Verifies Reflection references conservatively widen functions, methods, and classes.
 #[test]
 fn scan_reflection_reference_widens_all_declaration_hazards() {

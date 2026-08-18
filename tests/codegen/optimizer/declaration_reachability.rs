@@ -109,6 +109,18 @@ fn test_method_exists_literal_keeps_static_method() {
     assert_eq!(out, "y");
 }
 
+/// Verifies a class-string property probe retains otherwise unreachable class metadata.
+#[test]
+fn test_property_exists_class_string_keeps_class_metadata() {
+    let out = compile_and_run(
+        "<?php
+        class PropertyProbe { public int $hidden = 1; }
+        echo property_exists('PropertyProbe', 'hidden') ? 'y' : 'n';
+        ",
+    );
+    assert_eq!(out, "y");
+}
+
 /// Verifies a literal function probe retains an otherwise uncalled user declaration.
 #[test]
 fn test_function_exists_literal_keeps_user_function() {

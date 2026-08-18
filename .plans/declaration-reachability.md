@@ -129,9 +129,9 @@ From a live declaration body (and from top-level statements), record:
 | call to an include-loaded `FunctionVariantGroup` | every concrete function variant selectable by its runtime dispatcher |
 | `new C` / `C::class` / `instanceof C` / `catch (C)` / type hints on live callables | class/interface/enum `C` |
 | `$obj->m()` / `C::m()` / first-class `C::m(...)` / `[$obj, 'm']` / `['C', 'm']` | method `(C, m)` plus class `C` |
-| Registry builtin parameter named `callback` | callable edge from the argument bound by the shared call-argument planner; unknown/spread values widen callable hazards |
+| Registry builtin parameter with a callable type or the conventional `callback` name | callable edge from the argument bound by the shared call-argument planner; unknown/spread values widen callable hazards |
 | `function_exists('foo')` / `is_callable('foo')` / `call_user_func('foo')` with a **string literal** | function `foo` |
-| `method_exists($x, 'm')` / `class_exists('C')` with a **string literal** | method `m` on every live type that could be `$x`, or class `C` |
+| `method_exists($x, 'm')` / `class_exists('C')` / `property_exists('C', 'p')` with a **string literal** | method `m` on every live type that could be `$x`, or class `C` |
 | `elephc_pdo_*()` / any extern call | that extern function |
 | `extends` / `implements` / trait use on a live class | parent, interfaces, used traits |
 | `parent::m()` / `$this->m()` inside a live method | implementation owner selected by `ClassInfo.method_impl_classes` / `static_method_impl_classes` |
@@ -185,7 +185,7 @@ Hazards are boolean flags on the scan result. They do **not** disable the pass. 
 |---|---|---|
 | `dynamic_function` | `eval()`, `$fn()`, `call_user_func($x)`, `function_exists($x)`, `is_callable($x)`, `ExprCall`, `ClosureCall` used as a name lookup | every remaining free function |
 | `dynamic_method` | `$obj->$m()`, `$class::$m()`, computed `ExprCall` / `ClosureCall`, `method_exists($o, $x)`, `ReflectionMethod` / `ReflectionClass` method APIs, `call_user_func([$o, $x])` | every method of every **live** class |
-| `dynamic_class` | `new $c`, `class_exists($x)`, `unserialize()`, `get_declared_classes()`, `ReflectionClass` by variable name | every class / interface / enum |
+| `dynamic_class` | `new $c`, `class_exists($x)`, `property_exists($x, 'p')`, `unserialize()`, `get_declared_classes()`, `ReflectionClass` by variable name | every class / interface / enum |
 | `eval_bridge` | `eval` present, `--with-eval`, Magician already required | all user-visible declarations (functions, classes, methods) |
 
 Literal introspection is **not** a hazard. `function_exists('pdo_drivers')` is a normal edge to `pdo_drivers`.
