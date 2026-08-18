@@ -16367,3 +16367,50 @@ fclose($h);
         );
     }
 }
+
+/// Verifies `stream_select()` answers the READY COUNT when `$write`/`$except` are null.
+///
+/// `stream_select($r, $w, $e, 0)` with null write and except sets is the shape every read loop
+/// in PHP is written in, and it answered 15 where php answers 1 — a constant, because the null
+/// sets reached the runtime as boxed Mixed cells whose header it read as an array length, so
+/// `poll()` was handed fourteen uninitialized entries and counted every one of them.
+///
+/// The empty-array row is the contrast that isolates it: passing `[]` instead of `null` was
+/// correct throughout, which is why no existing test caught the null form. The last row keeps a
+/// non-null `$write` in the mix so the two shapes cannot be conflated, and every row also checks
+/// the arrays are compacted to the ready subset, which is the other half of the contract.
+#[test]
+fn test_stream_select_counts_ready_streams_with_null_sets() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sel.txt", "hello");
+$a = fopen("sel.txt", "r");
+$b = fopen("sel.txt", "r");
+
+$r = [$a];
+$w = null;
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a, $b];
+$w = null;
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a];
+$w = [];
+$e = [];
+echo stream_select($r, $w, $e, 0), "|", count($r), "\n";
+
+$r = [$a];
+$w = [$b];
+$e = null;
+echo stream_select($r, $w, $e, 0), "|", count($r), "|", count($w), "\n";
+
+fclose($a);
+fclose($b);
+"#,
+    );
+    assert_eq!(out, "1|1\n2|2\n1|1\n2|1|1\n");
+    let _ = fs::remove_dir_all(&dir);
+}
