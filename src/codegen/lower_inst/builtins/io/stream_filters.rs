@@ -93,13 +93,190 @@ pub(crate) fn lower_stream_filter_attach(
             return lower_bzip2_decompress_stream_filter_attach(ctx, inst);
         }
         if let Some(spec) = filter_name.strip_prefix("convert.iconv.") {
-            return lower_iconv_stream_filter_attach(ctx, inst, spec);
+            // A name with no separator is not a filter at all: `convert.iconv.` and
+            // `convert.iconv.UTF-8` both answer `false` on `php -n` 8.5.6, and this attached an
+            // inert node and reported success for both. An EMPTY half is a different thing and
+            // stays supported — `convert.iconv.UTF-8/` attaches, iconv reading the empty string
+            // as the current locale's charset.
+            if !spec.contains('/') {
+                return lower_refused_iconv_filter_attach(ctx, inst, prepend);
+            }
+            return lower_iconv_stream_filter_attach(ctx, inst, spec, prepend);
         }
         if let Some(id) = stream_filter_id(&filter_name) {
             return lower_builtin_stream_filter_attach(ctx, inst, id, prepend);
         }
+        return lower_user_stream_filter_attach(ctx, inst, prepend);
     }
-    lower_user_stream_filter_attach(ctx, inst, prepend)
+    lower_dynamic_inline_shape_filter_attach(ctx, inst, prepend)
+}
+
+/// The inline-shape filters, paired with the attach each one needs.
+///
+/// These four cannot be reached through `__rt_builtin_filter_id`, the run-time name table the
+/// dynamic path scans. That table lists what a CHAIN NODE can apply — a byte transform the id
+/// selects — and these are not that: each installs a per-fd handle plus a program-local helper
+/// thunk (`_zlib_fwrite_fn` and friends) that only a compile-time attach sequence can emit.
+/// Naming them in the table would mint a node whose id the chain hands to a byte transform that
+/// does not exist, so the attach would report success and filter nothing.
+///
+/// The way to reach them from a run-time name is therefore to emit the attach sequences AT THE
+/// CALL SITE and pick between them with a name comparison, which is what this table drives.
+const DYNAMIC_INLINE_SHAPE_FILTERS: &[(
+    &str,
+    fn(&mut FunctionContext<'_>, &Instruction) -> Result<()>,
+)] = &[
+    ("zlib.deflate", lower_zlib_deflate_stream_filter_attach),
+    ("zlib.inflate", lower_zlib_inflate_stream_filter_attach),
+    ("bzip2.compress", lower_bzip2_compress_stream_filter_attach),
+    (
+        "bzip2.decompress",
+        lower_bzip2_decompress_stream_filter_attach,
+    ),
+];
+
+/// Lowers a `stream_filter_append()` / `stream_filter_prepend()` whose `$filter_name` is not a
+/// compile-time literal.
+///
+/// `$name = "zlib.deflate"; stream_filter_append($h, $name);` attached NOTHING and answered
+/// `false`, while the same call with the literal compresses — php makes no such distinction, and
+/// a filter name held in a variable is ordinary PHP (a config value, a loop over a list). The
+/// four names above are compared here in turn, each branch emitting the very sequence the
+/// literal path emits, and anything else falls through to the user/table path unchanged.
+fn lower_dynamic_inline_shape_filter_attach(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    let filter = expect_operand(inst, 1)?;
+    let done_label = ctx.next_label("filter_dyn_done");
+    for (name, attach) in DYNAMIC_INLINE_SHAPE_FILTERS {
+        let next_label = ctx.next_label("filter_dyn_next");
+        emit_filter_name_mismatch_branch(ctx, filter, name, &next_label)?;
+        attach(ctx, inst)?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+            Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+        }
+        ctx.emitter.label(&next_label);
+    }
+    lower_dynamic_iconv_filter_attach(ctx, inst, filter, prepend, &done_label)?;
+    lower_user_stream_filter_attach(ctx, inst, prepend)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the `convert.iconv.<from>/<to>` arm of the dynamic-name attach.
+///
+/// The other four names are fixed strings a comparison can match. This one carries its two
+/// charsets INSIDE the name, and the attach sequence bakes them into `iconv_open()` as data
+/// symbols — which a name that only exists at run time cannot supply. So the same sequence is
+/// emitted against two program-local buffers, and `__rt_iconv_spec_split` fills them just
+/// before it runs. The shapes are untouched: they already take the ADDRESS of a symbol.
+///
+/// A name with no `/` after the prefix falls through to the caller's user-filter path, which is
+/// what php does — `convert.iconv.` and `convert.iconv.UTF-8` both answer `false` on `php -n`
+/// 8.5.6, while `convert.iconv.UTF-8/` and `convert.iconv./UTF-8` attach, an empty half being
+/// iconv's own way of naming the current locale's charset.
+fn lower_dynamic_iconv_filter_attach(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    filter: ValueId,
+    prepend: bool,
+    done_label: &str,
+) -> Result<()> {
+    use crate::codegen_support::runtime::io::ICONV_SPEC_BUFFER_BYTES;
+
+    let next_label = ctx.next_label("filter_dyn_next");
+    let from_symbol = ctx.next_label("iconv_dyn_from");
+    let to_symbol = ctx.next_label("iconv_dyn_to");
+    ctx.data
+        .add_comm(from_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
+    ctx.data.add_comm(to_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
+
+    load_string_to_result(ctx, filter, "stream_filter_append name")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // the run-time name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // and its byte length
+            abi::emit_symbol_address(ctx.emitter, "x2", &from_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x3", &to_symbol);
+            abi::emit_call_label(ctx.emitter, "__rt_iconv_spec_split");
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", next_label));               // not an iconv name: try the rest
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // the run-time name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its byte length
+            ctx.emitter
+                .instruction(&format!("lea rdx, [rip + {from_symbol}]"));
+            ctx.emitter
+                .instruction(&format!("lea rcx, [rip + {to_symbol}]"));
+            abi::emit_call_label(ctx.emitter, "__rt_iconv_spec_split");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter
+                .instruction(&format!("je {}", next_label));                    // not an iconv name: try the rest
+        }
+    }
+
+    // The charset pair is validated here exactly as on the literal path: php creates the filter
+    // at attach time, so an unopenable conversion answers `false` rather than attaching a
+    // transform that silently passes bytes through.
+    let refused_label = ctx.next_label("iconv_dyn_refused");
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    emit_iconv_open_probe(ctx, &from_symbol, &to_symbol, &refused_label);
+    emit_iconv_transform_for_current_fd(ctx, inst, &from_symbol, &to_symbol)?;
+    emit_inert_filter_resource(ctx, inst, false)?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&refused_label);
+    emit_iconv_create_warning(ctx, inst, prepend)?;
+    emit_boxed_bool(ctx, false);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done_label);
+    ctx.emitter.label(&next_label);
+    Ok(())
+}
+
+/// Branches to `mismatch_label` unless the run-time filter name equals `name`.
+///
+/// The name operand is re-loaded for every candidate rather than held in a register across the
+/// chain: an attach sequence in an earlier arm clobbers whatever it liked, and the loads are
+/// pointer/length pairs out of a slot, not work worth saving.
+fn emit_filter_name_mismatch_branch(
+    ctx: &mut FunctionContext<'_>,
+    filter: ValueId,
+    name: &str,
+    mismatch_label: &str,
+) -> Result<()> {
+    let (symbol, length) = ctx.data.add_string(name.as_bytes());
+    load_string_to_result(ctx, filter, "stream_filter_append name")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // `__rt_str_eq` takes x1/x2 = the first pair, which is where the load already left
+            // the run-time name, and x3/x4 = the second.
+            abi::emit_symbol_address(ctx.emitter, "x3", &symbol);
+            ctx.emitter.instruction(&format!("mov x4, #{length}"));
+            abi::emit_call_label(ctx.emitter, "__rt_str_eq");
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", mismatch_label));
+        }
+        Arch::X86_64 => {
+            // `__rt_str_eq` takes rdi/rsi = the first pair and rdx/rcx = the second; the load
+            // leaves the run-time name in rax/rdx, so both move before the literal is placed.
+            ctx.emitter.instruction("mov rdi, rax");                            // the run-time name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its byte length
+            ctx.emitter
+                .instruction(&format!("lea rdx, [rip + {symbol}]"));            // the candidate name pointer
+            ctx.emitter.instruction(&format!("mov rcx, {length}"));             // and its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_str_eq");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter
+                .instruction(&format!("je {}", mismatch_label));
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `stream_filter_append($stream, "zlib.deflate", ...)`.
@@ -538,21 +715,141 @@ pub(super) fn lower_iconv_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     spec: &str,
+    prepend: bool,
 ) -> Result<()> {
-    let stream = expect_operand(inst, 0)?;
-    load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
-    let Some((from, to)) = spec.split_once('/') else {
-        emit_inert_filter_resource(ctx, inst, false)?;
-        return store_if_result(ctx, inst);
-    };
-    if from.is_empty() || to.is_empty() {
-        emit_inert_filter_resource(ctx, inst, false)?;
-        return store_if_result(ctx, inst);
-    }
+    let (from, to) = spec
+        .split_once('/')
+        .expect("caller rejects an iconv spec with no separator");
     let from_cstr = format!("{}\0", from);
     let to_cstr = format!("{}\0", to);
     let (from_sym, _) = ctx.data.add_string(from_cstr.as_bytes());
     let (to_sym, _) = ctx.data.add_string(to_cstr.as_bytes());
+    let stream = expect_operand(inst, 0)?;
+    let refused_label = ctx.next_label("iconv_refused");
+    let done_label = ctx.next_label("iconv_attached");
+    load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    emit_iconv_open_probe(ctx, &from_sym, &to_sym, &refused_label);
+    emit_iconv_transform_for_current_fd(ctx, inst, &from_sym, &to_sym)?;
+    emit_inert_filter_resource(ctx, inst, false)?;
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&refused_label);
+    emit_iconv_create_warning(ctx, inst, prepend)?;
+    emit_boxed_bool(ctx, false);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Refuses a `convert.iconv.*` name php has no filter for, with php's own wording.
+///
+/// php answers `false` and warns `Unable to create or locate filter "<name>"` — the "create or
+/// locate" verb rather than the plain "locate" one, because the `convert.iconv.` prefix DID
+/// select a factory and the factory is what refused.
+fn lower_refused_iconv_filter_attach(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    emit_iconv_create_warning(ctx, inst, prepend)?;
+    emit_boxed_bool(ctx, false);
+    store_if_result(ctx, inst)
+}
+
+/// Emits php's `Unable to create or locate filter "<name>"` for the call's filter-name operand.
+fn emit_iconv_create_warning(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    let filter = expect_operand(inst, 1)?;
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // the filter-name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // and its byte length
+            ctx.emitter
+                .instruction(&format!("mov x2, #{}", i64::from(prepend)));      // which function names itself
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // the filter-name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its byte length
+            ctx.emitter
+                .instruction(&format!("mov rdx, {}", i64::from(prepend)));      // which function names itself
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_filter_create_warning");
+    Ok(())
+}
+
+/// Branches to `refused_label` unless `iconv_open()` can open this conversion.
+///
+/// php validates the charset pair when the filter is CREATED, so
+/// `stream_filter_append($h, "convert.iconv.nope/alsonope")` answers `false` there and never
+/// attaches. elephc attached regardless and only found out inside the transform, where the shape
+/// silently leaves the bytes unconverted — so a typo'd charset looked like a working filter.
+///
+/// The probe descriptor is closed immediately; the transform opens its own.
+fn emit_iconv_open_probe(
+    ctx: &mut FunctionContext<'_>,
+    from_sym: &str,
+    to_sym: &str,
+    refused_label: &str,
+) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the descriptor across the probe
+            abi::emit_symbol_address(ctx.emitter, "x0", to_sym);
+            abi::emit_symbol_address(ctx.emitter, "x1", from_sym);
+            ctx.emitter.bl_c("iconv_open");
+            ctx.emitter.instruction("cmn x0, #1");                              // is the descriptor (iconv_t)-1?
+            ctx.emitter
+                .instruction(&format!("b.eq __rt_icp_bad_{}", refused_label));
+            ctx.emitter.bl_c("iconv_close");                                    // the transform opens its own
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
+            let ok = format!("__rt_icp_ok_{}", refused_label);
+            ctx.emitter.instruction(&format!("b {}", ok));
+            ctx.emitter.label(&format!("__rt_icp_bad_{}", refused_label));
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // drop the preserved descriptor
+            ctx.emitter.instruction(&format!("b {}", refused_label));
+            ctx.emitter.label(&ok);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the descriptor across the probe
+            ctx.emitter
+                .instruction(&format!("lea rdi, [rip + {to_sym}]"));
+            ctx.emitter
+                .instruction(&format!("lea rsi, [rip + {from_sym}]"));
+            ctx.emitter.instruction("call iconv_open");
+            ctx.emitter.instruction("cmp rax, -1");                             // is the descriptor (iconv_t)-1?
+            ctx.emitter
+                .instruction(&format!("je __rt_icp_bad_{}", refused_label));
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("call iconv_close");                        // the transform opens its own
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the stream descriptor
+            let ok = format!("__rt_icp_ok_{}", refused_label);
+            ctx.emitter.instruction(&format!("jmp {}", ok));
+            ctx.emitter.label(&format!("__rt_icp_bad_{}", refused_label));
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // drop the preserved descriptor
+            ctx.emitter.instruction(&format!("jmp {}", refused_label));
+            ctx.emitter.label(&ok);
+        }
+    }
+}
+
+/// Picks the read or the write transcoder from `$mode` and attaches it to the descriptor already
+/// held in the integer result register.
+///
+/// Shared by the literal attach and the dynamic-name one, which differ only in where the two
+/// charset symbols come from: a deduplicated data string for a spec split at compile time, a
+/// program-local buffer for one `__rt_iconv_spec_split` fills at run time. Both are addresses of
+/// NUL-terminated bytes, which is all `iconv_open()` wants.
+fn emit_iconv_transform_for_current_fd(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    from_sym: &str,
+    to_sym: &str,
+) -> Result<()> {
     let write_label = ctx.next_label("iconv_mode_write");
     let after_label = ctx.next_label("iconv_mode_done");
     match ctx.emitter.target.arch {
@@ -563,10 +860,10 @@ pub(super) fn lower_iconv_stream_filter_attach(
             ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
             ctx.emitter.instruction("cmp x9, #2");                              // test for STREAM_FILTER_WRITE-only mode
             ctx.emitter.instruction(&format!("b.eq {}", write_label));          // install the streaming write transcoder
-            emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_read_transform_for_current_fd(ctx, from_sym, to_sym);
             ctx.emitter.instruction(&format!("b {}", after_label));             // skip the write-filter attach path
             ctx.emitter.label(&write_label);
-            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym);
             ctx.emitter.label(&after_label);
         }
         Arch::X86_64 => {
@@ -576,15 +873,14 @@ pub(super) fn lower_iconv_stream_filter_attach(
             abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp r9, 2");                               // test for STREAM_FILTER_WRITE-only mode
             ctx.emitter.instruction(&format!("je {}", write_label));            // install the streaming write transcoder
-            emit_iconv_read_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_read_transform_for_current_fd(ctx, from_sym, to_sym);
             ctx.emitter.instruction(&format!("jmp {}", after_label));           // skip the write-filter attach path
             ctx.emitter.label(&write_label);
-            emit_iconv_write_transform_for_current_fd(ctx, &from_sym, &to_sym);
+            emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym);
             ctx.emitter.label(&after_label);
         }
     }
-    emit_inert_filter_resource(ctx, inst, false)?;
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Emits the attach-time READ transform for the current iconv stream descriptor.

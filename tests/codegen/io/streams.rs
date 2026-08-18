@@ -16277,3 +16277,93 @@ fclose($h);
         out.stderr
     );
 }
+
+/// Verifies a filter name held in a VARIABLE reaches the same filters a literal one does.
+///
+/// `$name = "zlib.deflate"; stream_filter_append($h, $name);` attached NOTHING and answered
+/// `false`, while the identical call with the literal compresses. php makes no such distinction,
+/// and a name in a variable is ordinary PHP — a config value, a loop over a list, exactly what
+/// this test does. The five are unreachable through the run-time name table on purpose: that
+/// table lists what a chain node can apply, and each of these installs a per-fd handle and a
+/// program-local helper thunk instead, so the lowering now emits the attach SEQUENCES at the
+/// call site and picks between them by comparing the name.
+///
+/// The refusals matter as much as the attaches. `convert.iconv.` and `convert.iconv.UTF-8` carry
+/// no separator, so php has no filter for them and answers `false`; `convert.iconv.nope/alsonope`
+/// names a conversion `iconv_open()` cannot open, and php finds that out when it CREATES the
+/// filter, so that is `false` too. An EMPTY half is none of those — iconv reads it as the current
+/// locale's charset, and php attaches. All measured on `php -n` 8.5.6.
+#[test]
+fn test_stream_filter_append_resolves_a_run_time_filter_name() {
+    let out = compile_and_run(
+        r#"<?php
+$names = ["zlib.deflate", "zlib.inflate", "bzip2.compress", "bzip2.decompress", "convert.iconv.UTF-8/ISO-8859-1"];
+foreach ($names as $n) {
+    $h = fopen("php://memory", "w+");
+    echo $n, "=", var_export(@stream_filter_append($h, $n, STREAM_FILTER_WRITE) !== false, true), "\n";
+    fclose($h);
+}
+$h = fopen("php://memory", "w+");
+echo "literal=", var_export(@stream_filter_append($h, "zlib.deflate", STREAM_FILTER_WRITE) !== false, true), "\n";
+fclose($h);
+$bad = ["convert.iconv.", "convert.iconv.UTF-8", "convert.iconv.nope/alsonope", "nosuchfilter"];
+foreach ($bad as $n) {
+    $h = fopen("php://memory", "w+");
+    echo $n, "=", var_export(@stream_filter_append($h, $n, STREAM_FILTER_WRITE), true), "\n";
+    fclose($h);
+}
+$h = fopen("php://memory", "w+");
+echo "empty-half=", var_export(@stream_filter_append($h, "convert.iconv.UTF-8/", STREAM_FILTER_WRITE) !== false, true), "\n";
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "zlib.deflate=true\n",
+            "zlib.inflate=true\n",
+            "bzip2.compress=true\n",
+            "bzip2.decompress=true\n",
+            "convert.iconv.UTF-8/ISO-8859-1=true\n",
+            "literal=true\n",
+            "convert.iconv.=false\n",
+            "convert.iconv.UTF-8=false\n",
+            "convert.iconv.nope/alsonope=false\n",
+            "nosuchfilter=false\n",
+            "empty-half=true\n",
+        )
+    );
+}
+
+/// Verifies php's "create or locate" wording reaches the `convert.iconv.*` refusals.
+///
+/// php has two verbs and picks by WHY the attach failed: a name no factory claims gets
+/// `Unable to locate filter "nosuchfilter"`, while one a factory claims and then refuses gets
+/// `Unable to create or locate filter "convert.iconv."`. Every `convert.iconv.` name reaches the
+/// second, the prefix being what selects the factory. elephc reported success for both of these
+/// and warned about neither.
+#[test]
+fn test_iconv_filter_refusal_uses_the_create_or_locate_wording() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "convert.iconv.", STREAM_FILTER_WRITE));
+var_dump(stream_filter_append($h, "convert.iconv.nope/alsonope", STREAM_FILTER_WRITE));
+var_dump(stream_filter_append($h, "nosuchfilter", STREAM_FILTER_WRITE));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    for expected in [
+        "Unable to create or locate filter \"convert.iconv.\"",
+        "Unable to create or locate filter \"convert.iconv.nope/alsonope\"",
+        "Unable to locate filter \"nosuchfilter\"",
+    ] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected}, got stderr={}",
+            out.stderr
+        );
+    }
+}

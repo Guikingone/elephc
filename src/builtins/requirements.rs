@@ -139,12 +139,23 @@ pub fn unlink_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRe
     }
 }
 
-/// Resolves libraries needed by a literal stream filter name.
+/// Resolves libraries needed by a stream filter name.
+///
+/// A name that is not a literal reaches the compression filters too: the lowering emits every
+/// inline-shape attach sequence at the call site and picks between them by comparing the run-time
+/// name, because those filters install a per-fd handle no run-time name table can reconstruct.
+/// Those sequences reference `deflate`, `BZ2_bzCompress` and `iconv_open` whichever branch runs,
+/// so all three libraries have to be linked — asking for none left the symbols unresolved at
+/// link time.
 pub fn stream_filter_requirements(
     input: &BuiltinRequirementInput<'_>,
 ) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filter)) = input.args.get(1).map(|arg| &arg.kind) else {
-        return Vec::new();
+        return vec![
+            BuiltinRequirement::SystemLibrary("z"),
+            BuiltinRequirement::SystemLibrary("bz2"),
+            BuiltinRequirement::MacOsLibrary("iconv"),
+        ];
     };
     if matches!(filter.as_str(), "zlib.deflate" | "zlib.inflate") {
         vec![BuiltinRequirement::SystemLibrary("z")]

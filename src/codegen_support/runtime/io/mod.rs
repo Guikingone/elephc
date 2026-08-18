@@ -34,6 +34,7 @@ mod stream_context_shape;
 mod stream_select_cast_warning;
 mod stream_pending;
 mod filter_inert;
+mod filter_create_warning;
 mod filter_param_warning;
 mod filter_params;
 mod fsockopen_meta;
@@ -84,6 +85,7 @@ mod socket_scheme;
 mod format_sockaddr;
 mod data_stream;
 mod builtin_filter_id;
+mod iconv_spec_split;
 mod builtin_wrapper_index;
 mod stream_filter;
 mod fsockopen;
@@ -228,6 +230,7 @@ pub(crate) use format_sockaddr::{
 };
 pub(crate) use data_stream::emit_data_stream;
 pub(crate) use builtin_filter_id::{emit_builtin_filter_id, emit_builtin_filter_table};
+pub(crate) use iconv_spec_split::{emit_iconv_spec_split, ICONV_SPEC_BUFFER_BYTES};
 pub(crate) use builtin_wrapper_index::{
     emit_builtin_wrapper_index, emit_builtin_wrapper_table, emit_stream_wrapper_restore_diag,
 };
@@ -259,6 +262,7 @@ pub(crate) use stream_context_shape::emit_stream_context_options_shape_ok;
 pub(crate) use stream_select_cast_warning::emit_stream_select_cast_warning;
 pub(crate) use stream_pending::{emit_stream_pending_put, emit_stream_pending_take};
 pub(crate) use filter_inert::emit_filter_mark_inert;
+pub(crate) use filter_create_warning::emit_filter_create_warning;
 pub(crate) use filter_param_warning::emit_filter_param_warning;
 pub(crate) use filter_params::{emit_asf_params_load, emit_filter_absorb_params};
 pub(crate) use fsockopen_meta::emit_stream_record_fsockopen_meta;

@@ -421,13 +421,22 @@ through, and one that asks for a line length does not soft-wrap.
 `convert.base64-encode` likewise ignores `line-length` and never wraps.
 
 A filter name held in a variable resolves against the string, conversion and
-`consumed` filters, and against user-registered names. `zlib.*`, `bzip2.*` and
-`convert.iconv.*` are the exception: they are not table entries but per-call-site
-attach sequences that install a per-fd handle (and, for iconv, compile the
-charset pair into the binary), so a name that only exists at run time cannot
-reach them. `$n = "zlib.deflate"; stream_filter_append($s, $n)` warns
-`Unable to locate filter "zlib.deflate"` and returns `false` where the literal
-spelling works.
+`consumed` filters, against user-registered names, and against `zlib.*`,
+`bzip2.*` and `convert.iconv.*` — `$n = "zlib.deflate";
+stream_filter_append($s, $n)` compresses exactly as the literal spelling does.
+Those five are not table entries: each installs a per-fd handle and a
+program-local helper thunk, so the call site emits the attach sequences and picks
+between them by comparing the run-time name. For `convert.iconv.*` the charset
+pair is split out of the name at run time into program-local buffers, which is
+what a literal splits during compilation.
+
+A `convert.iconv.` name with no `/` is not a filter — `convert.iconv.` and
+`convert.iconv.UTF-8` return `false` and warn `Unable to create or locate filter`,
+PHP's wording for a name a factory claimed and then refused. A charset pair
+`iconv_open()` cannot open, such as `convert.iconv.nope/alsonope`, is refused the
+same way, at attach time as PHP refuses it. An EMPTY half is accepted:
+`convert.iconv.UTF-8/` and `convert.iconv./UTF-8` both attach, iconv reading the
+empty string as the current locale's charset.
 
 `consumed` counts the bytes it passes and forwards every one of them, as PHP's
 filter does. PHP additionally rewinds the stream when the filter chain closes,
