@@ -16414,3 +16414,74 @@ fclose($b);
     assert_eq!(out, "1|1\n2|2\n1|1\n2|1|1\n");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `stream_select()` refuses a `php://memory` stream, as php does.
+///
+/// A MEMORY stream is bytes in the heap: there is no operating-system descriptor to poll. php
+/// names the type and drops the entry — `Cannot represent a stream of type MEMORY as a
+/// select()able descriptor` — and raises `ValueError: No stream arrays were passed` when that
+/// leaves nothing selectable. elephc polled the stream's backing descriptor and reported it
+/// READY, so a select loop that blocks forever on php returned immediately here.
+///
+/// Only MEMORY is refused, and the other rows are what pin that: `php://temp` selects fine, being
+/// backed by a real file, and so do `data:` and a plain file. The mixed row is the one that shows
+/// the entry is DROPPED rather than fatal — a memory stream beside a real one leaves the real one
+/// selectable, and the answer counts only it.
+#[test]
+fn test_stream_select_refuses_a_memory_stream() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("selmem.txt", "hello");
+// Each label is built and printed only once the call has resolved, so where the warnings go
+// cannot interleave with stdout — the diagnostic stream is asserted separately below.
+function probe(string $label, $s): string {
+    $r = [$s];
+    $w = null;
+    $e = null;
+    try {
+        return $label . "=" . var_export(stream_select($r, $w, $e, 0), true);
+    } catch (ValueError $ex) {
+        return $label . "=VE:" . $ex->getMessage();
+    }
+}
+$out = [];
+$out[] = probe("file", fopen("selmem.txt", "r"));
+$out[] = probe("memory", fopen("php://memory", "w+"));
+$out[] = probe("temp", fopen("php://temp", "w+"));
+$out[] = probe("data", fopen("data://text/plain,hi", "r"));
+$f = fopen("selmem.txt", "r");
+$m = fopen("php://memory", "w+");
+$r = [$f, $m];
+$w = null;
+$e = null;
+$n = stream_select($r, $w, $e, 0);
+$out[] = "mixed=" . $n . "|" . count($r);
+fclose($f);
+fclose($m);
+echo implode("\n", $out), "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        concat!(
+            "file=1\n",
+            "memory=VE:No stream arrays were passed\n",
+            "temp=1\n",
+            "data=1\n",
+            "mixed=1|1\n",
+        )
+    );
+    let notices = out
+        .stderr
+        .matches("Cannot represent a stream of type MEMORY as a select()able descriptor")
+        .count();
+    // Three, not two: php walks the arrays TWICE — once to build the descriptor sets and once to
+    // translate the result back — and names the stream on both passes, so the mixed call warns
+    // twice while the memory-only one warns once, its ValueError landing before the second pass.
+    assert_eq!(
+        notices, 3,
+        "one per pass that reached the memory stream, got stderr={}",
+        out.stderr
+    );
+}

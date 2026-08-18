@@ -231,6 +231,17 @@ pub(crate) const SELECT_CAST_UNREPRESENTABLE: &str = concat!(
     " as a select()able descriptor\n"
 );
 
+/// The warning php raises for a `php://memory` stream handed to `stream_select()`.
+///
+/// A MEMORY stream has no operating-system descriptor to poll, so php refuses it outright and
+/// names the TYPE in the text. `php://temp` is not refused — it is backed by a real file once it
+/// exists — and neither are `data:`, a plain file, or the standard streams. Measured on `php -n`
+/// 8.5.6, where the refusal leaves nothing selectable and the `ValueError` follows.
+pub(crate) const SELECT_CAST_UNREPRESENTABLE_MEMORY: &str = concat!(
+    "Warning: stream_select(): Cannot represent a stream of type MEMORY",
+    " as a select()able descriptor\n"
+);
+
 /// `stream_eof`'s tail, the only one that also reports what php assumed.
 pub(crate) const WRAPPER_MISSING_HOOK_TAIL_EOF: &str =
     "::stream_eof is not implemented! Assuming EOF\n";

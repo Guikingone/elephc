@@ -160,6 +160,7 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     let cast_l = format!("__rt_stream_select_build_{}_cast", suffix);
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done", suffix);
     let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok", suffix);
+    let memory_refused_l = format!("__rt_stream_select_build_{}_mem_refused", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
@@ -194,7 +195,15 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("str x12, [sp, #2152]");                                 // spill the data-region pointer
     emitter.instruction("str x14, [sp, #2160]");                                 // spill the running pollfd index
     emitter.instruction("mov x0, x13");                                          // opaque stream handle → descriptor lookup
+    // A `php://memory` stream is bytes in the heap, so there is no descriptor to poll: php names
+    // the type and drops the entry. The guard answers -1 for one, which is the same "unusable
+    // descriptor" the resolve below produces for a closed handle, so the store, the tally and
+    // the compact pass all treat it the way they already treat those.
+    emitter.instruction(&format!("bl {}", "__rt_stream_select_memory_guard"));   // -1 once it has warned
+    emitter.instruction("cmn x0, #1");                                          // did the guard refuse it?
+    emitter.instruction(&format!("b.eq {}", memory_refused_l));                 // skip the resolve; -1 is already the answer
     emitter.instruction("bl __rt_stream_fd");                                    // resolve the backend descriptor through StreamState
+    emitter.label(&memory_refused_l);
     emitter.instruction("mov x13, x0");                                          // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
     emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
@@ -280,6 +289,7 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     let cast_done_l = format!("__rt_stream_select_keep_{}_cast_done", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done", suffix);
     let skip_l = format!("__rt_stream_select_keep_{}_skip", suffix);
+    let memory_refused_l = format!("__rt_stream_select_keep_{}_mem_refused", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("ldr x10, [sp, #{}]", len_off));               // load the original section length
@@ -330,7 +340,15 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction("str x12, [sp, #2168]");                                 // spill the data-region pointer
     emitter.instruction("str x15, [sp, #2176]");                                 // spill the original slot value
     emitter.instruction("mov x0, x16");                                          // opaque stream handle → descriptor lookup
+    // php walks the arrays TWICE — once to build the descriptor sets and once to translate the
+    // result back — and names an unrepresentable stream on both passes, so a memory stream sitting
+    // beside a real one warns twice. This pass only runs when `poll` did, which is why the
+    // memory-ONLY call still warns once: its `ValueError` is raised before the poll.
+    emitter.instruction("bl __rt_stream_select_memory_guard");                   // -1 once it has warned
+    emitter.instruction("cmn x0, #1");                                          // did the guard refuse it?
+    emitter.instruction(&format!("b.eq {}", memory_refused_l));                 // skip the resolve; -1 is already the answer
     emitter.instruction("bl __rt_stream_fd");                                    // resolve the backend descriptor through StreamState
+    emitter.label(&memory_refused_l);
     emitter.instruction("mov x16, x0");                                          // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
     emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
@@ -542,6 +560,7 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     let after_unbox_l = format!("__rt_stream_select_build_{}_after_unbox_x", suffix);
     let cast_done_l = format!("__rt_stream_select_build_{}_cast_done_x", suffix);
     let cast_ok_l = format!("__rt_stream_select_build_{}_cast_ok_x", suffix);
+    let memory_refused_l = format!("__rt_stream_select_build_{}_mem_refused_x", suffix);
     let done_l = format!("__rt_stream_select_build_{}_done_x", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
@@ -575,7 +594,14 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction("mov QWORD PTR [rbp - 2144], r12");                      // spill the value_type tag
     emitter.instruction("mov QWORD PTR [rbp - 2152], r14");                      // spill the running pollfd index
     emitter.instruction("mov rdi, rdx");                                         // opaque stream handle → descriptor lookup
+    // See the AArch64 counterpart: a `php://memory` stream has no descriptor to poll, and the
+    // guard answers -1 once it has named the type the way php does.
+    emitter.instruction("call __rt_stream_select_memory_guard");                 // -1 once it has warned
+    emitter.instruction("cmp rax, -1");                                          // did the guard refuse it?
+    emitter.instruction(&format!("je {}", memory_refused_l));                    // skip the resolve; -1 is already the answer
+    emitter.instruction("mov rdi, rax");                                         // the handle the guard passed through
     emitter.instruction("call __rt_stream_fd");                                  // resolve the backend descriptor through StreamState
+    emitter.label(&memory_refused_l);
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
@@ -648,6 +674,7 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     let cast_done_l = format!("__rt_stream_select_keep_{}_cast_done_x", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done_x", suffix);
     let skip_l = format!("__rt_stream_select_keep_{}_skip_x", suffix);
+    let memory_refused_l = format!("__rt_stream_select_keep_{}_mem_refused_x", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", len_off));    // load the original section length
@@ -693,7 +720,13 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction("mov QWORD PTR [rbp - 2160], r12");                      // spill the value_type tag
     emitter.instruction("mov QWORD PTR [rbp - 2168], r13");                      // spill the original slot value
     emitter.instruction("mov rdi, rdx");                                         // opaque stream handle → descriptor lookup
+    // See the AArch64 counterpart: php names an unrepresentable stream on BOTH of its passes.
+    emitter.instruction("call __rt_stream_select_memory_guard");                 // -1 once it has warned
+    emitter.instruction("cmp rax, -1");                                          // did the guard refuse it?
+    emitter.instruction(&format!("je {}", memory_refused_l));                    // skip the resolve; -1 is already the answer
+    emitter.instruction("mov rdi, rax");                                         // the handle the guard passed through
     emitter.instruction("call __rt_stream_fd");                                  // resolve the backend descriptor through StreamState
+    emitter.label(&memory_refused_l);
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
