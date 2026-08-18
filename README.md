@@ -189,6 +189,10 @@ elephc hello.php
 ./hello
 elephc hello.lfc
 
+# Print the compiler version
+elephc --version
+elephc -V
+
 # Custom heap size (default: 8MB)
 elephc --heap-size=16777216 heavy.php
 
