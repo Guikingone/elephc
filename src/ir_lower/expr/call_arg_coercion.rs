@@ -54,15 +54,28 @@ pub(super) fn prepare_by_ref_null_out_locals(
     let Some(sig) = sig else {
         return;
     };
+    // A by-reference VARIADIC needs the same treatment past its fixed parameters: every argument
+    // in the tail binds to `&...$out`, and `$out[$i] = …` writes through to the caller's cell. A
+    // caller local still holding `null` has no Mixed storage for that write to land in, so
+    // `foreach ($out as $i => $_) { $out[$i] = …; }` over `$a = null` left every variable NULL.
+    let regular = crate::types::call_args::regular_param_count(sig);
+    let by_ref_variadic = super::variadic_args::variadic_param_is_by_ref(sig);
     for (index, arg) in args.iter().enumerate() {
-        if !sig.ref_params.get(index).copied().unwrap_or(false) {
-            continue;
-        }
-        let Some((_, param_ty)) = sig.params.get(index) else {
-            continue;
-        };
-        if !matches!(param_ty, PhpType::Mixed) {
-            continue;
+        let in_variadic_tail = index >= regular;
+        if in_variadic_tail {
+            if !by_ref_variadic {
+                continue;
+            }
+        } else {
+            if !sig.ref_params.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            let Some((_, param_ty)) = sig.params.get(index) else {
+                continue;
+            };
+            if !matches!(param_ty, PhpType::Mixed) {
+                continue;
+            }
         }
         let ExprKind::Variable(name) = &arg.kind else {
             continue;

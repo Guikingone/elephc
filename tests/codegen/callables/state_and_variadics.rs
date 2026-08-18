@@ -1046,3 +1046,50 @@ var_dump($h, $i);
         )
     );
 }
+
+/// Verifies a by-reference variadic written through a `foreach` key, and over `null` callers.
+///
+/// `foreach ($out as $i => $_) { $out[$i] = …; }` is the natural way to fill a variadic
+/// out-parameter, and it reached the caller for none of its variables. A `foreach` key is a boxed
+/// Mixed in EIR, so the write lowers to `__rt_array_set_mixed_key` instead of the direct setter;
+/// its integer-key path delegates to `__rt_array_set_mixed`, which had no marker detection of its
+/// own and simply replaced the array element.
+///
+/// The `null` callers are the second half. A by-reference variadic argument still holding `null`
+/// has no Mixed storage for the write to land in, so the write went through the marker into a
+/// slot the caller read as null-typed — every variable stayed NULL with nothing reported.
+///
+/// The typed-caller row is kept beside it so a fix that only handles one of the two shapes cannot
+/// pass, and the string row covers the two-word caller cell.
+#[test]
+fn test_by_ref_variadic_writes_through_a_foreach_key() {
+    let out = compile_and_run(
+        r#"<?php
+function fill(int $base, &...$out): int {
+    $n = 0;
+    foreach ($out as $i => $_) { $out[$i] = $base + $i; $n = $n + 1; }
+    return $n;
+}
+function fillstr(&...$out): void {
+    foreach ($out as $i => $_) { $out[$i] = "v" . $i; }
+}
+$a = null; $b = null; $c = null;
+var_dump(fill(10, $a, $b, $c));
+var_dump($a, $b, $c);
+$d = 0; $e = 0;
+var_dump(fill(50, $d, $e));
+var_dump($d, $e);
+$f = null; $g = null;
+fillstr($f, $g);
+var_dump($f, $g);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(3)\nint(10)\nint(11)\nint(12)\n",
+            "int(2)\nint(50)\nint(51)\n",
+            "string(2) \"v0\"\nstring(2) \"v1\"\n",
+        )
+    );
+}
