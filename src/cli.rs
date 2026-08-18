@@ -24,6 +24,9 @@ const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
 
+/// Compiler package version embedded into the binary by Cargo.
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// ASCII mascot printed by `--mascotte`, embedded at compile time (not read
 /// from a filesystem path — the original source file lives outside this
 /// repo, on one contributor's machine, and wouldn't exist anywhere else).
@@ -77,11 +80,17 @@ fn wants_help(args: &[String]) -> bool {
     args.iter().any(|a| a == "-h" || a == "--help")
 }
 
+/// Returns true if `-V` or `--version` appears anywhere in the argument list.
+fn wants_version(args: &[String]) -> bool {
+    args.iter().any(|a| a == "-V" || a == "--version")
+}
+
 /// Full `--help` reference text, categorized by section. Printed to stdout
 /// with exit code 0 — this is a successful, requested action, not an error.
-pub(crate) const HELP: &str = "Usage: elephc [OPTIONS] <source-file>
+pub(crate) const HELP: &str = concat!("Usage: elephc [OPTIONS] <source-file>
 
 A PHP-to-native AOT compiler
+Version: ", env!("CARGO_PKG_VERSION"), "
 
 Arguments:
   <source-file>           Tagged .php or tagless .lfc source file to compile
@@ -126,8 +135,9 @@ Diagnostics:
 
 Other:
   -h, --help              Print this help and exit
+  -V, --version           Print version and exit
   --mascotte              Print an ASCII mascot and a random quote before output
-";
+");
 
 /// Configuration derived from command-line arguments, passed to the compile pipeline.
 /// Controls heap allocation size, debug output, code generation options, and linking behavior.
@@ -223,6 +233,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     }
     if wants_help(args) {
         println!("{HELP}");
+        process::exit(0);
+    }
+    if wants_version(args) {
+        println!("elephc {VERSION}");
         process::exit(0);
     }
 
@@ -981,6 +995,39 @@ mod tests {
     fn wants_help_false_without_help_flag() {
         let args = vec!["elephc".into(), "app.php".into()];
         assert!(!wants_help(&args));
+    }
+
+    /// Verifies `--version` is detected anywhere in the argument list.
+    #[test]
+    fn wants_version_detects_long_flag_anywhere() {
+        let args = vec![
+            "elephc".into(),
+            "--check".into(),
+            "--version".into(),
+            "app.php".into(),
+        ];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies `-V` is detected as the short alias for `--version`.
+    #[test]
+    fn wants_version_detects_short_flag() {
+        let args = vec!["elephc".into(), "-V".into()];
+        assert!(wants_version(&args));
+    }
+
+    /// Verifies normal arguments are not mistaken for a version request.
+    #[test]
+    fn wants_version_false_without_version_flag() {
+        let args = vec!["elephc".into(), "app.php".into()];
+        assert!(!wants_version(&args));
+    }
+
+    /// Verifies help exposes both the current compiler version and its version flags.
+    #[test]
+    fn help_includes_version_and_version_flags() {
+        assert!(HELP.contains(&format!("Version: {VERSION}")));
+        assert!(HELP.contains("-V, --version"));
     }
 
     /// Verifies `--mascotte` is detected anywhere in the argument list.

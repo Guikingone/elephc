@@ -10,6 +10,34 @@
 
 use crate::support::*;
 
+/// Verifies both compiler version flags print the Cargo package version and exit successfully.
+#[test]
+fn test_cli_version_flags_report_package_version() {
+    let dir = make_cli_test_dir("elephc_cli_version");
+    let expected = format!("elephc {}\n", env!("CARGO_PKG_VERSION"));
+
+    for flag in ["--version", "-V"] {
+        let output = elephc_cli_command(&dir)
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|error| panic!("failed to run elephc {flag}: {error}"));
+        assert!(output.status.success(), "elephc {flag} should succeed");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+        assert!(output.stderr.is_empty(), "elephc {flag} should not write stderr");
+    }
+
+    let help = elephc_cli_command(&dir)
+        .arg("--help")
+        .output()
+        .expect("failed to run elephc --help");
+    assert!(help.status.success(), "elephc --help should succeed");
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(stdout.contains(&format!("Version: {}", env!("CARGO_PKG_VERSION"))));
+    assert!(stdout.contains("-V, --version"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies native help is handled before project discovery and bare native is a usage error.
 #[test]
 fn test_cli_native_help_and_bare_usage() {

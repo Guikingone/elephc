@@ -16,12 +16,13 @@ exhaustive *what*.
 
 ```text
 elephc [OPTIONS] <source-file>
+elephc --version
 elephc native <COMMAND> [OPTIONS]
 ```
 
-Exactly one positional argument is required: the path to tagged `.php` or
-tagless `.lfc` source. The binary is written next to it, named after the source
-without its extension.
+Except for `--help` and `--version`, exactly one positional argument is required:
+the path to tagged `.php` or tagless `.lfc` source. The binary is written next
+to it, named after the source without its extension.
 Only an exact first argument of `native` selects the package command family. A
 source file literally named `native` must therefore be passed as `./native` or
 by another explicit path.
@@ -414,6 +415,8 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
+| `--help` / `-h` | — | off | Print the compiler help, including the current elephc version, and exit successfully. |
+| `--version` / `-V` | — | off | Print the elephc compiler version and exit successfully. |
 | `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
