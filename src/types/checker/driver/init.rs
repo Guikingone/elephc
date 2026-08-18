@@ -28,7 +28,7 @@ impl Checker {
     /// classes, interfaces, enums, etc.) are initialized empty.
     ///
     /// # Arguments
-    /// * `target_platform` - The compilation target platform, stored for use in platform-specific
+    /// * `target` - The full compilation target, stored for platform- and Apple-variant-specific
     ///   type checks and library requirements.
     ///
     /// # Returns

@@ -22,6 +22,7 @@ mod catalog_constants_curl;
 mod catalog_data;
 #[cfg(feature = "curl")]
 mod catalog_curl;
+mod catalog_pcntl;
 mod catalog_surfaces;
 mod eval_profile;
 mod id;
