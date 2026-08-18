@@ -352,4 +352,5 @@ pub(super) fn resolve_constant_name(
 /// a namespace, with or without the owning bridge or prelude being linked.
 fn is_builtin_global_constant(name: &str) -> bool {
     crate::types::predefined_constants::is_registered_constant(name)
+        || crate::types::pcntl_constants::is_pcntl_int_constant(name)
 }

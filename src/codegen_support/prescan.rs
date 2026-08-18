@@ -15,6 +15,7 @@ use elephc_builtin_contract::{lookup_constant, ConstValue};
 use crate::codegen_support::platform::Platform;
 use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
+use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
 use crate::types::PhpType;
 
@@ -87,6 +88,9 @@ pub(crate) fn collect_constants(
             "{name} is computed by prescan but the catalog does not mark it TargetDependent"
         );
         constants.insert(name.to_string(), value);
+    }
+    for (name, value) in pcntl_int_constants(target_platform) {
+        constants.insert(name.to_string(), (ExprKind::IntLiteral(value), PhpType::Int));
     }
     collect_constant_decls(program, &mut constants);
     constants
@@ -186,5 +190,21 @@ mod tests {
                 assert_eq!(*ty, php_type_of(constant.value), "{} type", constant.name);
             }
         }
+    }
+
+    /// Verifies PCNTL constants are seeded with target-specific values and availability.
+    #[test]
+    fn test_pcntl_constants_follow_target_platform() {
+        let mac = collect_constants(&vec![], Platform::MacOS);
+        assert_eq!(int_constant(&mac, "SIGCHLD"), 20);
+        assert_eq!(int_constant(&mac, "PCNTL_EAGAIN"), 35);
+        assert!(mac.contains_key("PRIO_DARWIN_BG"));
+        assert!(!mac.contains_key("CLONE_NEWNS"));
+
+        let linux = collect_constants(&vec![], Platform::Linux);
+        assert_eq!(int_constant(&linux, "SIGCHLD"), 17);
+        assert_eq!(int_constant(&linux, "PCNTL_EAGAIN"), 11);
+        assert!(linux.contains_key("CLONE_NEWNS"));
+        assert!(!linux.contains_key("PRIO_DARWIN_BG"));
     }
 }
