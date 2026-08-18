@@ -1929,11 +1929,12 @@ fn lower_mixed_array_set_aarch64(
     ctx.load_value_to_reg(array, "x0")?;
     ctx.load_value_to_reg(index, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_aarch64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // The marker write-through runs for BOTH shapes. Gating it on `fresh_boxed_value` meant a
+    // replacement that was ALREADY a boxed Mixed — everything `ichecked_add` produces, so every
+    // `$out[$i] = $a + $b` — went straight to the runtime setter, which replaces the element and
+    // never follows the marker to the caller's storage. `$out[0] = 99` wrote through and
+    // `$out[$i] = 70 + $i` did not, silently.
+    emit_mixed_array_set_ref_marker_writeback_aarch64(ctx, fresh_boxed_value);
     Ok(())
 }
 
@@ -1957,11 +1958,8 @@ fn lower_mixed_array_set_x86_64(
     ctx.load_value_to_reg(array, "rdi")?;
     ctx.load_value_to_reg(index, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
-    if fresh_boxed_value {
-        emit_mixed_array_set_ref_marker_writeback_x86_64(ctx);
-        return Ok(());
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed");
+    // See the AArch64 counterpart: the marker write-through runs for both shapes.
+    emit_mixed_array_set_ref_marker_writeback_x86_64(ctx, fresh_boxed_value);
     Ok(())
 }
 
@@ -1976,7 +1974,10 @@ fn lower_mixed_array_set_x86_64(
 ///
 /// The rule mirrors `runtime_callable_invoker`'s READ path, which already loads the high word
 /// only for runtime tag 1: a string is `(pointer, length)` and every other scalar is one word.
-fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'_>) {
+fn emit_mixed_array_set_ref_marker_writeback_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    fresh_boxed_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
@@ -2004,9 +2005,16 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
     ctx.emitter.instruction("ldr x9, [x2, #16]");                               // load the replacement Mixed high payload word
     ctx.emitter.instruction("str x9, [x10, #8]");                               // write the string length through the caller ref-cell
     ctx.emitter.label(&scalar_done_label);
-    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while freeing only the Mixed wrapper
-    ctx.emitter.instruction("mov x0, x2");                                      // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    ctx.emitter.instruction("str x0, [sp, #-16]!");                             // preserve the array result while disposing of only the Mixed wrapper
+    ctx.emitter.instruction("mov x0, x2");                                      // the replacement wrapper, now that its payload has been copied out
+    // A wrapper this lowering boxed itself is owned outright and freed. One that arrived ALREADY
+    // boxed was only retained on the way in, so it is RELEASED — freeing it would drop a
+    // reference the value's other holders still count on.
+    if fresh_boxed_value {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the array pointer as the ArraySet result
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the runtime setter after marker write-through
 
@@ -2023,7 +2031,10 @@ fn emit_mixed_array_set_ref_marker_writeback_aarch64(ctx: &mut FunctionContext<'
 ///
 /// Carries the same one-word/two-word rule as the AArch64 body above, for the same reason: a
 /// caller cell holding a scalar is ONE word, and writing two overwrote the neighbouring slot.
-fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_>) {
+fn emit_mixed_array_set_ref_marker_writeback_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    fresh_boxed_value: bool,
+) {
     let runtime_label = ctx.next_label("mixed_array_set_runtime");
     let mixed_cell_label = ctx.next_label("mixed_array_set_ref_mixed_cell");
     let scalar_done_label = ctx.next_label("mixed_array_set_ref_scalar_done");
@@ -2052,8 +2063,14 @@ fn emit_mixed_array_set_ref_marker_writeback_x86_64(ctx: &mut FunctionContext<'_
     ctx.emitter.instruction("mov QWORD PTR [r10 + 8], r9");                     // write the string length through the caller ref-cell
     ctx.emitter.label(&scalar_done_label);
     abi::emit_push_reg(ctx.emitter, "rdi");
-    ctx.emitter.instruction("mov rax, rdx");                                    // pass the consumed fresh Mixed wrapper to heap_free
-    abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    ctx.emitter.instruction("mov rax, rdx");                                    // the replacement wrapper, now that its payload has been copied out
+    // See the AArch64 counterpart: a wrapper boxed here is freed, one that arrived already boxed
+    // is released.
+    if fresh_boxed_value {
+        abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    }
     abi::emit_pop_reg(ctx.emitter, "rax");
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the runtime setter after marker write-through
 

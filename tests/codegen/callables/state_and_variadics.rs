@@ -1000,3 +1000,49 @@ echo $ok ? "yes" : "no";
     );
     assert_eq!(out, "42|yes");
 }
+
+/// Verifies a by-reference VARIADIC writes through to the caller for a computed index.
+///
+/// `function f(&...$out) { $out[$i] = …; }` is how a variadic out-parameter is written, and the
+/// write reached the caller only when the replacement was a raw scalar the lowering boxed itself.
+/// A value that arrived ALREADY boxed — which is everything `ichecked_add` and concatenation
+/// produce, so every `$out[$i] = $a + $b` — skipped the marker write-through entirely and went to
+/// the runtime setter, which replaces the array element and never follows the marker to the
+/// caller's storage. `$out[0] = 99` wrote through and `$out[$i] = 70 + $i` did not, silently.
+///
+/// The literal rows are kept beside the computed ones because they were the ones that always
+/// worked: a fix that merely moved which shape is broken would still pass half this test.
+/// `loopstr` is here for the two-word case — a string caller cell is a pointer AND a length, and
+/// writing one word where two belong leaves the length behind.
+#[test]
+fn test_by_ref_variadic_writes_through_for_a_computed_index() {
+    let out = compile_and_run(
+        r#"<?php
+function lit(&...$out): void { $out[0] = 99; $out[1] = 88; }
+function idx(int $k, &...$out): void { $out[$k] = 77; }
+function loopwrite(&...$out): void { $n = count($out); for ($i = 0; $i < $n; $i++) { $out[$i] = 70 + $i; } }
+function loopstr(&...$out): void { for ($i = 0; $i < 2; $i++) { $out[$i] = "s" . $i; } }
+$a = 0; $b = 0;
+lit($a, $b);
+var_dump($a, $b);
+$c = 0; $d = 0;
+idx(1, $c, $d);
+var_dump($c, $d);
+$e = 0; $f = 0; $g = 0;
+loopwrite($e, $f, $g);
+var_dump($e, $f, $g);
+$h = ""; $i = "";
+loopstr($h, $i);
+var_dump($h, $i);
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(99)\nint(88)\n",
+            "int(0)\nint(77)\n",
+            "int(70)\nint(71)\nint(72)\n",
+            "string(2) \"s0\"\nstring(2) \"s1\"\n",
+        )
+    );
+}
