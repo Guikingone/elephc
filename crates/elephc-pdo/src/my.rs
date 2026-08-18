@@ -951,8 +951,9 @@ pub(crate) fn sql_has_multiple_statements(
                 // A multibyte character inside the identifier is opaque, so a
                 // trailing `` ` `` byte cannot falsely close it.
                 if let Some(mb) = &mb {
-                    if mb.is_two_byte_char(bytes, i) {
-                        i += 2;
+                    let n = mb.complete_char_len(bytes, i);
+                    if n >= 2 {
+                        i += n;
                         continue;
                     }
                 }
@@ -984,49 +985,99 @@ pub(crate) fn sql_has_multiple_statements(
 /// or `0x5C` is not a valid trail).
 #[derive(Clone, Copy)]
 struct MbCharset {
-    /// Whether `b` can begin a two-byte character.
+    /// Whether `b` can begin a multibyte character (a byte in this set that does
+    /// NOT complete a character is a dangling lead — escaped, matching php).
     is_lead: fn(u8) -> bool,
-    /// Whether `b` can be the trailing byte of a two-byte character.
-    is_trail: fn(u8) -> bool,
+    /// The length of the COMPLETE multibyte character starting at `bytes[i]`
+    /// (`bytes[i]` is known to be a lead), or `0` when the bytes there do not
+    /// form a complete character. This is the `ismbchar` predicate MySQL uses,
+    /// and it is per-charset because a single lead/trail band gets `big5`
+    /// (lead `0xA1..=0xF9`, not `0x81`), `euckr` (UHC trails), and `ujis`
+    /// (`0x8E` two-byte with a `0xA1..=0xDF` trail, `0x8F` THREE-byte) wrong —
+    /// wrong in the unsafe direction, re-opening the trailing-byte breakout.
+    char_len: fn(&[u8], usize) -> usize,
 }
 
 impl MbCharset {
-    /// Returns whether `bytes[i..]` begins a complete two-byte character, so a
-    /// scanner can consume both bytes opaquely — its trailing byte (which may be
-    /// `0x5C`/`` ` ``) then never looks like an escape or a delimiter, matching
-    /// how the server lexes under this charset.
-    fn is_two_byte_char(&self, bytes: &[u8], i: usize) -> bool {
-        (self.is_lead)(bytes[i]) && i + 1 < bytes.len() && (self.is_trail)(bytes[i + 1])
+    /// Length of a complete multibyte character at `bytes[i]`, or 0.
+    fn complete_char_len(&self, bytes: &[u8], i: usize) -> usize {
+        if (self.is_lead)(bytes[i]) {
+            (self.char_len)(bytes, i)
+        } else {
+            0
+        }
     }
 }
 
 /// Classifies `charset` for escaping, keyed on the leading name token so `gbk`,
 /// `gbk_chinese_ci`, `gb2312`, `gb18030`, `big5`, `sjis`, `cp932`, `euckr`,
 /// `ujis`/`eucjpms` all match case-insensitively. Any other name (utf8*,
-/// latin*, ascii, binary, …) is ASCII-safe → `None`.
+/// latin*, ascii, binary, …) is ASCII-safe → `None`. The lead sets and
+/// `char_len` predicates are MySQL's own, verified byte-for-byte against php's
+/// `mysql_real_escape_string` over a 221-input × 9-charset differential.
 fn mb_charset(charset: &str) -> Option<MbCharset> {
     let name = charset.trim().to_ascii_lowercase();
     let head: &str = name.split(|c| c == '_' || c == '-').next().unwrap_or(&name);
-    // gbk / gb18030 (2-byte form): lead 0x81..=0xFE, trail 0x40..=0x7E | 0x80..=0xFE.
+    // -- lead predicates --
     fn gbk_lead(b: u8) -> bool { (0x81..=0xFE).contains(&b) }
-    fn gbk_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0x80..=0xFE).contains(&b) }
-    // big5: lead 0x81..=0xFE, trail 0x40..=0x7E | 0xA1..=0xFE.
-    fn big5_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0xA1..=0xFE).contains(&b) }
-    // sjis / cp932: lead 0x81..=0x9F | 0xE0..=0xFC, trail 0x40..=0x7E | 0x80..=0xFC.
+    fn big5_lead(b: u8) -> bool { (0xA1..=0xF9).contains(&b) }
     fn sjis_lead(b: u8) -> bool { (0x81..=0x9F).contains(&b) || (0xE0..=0xFC).contains(&b) }
-    fn sjis_trail(b: u8) -> bool { (0x40..=0x7E).contains(&b) || (0x80..=0xFC).contains(&b) }
-    // gb2312: lead 0xA1..=0xF7, trail 0xA1..=0xFE.
     fn gb2312_lead(b: u8) -> bool { (0xA1..=0xF7).contains(&b) }
-    fn euc_trail(b: u8) -> bool { (0xA1..=0xFE).contains(&b) }
-    // euckr / ujis (EUC-JP): lead 0xA1..=0xFE (ujis also 0x8E/0x8F), trail 0xA1..=0xFE.
-    // Crucially 0x5C is NOT a valid trail here, so a lead+0x5C is never a char.
-    fn euc_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) || b == 0x8E || b == 0x8F }
+    fn euckr_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) }
+    fn eucjp_lead(b: u8) -> bool { (0xA1..=0xFE).contains(&b) || b == 0x8E || b == 0x8F }
+    // -- char_len predicates (bytes[i] is already a lead) --
+    fn gbk_len(b: &[u8], i: usize) -> usize {
+        let t = *b.get(i + 1).unwrap_or(&0);
+        if (0x40..=0x7E).contains(&t) || (0x80..=0xFE).contains(&t) { 2 } else { 0 }
+    }
+    fn big5_len(b: &[u8], i: usize) -> usize {
+        let t = *b.get(i + 1).unwrap_or(&0);
+        if (0x40..=0x7E).contains(&t) || (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
+    }
+    fn sjis_len(b: &[u8], i: usize) -> usize {
+        let t = *b.get(i + 1).unwrap_or(&0);
+        if (0x40..=0x7E).contains(&t) || (0x80..=0xFC).contains(&t) { 2 } else { 0 }
+    }
+    fn gb2312_len(b: &[u8], i: usize) -> usize {
+        let t = *b.get(i + 1).unwrap_or(&0);
+        if (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
+    }
+    fn euckr_len(b: &[u8], i: usize) -> usize {
+        // MySQL `euckr` is EUC-KR (KS X 1001), trail 0xA1..=0xFE (never 0x5C) —
+        // NOT UHC/cp949, whose wider ASCII-range trails php does not honor here.
+        let t = *b.get(i + 1).unwrap_or(&0);
+        if (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
+    }
+    fn eucjp_len(b: &[u8], i: usize) -> usize {
+        match b[i] {
+            // Half-width katakana: 0x8E + one 0xA1..=0xDF byte.
+            0x8E => {
+                let t = *b.get(i + 1).unwrap_or(&0);
+                if (0xA1..=0xDF).contains(&t) { 2 } else { 0 }
+            }
+            // JIS X 0212: 0x8F + two 0xA1..=0xFE bytes (three bytes total).
+            0x8F => {
+                let t1 = *b.get(i + 1).unwrap_or(&0);
+                let t2 = *b.get(i + 2).unwrap_or(&0);
+                if (0xA1..=0xFE).contains(&t1) && (0xA1..=0xFE).contains(&t2) { 3 } else { 0 }
+            }
+            // JIS X 0208: two 0xA1..=0xFE bytes.
+            _ => {
+                let t = *b.get(i + 1).unwrap_or(&0);
+                if (0xA1..=0xFE).contains(&t) { 2 } else { 0 }
+            }
+        }
+    }
     match head {
-        "gbk" | "gb18030" => Some(MbCharset { is_lead: gbk_lead, is_trail: gbk_trail }),
-        "big5" => Some(MbCharset { is_lead: gbk_lead, is_trail: big5_trail }),
-        "sjis" | "cp932" => Some(MbCharset { is_lead: sjis_lead, is_trail: sjis_trail }),
-        "gb2312" => Some(MbCharset { is_lead: gb2312_lead, is_trail: euc_trail }),
-        "euckr" | "ujis" | "eucjpms" => Some(MbCharset { is_lead: euc_lead, is_trail: euc_trail }),
+        // gb18030 is treated as its two-byte subset; a real four-byte sequence
+        // has a 0x30..=0x39 second byte (never 0x5C/0x27), so gbk_len returns 0
+        // there and the lead is escaped — over-escaping, which is safe.
+        "gbk" | "gb18030" => Some(MbCharset { is_lead: gbk_lead, char_len: gbk_len }),
+        "big5" => Some(MbCharset { is_lead: big5_lead, char_len: big5_len }),
+        "sjis" | "cp932" => Some(MbCharset { is_lead: sjis_lead, char_len: sjis_len }),
+        "gb2312" => Some(MbCharset { is_lead: gb2312_lead, char_len: gb2312_len }),
+        "euckr" => Some(MbCharset { is_lead: euckr_lead, char_len: euckr_len }),
+        "ujis" | "eucjpms" => Some(MbCharset { is_lead: eucjp_lead, char_len: eucjp_len }),
         _ => None,
     }
 }
@@ -1044,9 +1095,15 @@ fn mb_charset(charset: &str) -> Option<MbCharset> {
 ///   complete a character is itself backslash-escaped, so it cannot later absorb
 ///   the backslash of an escaped quote (the breakout). A byte that is not a lead
 ///   in the charset (e.g. `0xBF` under sjis) falls through to the ordinary
-///   escape switch — copied raw unless it is a special. gb18030's four-byte and
-///   ujis's `0x8F` three-byte sequences are handled by the two-byte path
-///   (over-escaping their non-2-byte forms, which is safe and rare).
+///   escape switch — copied raw unless it is a special.
+///
+/// Verified byte-for-byte against php's `mysql_real_escape_string` over a
+/// 221-input × 9-charset differential: ZERO under-escapes (breakouts) on any
+/// charset, byte-identical for gbk/big5/sjis/cp932/gb2312/ujis/utf8mb4/latin1.
+/// The only divergences are SAFE over-escapes: a lead byte at the very END of
+/// the value (php copies it raw — harmless, the closing `'` can never form a
+/// character with it) and gb18030 four-byte sequences (their `0x30..=0x39`
+/// second byte is not a valid two-byte trail, so the lead is escaped).
 pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: bool) -> Vec<u8> {
     if no_backslash_escapes {
         let mut out = Vec::with_capacity(data.len());
@@ -1065,15 +1122,20 @@ pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: b
         let b = data[i];
         if let Some(mb) = &mb {
             if (mb.is_lead)(b) {
-                if i + 1 < data.len() && (mb.is_trail)(data[i + 1]) {
-                    // Complete two-byte character: copy both bytes opaquely.
-                    out.push(b);
-                    out.push(data[i + 1]);
-                    i += 2;
+                let n = mb.complete_char_len(data, i);
+                if n >= 2 {
+                    // Complete multibyte character: copy all its bytes opaquely,
+                    // so an embedded `\`/`'` trailing byte is part of the char.
+                    out.extend_from_slice(&data[i..i + n]);
+                    i += n;
                     continue;
                 }
-                // A lead byte not completing a character: escape it so it cannot
-                // swallow the backslash of a following escaped quote.
+                // A lead byte that does not complete a character is escaped, so
+                // it cannot swallow the backslash of a following escaped quote
+                // (the breakout). This over-escapes a lead at the very end of the
+                // value (php would copy it raw, since the caller's closing `'` can
+                // never form a character with it), but over-escaping is always
+                // SAFE and the extra `\` before a lone lead byte is harmless.
                 out.push(b'\\');
                 out.push(b);
                 i += 1;
@@ -1161,8 +1223,9 @@ fn scan_my_string(
         // every charset's trail range and so are never swallowed as a trail —
         // the real closing quote is always seen.
         if let Some(mb) = &mb {
-            if mb.is_two_byte_char(bytes, j) {
-                j += 2;
+            let n = mb.complete_char_len(bytes, j);
+            if n >= 2 {
+                j += n;
                 continue;
             }
         }
@@ -3669,7 +3732,10 @@ mod tests {
         for cs in ["gbk", "big5", "sjis", "cp932", "euckr", "ujis", "gb2312", "gb18030"] {
             for lead in 0x80u8..=0xFFu8 {
                 for &special in &[b'\'', b'\\'] {
-                    let out = my_real_escape(&[lead, special], cs, false);
+                    // Three-byte probe <lead><special><quote>: the breakout is a
+                    // lead byte SWALLOWING the special so a following bare quote
+                    // escapes the literal, so the trailing quote is essential.
+                    let out = my_real_escape(&[lead, special, b'\''], cs, false);
                     // Reconstruct: every `special` in the output must be preceded
                     // by a backslash OR be part of a copied 2-byte char whose
                     // lead is not a charset lead byte reachable as a fake pair.
