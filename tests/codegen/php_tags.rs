@@ -90,3 +90,33 @@ fn test_short_echo_tag_is_an_opening_tag() {
     let opens = compile_and_run("<?= 1 + 2 ?>\n<?php echo \"!\\n\";\n");
     assert_eq!(opens, "3!\n");
 }
+
+/// Verifies a closing tag inside a COMMENT, which php treats differently per comment kind.
+///
+/// A `//` or `#` comment ENDS at `?>`: `<?php echo "A"; // comment ?>TEXT` prints `ATEXT`, because
+/// the tag closes even though it sits in the comment. elephc ran the comment to the newline, so the
+/// tag was swallowed and the `<?php` on the next line arrived as code — a parse error on a file php
+/// accepts.
+///
+/// A `/* */` comment does NOT end there: `/* block ?> still comment */ echo "B";` prints `AB`, so
+/// the tag inside it is ordinary comment text and only `*/` closes it. Both measured on `php -n`
+/// 8.5.6.
+///
+/// A tag inside a STRING or a heredoc is likewise not a tag — those are scanned as literals before
+/// the tag probe ever sees them — which the third case pins.
+#[test]
+fn test_closing_tag_inside_a_comment_follows_the_comment_kind() {
+    let line = compile_and_run("<?php echo \"A\"; // comment ?>TEXT\n<?php echo \"B\";\n");
+    assert_eq!(line, "ATEXT\nB");
+
+    let hash = compile_and_run("<?php echo \"A\"; # hash ?>TEXT\n<?php echo \"B\";\n");
+    assert_eq!(hash, "ATEXT\nB");
+
+    let block = compile_and_run("<?php echo \"A\"; /* block ?> still comment */ echo \"B\";\n");
+    assert_eq!(block, "AB");
+
+    let literals = compile_and_run(
+        "<?php\necho \"a ?> b\\n\";\necho 'c ?> d', \"\\n\";\n$h = <<<TXT\ninside ?> heredoc\nTXT;\necho $h, \"\\n\";\n?>\nafter\n<?php\necho \"end\\n\";\n",
+    );
+    assert_eq!(literals, "a ?> b\nc ?> d\ninside ?> heredoc\nafter\nend\n");
+}

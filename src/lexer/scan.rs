@@ -124,6 +124,30 @@ pub fn scan_tokens(
 }
 
 
+
+/// Skips a `//` or `#` line comment, which php ends at a newline OR at a CLOSING TAG.
+///
+/// `<?php echo "A"; // comment ?>TEXT` prints `ATEXT`: the `?>` inside the comment closes the tag
+/// and hands `TEXT` to the output. Running to the newline instead swallowed the tag, and the
+/// `<?php` on the next line then arrived as code — a parse error on a file php accepts. Measured on
+/// `php -n` 8.5.6, for both comment introducers.
+///
+/// A `/* */` block comment does NOT stop there: `/* block ?> still comment */ echo "B";` prints
+/// `AB`, so the tag inside it is ordinary comment text and only `*/` ends it.
+///
+/// The tag itself is left UNCONSUMED, so the scan loop sees it and takes the inline-HTML path.
+fn skip_line_comment(cursor: &mut Cursor) {
+    while let Some(ch) = cursor.peek() {
+        if cursor.remaining().starts_with("?>") {
+            return;
+        }
+        cursor.advance();
+        if ch == '\n' {
+            return;
+        }
+    }
+}
+
 /// Consumes a `?>` closing tag and the literal text after it, emitting `; echo <text>;`.
 ///
 /// php's rules here are three, and each is measured on `php -n` 8.5.6:
@@ -213,17 +237,13 @@ fn skip_whitespace_and_comments(cursor: &mut Cursor) {
         }
 
         if cursor.remaining().starts_with("//") {
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
         if cursor.remaining().starts_with('#') && !cursor.remaining().starts_with("#[") {
             // PHP line comment introduced by `#` (but `#[` opens an attribute group).
-            while let Some(ch) = cursor.advance() {
-                if ch == '\n' { break; }
-            }
+            skip_line_comment(cursor);
             continue;
         }
 
