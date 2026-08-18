@@ -332,9 +332,14 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "pcntl_errno",
     "pcntl_fork",
     "pcntl_get_last_error",
+    "pcntl_getcpu",
+    "pcntl_getcpuaffinity",
     "pcntl_getpriority",
+    "pcntl_setcpuaffinity",
+    "pcntl_setns",
     "pcntl_setpriority",
     "pcntl_strerror",
+    "pcntl_unshare",
     "pcntl_wait",
     "pcntl_waitid",
     "pcntl_waitpid",
@@ -405,12 +410,12 @@ mod tests {
         assert_eq!(eval_internal, 99);
         // 31 registry builtins awaiting eval homes, plus the 326 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 374);
+        assert_eq!(eval_pending, 379);
         // Main's BCMath registry adds fourteen AOT contracts; this branch also
         // promotes get_object_vars from an external surface into the registry and
         // adds the ten iconv contracts and forty-three internal `__elephc_curl_*`
         // entry points.
-        assert_eq!(aot_registry, 601);
+        assert_eq!(aot_registry, 606);
         // Ten constructs/dedicated-syntax/hash surfaces, the 343 prelude-provided and
         // name-resolver-rewritten contracts, and the curl prelude when published.
         assert_eq!(aot_external, 353 + curl_surface);
@@ -462,7 +467,7 @@ mod tests {
         assert_eq!(shared_runtime, 19);
         assert_eq!(hybrid_adapter, 2);
         assert_eq!(interpreter_adapter, 463 + curl_surface);
-        assert_eq!(unsupported, 473);
+        assert_eq!(unsupported, 478);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
