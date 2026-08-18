@@ -281,9 +281,10 @@ impl Emitter {
 /// assembler-local labels, and `L`-prefixed labels also do not start a new atom,
 /// so each `__rt_*` helper stays a single dead-strippable unit. Matching is
 /// whole-token (identifier runs of `[A-Za-z0-9_$]`), so a name is never rewritten
-/// inside a longer identifier. Quoted assembly strings are copied verbatim, so
-/// user string constants cannot be changed when user metadata references one of
-/// the localized labels.
+/// inside a longer identifier. Quoted assembly strings are copied verbatim within
+/// their physical line, so user string constants cannot be changed when user
+/// metadata references one of the localized labels and an unmatched quote cannot
+/// suppress localization on later lines.
 pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String {
     if internal.is_empty() {
         return asm.to_string();
@@ -300,7 +301,9 @@ pub fn localize_internal_labels(asm: &str, internal: &HashSet<String>) -> String
             while i < bytes.len() {
                 let byte = bytes[i];
                 i += 1;
-                if escaped {
+                if byte == b'\n' {
+                    break;
+                } else if escaped {
                     escaped = false;
                 } else if byte == b'\\' {
                     escaped = true;
@@ -370,6 +373,17 @@ mod tests {
         assert_eq!(
             localize_internal_labels(asm, &internal),
             "    b L_eir_branch_1\nL_eir_branch_1:\n    .ascii \"_eir_branch_1\"\n"
+        );
+    }
+
+    /// Verifies an unmatched quote in one assembly line cannot hide labels on later lines.
+    #[test]
+    fn test_localize_internal_labels_bounds_unmatched_quotes_to_one_line() {
+        let internal = HashSet::from(["_eir_branch_1".to_string()]);
+        let asm = "    ; unmatched \" in comment\n    b _eir_branch_1\n_eir_branch_1:\n";
+        assert_eq!(
+            localize_internal_labels(asm, &internal),
+            "    ; unmatched \" in comment\n    b L_eir_branch_1\nL_eir_branch_1:\n"
         );
     }
 
