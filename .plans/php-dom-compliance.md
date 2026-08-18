@@ -1,21 +1,21 @@
 # PHP DOM 8.5 compliance plan
 
-Last verified: 2026-08-04
+Last verified: 2026-08-18
 
 Authoritative branch: `feat/php-dom-compliance`
 
 Authoritative worktree:
 `/Users/guillaumeloulier/PhpstormProjects/oss/elephc/.claude/worktrees/php-dom-compliance`
 
-Current committed implementation checkpoint: `e7315176e`
-(`fix(dom): always publish xpath host resolvers`)
+Current committed implementation checkpoint: `571d19bbd`
+(`feat(dom): checkpoint PHP 8.5 compliance campaign`)
 
 Current published head: `50347ae2ee`
 (`docs(dom): track xpath resolver remediation`), containing implementation
 checkpoint `e7315176e`.
 
-Current synchronized upstream baseline: `01652f85b6`
-(`update traffic stats`)
+Current synchronized upstream baseline: `127ca4f6b`
+(`chore: update repository stats`)
 
 Legend:
 
@@ -26,6 +26,20 @@ Legend:
 ## Executive status
 
 - [x] Create the dedicated branch and isolated worktree from fresh `origin/main`.
+- [x] Rebase the complete local DOM campaign onto current `origin/main`
+  `127ca4f6b` and resolve the modular compiler/runtime migration. The 182
+  historical branch commits plus the uncommitted TDD checkpoint were preserved
+  under `backup/php-dom-compliance-pre-rebase-20260810` and
+  `backup/php-dom-compliance-wip-pre-rebase-20260810`, then collapsed into the
+  single auditable commit `571d19bbd` directly above upstream. Independent
+  Terra/Luna audits found and restored lost `ArrayAppend` eval-AOT handling,
+  URL-stat success flags, `__PHP_Incomplete_Class` serialization, parser
+  regressions, SimpleXML comparisons/casts/isset/unset/numeric coercion,
+  DOM `NamedNodeMap` errors, XPath dynamic-spread presence, DOM/SimpleXML
+  writes/foreach ownership, and their new modular homes. The branch is now one
+  commit ahead and zero behind `origin/main`; the rebase state is clean. The
+  remote fork still names the pre-rewrite history and must later be updated
+  with `--force-with-lease` after validation, never pulled into this branch.
 - [x] Read `CONTRIBUTING.md` and the repository target/test/ownership rules;
   the referenced `RTK.md` is not present in this checkout.
 - [x] Freeze PHP `8.5.8`, php-src commit
