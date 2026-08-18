@@ -2665,13 +2665,18 @@ pub unsafe extern "C" fn elephc_pdo_sql_has_multiple_statements(
     len: i64,
 ) -> i64 {
     ffi_guard(1, || {
+        // Raw bytes, not a lossy String: a GBK/sjis query is not valid UTF-8 and
+        // the scanner is charset-aware, so any lossy replacement of a lead byte
+        // would corrupt the lexing the security guard depends on.
         let bytes = bytes_arg(sql, len);
-        let text = String::from_utf8_lossy(&bytes);
-        let no_backslash_escapes = {
+        let (no_backslash_escapes, charset) = {
             let guard = lock_recover(conns());
-            matches!(guard.get(&conn_id), Some(Conn::Mysql(c)) if c.no_backslash_escape())
+            match guard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => (c.no_backslash_escape(), c.charset().to_string()),
+                _ => (false, String::new()),
+            }
         };
-        my::sql_has_multiple_statements(&text, no_backslash_escapes) as i64
+        my::sql_has_multiple_statements(&bytes, no_backslash_escapes, &charset) as i64
     })
 }
 

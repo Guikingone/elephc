@@ -273,8 +273,13 @@ mirrors mysqlnd).
   bridge keeps multi-statements enabled for the whole connection (php's
   mysqlnd toggles them per `multi_query()` call via `COM_SET_OPTION`, which
   the bridge does not expose), so without the client-side scan a classic
-  `"1; DROP TABLE …"` injection would execute. The scan skips string
-  literals, backtick identifiers, and comments; a trailing `;` is fine. There
+  `"1; DROP TABLE …"` injection would execute. The scan is **charset-aware**
+  (it consults the connection's live charset, the same per-charset table the
+  escape uses, over the raw query bytes — never a lossy-UTF-8 copy), so a
+  GBK-family `<lead><0x5C>` inside a string literal is lexed as one character
+  exactly like the server, and cannot hide the real closing quote to smuggle a
+  second statement past the guard. The scan skips string literals, backtick
+  identifiers, and comments; a trailing `;` is fine. There
   is no exemption for compound-body DDL: `CREATE PROCEDURE … BEGIN …; … END`
   through `query()` is rejected too (telling body semicolons apart from a
   statement separator safely needs a full BEGIN/END parser, and any cheaper

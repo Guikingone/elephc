@@ -902,8 +902,20 @@ fn sql_is_call_statement(sql: &str) -> bool {
 /// semicolon separator. Quoted regions and MySQL comments are skipped with the
 /// same escape rules as placeholder translation, so a semicolon inside data
 /// never trips `ATTR_MULTI_STATEMENTS = false`.
-pub(crate) fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool) -> bool {
-    let bytes = sql.as_bytes();
+pub(crate) fn sql_has_multiple_statements(
+    bytes: &[u8],
+    no_backslash_escapes: bool,
+    charset: &str,
+) -> bool {
+    // Operates on RAW bytes, never a lossy-UTF-8 String: a GBK/sjis query is not
+    // valid UTF-8, and `from_utf8_lossy` would replace the lead byte with U+FFFD
+    // before the scan, defeating the charset-aware lexing below.
+    // The scanner must lex string literals and identifiers the way the SERVER
+    // will: under a GBK-family charset, `<lead><0x5C>` is one character, so a
+    // charset-blind scanner treats that `0x5C` as a backslash escape, skips the
+    // real closing quote, and never sees the `;` that follows — admitting a
+    // second statement. Consult the same per-charset table the escape uses.
+    let mb = mb_charset(charset);
     let mut i = 0usize;
     let mut saw_statement = false;
     let mut completed_statement = false;
@@ -929,13 +941,21 @@ pub(crate) fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool)
         }
         saw_statement = true;
         if matches!(bytes[i], b'\'' | b'"') {
-            i = scan_my_string(bytes, i, bytes[i], no_backslash_escapes)
+            i = scan_my_string(bytes, i, bytes[i], no_backslash_escapes, mb)
                 .unwrap_or(bytes.len());
             continue;
         }
         if bytes[i] == b'`' {
             i += 1;
             while i < bytes.len() {
+                // A multibyte character inside the identifier is opaque, so a
+                // trailing `` ` `` byte cannot falsely close it.
+                if let Some(mb) = &mb {
+                    if mb.is_two_byte_char(bytes, i) {
+                        i += 2;
+                        continue;
+                    }
+                }
                 if bytes[i] == b'`' {
                     if i + 1 < bytes.len() && bytes[i + 1] == b'`' {
                         i += 2;
@@ -962,11 +982,22 @@ pub(crate) fn sql_has_multiple_statements(sql: &str, no_backslash_escapes: bool)
 /// single band that assumed `0x5C` was a valid trail for every charset would
 /// re-open the breakout on sjis/cp932/euckr/ujis (where `0xBF` is not a lead,
 /// or `0x5C` is not a valid trail).
+#[derive(Clone, Copy)]
 struct MbCharset {
     /// Whether `b` can begin a two-byte character.
     is_lead: fn(u8) -> bool,
     /// Whether `b` can be the trailing byte of a two-byte character.
     is_trail: fn(u8) -> bool,
+}
+
+impl MbCharset {
+    /// Returns whether `bytes[i..]` begins a complete two-byte character, so a
+    /// scanner can consume both bytes opaquely — its trailing byte (which may be
+    /// `0x5C`/`` ` ``) then never looks like an escape or a delimiter, matching
+    /// how the server lexes under this charset.
+    fn is_two_byte_char(&self, bytes: &[u8], i: usize) -> bool {
+        (self.is_lead)(bytes[i]) && i + 1 < bytes.len() && (self.is_trail)(bytes[i + 1])
+    }
 }
 
 /// Classifies `charset` for escaping, keyed on the leading name token so `gbk`,
@@ -1115,12 +1146,25 @@ fn scan_my_string(
     start: usize,
     quote: u8,
     no_backslash_escapes: bool,
+    mb: Option<MbCharset>,
 ) -> Option<usize> {
     let len = bytes.len();
     let mut j = start + 1;
     loop {
         if j >= len {
             return None;
+        }
+        // A complete multibyte character is opaque and must be consumed BEFORE
+        // the escape/quote checks: under a GBK-family charset `<lead><0x5C>` is
+        // one character, so its `0x5C` is a trail byte, not a backslash escape,
+        // and `<lead><0x60>`… never matters here since `0x27`/`0x22` are below
+        // every charset's trail range and so are never swallowed as a trail —
+        // the real closing quote is always seen.
+        if let Some(mb) = &mb {
+            if mb.is_two_byte_char(bytes, j) {
+                j += 2;
+                continue;
+            }
         }
         let cj = bytes[j];
         if !no_backslash_escapes && cj == b'\\' && j + 1 < len {
@@ -1243,7 +1287,7 @@ fn translate_placeholders_impl(
         match c {
             b'\'' | b'"' => {
                 if let Some(end) =
-                    scan_my_string(bytes, i, c, no_backslash_escapes || !mysql_rules)
+                    scan_my_string(bytes, i, c, no_backslash_escapes || !mysql_rules, None)
                 {
                     out.push_str(&sql[i..end]);
                     i = end;
@@ -1389,7 +1433,7 @@ fn interpolate_emulated_sql(
         }
         match bytes[i] {
             quote @ (b'\'' | b'"') => {
-                if let Some(end) = scan_my_string(bytes, i, quote, no_backslash_escape) {
+                if let Some(end) = scan_my_string(bytes, i, quote, no_backslash_escape, None) {
                     out.push_str(&sql[i..end]);
                     i = end;
                 } else {
@@ -2053,7 +2097,7 @@ impl MyConn {
             return -1;
         }
         let no_backslash_escape = self.no_backslash_escape();
-        if !self.multi_statements && sql_has_multiple_statements(sql, no_backslash_escape) {
+        if !self.multi_statements && sql_has_multiple_statements(sql.as_bytes(), no_backslash_escape, self.charset()) {
             self.sqlstate = "42000".to_string();
             self.errcode = 1064;
             self.errmsg = "Multiple statements are disabled for this connection".to_string();
@@ -2292,7 +2336,7 @@ impl MyConn {
             return Err(self.errmsg.clone());
         }
         let no_backslash_escape = self.no_backslash_escape();
-        if !self.multi_statements && sql_has_multiple_statements(sql, no_backslash_escape) {
+        if !self.multi_statements && sql_has_multiple_statements(sql.as_bytes(), no_backslash_escape, self.charset()) {
             self.sqlstate = "42000".to_string();
             self.errcode = 1064;
             self.errmsg = "Multiple statements are disabled for this connection".to_string();
@@ -3532,13 +3576,14 @@ mod tests {
     /// region and accepts one trailing separator, while finding real second SQL.
     #[test]
     fn multi_statement_detection_is_sql_aware() {
-        assert!(!sql_has_multiple_statements("SELECT ';';", false));
+        assert!(!sql_has_multiple_statements(b"SELECT ';';", false, "utf8mb4"));
         assert!(!sql_has_multiple_statements(
-            "SELECT 1 /* ; SELECT 2 */; -- tail ;\n",
+            b"SELECT 1 /* ; SELECT 2 */; -- tail ;\n",
             false,
+            "utf8mb4",
         ));
-        assert!(sql_has_multiple_statements("SELECT 1; SELECT 2", false));
-        assert!(sql_has_multiple_statements("SELECT `a;b`; CALL p()", false));
+        assert!(sql_has_multiple_statements(b"SELECT 1; SELECT 2", false, "utf8mb4"));
+        assert!(sql_has_multiple_statements(b"SELECT `a;b`; CALL p()", false, "utf8mb4"));
     }
 
     /// A `/*! ... */` version-gated executable comment is live SQL, so a `;`
@@ -3546,12 +3591,36 @@ mod tests {
     /// comment stays inert.
     #[test]
     fn multi_statement_detection_sees_executable_comments() {
-        assert!(sql_has_multiple_statements("SELECT 1/*!;DROP TABLE t*/", false));
+        assert!(sql_has_multiple_statements(b"SELECT 1/*!;DROP TABLE t*/", false, "utf8mb4"));
         assert!(sql_has_multiple_statements(
-            "SELECT 1 /*!50000 ; SELECT 2 */",
+            b"SELECT 1 /*!50000 ; SELECT 2 */",
             false,
+            "utf8mb4",
         ));
-        assert!(!sql_has_multiple_statements("SELECT 1 /* ; SELECT 2 */", false));
+        assert!(!sql_has_multiple_statements(b"SELECT 1 /* ; SELECT 2 */", false, "utf8mb4"));
+    }
+
+    /// SECURITY: the multi-statement scanner must lex string literals like the
+    /// SERVER under a GBK-family charset — a `<lead><0x5C>` inside a literal is
+    /// ONE character, so a charset-blind scanner would treat the `0x5C` as an
+    /// escape, skip the closing quote, and miss the trailing `;`. With the
+    /// charset consulted, the second statement is detected; on a non-GBK charset
+    /// (or under NO_BACKSLASH_ESCAPES) the same bytes are correctly not multi.
+    #[test]
+    fn multi_statement_detection_is_charset_aware() {
+        // <BF><5C> = one GBK char; the ' after it really closes the literal, so
+        // the ; is a real statement separator (raw bytes — not valid UTF-8).
+        let attack: &[u8] = b"SELECT '\xBF\x5C' ; DROP TABLE t";
+        assert!(
+            sql_has_multiple_statements(attack, false, "gbk"),
+            "gbk: <BF><5C> is one char, so the ; is a real separator"
+        );
+        // Under NO_BACKSLASH_ESCAPES the 0x5C is never an escape, so even a
+        // charset-blind scan sees the closing quote — still multi.
+        assert!(sql_has_multiple_statements(attack, true, "gbk"));
+        // On latin1 the 0x5C IS a backslash escape (escapes the closing quote),
+        // so the literal runs on and there is genuinely no second statement.
+        assert!(!sql_has_multiple_statements(attack, false, "latin1"));
     }
 
     /// Charset-aware escaping matches php's `mysql_real_escape_string`
