@@ -618,9 +618,22 @@ pub(super) fn emit_zlib_deflate_wrapper_attach_in_place(ctx: &mut FunctionContex
 /// An empty path, a failed open, or a mode php's wrapper refuses all box PHP false. The write
 /// direction exists for `compress.zlib://` only: `compress.bzip2://` stays read-only, which is
 /// a measured gap and not an oversight.
+/// Where the underlying path a `compress.*://` open works on comes from.
+///
+/// A literal URL is split during lowering and its remainder baked as a data string. A URL only
+/// known at RUN time cannot be: the wrapper prefix is stripped from the staged string registers
+/// instead, which is the whole difference between the two openers.
+#[derive(Clone, Copy)]
+pub(super) enum CompressUnderlying<'a> {
+    /// The remainder after the wrapper prefix, known at compile time.
+    Literal(&'a str),
+    /// The FULL url sits in the string result registers; skip this many prefix bytes.
+    Staged { prefix_len: usize },
+}
+
 pub(super) fn emit_literal_compress_wrapper_fopen_result(
     ctx: &mut FunctionContext<'_>,
-    underlying: &str,
+    underlying: CompressUnderlying<'_>,
     full_uri: &str,
     kind: CompressWrapper,
     mode: &str,
@@ -631,18 +644,41 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
         // silently writing plain bytes through a `compress.bzip2://` handle.
         direction = CompressWrapperDirection::Read;
     }
-    if underlying.is_empty() || direction == CompressWrapperDirection::Refused {
+    let literal_underlying = match underlying {
+        CompressUnderlying::Literal(path) => Some(path),
+        CompressUnderlying::Staged { .. } => None,
+    };
+    if literal_underlying.is_some_and(str::is_empty)
+        || direction == CompressWrapperDirection::Refused
+    {
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen");
         return Ok(());
     }
     let writing = direction == CompressWrapperDirection::Write;
+    let staged = matches!(underlying, CompressUnderlying::Staged { .. });
     if writing {
         // The level has to be read BEFORE the open: `__rt_fopen` returns the descriptor in the
         // very register the option walk would clobber, and the context scope is live either way.
+        //
+        // The STAGED form carries the url in those same string registers, so it is spilled across
+        // the option walk. Without that the prefix arithmetic below ran on whatever the walk left
+        // behind and the program segfaulted — the literal form never noticed, because it
+        // materializes its path from a data symbol after the walk has finished.
+        if staged {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
+        }
         emit_publish_zlib_wrapper_level(ctx);
+        if staged {
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2"),
+                Arch::X86_64 => abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx"),
+            }
+        }
     }
-    let (path_label, path_len) = ctx.data.add_string(underlying.as_bytes());
     let open_mode: &[u8] = if !writing {
         b"r"
     } else if mode.starts_with('a') {
@@ -651,19 +687,42 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
         b"w"
     };
     let (mode_label, mode_len) = ctx.data.add_string(open_mode);
+    // The staged form arrives with the FULL url in the string registers, so the wrapper prefix is
+    // skipped by pointer arithmetic where the literal form bakes the remainder as its own string.
+    match underlying {
+        CompressUnderlying::Literal(path) => {
+            let (path_label, path_len) = ctx.data.add_string(path.as_bytes());
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x1", &path_label);
+                    ctx.emitter.instruction(&format!("mov x2, #{}", path_len)); // the underlying path byte length
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rax", &path_label);
+                    ctx.emitter.instruction(&format!("mov rdx, {}", path_len)); // the underlying path byte length
+                }
+            }
+        }
+        CompressUnderlying::Staged { prefix_len } => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("add x1, x1, #{prefix_len}")); // step past the wrapper prefix
+                ctx.emitter.instruction(&format!("sub x2, x2, #{prefix_len}")); // and shorten the length to match
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("add rax, {prefix_len}"));     // step past the wrapper prefix
+                ctx.emitter.instruction(&format!("sub rdx, {prefix_len}"));     // and shorten the length to match
+            }
+        },
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_symbol_address(ctx.emitter, "x1", &path_label);
-            ctx.emitter.instruction(&format!("mov x2, #{}", path_len));         // pass the underlying path byte length
             abi::emit_symbol_address(ctx.emitter, "x3", &mode_label);
-            ctx.emitter.instruction(&format!("mov x4, #{}", mode_len));         // pass the read-mode string byte length
+            ctx.emitter.instruction(&format!("mov x4, #{}", mode_len));         // pass the open-mode string byte length
             abi::emit_call_label(ctx.emitter, "__rt_fopen");
         }
         Arch::X86_64 => {
-            abi::emit_symbol_address(ctx.emitter, "rax", &path_label);
-            ctx.emitter.instruction(&format!("mov rdx, {}", path_len));         // pass the underlying path byte length
             abi::emit_symbol_address(ctx.emitter, "rdi", &mode_label);
-            ctx.emitter.instruction(&format!("mov rsi, {}", mode_len));         // pass the read-mode string byte length
+            ctx.emitter.instruction(&format!("mov rsi, {}", mode_len));         // pass the open-mode string byte length
             abi::emit_call_label(ctx.emitter, "__rt_fopen");
         }
     }

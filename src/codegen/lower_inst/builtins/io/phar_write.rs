@@ -101,7 +101,13 @@ fn lower_literal_compress_zlib_file_put_contents(
     let done = ctx.next_label("fpc_zlib_done");
     let failed = ctx.next_label("fpc_zlib_failed");
     begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
-    emit_literal_compress_wrapper_fopen_result(ctx, underlying, uri, CompressWrapper::Zlib, mode)?;
+    emit_literal_compress_wrapper_fopen_result(
+        ctx,
+        CompressUnderlying::Literal(underlying),
+        uri,
+        CompressWrapper::Zlib,
+        mode,
+    )?;
     finish_fopen_context_scope(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

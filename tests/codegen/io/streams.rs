@@ -16485,3 +16485,58 @@ echo implode("\n", $out), "\n";
         out.stderr
     );
 }
+
+/// Verifies a `compress.zlib://` URL assembled at RUN time opens like the literal spelling.
+///
+/// `$name = "compress.zlib://out.gz"; fopen($name, "w");` answered `false` where the identical
+/// call with the literal compresses — in both directions. The wrapper was reachable only from a
+/// compile-time literal, because that is what the split into "wrapper" and "underlying path"
+/// needed, and a URL built with `sys_get_temp_dir()` or read from config is ordinary PHP.
+///
+/// The literal rows are kept beside the computed ones so a fix that merely moves which spelling
+/// works still fails this test, and the round trip is checked through the OTHER spelling each
+/// time — a literal write read back by a computed open, and the reverse — which is what proves
+/// the two produce the same bytes rather than two self-consistent formats.
+#[test]
+fn test_compress_zlib_wrapper_accepts_a_run_time_url() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$literal = "compress.zlib://a.gz";
+$computed = "compress.zlib://b.gz";
+
+$w = fopen("compress.zlib://a.gz", "w");
+var_dump(fwrite($w, "payload payload payload"));
+fclose($w);
+
+$r = fopen($literal, "r");
+echo "computed read of literal write: ";
+var_dump(stream_get_contents($r));
+fclose($r);
+
+$w2 = fopen($computed, "w");
+var_dump(fwrite($w2, "second second second"));
+fclose($w2);
+
+$r2 = fopen("compress.zlib://b.gz", "r");
+echo "literal read of computed write: ";
+var_dump(stream_get_contents($r2));
+fclose($r2);
+
+// The raw file must NOT be the payload: a wrapper that merely passed bytes through
+// would round-trip just as happily.
+echo "compressed: ";
+var_dump(file_get_contents("a.gz") !== "payload payload payload");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "int(23)\n",
+            "computed read of literal write: string(23) \"payload payload payload\"\n",
+            "int(20)\n",
+            "literal read of computed write: string(20) \"second second second\"\n",
+            "compressed: bool(true)\n",
+        )
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

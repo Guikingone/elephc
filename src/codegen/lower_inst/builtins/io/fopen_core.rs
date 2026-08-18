@@ -27,7 +27,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
                 optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
-                underlying,
+                CompressUnderlying::Literal(underlying),
                 path,
                 CompressWrapper::Zlib,
                 &mode_text,
@@ -37,7 +37,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
                 optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
-                underlying,
+                CompressUnderlying::Literal(underlying),
                 path,
                 CompressWrapper::Bzip2,
                 &mode_text,
@@ -53,6 +53,10 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         }
         return Ok(());
     }
+    // A `compress.*://` url only known at RUN time is opened here, before the ordinary dynamic
+    // open it would otherwise fall into. The label it hands back is placed past that open, so a
+    // url the wrappers claimed skips it.
+    let compress_done = emit_dynamic_compress_wrapper_fopen(ctx, inst, filename, mode)?;
     publish_dynamic_phar_function_pointers(ctx);
     publish_dynamic_phar_write_function_pointer(ctx);
     match ctx.emitter.target.arch {
@@ -77,7 +81,85 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
         Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
     }
-    emit_dynamic_fopen_result(ctx, inst)
+    emit_dynamic_fopen_result(ctx, inst)?;
+    if let Some(label) = compress_done {
+        ctx.emitter.label(&label);
+    }
+    Ok(())
+}
+
+
+/// The compression wrappers, with the prefix a run-time URL is recognised by.
+const DYNAMIC_COMPRESS_WRAPPERS: &[(&str, CompressWrapper)] = &[
+    ("compress.zlib://", CompressWrapper::Zlib),
+    ("compress.bzip2://", CompressWrapper::Bzip2),
+];
+
+/// Opens a `compress.zlib://` or `compress.bzip2://` URL whose path is only known at run time.
+///
+/// `$name = "compress.zlib://out.gz"; fopen($name, "w");` answered `false` where the identical
+/// call with the literal compresses, in both directions — the wrappers were reachable only from a
+/// compile-time literal, because that is what the split into "wrapper" and "underlying path"
+/// needed. A URL assembled at run time is ordinary PHP: a filename from config, a path built with
+/// `sys_get_temp_dir()`.
+///
+/// The URL is compared against each prefix in turn, and a match runs the very sequence the literal
+/// path runs — the same open, the same filter attach — with the underlying path taken from the
+/// staged string registers instead of a baked data string.
+///
+/// `$mode` follows the literal path's rule: a compile-time literal decides the direction, and
+/// anything else reads, which is the overwhelmingly common open.
+///
+/// Returns the label the caller must place AFTER the ordinary dynamic open, so a URL one of the
+/// wrappers claimed jumps past it.
+fn emit_dynamic_compress_wrapper_fopen(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    filename: ValueId,
+    mode: ValueId,
+) -> Result<Option<String>> {
+    let mode_text = optional_const_string_operand(ctx, mode)?.unwrap_or_else(|| "r".to_string());
+    let done_label = ctx.next_label("compress_dyn_done");
+    for (prefix, kind) in DYNAMIC_COMPRESS_WRAPPERS {
+        let next_label = ctx.next_label("compress_dyn_next");
+        let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
+        load_string_to_result(ctx, filename, "fopen filename")?;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                // `__rt_str_starts_with` takes x1/x2 = haystack, which is where the load left the
+                // url, and x3/x4 = needle.
+                abi::emit_symbol_address(ctx.emitter, "x3", &prefix_label);
+                ctx.emitter.instruction(&format!("mov x4, #{prefix_len}"));
+                abi::emit_call_label(ctx.emitter, "__rt_str_starts_with");
+                ctx.emitter.instruction(&format!("cbz x0, {}", next_label));
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the url pointer
+                ctx.emitter.instruction("mov rsi, rdx");                        // and its byte length
+                ctx.emitter
+                    .instruction(&format!("lea rdx, [rip + {prefix_label}]"));  // the wrapper prefix
+                ctx.emitter.instruction(&format!("mov rcx, {prefix_len}"));
+                abi::emit_call_label(ctx.emitter, "__rt_str_starts_with");
+                ctx.emitter.instruction("test rax, rax");
+                ctx.emitter.instruction(&format!("je {}", next_label));
+            }
+        }
+        // Reload: the prefix probe consumed the staged registers, and the opener reads the url
+        // from them to step past the prefix it just matched.
+        load_string_to_result(ctx, filename, "fopen filename")?;
+        emit_literal_compress_wrapper_fopen_result(
+            ctx,
+            CompressUnderlying::Staged { prefix_len },
+            prefix,
+            *kind,
+            &mode_text,
+        )?;
+        emit_record_stream_mode_after_boxed(ctx, mode)?;
+        store_if_result(ctx, inst)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&next_label);
+    }
+    Ok(Some(done_label))
 }
 
 /// Where the open mode a `php://filter` URL is opened with comes from.
