@@ -71,6 +71,7 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, _php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_UNSET);
     wm.add_raw_func(RT_HASH_APPEND);
     wm.add_raw_func(RT_HASH_UNION);
+    wm.add_raw_func(RT_HASH_SPREAD);
     wm.add_raw_func(RT_ARRAY_HASH_UNION);
     wm.add_raw_func(RT_HASH_ARRAY_UNION);
     wm.add_raw_func(RT_ARRAY_TO_HASH);
@@ -1266,6 +1267,62 @@ const RT_HASH_UNION: &str = r#"(func $__rt_hash_union (param $a i32) (param $b i
     (local.set $cur (i64.load (i32.add (local.get $be) (i32.const 56))))  ;; cur = b entry.next
     (br $walk)))                                                        ;; next entry
   (local.get $result))
+"#;
+
+/// `__rt_hash_spread`: PHP's `[...$source]` merged INTO an existing hash.
+///
+/// The two rules that separate it from `__rt_hash_union` are the ones php-src applies at
+/// `zend_hash_merge`-time, and both were measured before this was written:
+///
+/// ```text
+///   $a = [5 => 'a', 'k' => 'b', 9 => 'c'];  $b = [1 => 'd', 'k' => 'e'];
+///   [...$a, ...$b]  ==  [0 => 'a', 'k' => 'e', 1 => 'c', 2 => 'd']
+/// ```
+///
+/// INTEGER keys are discarded and renumbered from the destination's next free key, in source
+/// order — so `5` and `9` become `0` and `1`, and `$b`'s `1` continues at `2`. STRING keys are
+/// preserved and the LATER operand wins, keeping the position of the entry it replaces: `'k'`
+/// stays second and takes `$b`'s value. `__rt_hash_set` already overwrites in place, so the
+/// ordering falls out rather than being arranged.
+///
+/// Borrows `$src` (never frees it) and returns the possibly-reallocated `$dest`, or 0 when an
+/// integer append saturates at `PHP_INT_MAX` — the same signal `__rt_hash_append` gives, raised
+/// by the caller rather than here so both share one proof shape.
+const RT_HASH_SPREAD: &str = r#"(func $__rt_hash_spread (param $dest i32) (param $src i32) (result i32)
+  (local $cur i64)
+  (local $e i32)
+  (local $klo i64)
+  (local $khi i64)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (local $appended i32)
+  (if (i32.eqz (local.get $src))                                        ;; nothing to merge in
+    (then (return (local.get $dest))))
+  (call $__rt_hash_validate_layout (local.get $src))                    ;; slots/trailer before iterating
+  (if (i32.eqz (local.get $dest))                                       ;; no destination yet
+    (then (local.set $dest (call $__rt_hash_new (i64.const 4) (i64.load (i32.add (local.get $src) (i32.const 16)))))))
+  (call $__rt_hash_validate_layout (local.get $dest))                   ;; and before inserting
+  (local.set $cur (i64.load (i32.add (local.get $src) (i32.const 24)))) ;; cur = src.head (insertion order)
+  (block $done (loop $walk
+    (br_if $done (i64.eq (local.get $cur) (i64.const -1)))              ;; end of src's insertion order
+    (local.set $e (i32.add (i32.add (local.get $src) (i32.const 40)) (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))  ;; &src entry
+    (local.set $klo (i64.load (i32.add (local.get $e) (i32.const 8))))    ;; key_lo
+    (local.set $khi (i64.load (i32.add (local.get $e) (i32.const 16))))   ;; key_hi (-1 marks an integer key)
+    (local.set $vlo (i64.load (i32.add (local.get $e) (i32.const 24))))   ;; value_lo
+    (local.set $vhi (i64.load (i32.add (local.get $e) (i32.const 32))))   ;; value_hi
+    (local.set $vtag (i64.load (i32.add (local.get $e) (i32.const 40))))  ;; value_tag
+    (if (i64.eq (local.get $khi) (i64.const -1))
+      (then                                                             ;; integer key -> renumbered append
+        (local.set $appended (call $__rt_hash_append (local.get $dest) (local.get $vlo) (local.get $vhi) (local.get $vtag)))
+        (if (i32.eqz (local.get $appended))                             ;; saturated next key: caller raises
+          (then (return (i32.const 0))))
+        (local.set $dest (local.get $appended)))
+      (else                                                             ;; string key -> preserved, later wins
+        (local.set $dest (call $__rt_hash_set (local.get $dest) (local.get $klo) (local.get $khi) (local.get $vlo) (local.get $vhi) (local.get $vtag)))))
+    (local.set $cur (i64.load (i32.add (local.get $e) (i32.const 56))))   ;; cur = entry.next
+    (br $walk)))
+  (local.get $dest))
 "#;
 
 /// `__rt_array_hash_union`: the PHP `+` operator with a DENSE INDEXED left operand and

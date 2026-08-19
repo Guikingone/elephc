@@ -295,11 +295,22 @@ pub(super) fn lower_closure_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
             name, capture_count, closure_fn.flags.closure_capture_count
         )));
     }
-    // Visible params must be by-value non-variadic (the wrapper forwards them as-is).
-    for p in &closure_fn.params[..visible_count] {
-        if p.by_ref || p.variadic {
+    // Visible params must be by-value: the wrapper forwards them as-is. A VARIADIC tail is
+    // admitted — the wrapper collects it out of the argument buffer — but only as the last
+    // visible parameter, packed as an array, which is the only shape PHP produces.
+    for (index, p) in closure_fn.params[..visible_count].iter().enumerate() {
+        if p.by_ref {
             return Err(WasmError::Unsupported(format!(
-                "ClosureNew by-ref/variadic visible param {} on wasm32-wasi (P7c)",
+                "ClosureNew by-ref visible param {} on wasm32-wasi (P7c)",
+                p.name
+            )));
+        }
+        if p.variadic
+            && !(index + 1 == visible_count
+                && matches!(p.ir_type, IrType::Heap(IrHeapKind::Array)))
+        {
+            return Err(WasmError::Unsupported(format!(
+                "ClosureNew variadic visible param {} is not a packed trailing array",
                 p.name
             )));
         }
@@ -1715,6 +1726,39 @@ pub(super) fn append_arg_array_guard(wat: &mut String, required_count: i64) {
     );
 }
 
+/// Emits the WAT that gathers `args[from..]` into a fresh `array<mixed>` and leaves it on the
+/// stack for a variadic parameter.
+///
+/// The argument buffer a closure call builds is already a value-type-7 array of Mixed cells in
+/// call order, which is the same representation the body's packed variadic parameter reads — so
+/// this copies cell pointers rather than converting anything. `__rt_array_push_mixed` records a
+/// pointer WITHOUT retaining it, so each cell is increfed first; the array the caller ends up
+/// holding is released by the wrapper once the body returns.
+fn collect_variadic_tail_wat(from: usize) -> String {
+    let mut wat = String::new();
+    wat.push_str("  (local.set $va (call $__rt_array_new (i64.const 0) (i64.const 16)))
+");
+    wat.push_str(&format!("  (local.set $va_i (i64.const {from}))
+"));
+    wat.push_str("  (block $va_done (loop $va_next
+");
+    wat.push_str("    (br_if $va_done (i64.ge_s (local.get $va_i) (local.get $args_len)))
+");
+    wat.push_str("    (local.set $va_cell (i32.wrap_i64 (i64.load (i32.add (i32.add (local.get $args) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $va_i) (i64.const 16)))))))
+");
+    wat.push_str("    (call $__rt_incref (local.get $va_cell))
+");
+    wat.push_str("    (local.set $va (call $__rt_array_push_mixed (local.get $va) (local.get $va_cell)))
+");
+    wat.push_str("    (local.set $va_i (i64.add (local.get $va_i) (i64.const 1)))
+");
+    wat.push_str("    (br $va_next)))
+");
+    wat.push_str("  (local.get $va)
+");
+    wat
+}
+
 /// Builds the raw WAT `__rt_closure_call` guarded if-ladder from
 /// `(entry_index, descriptor_kind, capture_count, descriptor_bytes, wrapper)`
 /// arms.
@@ -1830,6 +1874,21 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
             "closure {} capture_count {} > params {}",
             f.name, cap, f.params.len()
         )))?;
+    // A VARIADIC visible parameter is the last one, and it is the only one whose value is not
+    // in the buffer: PHP hands the body an array of everything from that position on. The
+    // buffer already holds exactly that — Mixed cells, in order — so collecting is a copy of
+    // the tail rather than a conversion.
+    let variadic_at = f.params[..vis]
+        .iter()
+        .position(|param| param.variadic);
+    if let Some(position) = variadic_at {
+        if position + 1 != vis {
+            return Err(WasmError::Unsupported(format!(
+                "closure {} declares a variadic parameter before its last visible one",
+                f.name
+            )));
+        }
+    }
     let mut wat = String::new();
     wat.push_str(&format!(
         "(func ${} (param $desc i32) (param $args i32) (result i32)\n",
@@ -1839,7 +1898,11 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
     wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
     wat.push_str("  (local $args_len i64) (local $args_capacity i64) (local $args_size i32)\n");
-    let required_count = i64::try_from(vis).map_err(|_| {
+    if variadic_at.is_some() {
+        wat.push_str("  (local $va i32) (local $va_i i64) (local $va_cell i32)\n");
+    }
+    // A variadic tail may receive nothing, so it is not part of the required arity.
+    let required_count = i64::try_from(variadic_at.unwrap_or(vis)).map_err(|_| {
         WasmError::Unsupported(format!(
             "closure {} visible parameter count exceeds i64",
             f.name
@@ -1849,6 +1912,14 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
 
     // Unbox each visible parameter from the arg buffer and push it for the body call.
     for (i, p) in f.params[..vis].iter().enumerate() {
+        if p.variadic {
+            wat.push_str(&format!(
+                "  ;; collect the variadic tail (param {}) from arg slot {} onward\n",
+                p.name, i
+            ));
+            wat.push_str(&collect_variadic_tail_wat(i));
+            continue;
+        }
         let slot_off = 24 + i * 16;
         wat.push_str(&format!(
             "  ;; unbox visible arg {} (param {} : {:?}) from arg slot +{}\n",
@@ -1886,6 +1957,12 @@ fn build_closure_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
 
     // Call the closure body with the forwarded visible + capture args on the stack.
     wat.push_str(&format!("  call ${}\n", body_symbol));
+    if variadic_at.is_some() {
+        // The body BORROWS its array parameter, so the reference the collector took belongs to
+        // the wrapper. Folded, so it takes its operand from its own parentheses rather than
+        // from the body result still sitting on the stack.
+        wat.push_str("  (call $__rt_decref_any (local.get $va)) ;; the collected tail was the wrapper's\n");
+    }
     wat.push_str("  ;; box the body result into a Mixed cell (result i32)\n");
 
     // Box the body result into a Mixed cell and leave it as the (result i32) return value.

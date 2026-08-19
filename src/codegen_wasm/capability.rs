@@ -20,9 +20,9 @@ use super::transfer;
 use super::WasmError;
 use crate::codegen::{literal_default_value, Emit, LiteralDefaultValue};
 use crate::ir::{
-    BlockId, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, Module,
-    Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator, UnaryStringRuntime,
-    ValueDef, ValueId,
+    BlockId, CmpPredicate, Effects, Function, Immediate, InstId, Instruction, IrHeapKind, IrType,
+    LocalKind, Module, Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
+    UnaryStringRuntime, ValueDef, ValueId,
 };
 use crate::parser::ast::Visibility;
 use crate::types::PhpType;
@@ -3475,7 +3475,10 @@ fn array_get_shape_issue(
     block: u32,
     inst: &Instruction,
 ) -> Option<String> {
+    // A read PROVEN in bounds produces no warning, so it does not need the diagnostic runtime a
+    // main-bearing module carries — the same proof that lets it keep the element's own width.
     if inst.op == Op::ArrayGet
+        && !array_read_is_provably_in_bounds(function, inst)
         && !module
             .functions
             .iter()
@@ -3559,8 +3562,15 @@ fn array_get_shape_issue(
     }
     let result_php = inst.result_php_type.codegen_repr();
     let supported_result = match &element_type {
+        // The tagged pair is the general shape, because a miss has to be answerable as null and
+        // a raw i64 has no null to answer with. A read PROVEN in bounds has no miss to answer,
+        // so it may keep the element's own width — which is what the array-spread walk the EIR
+        // generates for `[...$a]` needs, since it types its read `int` rather than `?int`.
         PhpType::Int => {
-            inst.result_type == IrType::TaggedScalar && result_php == PhpType::TaggedScalar
+            (inst.result_type == IrType::TaggedScalar && result_php == PhpType::TaggedScalar)
+                || (inst.result_type == IrType::I64
+                    && result_php == PhpType::Int
+                    && array_read_is_provably_in_bounds(function, inst))
         }
         // An element that is ALREADY a Mixed cell meets the missing-index null in the same
         // representation: the miss boxes null, the hit hands back the stored cell.
@@ -5589,6 +5599,267 @@ fn property_set_shape_issue(
     .map(|issue| format!("property ${property}: {issue}"))
 }
 
+/// Whether an indexed read can be shown, here, to always hit.
+///
+/// The one shape this proves is the counted walk the EIR generates for an array spread, and it is
+/// proved from the EIR rather than from the block names, so a hand-written `for ($i = 0; $i <
+/// count($a); $i++) { $a[$i]; }` earns the same result:
+///
+/// ```text
+///   L = array_len A          ... in some block
+///   br H(0)
+/// H(i):
+///   c = icmp i L Slt
+///   cond_br c, B, _
+/// B:
+///   v = array_get A i        <- this read
+/// ```
+///
+/// Four things have to hold, and each of them is load-bearing:
+///
+/// - `B` is entered ONLY through that `cond_br`'s true edge, so `i < L` holds on entry;
+/// - every value flowing into `i` is a non-negative constant or `i + non-negative`, so `i >= 0`;
+/// - `L` is `array_len` of the SAME SSA value the read indexes;
+/// - nothing in the function writes through that SSA value, so `L` still describes it here.
+///
+/// The last one is what makes the aliasing question go away without an alias analysis: the array
+/// is not written through this name at all, and PHP's copy-on-write means a write through any
+/// other name separates the storage first.
+fn array_read_is_provably_in_bounds(function: &Function, inst: &Instruction) -> bool {
+    let [array, index] = inst.operands.as_slice() else {
+        return false;
+    };
+    let Some(block) = function
+        .blocks
+        .iter()
+        .find(|block| {
+            block
+                .instructions
+                .iter()
+                .filter_map(|id| function.instruction(*id))
+                .any(|candidate| std::ptr::eq(candidate, inst))
+        })
+    else {
+        return false;
+    };
+
+    // Exactly one edge into this block, and it is the TRUE arm of a bound test.
+    let entries: Vec<_> = function
+        .blocks
+        .iter()
+        .filter(|predecessor| {
+            predecessor
+                .terminator
+                .as_ref()
+                .is_some_and(|terminator| terminator_targets(terminator).contains(&block.id))
+        })
+        .collect();
+    let [entry] = entries.as_slice() else {
+        return false;
+    };
+    let Some(Terminator::CondBr {
+        cond,
+        then_target,
+        else_target,
+        ..
+    }) = entry.terminator.as_ref()
+    else {
+        return false;
+    };
+    if *then_target != block.id || *else_target == block.id {
+        return false;
+    }
+
+    // The guard is `index < length-of-this-array`.
+    let Some(compare) = value_defining_instruction(function, *cond) else {
+        return false;
+    };
+    if compare.op != Op::ICmp
+        || compare.immediate != Some(Immediate::CmpPredicate(CmpPredicate::Slt))
+        || compare.operands.first() != Some(index)
+    {
+        return false;
+    }
+    let Some(&length) = compare.operands.get(1) else {
+        return false;
+    };
+    let Some(length_of) = value_defining_instruction(function, length) else {
+        return false;
+    };
+    if length_of.op != Op::ArrayLen || length_of.operands.first() != Some(array) {
+        return false;
+    }
+
+    // The index is a block parameter, and everything flowing into it is non-negative.
+    let Some(position) = entry.params.iter().position(|param| param == index) else {
+        return false;
+    };
+    let non_negative = function.blocks.iter().all(|predecessor| {
+        predecessor
+            .terminator
+            .as_ref()
+            .map(|terminator| {
+                terminator_args_into(terminator, entry.id)
+                    .iter()
+                    .all(|args| {
+                        args.get(position).is_none_or(|incoming| {
+                            index_argument_is_non_negative(function, *incoming, *index)
+                        })
+                    })
+            })
+            .unwrap_or(true)
+    });
+    if !non_negative {
+        return false;
+    }
+
+    // The recorded length still describes the array at the read. Every write through this SSA
+    // name has to sit in the `array_len`'s own block, ahead of it — same block means straight-line
+    // order, so the length was taken after the last of them, and re-entering that block re-takes
+    // the length after re-running them. A write anywhere else could land between the two.
+    writes_through_array_precede_the_length(function, *array, length_of)
+}
+
+/// Whether every write through `array` happens before `length_of` took its length.
+fn writes_through_array_precede_the_length(
+    function: &Function,
+    array: ValueId,
+    length_of: &Instruction,
+) -> bool {
+    let Some(length_block) = function.blocks.iter().find(|block| {
+        block
+            .instructions
+            .iter()
+            .filter_map(|id| function.instruction(*id))
+            .any(|candidate| std::ptr::eq(candidate, length_of))
+    }) else {
+        return false;
+    };
+    let ordered: Vec<&Instruction> = length_block
+        .instructions
+        .iter()
+        .filter_map(|id| function.instruction(*id))
+        .collect();
+    let Some(length_at) = ordered
+        .iter()
+        .position(|candidate| std::ptr::eq(*candidate, length_of))
+    else {
+        return false;
+    };
+    function.instructions.iter().all(|candidate| {
+        !candidate.effects.contains(Effects::WRITES_HEAP)
+            || !candidate.operands.contains(&array)
+            || ordered[..length_at]
+                .iter()
+                .any(|earlier| std::ptr::eq(*earlier, candidate))
+    })
+}
+
+/// The blocks one terminator can transfer control to.
+fn terminator_targets(terminator: &Terminator) -> Vec<BlockId> {
+    match terminator {
+        Terminator::Br { target, .. } => vec![*target],
+        Terminator::CondBr {
+            then_target,
+            else_target,
+            ..
+        } => vec![*then_target, *else_target],
+        Terminator::Switch {
+            cases, default, ..
+        } => cases
+            .iter()
+            .map(|case| case.target)
+            .chain(std::iter::once(*default))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The argument lists one terminator passes to a given block, one per edge into it.
+fn terminator_args_into<'a>(terminator: &'a Terminator, target: BlockId) -> Vec<&'a Vec<ValueId>> {
+    match terminator {
+        Terminator::Br { target: t, args } if *t == target => vec![args],
+        Terminator::CondBr {
+            then_target,
+            then_args,
+            else_target,
+            else_args,
+            ..
+        } => {
+            let mut edges = Vec::new();
+            if *then_target == target {
+                edges.push(then_args);
+            }
+            if *else_target == target {
+                edges.push(else_args);
+            }
+            edges
+        }
+        Terminator::Switch {
+            cases,
+            default,
+            default_args,
+            ..
+        } => {
+            let mut edges: Vec<&Vec<ValueId>> = cases
+                .iter()
+                .filter(|case| case.target == target)
+                .map(|case| &case.args)
+                .collect();
+            if *default == target {
+                edges.push(default_args);
+            }
+            edges
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether one value flowing into a loop counter keeps it non-negative.
+///
+/// A non-negative literal starts it, and `counter + non-negative literal` advances it. The
+/// induction is over that one parameter only — an increment computed from anything else is not
+/// proved here, and the caller then keeps the tagged shape.
+fn index_argument_is_non_negative(
+    function: &Function,
+    incoming: ValueId,
+    counter: ValueId,
+) -> bool {
+    if incoming == counter {
+        return true;
+    }
+    let Some(instruction) = value_defining_instruction(function, incoming) else {
+        return false;
+    };
+    match instruction.op {
+        Op::ConstI64 => matches!(instruction.immediate, Some(Immediate::I64(value)) if value >= 0),
+        Op::IAdd | Op::ICheckedAdd => {
+            let [left, right] = instruction.operands.as_slice() else {
+                return false;
+            };
+            (*left == counter && const_i64_at_least_zero(function, *right))
+                || (*right == counter && const_i64_at_least_zero(function, *left))
+        }
+        _ => false,
+    }
+}
+
+/// Whether a value is a literal integer of zero or more.
+fn const_i64_at_least_zero(function: &Function, value: ValueId) -> bool {
+    value_defining_instruction(function, value).is_some_and(|instruction| {
+        instruction.op == Op::ConstI64
+            && matches!(instruction.immediate, Some(Immediate::I64(literal)) if literal >= 0)
+    })
+}
+
+/// The instruction that produced one SSA value, if an instruction did.
+fn value_defining_instruction<'a>(function: &'a Function, value: ValueId) -> Option<&'a Instruction> {
+    let ValueDef::Instruction { inst, .. } = function.value(value)?.def else {
+        return None;
+    };
+    function.instruction(inst)
+}
+
 /// Validates one value against the DECLARED property slot it will be written into.
 ///
 /// A Mixed/Union/Iterable slot holds a Mixed cell, so the write is the ordinary boxing transfer.
@@ -7542,16 +7813,24 @@ fn array_callable_argument_container_issue(
 }
 
 /// Requires each wrapper-consumed argument to match its parameter exactly.
+///
+/// A VARIADIC tail ends the pairing: every argument from that position on is boxed into a Mixed
+/// cell and stays boxed inside the array the wrapper collects, so there is no per-parameter
+/// representation for one of them to match. The boxability of each is checked by the caller.
 fn callable_argument_contract_issue(
     owner: &Function,
     target: &Function,
     visible_count: usize,
     arguments: &[ValueId],
 ) -> Option<String> {
+    let paired = target.params[..visible_count]
+        .iter()
+        .position(|parameter| parameter.variadic)
+        .unwrap_or(visible_count);
     for (index, (argument, parameter)) in arguments
         .iter()
-        .take(visible_count)
-        .zip(&target.params[..visible_count])
+        .take(paired)
+        .zip(&target.params[..paired])
         .enumerate()
     {
         let Some(source) = owner.value(*argument) else {
@@ -7891,9 +8170,14 @@ fn callable_wrapper_issue(
     visible_count: usize,
     supplied_args: usize,
 ) -> Option<String> {
-    if visible_count > supplied_args {
+    // A variadic tail may receive nothing, so it is not part of the required arity.
+    let required = function.params[..visible_count]
+        .iter()
+        .position(|parameter| parameter.variadic)
+        .unwrap_or(visible_count);
+    if required > supplied_args {
         return Some(format!(
-            "callback declares {visible_count} visible parameters but the runtime supplies {supplied_args}"
+            "callback declares {required} required parameters but the runtime supplies {supplied_args}"
         ));
     }
     callable_wrapper_signature_issue(function, visible_count)
@@ -7905,7 +8189,15 @@ fn callable_wrapper_signature_issue(
     function: &Function,
     visible_count: usize,
 ) -> Option<String> {
-    for param in &function.params[..visible_count] {
+    for (index, param) in function.params[..visible_count].iter().enumerate() {
+        // A VARIADIC tail is what the wrapper collects out of the argument buffer, so it is
+        // admitted in the one shape PHP produces: last, and already packed as an array.
+        if param.variadic
+            && index + 1 == visible_count
+            && matches!(param.ir_type, IrType::Heap(IrHeapKind::Array))
+        {
+            continue;
+        }
         if param.by_ref || param.variadic {
             return Some(format!(
                 "callback parameter {} is by-reference or variadic",
@@ -8586,6 +8878,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ArrayToHash
         | Op::HashAppend
         | Op::ArrayUnion
+        | Op::HashSpread
         | Op::HashUnion
         | Op::ArrayHashUnion
         | Op::HashArrayUnion
@@ -8679,7 +8972,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::HashEnsureUnique
         | Op::ArrayCloneShallow
         | Op::HashCloneShallow
-        | Op::HashSpread
         | Op::ArraySetMixedKey
         | Op::ArrayKeyExists
         | Op::OffsetExists

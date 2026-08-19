@@ -134,6 +134,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::StoreStaticProperty => lower_store_static_property(ctx, &inst),
         Op::ScopedConstantGet => lower_scoped_constant_get(ctx, &inst),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
+        Op::HashSpread => super::inst_hash::lower_hash_spread(ctx, &inst),
         Op::HashUnion => super::inst_hash::lower_hash_union(ctx, &inst),
         Op::ArrayUnion => super::inst_hash::lower_array_union(ctx, &inst),
         Op::ArrayHashUnion => super::inst_hash::lower_array_hash_union(ctx, &inst),
@@ -4141,6 +4142,18 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_array_get_tagged_int", "indexed array get (tagged int)");
         }
+        // A read the audit proved in bounds keeps the element's own width: the getter's tag can
+        // only be the integer one, so it is dropped rather than tested. The audit is what makes
+        // this safe — a raw i64 has no null to answer a miss with — so the two must not drift.
+        (PhpType::Int, WasmRepr::I64(_)) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
+            ctx.fb.ins(
+                "call $__rt_array_get_tagged_int",
+                "indexed array get, proven in bounds",
+            );
+            ctx.fb.ins("drop", "the tag can only be the integer one here");
+        }
         (PhpType::Bool, WasmRepr::Ptr(_)) => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(index)?;
@@ -4194,7 +4207,10 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     store_result(ctx, inst)?;
-    if inst.op == Op::ArrayGet {
+    // A proven-in-bounds read has no miss to diagnose, and no tag left to test for one.
+    let proven_in_bounds =
+        element_type == PhpType::Int && matches!(result_repr, WasmRepr::I64(_));
+    if inst.op == Op::ArrayGet && !proven_in_bounds {
         emit_undefined_array_index_warning_if_null(
             ctx,
             array,

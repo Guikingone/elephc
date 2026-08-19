@@ -527,6 +527,102 @@ mod tests {
         }
     }
 
+    /// A closure whose only visible parameter is variadic — `function (...$parts) { ... }` —
+    /// called with three arguments, echoing `count($parts)`.
+    ///
+    /// The wrapper is what this exercises: the argument buffer a closure call builds already
+    /// holds Mixed cells in call order, and a packed variadic parameter reads exactly that
+    /// representation, so the wrapper gathers the tail into a fresh array instead of unboxing a
+    /// single slot. Three arguments in, `3` out; a wrapper that forwarded slot 0 as the array
+    /// would answer whatever `count` makes of one cell.
+    #[test]
+    fn closure_variadic_tail_collects_every_argument_e2e() {
+        let mut module = Module::new(Target::wasm());
+        let name_id = module.data.intern_string("__eir_closure_main_0");
+        let packed = PhpType::Array(Box::new(PhpType::Mixed));
+
+        let mut body = Function::new("__eir_closure_main_0".to_string(), IrType::I64, PhpType::Int);
+        body.flags.is_closure = true;
+        body.params.push(FunctionParam {
+            name: "parts".to_string(),
+            ir_type: IrType::Heap(IrHeapKind::Array),
+            php_type: packed.clone(),
+            by_ref: false,
+            variadic: true,
+        });
+        let slot = body.add_local(
+            Some("parts".to_string()),
+            IrType::Heap(IrHeapKind::Array),
+            packed.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut body);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let parts = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Array), packed.clone());
+            let count = b
+                .emit(
+                    Op::ArrayLen,
+                    vec![parts],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(count) });
+        }
+        module.add_closure(body);
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let callable = b
+                .emit(
+                    Op::ClosureNew,
+                    Vec::new(),
+                    Some(Immediate::Data(name_id)),
+                    IrType::I64,
+                    PhpType::Callable,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let mut arguments = vec![callable];
+            for value in [7_i64, 8, 9] {
+                arguments.push(b.emit_const_i64(value));
+            }
+            let count = b
+                .emit(
+                    Op::ClosureCall,
+                    arguments,
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            let _ = b.emit(
+                Op::EchoValue,
+                vec![count],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "3");
+        }
+    }
+
     /// End-to-end P7a1: builds a real closure body (`__eir_closure_main_0`, one int param,
     /// returns `x * 2`) plus a `main` that emits `ClosureNew` (resolving the body name from
     /// the module string pool), `ClosureCall` (boxes 42 into the uniform Mixed-cell arg
@@ -7968,6 +8064,222 @@ mod tests {
         module.add_function(f);
         if let Some(o) = invoke(&module, "fn_c", &[]) {
             assert_eq!(o, "20");
+        }
+    }
+
+    /// The counted walk the EIR generates for an array spread: `for (i = 0; i < len(a); i++)`
+    /// summing `a[i]`, whose read is typed `int` rather than `?int`.
+    ///
+    /// A raw i64 has no null to answer a miss with, so that shape is only lowerable because the
+    /// bound test in front of it proves the read always hits. The test builds the loop twice: once
+    /// as the EIR writes it, and once with the comparison flipped to `Sle` — one operator, and the
+    /// last iteration reads `a[len]`. The second must be REFUSED, or the proof is not a proof.
+    #[test]
+    fn counted_walk_reads_an_int_element_at_its_own_width() {
+        let elements = PhpType::Array(Box::new(PhpType::Int));
+        let build = |predicate: CmpPredicate| {
+            let mut module = Module::new(Target::wasm());
+            let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+            function.flags.is_main = true;
+            {
+                let mut b = Builder::new(&mut function);
+                let entry = b.create_named_block("entry", Vec::new());
+                let header = b.create_named_block(
+                    "walk.next",
+                    vec![(IrType::I64, PhpType::Int), (IrType::I64, PhpType::Int)],
+                );
+                let body = b.create_named_block("walk.body", Vec::new());
+                let exit = b.create_named_block(
+                    "walk.exit",
+                    vec![(IrType::I64, PhpType::Int)],
+                );
+                b.set_entry(entry);
+
+                b.position_at_end(entry);
+                let array = b
+                    .emit(
+                        Op::ArrayNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(3)),
+                        IrType::Heap(IrHeapKind::Array),
+                        elements.clone(),
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                for value in [11_i64, 22, 33] {
+                    let value = b.emit_const_i64(value);
+                    let _ = b.emit(
+                        Op::ArrayPush,
+                        vec![array, value],
+                        None,
+                        IrType::Void,
+                        PhpType::Void,
+                        Ownership::NonHeap,
+                    );
+                }
+                let length = b
+                    .emit(
+                        Op::ArrayLen,
+                        vec![array],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                let zero = b.emit_const_i64(0);
+                b.terminate(Terminator::Br {
+                    target: header,
+                    args: vec![zero, zero],
+                });
+
+                b.position_at_end(header);
+                let index = b.block_param(header, 0);
+                let total = b.block_param(header, 1);
+                let more = b
+                    .emit(
+                        Op::ICmp,
+                        vec![index, length],
+                        Some(Immediate::CmpPredicate(predicate)),
+                        IrType::I64,
+                        PhpType::Bool,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                b.terminate(Terminator::CondBr {
+                    cond: more,
+                    then_target: body,
+                    then_args: Vec::new(),
+                    else_target: exit,
+                    else_args: vec![total],
+                });
+
+                b.position_at_end(body);
+                let element = b
+                    .emit(
+                        Op::ArrayGet,
+                        vec![array, index],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                let running = b
+                    .emit(
+                        Op::IAdd,
+                        vec![total, element],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                let one = b.emit_const_i64(1);
+                let next = b
+                    .emit(
+                        Op::IAdd,
+                        vec![index, one],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .unwrap();
+                b.terminate(Terminator::Br {
+                    target: header,
+                    args: vec![next, running],
+                });
+
+                b.position_at_end(exit);
+                let sum = b.block_param(exit, 0);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![sum],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                b.terminate(Terminator::Return { value: None });
+            }
+            module.add_function(function);
+            module
+        };
+
+        let refusal = generate(&build(CmpPredicate::Sle), Emit::Executable)
+            .expect_err("a read past the length must not lower at the element's own width");
+        assert!(
+            refusal.to_string().contains("cannot lower into"),
+            "unexpected refusal: {refusal}"
+        );
+        if let Some(out) = run_main(&build(CmpPredicate::Slt)) {
+            assert_eq!(out, "66");
+        }
+    }
+
+    /// `[...$a, ...$b]` where `$a = [5 => 10, 2 => 20]` and `$b = [7 => 30]`, read back at key 2.
+    ///
+    /// Every source key here is an INTEGER, so PHP discards all three and renumbers them 0, 1, 2
+    /// in source order — measured on php-src 8.5.6 before this was written. Key 2 therefore holds
+    /// `$b`'s only value, 30, and a backend that preserved the source keys would answer 20 (the
+    /// value `$a` stored at 2) instead. That is the whole point of `Op::HashSpread` over
+    /// `Op::HashUnion`, which preserves keys and lets the LEFT win.
+    #[test]
+    fn hash_spread_renumbers_int_keys() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("c".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let mut fresh_hash = |b: &mut Builder, entries: &[(i64, i64)]| {
+                let hash = b
+                    .emit(
+                        Op::HashNew,
+                        Vec::new(),
+                        Some(Immediate::Capacity(8)),
+                        IrType::Heap(IrHeapKind::Hash),
+                        assoc.clone(),
+                        Ownership::Owned,
+                    )
+                    .unwrap();
+                for (key, value) in entries {
+                    let key = b.emit_const_i64(*key);
+                    let value = b.emit_const_i64(*value);
+                    let _ = b.emit(
+                        Op::HashSet,
+                        vec![hash, key, value],
+                        None,
+                        IrType::Void,
+                        PhpType::Void,
+                        Ownership::NonHeap,
+                    );
+                }
+                hash
+            };
+            let left = fresh_hash(&mut b, &[(5, 10), (2, 20)]);
+            let right = fresh_hash(&mut b, &[(7, 30)]);
+            let merged = fresh_hash(&mut b, &[]);
+            for source in [left, right] {
+                let _ = b.emit(
+                    Op::HashSpread,
+                    vec![merged, source],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            let key = b.emit_const_i64(2);
+            let got = emit_hash_get_int(&mut b, merged, key);
+            b.terminate(Terminator::Return { value: Some(got) });
+        }
+        module.add_function(f);
+        if let Some(out) = invoke(&module, "fn_c", &[]) {
+            assert_eq!(out, "30");
         }
     }
 

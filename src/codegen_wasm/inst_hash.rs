@@ -188,6 +188,58 @@ pub(super) fn lower_hash_unset(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     Ok(())
 }
 
+/// Lowers `Op::HashSpread` — one `...$source` operand of an associative array literal.
+///
+/// The destination is MUTATED and the op has no result, so the possibly-reallocated pointer the
+/// helper answers is written back into the destination operand's own value and mirrored into its
+/// source slot, exactly as `hash_set` and `hash_append` do.
+///
+/// The saturating integer append is the one failure: `__rt_hash_spread` answers 0 there rather
+/// than raising, so the raise sits here — the same shape, and the same failure code, as the bare
+/// append it is made of.
+pub(super) fn lower_hash_spread(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let dest = operand(inst, 0)?;
+    let source = operand(inst, 1)?;
+    ctx.emit_load_value(dest)?;
+    ctx.emit_load_value(source)?;
+    ctx.fb.ins(
+        "call $__rt_hash_spread",
+        "merge the source in: string keys preserved, integer keys renumbered",
+    );
+    let merged = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", merged), "capture the merged pointer");
+    ctx.fb
+        .ins(&format!("local.get {}", merged), "merged pointer");
+    ctx.fb.ins("i32.eqz", "saturated append key occupied?");
+    ctx.fb
+        .ins("if", "PHP append failure (non-returning exceptional edge)");
+    let has_main = ctx
+        .module
+        .functions
+        .iter()
+        .any(|function| function.flags.is_main);
+    if has_main {
+        ctx.fb
+            .ins("i32.const 7", "occupied next array element failure code");
+        ctx.fb.ins(
+            "call $__rt_fail",
+            "report Cannot add element to the array as occupied",
+        );
+    } else {
+        ctx.fb
+            .ins("call $__rt_fail_callable_dispatch", "reactor-mode append failure");
+    }
+    ctx.fb
+        .ins("unreachable", "elephc-trap:post-noreturn:hash-spread-occupied");
+    ctx.fb.ins("end", "end of the append-failure edge");
+    ctx.fb
+        .ins(&format!("local.get {}", merged), "the merged hash pointer");
+    ctx.emit_store_value(dest)?;
+    super::inst::write_back_container_slot(ctx, dest)?;
+    Ok(())
+}
+
 /// Lowers `Op::HashAppend` (`$h[] = v`). Materializes the value into temp locals and
 /// computes its per-entry runtime tag exactly like `lower_hash_set`, but lets the runtime
 /// load the persisted integer append key and delegate to copy-on-write-aware

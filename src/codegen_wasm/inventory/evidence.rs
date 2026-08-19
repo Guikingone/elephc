@@ -114,6 +114,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::HashIsset => &["isset($h[k]) over an associative array"],
         Op::HashAppend => &["append to an associative array"],
         Op::HashUnion => &["associative array union (`+`)"],
+        Op::HashSpread => &["associative array spread (`[...$assoc]`)"],
         Op::ArrayHashUnion => &["indexed-left/associative-right array union"],
         Op::HashArrayUnion => &["associative-left/indexed-right array union"],
         Op::IterStart => &["`foreach` initialization"],
@@ -260,6 +261,7 @@ fn op_tests(op: Op) -> &'static [&'static str] {
             &["codegen_wasm::tests::hash_set_get_int_lowers"]
         }
         Op::HashUnion => &["codegen_wasm::tests::hash_union_left_wins_lowers"],
+        Op::HashSpread => &["codegen_wasm::tests::hash_spread_renumbers_int_keys"],
         Op::HashUnset => &["codegen_wasm::tests::hash_unset_removes_element_lowers"],
         Op::HashIsset => &[
             "codegen_wasm::tests::hash_isset_and_array_key_exists_lower",
@@ -416,6 +418,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::HashIsset => "codegen_wasm::inst_hash::lower_hash_isset",
         Op::HashAppend => "codegen_wasm::inst_hash::lower_hash_append",
         Op::HashUnion => "codegen_wasm::inst_hash::lower_hash_union",
+        Op::HashSpread => "codegen_wasm::inst_hash::lower_hash_spread",
         Op::ArrayUnion => "codegen_wasm::inst_hash::lower_array_union",
         Op::ArrayHashUnion => "codegen_wasm::inst_hash::lower_array_hash_union",
         Op::HashArrayUnion => "codegen_wasm::inst_hash::lower_hash_array_union",
@@ -537,6 +540,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::HashUnset
         | Op::HashAppend
         | Op::HashUnion
+        | Op::HashSpread
         | Op::ArrayHashUnion
         | Op::HashArrayUnion
         | Op::HashLen
