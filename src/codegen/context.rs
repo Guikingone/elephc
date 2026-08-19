@@ -61,6 +61,7 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
+    pub(super) exception_activation_offset: Option<usize>,
     pub(super) epilogue_emitted: bool,
     /// `--instrument` id assigned to this function in its prologue, consumed by
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
@@ -125,6 +126,7 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
+            exception_activation_offset: layout.exception_activation_offset,
             epilogue_emitted: false,
             instr_id: None,
             is_main,

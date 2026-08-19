@@ -291,6 +291,7 @@ pub fn generate_user_asm_from_ir_with_options(
         data,
         emit,
         exported_functions,
+        heap_debug,
     ))
 }
 
@@ -301,6 +302,7 @@ fn finalize_user_asm(
     mut data: DataSection,
     emit: Emit,
     exported_functions: &HashMap<String, ExportedFunction>,
+    heap_debug: bool,
 ) -> String {
     let eval_bridge = module.required_runtime_features.eval_bridge;
     let emit_eval_reflection_metadata =
@@ -342,7 +344,6 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
-    let data_output = data.emit(module.target);
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
@@ -365,8 +366,14 @@ fn finalize_user_asm(
     emit_intrinsic_method_wrappers(module, &mut emitter);
     if matches!(emit, Emit::Cdylib) {
         let mut sorted_exports: Vec<&ExportedFunction> = exported_functions.values().collect();
-        sorted_exports.sort_by(|a, b| a.name.cmp(&b.name));
-        crate::codegen::cdylib::emit_cdylib_exports(&mut emitter, module.target, &sorted_exports);
+        sorted_exports.sort_by(|a, b| a.c_name.cmp(&b.c_name));
+        crate::codegen::cdylib::emit_cdylib_exports(
+            &mut emitter,
+            &mut data,
+            module.target,
+            &sorted_exports,
+            heap_debug,
+        );
     }
     let user_data = runtime::emit_runtime_data_user(
         &empty_globals,
@@ -392,6 +399,7 @@ fn finalize_user_asm(
         module.target,
     );
 
+    let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {
         user_asm.push('\n');
@@ -401,11 +409,12 @@ fn finalize_user_asm(
     user_asm.push_str(&user_data);
     let mut exported: HashSet<String> = exported_functions
         .values()
-        .map(|export| module.target.extern_symbol(&export.name))
+        .map(|export| module.target.extern_symbol(&export.c_name))
         .collect();
     match emit {
         Emit::Cdylib => {
             for lifecycle in [
+                "elephc_abi_version",
                 "elephc_init",
                 "elephc_shutdown",
                 "elephc_last_error",
@@ -421,10 +430,21 @@ fn finalize_user_asm(
             exported.insert(module.target.extern_symbol("main"));
         }
     }
-    crate::codegen::visibility::append_hidden_directives(
+    // The GCC driver contributes the ELF CRT `_init`/`_fini` definitions after
+    // assembly. Hidden undefined declarations here propagate local visibility
+    // to those definitions in the final shared object.
+    let additional_internal: &[&str] = if matches!(emit, Emit::Cdylib)
+        && module.target.platform == platform::Platform::Linux
+    {
+        &["_init", "_fini"]
+    } else {
+        &[]
+    };
+    crate::codegen::visibility::append_hidden_directives_with_extras(
         &user_asm,
         &exported,
         module.target.platform,
+        additional_internal,
     )
 }
 
