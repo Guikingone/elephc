@@ -346,7 +346,7 @@ class mysqli {
         // php-src: $name is a SQL COMMENT on START TRANSACTION, never a
         // savepoint; the empty-name ValueError is raised BEFORE any SQL goes to
         // the server (unlike the old ordering, which left an open transaction).
-        $_comment = $this->transactionComment("mysqli::begin_transaction", $name);
+        $_comment = $this->transactionComment("mysqli::begin_transaction", $name, true);
         if (!$this->requireConnection()) {
             return false;
         }
@@ -380,7 +380,7 @@ class mysqli {
     }
 
     public function commit(int $flags = 0, ?string $name = null): bool {
-        $_comment = $this->transactionComment("mysqli::commit", $name);
+        $_comment = $this->transactionComment("mysqli::commit", $name, false);
         if (!$this->requireConnection()) {
             return false;
         }
@@ -399,7 +399,7 @@ class mysqli {
     }
 
     public function rollback(int $flags = 0, ?string $name = null): bool {
-        $_comment = $this->transactionComment("mysqli::rollback", $name);
+        $_comment = $this->transactionComment("mysqli::rollback", $name, false);
         if (!$this->requireConnection()) {
             return false;
         }
@@ -720,30 +720,38 @@ class mysqli {
     }
 
     // Renders a transaction $name as php-src's ` /*name*/` SQL comment suffix
-    // ("" when $name is null). Empty $name is a ValueError (raised before any
-    // SQL is sent, matching php's message). Otherwise the name is STRIPPED to
-    // php's allowlist [A-Za-z0-9 \-_=] before it is wrapped: blocklisting `*/`
-    // was not enough because a name starting with `!` (or MariaDB's `M!`) opens
-    // an EXECUTABLE `/*! … */` comment whose body the server runs — a `;` inside
-    // it would then execute a second statement, and this path (exec, not
-    // runQuery) never sees the multi-statement guard. Stripping to the allowlist
-    // closes every comment dialect at once, exactly as php sanitises the name.
-    private function transactionComment(string $context, ?string $name): string {
+    // ("" when $name is null). An empty $name is a ValueError ONLY for
+    // begin_transaction ($emptyThrows) — php throws there but for commit /
+    // rollback it does not, sending `COMMIT /**/` / `ROLLBACK /**/` instead.
+    // A non-empty name is STRIPPED to php's allowlist [A-Za-z0-9 -_=] before it
+    // is wrapped: blocklisting `*/` was not enough because a name starting with
+    // `!` (or MariaDB's `M!`) opens an EXECUTABLE `/*! … */` comment whose body
+    // the server runs — a `;` inside it would then execute a second statement,
+    // and this path (exec, not runQuery) never sees the multi-statement guard.
+    // Stripping to the allowlist closes every comment dialect at once, exactly
+    // as php sanitises the name.
+    private function transactionComment(string $context, ?string $name, bool $emptyThrows): string {
         if ($name === null) {
             return "";
         }
         if ($name === "") {
-            throw new ValueError($context . "(): Argument #2 (\$name) must not be empty");
+            if ($emptyThrows) {
+                throw new ValueError($context . "(): Argument #2 (\$name) must not be empty");
+            }
+            return " /**/";
         }
         $_clean = "";
         $_len = strlen($name);
         for ($_i = 0; $_i < $_len; $_i++) {
             $_c = substr($name, $_i, 1);
             $_o = ord($_c);
+            // php's kept set (empirically, feeding every printable byte):
+            // space, `-`, 0-9, `=`, A-Z, `_`, a-z. Backslash is NOT kept, though
+            // php's own warning text lists it; the empirical behaviour wins.
             if (($_o >= 48 && $_o <= 57)          // 0-9
                 || ($_o >= 65 && $_o <= 90)       // A-Z
                 || ($_o >= 97 && $_o <= 122)      // a-z
-                || $_c === " " || $_c === "-" || $_c === "_" || $_c === "=" || $_c === "\\") {
+                || $_c === " " || $_c === "-" || $_c === "_" || $_c === "=") {
                 $_clean = $_clean . $_c;
             }
         }

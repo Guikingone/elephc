@@ -160,12 +160,14 @@ $db->commit(MYSQLI_TRANS_COR_AND_CHAIN, "job42");                 // COMMIT AND 
 
 The `$name` argument of `begin_transaction()` / `commit()` / `rollback()` is a
 SQL **comment** (`/*name*/`), exactly as php-src emits it — it is *not* a
-savepoint. Like php, the name is **stripped to `[A-Za-z0-9 \-_=]`** before it is
-wrapped (an empty name is a `ValueError`): this is a security measure, not
-cosmetics — an unfiltered name beginning with `!` (or MariaDB's `M!`) would open
-an executable `/*! … */` comment and a `;` inside it would run a second
-statement. php raises an `E_WARNING` when it truncates; elephc strips silently
-(no `E_WARNING` channel — documented divergence, identical security behavior).
+savepoint. Like php, the name is **stripped to `[A-Za-z0-9 -_=]`** before it is
+wrapped: this is a security measure, not cosmetics — an unfiltered name
+beginning with `!` (or MariaDB's `M!`) would open an executable `/*! … */`
+comment and a `;` inside it would run a second statement. An empty name is a
+`ValueError` for `begin_transaction()` only (php throws there but not for
+`commit()`/`rollback()`, which send `COMMIT /**/` / `ROLLBACK /**/`). php raises
+an `E_WARNING` when it truncates; elephc strips silently (no `E_WARNING` channel
+— documented divergence, identical security behavior).
 Savepoints are the separate `savepoint()` / `release_savepoint()` methods (and
 `mysqli_savepoint()` / `mysqli_release_savepoint()`), which emit `SAVEPOINT` /
 `RELEASE SAVEPOINT` with backtick quoting. The `$flags` are composed into the
@@ -199,18 +201,28 @@ property protected behind the getter; elephc exposes both).
 ## Escaping
 
 `real_escape_string()` / `escape_string()` return the escaped payload
-**without** wrapping quotes. Escaping is **charset-aware** and matches
-`mysql_real_escape_string` byte-for-byte, using the connection's own live
-charset (tracked in the bridge from the handshake and every `SET NAMES` —
-including a `MYSQLI_INIT_COMMAND` `SET NAMES …` or a reused persistent
-connection — so it is never fooled into treating a multibyte session as
-`utf8mb4`). For an ASCII-incompatible multibyte charset (`gbk`, `big5`, `sjis`,
-`cp932`, `euckr`, `ujis`, `gb2312`, `gb18030`) the escape uses that charset's
-real lead/trail byte ranges: a byte that completes a valid two-byte character is
-copied opaquely, and a lead byte that does not is itself escaped — closing the
-classic trailing-byte breakout for the whole family, not just GBK. Under
-`NO_BACKSLASH_ESCAPES` only `'` is doubled (backslash is a literal there; this
-mirrors mysqlnd).
+**without** wrapping quotes. Escaping is **charset-aware**, using the
+connection's own live charset — tracked in the bridge from the handshake and
+from every statement that changes the client charset: `SET NAMES`,
+`SET CHARACTER SET`, and even a raw `SET character_set_client = …` (bare, `@@`,
+or `SESSION` spellings). This goes **beyond php**, which only follows
+`mysqli_set_charset()` and stays on `utf8mb4` after a raw SQL charset change (so
+php's own `real_escape_string()` is unsafe there); elephc tracks it, so the
+escape is never fooled into treating a multibyte session as `utf8mb4`.
+`character_set_connection` / `character_set_results` and `GLOBAL` scopes are not
+tracked, because they do not change how the server lexes the string literals
+being escaped. For an ASCII-incompatible multibyte charset (`gbk`, `big5`,
+`sjis`, `cp932`, `euckr`, `ujis`, `gb2312`, `gb18030`) the escape uses that
+charset's real lead/trail byte ranges: a byte that completes a valid character
+is copied opaquely, and a lead byte that does not is itself escaped — closing the
+classic trailing-byte breakout for the whole family, not just GBK. Verified
+byte-for-byte against php over a 221-input × 9-charset differential: identical
+for gbk/big5/sjis/cp932/gb2312/ujis, and **`euckr` follows MySQL's own
+`ctype-euc_kr` table** (server-faithful: the server is what parses the escaped
+result) rather than mysqlnd's slightly wider table, so a handful of `0x8E`/`0x8F`
+`euckr` sequences escape differently from php — always in the safe direction,
+never leaving a quote reachable. Under `NO_BACKSLASH_ESCAPES` only `'` is doubled
+(backslash is a literal there; this mirrors mysqlnd).
 
 ## Divergences from php-src
 

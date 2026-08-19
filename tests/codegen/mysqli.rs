@@ -80,10 +80,20 @@ catch (ValueError $e) {
 try { $db->begin_transaction(0, "!50000 ; DROP"); echo "|no-strip-throw"; }
 catch (ValueError $e) { echo "|stripped-threw-ve"; }
 catch (Error $e) { echo "|conn-error"; }
+// Unlike begin_transaction, commit/rollback do NOT throw on an empty name
+// (php sends COMMIT /**/); the empty check is skipped, so on an unconnected
+// object they reach the connection Error, not a ValueError.
+try { $db->commit(0, ""); echo "|no"; }
+catch (ValueError $e) { echo "|commit-ve"; }
+catch (Error $e) { echo "|commit-conn"; }
+try { $db->rollback(0, ""); echo "|no"; }
+catch (ValueError $e) { echo "|rollback-ve"; }
+catch (Error $e) { echo "|rollback-conn"; }
 "#,
     );
-    // The name is stripped (no ValueError), then the unconnected object errors.
-    assert_eq!(out, "empty-ve|conn-error");
+    // begin: empty→ValueError, malicious→stripped→conn Error; commit/rollback:
+    // empty name is NOT a ValueError (reaches the connection Error instead).
+    assert_eq!(out, "empty-ve|conn-error|commit-conn|rollback-conn");
 }
 
 /// A mysqli-only program declares the mysqli surface (class, procedural alias,

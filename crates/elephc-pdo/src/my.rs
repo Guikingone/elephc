@@ -1157,24 +1157,60 @@ pub(crate) fn my_real_escape(data: &[u8], charset: &str, no_backslash_escapes: b
     out
 }
 
-/// Returns the charset name a `SET NAMES <cs>` / `SET CHARACTER SET <cs>` /
-/// `SET CHARSET <cs>` statement selects (lowercased, first identifier token), so
-/// the connection can track its live charset for charset-aware escaping without
-/// a round-trip. `None` for any other statement.
+/// Returns the new **client** charset a `SET` statement selects, so the
+/// connection can track its live charset for charset-aware escaping without a
+/// round-trip. `None` for any statement that does not change it.
+///
+/// Recognizes both the high-level forms — `SET NAMES <cs>`,
+/// `SET CHARACTER SET <cs>`, `SET CHARSET <cs>` — and a direct assignment to
+/// the session variable that actually governs how the server lexes the string
+/// literals we escape: `SET [SESSION|LOCAL] [@@[SESSION.|LOCAL.]]
+/// character_set_client = <value>` (value bare or quoted). `character_set_client`
+/// is the ONLY one that matters for escaping (it decides where a string literal
+/// ends); `character_set_connection`/`_results` do not change literal parsing,
+/// and `GLOBAL`/`@@GLOBAL.` does not affect the current session — both are
+/// deliberately ignored. Without this, a `SET character_set_client = gbk` would
+/// leave the escape on a stale utf8mb4 table while the server reads gbk, which
+/// is the trailing-byte breakout through a different door.
 fn charset_after_set_names(sql: &str) -> Option<String> {
     let trimmed = sql.trim_start();
     let up = trimmed.to_ascii_uppercase();
-    let rest = if let Some(r) = up.strip_prefix("SET NAMES ") {
-        &trimmed[trimmed.len() - r.len()..]
-    } else if let Some(r) = up.strip_prefix("SET CHARACTER SET ") {
-        &trimmed[trimmed.len() - r.len()..]
-    } else if let Some(r) = up.strip_prefix("SET CHARSET ") {
-        &trimmed[trimmed.len() - r.len()..]
-    } else {
-        return None;
-    };
-    let token: String = rest
-        .trim_start()
+    // Byte offset back into the original (mixed-case) string for a suffix of the
+    // uppercased string (ASCII uppercasing preserves byte length).
+    let orig = |suffix: &str| &trimmed[trimmed.len() - suffix.len()..];
+    for kw in ["SET NAMES ", "SET CHARACTER SET ", "SET CHARSET "] {
+        if let Some(r) = up.strip_prefix(kw) {
+            return charset_ident(orig(r));
+        }
+    }
+    // SET [SESSION|LOCAL] [@@[SESSION.|LOCAL.]]character_set_client = <value>
+    let after_set = up.strip_prefix("SET ")?;
+    let after_scope = after_set
+        .strip_prefix("SESSION ")
+        .or_else(|| after_set.strip_prefix("LOCAL "))
+        .unwrap_or(after_set)
+        .trim_start();
+    let after_at = after_scope
+        .strip_prefix("@@SESSION.")
+        .or_else(|| after_scope.strip_prefix("@@LOCAL."))
+        .or_else(|| after_scope.strip_prefix("@@"))
+        .unwrap_or(after_scope);
+    let after_var = after_at.strip_prefix("CHARACTER_SET_CLIENT")?;
+    let after_eq = after_var.trim_start().strip_prefix('=')?;
+    charset_ident(orig(after_eq))
+}
+
+/// Extracts a charset identifier from a value that may be bare (`gbk`) or quoted
+/// (`'gbk'` / `"gbk"` / `` `gbk` ``), lowercased. `None` when no identifier
+/// begins the value.
+fn charset_ident(value: &str) -> Option<String> {
+    let value = value.trim_start();
+    let value = value
+        .strip_prefix('\'')
+        .or_else(|| value.strip_prefix('"'))
+        .or_else(|| value.strip_prefix('`'))
+        .unwrap_or(value);
+    let token: String = value
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
@@ -3774,9 +3810,11 @@ mod tests {
         }
     }
 
-    /// `SET NAMES` tracking recognizes the charset token for live-charset escaping.
+    /// Charset tracking recognizes every spelling that changes the CLIENT
+    /// charset — the one that governs how the server lexes escaped literals.
     #[test]
     fn set_names_charset_tracking() {
+        // High-level forms.
         assert_eq!(charset_after_set_names("SET NAMES gbk").as_deref(), Some("gbk"));
         assert_eq!(charset_after_set_names("set names GBK").as_deref(), Some("gbk"));
         assert_eq!(
@@ -3784,6 +3822,17 @@ mod tests {
             Some("utf8mb4")
         );
         assert_eq!(charset_after_set_names("SET CHARACTER SET sjis").as_deref(), Some("sjis"));
+        // Direct character_set_client assignment: bare, quoted, @@, SESSION.
+        assert_eq!(charset_after_set_names("SET character_set_client = gbk").as_deref(), Some("gbk"));
+        assert_eq!(charset_after_set_names("SET character_set_client=gbk").as_deref(), Some("gbk"));
+        assert_eq!(charset_after_set_names("SET @@character_set_client = 'gbk'").as_deref(), Some("gbk"));
+        assert_eq!(charset_after_set_names("SET SESSION character_set_client = \"gbk\"").as_deref(), Some("gbk"));
+        assert_eq!(charset_after_set_names("set @@session.character_set_client=big5").as_deref(), Some("big5"));
+        // Not the client charset (do not affect literal parsing) → not tracked.
+        assert_eq!(charset_after_set_names("SET character_set_connection = gbk").as_deref(), None);
+        assert_eq!(charset_after_set_names("SET character_set_results = gbk").as_deref(), None);
+        assert_eq!(charset_after_set_names("SET GLOBAL character_set_client = gbk").as_deref(), None);
+        assert_eq!(charset_after_set_names("SET @@GLOBAL.character_set_client = gbk").as_deref(), None);
         assert_eq!(charset_after_set_names("SELECT 1").as_deref(), None);
     }
 

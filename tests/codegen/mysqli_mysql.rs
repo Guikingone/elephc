@@ -122,6 +122,31 @@ $db->set_charset("utf8mb4");
     assert_eq!(out, "all-match|sjis|bf5c5c");
 }
 
+/// SECURITY: the escape tracks the CLIENT charset changed by a raw
+/// `SET character_set_client = gbk` (not just SET NAMES), so it is never left on
+/// a stale utf8mb4 table while the server reads gbk — the round-2 breakout
+/// through a different door. php stays on utf8mb4 here and emits the unsafe
+/// `bf5c27`; elephc goes further and emits the safe `5cbf5c27`.
+#[test]
+#[ignore]
+fn test_mysqli_escape_tracks_character_set_client() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SET character_set_client = gbk");
+echo $db->character_set_name();
+echo "|", bin2hex($db->real_escape_string("\xBF\x27"));
+$db->query("SET @@character_set_client = 'sjis'");
+echo "|", $db->character_set_name();
+echo "|", bin2hex($db->real_escape_string("\xBF\x27"));
+$db->query("SET NAMES utf8mb4");
+echo "|", $db->character_set_name();
+"#,
+    ));
+    // gbk: 0xBF is a lead → escaped, then quote escaped (5cbf 5c27).
+    // sjis: 0xBF not a lead → raw, quote escaped (bf 5c27).
+    assert_eq!(out, "gbk|5cbf5c27|sjis|bf5c27|utf8mb4");
+}
+
 /// SECURITY: a transaction `$name` cannot inject an executable `/*! … */`
 /// comment. php strips the name to its allowlist; elephc does the same, so a
 /// `!`-prefixed name carrying a `;`-separated DROP is neutralized (the table
