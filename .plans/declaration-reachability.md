@@ -130,7 +130,9 @@ From a live declaration body (and from top-level statements), record:
 | `new C` / `C::class` / `instanceof C` / `catch (C)` / type hints on live callables | class/interface/enum `C` |
 | `new static(...)` inside a live method | the lexical class and every instantiable descendant, including each possible constructor body and argument signature |
 | `$obj->m()` / `C::m()` / first-class `C::m(...)` / `[$obj, 'm']` / `['C', 'm']` | method `(C, m)` plus class `C` |
-| Registry builtin parameter with a callable type or the conventional `callback` name | callable edge from the argument bound by the shared call-argument planner; unknown/spread values widen callable hazards |
+| `foreach`, `count()`, object offset access, `json_encode()`, iterator builtins, `new IteratorIterator(...)` | behavioral edges to the compiler-invoked `Iterator` / `IteratorAggregate` / `Countable` / `ArrayAccess` / `JsonSerializable` methods; class-qualified for known receivers and method-name wildcard for opaque or recursively encoded receivers |
+| Registry builtin parameter with a callable type or structural callback-slot metadata | callable edge from the argument bound by the shared call-argument planner; unknown/spread values widen callable hazards; registry validation checks every declared slot and a registry-wide test pins the current callback-consuming set |
+| attributes on a live declaration, including fixed and variadic parameters | attribute class construction plus declaration edges from every attribute argument |
 | `function_exists('foo')` / `is_callable('foo')` / `call_user_func('foo')` with a **string literal** | function `foo` |
 | `method_exists($x, 'm')` / `class_exists('C')` / `property_exists('C', 'p')` with a **string literal** | method `m` on every live type that could be `$x`, or class `C`; named arguments are normalized before selecting the target |
 | `elephc_pdo_*()` / any extern call | that extern function |

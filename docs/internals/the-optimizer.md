@@ -288,9 +288,9 @@ Reflection retain class-like declarations conservatively. Literal
 `property_exists` probes retain the named declaration instead of triggering a
 global widening. The same shared argument planner maps reordered named arguments
 before introspection targets, callbacks, or argument-dependent builtin link
-requirements are inspected. Registry parameters with a callable type or the
-conventional `callback` name add callable edges, including named arguments and
-conservative dynamic-spread fallback. Explicit prelude requests
+requirements are inspected. Registry parameters with a callable type or
+structural callback-slot metadata add callable edges, including named arguments
+and conservative dynamic-spread fallback. Explicit prelude requests
 such as `--with-pdo`, `--with-tz`, and `--with-image` root their complete
 inventory group; `--with-crypto` only force-links the bridge, and `--web` is
 demand-pruned from its executable bootstrap roots.
@@ -318,6 +318,19 @@ Two-element array literals are treated as possible callable arrays even when
 they are ordinary data, for the same reason: the resulting over-retention is
 safe, while rejecting a runtime callable would not be.
 
+Compiler-invoked protocol methods (`Iterator`, `IteratorAggregate`,
+`Countable`, `ArrayAccess`, `JsonSerializable`) gain behavioral edges from the
+operations whose lowering can invoke them: `foreach`, `count()`, object offset
+access, `json_encode()`, the iterator builtins, and `IteratorIterator`
+construction. A statically known receiver contributes a class-qualified edge;
+an opaque receiver widens only the corresponding protocol method names, while
+recursive JSON encoding conservatively uses the `jsonSerialize` method name.
+Declared scalar/array locals and positive `is_array()` branch guards suppress
+impossible object protocol edges. A dynamic lookup inside a protocol body therefore widens the
+keep-set only when such an operation can execute it, just as it would in an
+ordinary reachable method. User interfaces that lowering does not invoke stay
+structural, so an unused `Runner::run()` body does not retain sibling methods.
+
 Late-static construction is also a family-wide runtime edge. A reachable
 `new static(...)` roots the lexical class and each checker-known descendant that
 could be selected by the called-class id. Their constructor bodies and signatures
@@ -336,8 +349,10 @@ methods from `CheckResult`. The pass therefore filters `method_decls` and all
 related method maps, resolves inherited implementations through
 `method_impl_classes`, scans trait-imported bodies from each consuming class's
 flattened declarations, rebuilds instance and static vtable slots in survivor
-order, removes dead extern schemas and link requirements, and keeps the checked
-metadata synchronized with the remaining AST. Conditional builtin requirements
+order, and keeps every shared virtual slot on the whole inheritance lineage once
+any occupant survives, so a mid-chain `parent::` call cannot renumber a
+grandparent-typed dispatch. It also removes dead extern schemas and link
+requirements, and keeps the checked metadata synchronized with the remaining AST. Conditional builtin requirements
 are rescanned from normalized parameter-order arguments before a bridge or system
 library is removed.
 

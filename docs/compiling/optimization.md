@@ -32,6 +32,21 @@ user metadata and address-taken callable labels can rely on one contiguous user
 object, so user declarations are removed by the AST pass instead of by
 `.subsections_via_symbols`.
 
+Callback-consuming AOT builtins expose their callback slots through structural
+shared-contract metadata, independently of the PHP parameter name and its broad
+storage type. Registry validation rejects unknown or duplicate callback slots, and
+a registry-wide test pins the complete current set so declaration reachability does
+not depend on a parameter-naming convention.
+
+Operations that invoke PHP protocols implicitly, including `foreach`, `count()`,
+object offset access, `json_encode()`, and iterator helpers, keep the corresponding
+protocol methods behaviorally reachable. Known receiver classes produce
+class-qualified edges; opaque receivers widen only those protocol method names,
+and recursive JSON encoding conservatively keeps `jsonSerialize` by name.
+Declared array/scalar locals and positive `is_array()` guards avoid treating an array-only path as object dispatch.
+Attributes on reachable declarations are scanned at every supported location,
+including fixed and variadic parameters.
+
 ## EIR optimization passes
 
 After the AST is lowered to EIR and validated, a fixed-point pass driver runs the
