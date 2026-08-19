@@ -9707,6 +9707,121 @@ mod tests {
         }
     }
 
+    /// `LsbA::start()` and `LsbB::start()` share ONE body — `return new static();` — and must
+    /// build different classes. Both classes declare `$n` at the same offset with different
+    /// defaults, so the printed `1122` is the only evidence that `Op::DynamicObjectNew`
+    /// dispatched on the called-class id its caller forwarded rather than on the defining class.
+    /// A backend that resolved `static` to the method's own class would print `1111`.
+    #[test]
+    fn new_static_dispatches_on_the_called_class() {
+        let base = "LsbA";
+        let derived = "LsbB";
+        let mut module = Module::new(Target::wasm());
+        let late_bound = module.data.intern_class_name("static");
+        let constraint = module.data.intern_class_name(&format!("{base}|{base}"));
+        let base_target = module.data.intern_string(&format!("{base}::start"));
+        let derived_target = module.data.intern_string(&format!("{derived}::start"));
+        let n_data = module.data.intern_string("n");
+
+        let start_key = crate::names::php_symbol_key("start");
+        let int_default = |value: i64| {
+            vec![Some(Expr {
+                kind: ExprKind::IntLiteral(value),
+                span: Span::dummy(),
+            })]
+        };
+        let mut base_info = test_class_info(
+            1,
+            vec![("n".to_string(), PhpType::Int)],
+            int_default(11),
+            false,
+        );
+        base_info
+            .static_methods
+            .insert(start_key.clone(), method_sig(&[], PhpType::Object(base.to_string())));
+        base_info
+            .static_method_impl_classes
+            .insert(start_key.clone(), base.to_string());
+        module.class_infos.insert(base.to_string(), base_info);
+
+        let mut derived_info = test_class_info(
+            2,
+            vec![("n".to_string(), PhpType::Int)],
+            int_default(22),
+            false,
+        );
+        derived_info.parent = Some(base.to_string());
+        derived_info
+            .static_methods
+            .insert(start_key.clone(), method_sig(&[], PhpType::Object(base.to_string())));
+        derived_info
+            .static_method_impl_classes
+            .insert(start_key, base.to_string());
+        module.class_infos.insert(derived.to_string(), derived_info);
+
+        module.class_methods.push(static_method_fn(
+            base,
+            "start",
+            IrType::Heap(IrHeapKind::Object),
+            PhpType::Object(base.to_string()),
+            |b, _cid| {
+                let name = b
+                    .emit(
+                        Op::ConstClassName,
+                        vec![],
+                        Some(Immediate::Data(late_bound)),
+                        IrType::Str,
+                        PhpType::Str,
+                        Ownership::MaybeOwned,
+                    )
+                    .expect("ConstClassName lowers");
+                Some(
+                    b.emit(
+                        Op::DynamicObjectNew,
+                        vec![name],
+                        Some(Immediate::Data(constraint)),
+                        IrType::Heap(IrHeapKind::Object),
+                        PhpType::Object(base.to_string()),
+                        Ownership::Owned,
+                    )
+                    .expect("DynamicObjectNew lowers"),
+                )
+            },
+        ));
+
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        {
+            let mut b = Builder::new(&mut main);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            for target in [base_target, derived_target] {
+                let object = emit_static_method_call(
+                    &mut b,
+                    target,
+                    vec![],
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object(base.to_string()),
+                );
+                let n = emit_prop_get(&mut b, object, n_data, IrType::I64, PhpType::Int);
+                let _ = b.emit(
+                    Op::EchoValue,
+                    vec![n],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            b.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(main);
+        if let Some(out) = run_main(&module) {
+            assert_eq!(out, "1122");
+        }
+    }
+
     /// `PdD3Base::get()` -> 100, `PdD3Der` overrides `get()` -> 999. Both receivers
     /// route to ONE introducer-scoped dispatch stub keyed by `class_id`; a Base object
     /// prints 100 and a Der object prints 999, proving the override dispatches correctly.

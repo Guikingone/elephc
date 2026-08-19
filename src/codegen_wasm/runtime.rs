@@ -92,6 +92,10 @@ const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 /// ran. The name is composed at RUNTIME because which variant is live is runtime state.
 /// `var_dump`'s fixed fragments. php writes the TYPE and, for a string, its BYTE LENGTH, so
 /// only the punctuation is fixed; the numbers are rendered at runtime.
+/// php's `Error` for a property written through a non-object. The NAME is composed at runtime
+/// because one lowering serves every property.
+const ERR_ASSIGN_ON_NULL_PREFIX: &[u8] = b"PHP Fatal error: Uncaught Error: Attempt to assign property \"";
+const ERR_ASSIGN_ON_NULL_SUFFIX: &[u8] = b"\" on null\n";
 const DUMP_INT_PREFIX: &[u8] = b"int(";
 const DUMP_FLOAT_PREFIX: &[u8] = b"float(";
 const DUMP_STRING_PREFIX: &[u8] = b"string(";
@@ -175,6 +179,11 @@ const ERR_STR_SPLIT_LENGTH: &[u8] = b"PHP Fatal error: Uncaught ValueError: str_
 const ERR_PRINT_R_UNRENDERABLE: &[u8] =
     b"print_r: rendering an object or resource is not implemented on wasm32-wasi\n";
 /// `chr()` outside `[0, 255]` still answers, wrapping modulo 256, but is deprecated since 8.5.
+/// Code 16: `new static()` reached with a called-class id no candidate arm matches. The ladder
+/// covers every class in the module that descends from the method's own, so this is the shape a
+/// hierarchy compiled without one of its members would take — loud, not a null object.
+const ERR_LATE_STATIC_UNRESOLVED: &[u8] =
+    b"PHP Fatal error: Uncaught Error: new static() reached an unregistered called class\n";
 const DEPRECATED_CHR_RANGE: &[u8] = b"Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256\n";
 /// `ord()` on anything but exactly one byte still answers, but is deprecated since 8.5.
 const DEPRECATED_ORD_LENGTH: &[u8] =
@@ -320,6 +329,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_EXPLODE_EMPTY_SEP.len() as u32
     + ERR_STR_SPLIT_LENGTH.len() as u32
     + ERR_PRINT_R_UNRENDERABLE.len() as u32
+    + ERR_LATE_STATIC_UNRESOLVED.len() as u32
     + ERR_METHOD_CALL_PREFIX.len() as u32
     + ERR_METHOD_CALL_SUFFIX.len() as u32
     + PHP_TYPE_INT.len() as u32
@@ -338,6 +348,8 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNDEFINED_FUNCTION_SUFFIX.len() as u32
     + ERR_ERROR_VALUE_PREFIX.len() as u32
     + ERR_ERROR_VALUE_SUFFIX.len() as u32
+    + ERR_ASSIGN_ON_NULL_PREFIX.len() as u32
+    + ERR_ASSIGN_ON_NULL_SUFFIX.len() as u32
     + DUMP_INT_PREFIX.len() as u32
     + DUMP_FLOAT_PREFIX.len() as u32
     + DUMP_STRING_PREFIX.len() as u32
@@ -1064,6 +1076,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_EXPLODE_EMPTY_SEP,
         ERR_STR_SPLIT_LENGTH,
         ERR_PRINT_R_UNRENDERABLE,
+        ERR_LATE_STATIC_UNRESOLVED,
     ];
     let method_messages = [
         ERR_METHOD_CALL_PREFIX,
@@ -1093,6 +1106,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_ERROR_VALUE_PREFIX,
         ERR_ERROR_VALUE_SUFFIX,
         // Appended LAST for the same reason as every group above it.
+        ERR_ASSIGN_ON_NULL_PREFIX,
+        ERR_ASSIGN_ON_NULL_SUFFIX,
         DUMP_INT_PREFIX,
         DUMP_FLOAT_PREFIX,
         DUMP_STRING_PREFIX,
@@ -1254,7 +1269,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_error_value_failure_runtime(wm, &method_offsets[21..23]);
-    super::inet::emit_var_dump_runtime(wm, &method_offsets[23..39]);
+    emit_assign_on_null_runtime(wm, &method_offsets[23..25]);
+    super::inet::emit_var_dump_runtime(wm, &method_offsets[25..41]);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
@@ -1676,7 +1692,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 39);
+    debug_assert_eq!(offsets.len(), 41);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
@@ -2183,6 +2199,26 @@ fn emit_error_value_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable ;; elephc-trap:post-noreturn:error-value-fatal-exit
+)"#
+    ));
+}
+
+/// Emits the `Error` php raises for a property written through a non-object.
+///
+/// KNOWN DIVERGENCE, shared with every other raise on this target: php's `Error` is CATCHABLE,
+/// and this reports the uncaught form and exits. The capability audit refuses the write inside a
+/// function that could catch it, so the two only ever disagree where php would also have exited.
+fn emit_assign_on_null_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_assign_on_null (param $name_ptr i32) (param $name_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:assign-on-null-fatal-exit
 )"#
     ));
 }

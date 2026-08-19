@@ -123,6 +123,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::IterNext => &["`foreach` loop advance"],
         Op::IterEnd => &["`foreach` loop completion"],
         Op::ObjectNew => &["object construction (`new ClassName(...)`)"],
+        Op::DynamicObjectNew => &["late static binding (`new static()`)"],
         Op::PropGet => &["object property read"],
         Op::PropSet => &["object property assignment"],
         Op::NullsafePropGet => &["nullsafe property read (`?->property`)"],
@@ -275,6 +276,9 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         Op::ObjectNew | Op::PropGet | Op::PropSet => {
             &["codegen_wasm::tests::object_prop_set_overwrites"]
         }
+        Op::DynamicObjectNew => {
+            &["codegen_wasm::tests::new_static_dispatches_on_the_called_class"]
+        }
         Op::MethodCall => &["codegen_wasm::tests::method_direct_call_returns_value"],
         Op::StaticMethodCall => {
             &["codegen_wasm::tests::static_method_named_direct_call"]
@@ -423,6 +427,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::IterCurrentValue => "codegen_wasm::inst::lower_iter_current_value",
         Op::IterEnd => "codegen_wasm::inst::lower_instruction(no-op)",
         Op::ObjectNew => "codegen_wasm::objects::lower_object_new",
+        Op::DynamicObjectNew => "codegen_wasm::objects::lower_dynamic_object_new",
         Op::PropGet => "codegen_wasm::objects::lower_prop_get",
         Op::PropSet => "codegen_wasm::objects::lower_prop_set",
         Op::MethodCall => "codegen_wasm::methods::lower_method_call",
@@ -542,7 +547,11 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::IterCurrentValueRef
         | Op::IterNext
         | Op::IterEnd => "iter",
-        Op::ObjectNew | Op::PropGet | Op::PropSet | Op::NullsafePropGet => "object",
+        Op::ObjectNew
+        | Op::DynamicObjectNew
+        | Op::PropGet
+        | Op::PropSet
+        | Op::NullsafePropGet => "object",
         Op::MethodCall | Op::NullsafeMethodCall | Op::StaticMethodCall => "method",
         Op::InstanceOfDynamic => "instanceof_dynamic",
         Op::Call | Op::LanguageConstructCall | Op::RuntimeCall => "call",

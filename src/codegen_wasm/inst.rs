@@ -146,6 +146,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IterCurrentValue => lower_iter_current_value(ctx, &inst),
         Op::IterEnd => Ok(()),
         Op::ObjectNew => super::objects::lower_object_new(ctx, &inst),
+        Op::DynamicObjectNew => super::objects::lower_dynamic_object_new(ctx, &inst),
         Op::PropGet
             if super::capability::magic_get_dispatch_is_supported(ctx.module, ctx.function, &inst) =>
         {
@@ -1146,6 +1147,18 @@ fn emit_operand_as_mixed(ctx: &mut FnCtx, value: ValueId) -> Result<bool> {
             ctx.fb.ins("i64.extend_i32_u", "widen the length");
             ctx.fb.ins("call $__rt_mixed_from_value", "box the string operand");
         }
+        // A tagged pair — `int|null`, which a nullable property read produces — already carries
+        // the cell's own tag in its tag word, so boxing it is a move rather than a decision.
+        // Same conversion `MixedBox` performs, and deliberately the same two lines.
+        WasmRepr::Tagged { payload, tag } => {
+            ctx.fb
+                .ins(&format!("local.get {}", tag), "tagged scalar runtime tag");
+            ctx.fb.ins("i64.extend_i32_u", "tag -> i64");
+            ctx.fb
+                .ins(&format!("local.get {}", payload), "tagged scalar payload");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box the tagged operand");
+        }
         other => {
             return Err(WasmError::Unsupported(format!(
                 "mixed numeric operand representation {:?}",
@@ -1976,15 +1989,47 @@ fn lower_const_class_name(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             WasmError::Unsupported(format!("const_class_name references unknown class data {data:?}"))
         })?;
     if name == "static" {
-        return Err(WasmError::Unsupported(
-            "static::class needs the called class, which this target does not forward".to_string(),
-        ));
+        // `new static()` resolves the class from the called-class id its caller forwarded, and
+        // never reads this string — the EIR still produces it because the native backend goes
+        // through a class-name round trip that this target skips. When that is the ONLY consumer
+        // there is no name to materialize; anything else still needs the class-name table this
+        // target does not emit, and stays refused rather than answering the defining class.
+        if !late_static_name_is_only_consumed_by_new(ctx, inst) {
+            return Err(WasmError::Unsupported(
+                "static::class needs the called class, which this target does not forward"
+                    .to_string(),
+            ));
+        }
+        ctx.fb
+            .ins("i32.const 0", "the late-bound class name is resolved at the `new` itself");
+        ctx.fb.ins("i64.const 0", "so this placeholder is never read");
+        return store_result(ctx, inst);
     }
     let (ptr, len) = ctx.default_str_literal(name.trim_start_matches('\\'))?;
     ctx.fb
         .ins(&format!("i32.const {ptr}"), "the class name, resolved at compile time");
     ctx.fb.ins(&format!("i64.const {len}"), "its length");
     store_result(ctx, inst)
+}
+
+/// Whether a `static::class` string feeds nothing but the late-bound `new` that resolves it.
+///
+/// `new static()` reads the called-class id directly, so its class operand is dead. Any OTHER
+/// use — echoing it, comparing it, passing it — is a real read of a name this target cannot
+/// produce, and the caller refuses instead.
+fn late_static_name_is_only_consumed_by_new(ctx: &FnCtx, inst: &Instruction) -> bool {
+    let Some(result) = inst.result else {
+        return false;
+    };
+    ctx.function.instructions.iter().all(|candidate| {
+        candidate
+            .operands
+            .iter()
+            .enumerate()
+            .all(|(index, operand)| {
+                *operand != result || (candidate.op == Op::DynamicObjectNew && index == 0)
+            })
+    })
 }
 
 /// Lowers `StrCharAt`: `$s[$i]`, PHP's one-byte string offset read.

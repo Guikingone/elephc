@@ -533,6 +533,17 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // The property write through a non-object composes the name into php's message and
+        // exits — the same proof shape as the undefined-function fatal.
+        "$__rt_fail_assign_on_null" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_assign_on_null",
+                    TrapClass::PostNoreturn,
+                    "assign-on-null-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         // A `throw_error_value` no frame can catch writes the prefix, the runtime-composed
         // message and the newline, then exits — the same proof shape as the undefined-function
         // fatal above, and for the same reason: the message is runtime state.
@@ -630,6 +641,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_undefined_method",
         "$__rt_fail_undefined_function",
         "$__rt_fail_error_value",
+        "$__rt_fail_assign_on_null",
         "$__rt_fail_too_few_arguments",
         "$__rt_fail_operand_types",
         "$__rt_fail_object_to_string",

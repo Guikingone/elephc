@@ -5499,12 +5499,51 @@ fn property_set_shape_issue(
     let Some(receiver) = function.value(*receiver) else {
         return Some("property receiver is missing from the value table".to_string());
     };
-    let PhpType::Object(class_name) = receiver.php_type.codegen_repr() else {
-        return Some(format!(
-            "property receiver must be a concrete object, got {:?}/{:?}",
-            receiver.ir_type,
-            receiver.php_type.codegen_repr()
-        ));
+    let class_name = match &receiver.php_type {
+        PhpType::Object(class_name) => class_name.clone(),
+        // A `C|null` receiver is the write-side twin of the nullable READ: exactly one concrete
+        // class, opened from its boxed cell, with php's `Error` on the null arm.
+        PhpType::Union(variants)
+            if variants
+                .iter()
+                .all(|variant| matches!(variant, PhpType::Object(_) | PhpType::Void)) =>
+        {
+            let classes = variants
+                .iter()
+                .filter_map(|variant| match variant {
+                    PhpType::Object(class_name) => Some(class_name.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let [class_name] = classes.as_slice() else {
+                return Some(
+                    "a nullable property receiver union must name exactly one concrete class"
+                        .to_string(),
+                );
+            };
+            // The null arm raises php's `Error`, and this target reproduces the observable of an
+            // UNCAUGHT one — so the shape is only supported where nothing could have caught it.
+            // Same per-FUNCTION test `throw_error_value` uses, and for the same reason: a handler
+            // pushed in an enclosing block is live here even though this block never pushes one.
+            if function
+                .instructions
+                .iter()
+                .any(|candidate| candidate.op == Op::TryPushHandler)
+            {
+                return Some(
+                    "a nullable property receiver inside a function with a catch handler on                      wasm32-wasi (the Error its null arm raises is not built on this target)"
+                        .to_string(),
+                );
+            }
+            class_name.clone()
+        }
+        _ => {
+            return Some(format!(
+                "property receiver must be a concrete object, got {:?}/{:?}",
+                receiver.ir_type,
+                receiver.php_type.codegen_repr()
+            ));
+        }
     };
     let Some(class_info) = module.class_infos.get(&class_name) else {
         return Some(format!("property receiver class {class_name} is missing"));
@@ -8593,6 +8632,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::TypePredicate
         | Op::Nop
         | Op::ConstClassName
+        | Op::DynamicObjectNew
         | Op::IncludeOnceMark
         | Op::IncludeOnceGuard
         | Op::FunctionVariantMark
@@ -8649,7 +8689,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::SplRuntimeCall
         | Op::EvalObjectNew
         | Op::ObjectCloneShallow
-        | Op::DynamicObjectNew
         | Op::DynamicObjectNewMixed
         | Op::DynamicObjectNewWithoutConstructorMixed
         | Op::PropInitialized

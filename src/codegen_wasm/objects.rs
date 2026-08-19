@@ -53,6 +53,10 @@ use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 use std::collections::HashMap;
 
+/// The hidden first parameter every static method carries: the class the call NAMED,
+/// which is what `static` resolves to and what `self` deliberately does not.
+const CALLED_CLASS_ID_PARAM: &str = "__elephc_called_class_id";
+
 /// Registers the object refcount runtime (`__rt_decref_object`) on `wm`.
 ///
 /// Must be emitted alongside `refcount::emit_refcount_runtime`, whose `__rt_decref_any` calls
@@ -1115,6 +1119,24 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         .get(class_data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("invalid class data id {:?}", class_data)))?;
+    let args = inst.operands.clone();
+    emit_object_new_of_class(ctx, inst, &class_name, &args)
+}
+
+/// Constructs one instance of a NAMED class and stores it into `inst`'s result.
+///
+/// Split out of `lower_object_new` so late static binding can reuse it: `new static()` knows the
+/// class only from the called-class id its caller forwarded, so it picks the name at run time and
+/// then needs exactly this — the allocation, the defaults, and the constructor call — per
+/// candidate. The constructor arguments are passed in rather than read off `inst`, because the
+/// dynamic form carries the class as its FIRST operand and the arguments after it.
+fn emit_object_new_of_class(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    class_name: &str,
+    args: &[ValueId],
+) -> Result<()> {
+    let class_name = class_name.to_string();
     let ci = ctx
         .module
         .class_infos
@@ -1138,7 +1160,7 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     match &ctor_sig {
         None => {
             // No constructor: operands MUST be empty (matches native's args-without-ctor reject).
-            if !inst.operands.is_empty() {
+            if !args.is_empty() {
                 return Err(WasmError::Unsupported(format!(
                     "constructor arguments for class {} with no __construct on wasm32-wasi",
                     class_name
@@ -1146,10 +1168,10 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
             }
         }
         Some(sig) => {
-            if inst.operands.len() != sig.params.len() {
+            if args.len() != sig.params.len() {
                 return Err(WasmError::Unsupported(format!(
                     "constructor argument count mismatch for class {} on wasm32-wasi (got {}, expected {})",
-                    class_name, inst.operands.len(), sig.params.len()
+                    class_name, args.len(), sig.params.len()
                 )));
             }
             if sig.variadic.is_some() {
@@ -1176,7 +1198,7 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
             // a `mixed` parameter has to be boxed here. The body's parameters are read for
             // their `IrType`, which the checker-owned signature does not carry.
             if needs_open_coded_throwable_constructor(ctx.module, &class_name, &impl_class) {
-                emit_open_coded_throwable_constructor(ctx, &obj, &ci, &class_name, inst)?;
+                emit_open_coded_throwable_constructor(ctx, &obj, &ci, &class_name, args)?;
                 ctx.fb.ins(&format!("local.get {}", obj), "reload object pointer for result store");
                 store_result(ctx, inst)?;
                 return Ok(());
@@ -1200,17 +1222,17 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
                     .map(|param| (param.ir_type, param.php_type.codegen_repr()))
                     .collect()
             };
-            if ctor_params.len() != inst.operands.len() {
+            if ctor_params.len() != args.len() {
                 return Err(WasmError::Unsupported(format!(
                     "constructor body {}::__construct takes {} arguments, got {}",
                     impl_class,
                     ctor_params.len(),
-                    inst.operands.len()
+                    args.len()
                 )));
             }
             ctx.fb.ins(&format!("local.get {}", obj), "push $this (fresh object) as first ctor arg");
             let mut boxed_args: Vec<(String, IrType)> = Vec::new();
-            for (&arg, (param_ir, param_php)) in inst.operands.iter().zip(&ctor_params) {
+            for (&arg, (param_ir, param_php)) in args.iter().zip(&ctor_params) {
                 if let Some(cell) = super::transfer::emit_push_call_argument(
                     ctx,
                     arg,
@@ -1237,6 +1259,152 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     ctx.fb.ins(&format!("local.get {}", obj), "reload object pointer for result store");
     store_result(ctx, inst)?;
     Ok(())
+}
+
+/// Lowers `new static()` — the only `dynamic_object_new` shape this target admits.
+///
+/// PHP resolves `static` from the CALLED class, and every static call on this target already
+/// forwards that class's id as hidden parameter 0. So there is nothing to look up: the id is a
+/// local, and the construction is an if-ladder over the classes that could have been called —
+/// the method's own class and its descendants. The native backend goes the long way round
+/// (`static::class` -> a class-name string -> `__rt_instanceof_lookup` -> the same ladder)
+/// because it also serves `new $name`; this target serves only the late-bound form, where the
+/// string is a detour with a table at each end.
+///
+/// A called-class id no arm matches is a FATAL rather than a silent null: the ladder is built
+/// from the module's own class table, so a miss means the table and the call disagree.
+pub(super) fn lower_dynamic_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let class_operand = operand(inst, 0)?;
+    if !value_is_late_static_class_name(ctx, class_operand) {
+        return Err(WasmError::Unsupported(
+            "dynamic object construction from a runtime class-string on wasm32-wasi".to_string(),
+        ));
+    }
+    let required_parent = dynamic_new_required_parent(ctx, inst)?;
+    let args = inst.operands[1..].to_vec();
+    let candidates = late_static_new_candidates(ctx, &required_parent);
+    let [first, rest @ ..] = candidates.as_slice() else {
+        return Err(WasmError::Unsupported(format!(
+            "new static() in a {required_parent} hierarchy with no constructible class"
+        )));
+    };
+
+    let cid = ctx.fresh_temp(ValType::I64);
+    let slot = ctx
+        .function
+        .locals
+        .iter()
+        .find(|local| local.name.as_deref() == Some(CALLED_CLASS_ID_PARAM))
+        .map(|local| local.id)
+        .ok_or_else(|| {
+            WasmError::Unsupported(
+                "new static() outside a function carrying the called-class id".to_string(),
+            )
+        })?;
+    ctx.emit_load_slot(slot)?;
+    ctx.fb.ins(
+        &format!("local.set {cid}"),
+        "the called class, forwarded by every static call",
+    );
+
+    // Guard FIRST, arms after: each arm stores the result and falls through to the next test,
+    // so a trailing fatal would run on the way out of the matching arm too.
+    let mut matches_any = format!("(i64.eq (local.get {cid}) (i64.const {}))", first.0 as i64);
+    for (class_id, _) in rest {
+        matches_any = format!(
+            "(i32.or {matches_any} (i64.eq (local.get {cid}) (i64.const {})))",
+            *class_id as i64
+        );
+    }
+    ctx.fb.ins(
+        &format!("(if (i32.eqz {matches_any}) (then (call $__rt_fail (i32.const 16)) unreachable))"),
+        "elephc-trap:post-noreturn:late-static-new-unresolved",
+    );
+
+    for (class_id, class_name) in &candidates {
+        ctx.fb.ins(
+            &format!("(i64.eq (local.get {cid}) (i64.const {}))", *class_id as i64),
+            &format!("was {class_name} the called class?"),
+        );
+        ctx.fb.ins("if", "construct the called class");
+        emit_object_new_of_class(ctx, inst, class_name, &args)?;
+        ctx.fb.ins("end", "end of this candidate's arm");
+    }
+    Ok(())
+}
+
+/// Whether a class-name value is the late-bound `static`, rather than a name known here.
+fn value_is_late_static_class_name(ctx: &FnCtx, value: ValueId) -> bool {
+    let Some(ValueDef::Instruction { inst, .. }) = ctx.function.value(value).map(|v| v.def) else {
+        return false;
+    };
+    let Some(instruction) = ctx.function.instruction(inst) else {
+        return false;
+    };
+    if instruction.op != Op::ConstClassName {
+        return false;
+    }
+    let Some(Immediate::Data(data)) = instruction.immediate else {
+        return false;
+    };
+    ctx.module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .is_some_and(|name| name == "static")
+}
+
+/// The class a `dynamic_object_new` result must descend from, from its `"fallback|parent"` data.
+fn dynamic_new_required_parent(ctx: &FnCtx, inst: &Instruction) -> Result<String> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Err(WasmError::Unsupported(
+            "dynamic_object_new without its class-constraint immediate".to_string(),
+        ));
+    };
+    ctx.module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .and_then(|names| names.split_once('|'))
+        .map(|(_, required_parent)| required_parent.to_string())
+        .ok_or_else(|| {
+            WasmError::Unsupported(
+                "dynamic_object_new constraint is not a `fallback|parent` pair".to_string(),
+            )
+        })
+}
+
+/// The `(class_id, name)` pairs a `new static()` under `required_parent` can produce.
+///
+/// Sorted by class id so the emitted ladder is stable across runs, the same ordering every other
+/// dispatch here uses.
+fn late_static_new_candidates(ctx: &FnCtx, required_parent: &str) -> Vec<(u64, String)> {
+    let mut candidates: Vec<(u64, String)> = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(class_name, _)| class_descends_from(ctx, class_name, required_parent))
+        .map(|(class_name, ci)| (ci.class_id, class_name.clone()))
+        .collect();
+    candidates.sort();
+    candidates
+}
+
+/// Whether `class_name` IS `ancestor` or inherits from it, matching PHP's case-insensitive names.
+fn class_descends_from(ctx: &FnCtx, class_name: &str, ancestor: &str) -> bool {
+    let ancestor_key = php_symbol_key(ancestor.trim_start_matches('\\'));
+    let mut current = Some(class_name.to_string());
+    while let Some(name) = current {
+        if php_symbol_key(name.trim_start_matches('\\')) == ancestor_key {
+            return true;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(&name)
+            .and_then(|ci| ci.parent.clone());
+    }
+    false
 }
 
 /// Allocates one instance of `class_name` and returns the local holding its pointer.
@@ -1989,6 +2157,11 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("invalid string data id {:?}", prop_data)))?;
 
+    // A NULLABLE receiver — `$head->next->next = ...` walking a `?self` chain — arrives boxed,
+    // so the object pointer has to be recovered from the cell before the slot can be written.
+    if matches!(value_php_type(ctx, object)?, PhpType::Union(_)) {
+        return lower_nullable_prop_set(ctx, object, value, prop_data, &property);
+    }
     let (class_name, ci) = receiver_class_info(ctx, object)?;
     // Undeclared property on an ADP / stdClass class -> write through the dyn-prop hash tail.
     if let Some(dyn_off) = dynamic_property_hash_offset_for_class(&ci, &class_name, &property) {
@@ -1999,6 +2172,100 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let obj_ref = object_ptr_ref(ctx, object)?;
 
     emit_declared_property_store(ctx, &obj_ref, offset, &prop_type, value, &property)
+}
+
+/// Writes a declared property through a receiver whose type is `C|null`.
+///
+/// The read side already opens one of these (`lower_nullsafe_prop_get`); the write differs only
+/// in what the null arm does. PHP does not warn-and-continue there the way a READ does — it
+/// raises `Error: Attempt to assign property "x" on null` — so the null arm reports that and
+/// exits rather than storing into address zero.
+///
+/// KNOWN DIVERGENCE, the same one every raise on this target carries: php's `Error` is
+/// CATCHABLE. The audit refuses the write where a frame could catch it, so the two only disagree
+/// where php would also have terminated.
+fn lower_nullable_prop_set(
+    ctx: &mut FnCtx,
+    object: ValueId,
+    value: ValueId,
+    prop_data: crate::ir::DataId,
+    property: &str,
+) -> Result<()> {
+    let (class_name, ci) = nullable_receiver_class_info(ctx, object)?;
+    if dynamic_property_hash_offset_for_class(&ci, &class_name, property).is_some() {
+        return Err(WasmError::Unsupported(format!(
+            "dynamic property ${property} written through a nullable {class_name} receiver"
+        )));
+    }
+    let (_, offset, prop_type) = resolve_property_slot(&ci, property)?;
+    let prop_type = prop_type.codegen_repr();
+
+    let hi = ctx.fresh_temp(ValType::I64);
+    let lo = ctx.fresh_temp(ValType::I64);
+    let tag = ctx.fresh_temp(ValType::I64);
+    let obj = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(object)?;
+    ctx.fb
+        .ins("call $__rt_mixed_unbox", "unbox nullable receiver -> (tag, lo, hi)");
+    ctx.fb
+        .ins(&format!("local.set {}", hi), "discard receiver high word");
+    ctx.fb.ins(
+        &format!("local.set {}", lo),
+        "receiver low word (object ptr when non-null)",
+    );
+    ctx.fb
+        .ins(&format!("local.set {}", tag), "receiver runtime tag");
+    ctx.fb
+        .ins(&format!("local.get {}", tag), "receiver runtime tag");
+    ctx.fb.ins("i64.const 8", "null tag");
+    ctx.fb.ins("i64.eq", "is the receiver null?");
+    ctx.fb.ins("if", "null -> php raises an Error naming the property");
+    let (name_ptr, name_len) = ctx.str_literal(prop_data)?;
+    ctx.fb.ins(
+        &format!(
+            "(call $__rt_fail_assign_on_null (i32.const {name_ptr}) (i32.const {name_len}))"
+        ),
+        "report the uncaught Error and exit 255",
+    );
+    ctx.fb
+        .ins("unreachable", "elephc-trap:post-noreturn:assign-on-null");
+    ctx.fb.ins("end", "end of the null arm");
+    ctx.fb
+        .ins(&format!("local.get {}", lo), "object payload low word");
+    ctx.fb.ins("i32.wrap_i64", "low word -> object pointer i32");
+    ctx.fb
+        .ins(&format!("local.set {}", obj), "save object pointer");
+
+    emit_declared_property_store(ctx, &obj, offset, &prop_type, value, property)
+}
+
+/// Resolves the single concrete class a `C|null` receiver names, alongside its `ClassInfo`.
+fn nullable_receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<(String, ClassInfo)> {
+    let PhpType::Union(variants) = value_php_type(ctx, object)? else {
+        return Err(WasmError::Unsupported(
+            "nullable property receiver is not a union".to_string(),
+        ));
+    };
+    let classes = variants
+        .iter()
+        .filter_map(|variant| match variant {
+            PhpType::Object(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let [class_name] = classes.as_slice() else {
+        return Err(WasmError::Unsupported(format!(
+            "nullable property receiver must name exactly one class, got {:?}",
+            variants
+        )));
+    };
+    let ci = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {class_name}")))?;
+    Ok((class_name.clone(), ci))
 }
 
 /// Open-codes the inherited Throwable constructor: each supplied argument is written into its
@@ -2013,18 +2280,17 @@ fn emit_open_coded_throwable_constructor(
     obj: &str,
     class_info: &ClassInfo,
     class_name: &str,
-    inst: &Instruction,
+    args: &[ValueId],
 ) -> Result<()> {
-    if inst.operands.len() > THROWABLE_CONSTRUCTOR_PROPERTIES.len() {
+    if args.len() > THROWABLE_CONSTRUCTOR_PROPERTIES.len() {
         return Err(WasmError::Unsupported(format!(
             "{}::__construct with {} arguments on wasm32-wasi, expected at most {}",
             class_name,
-            inst.operands.len(),
+            args.len(),
             THROWABLE_CONSTRUCTOR_PROPERTIES.len()
         )));
     }
-    for (&argument, property) in inst
-        .operands
+    for (&argument, property) in args
         .iter()
         .zip(THROWABLE_CONSTRUCTOR_PROPERTIES.iter())
     {
