@@ -23,6 +23,7 @@ echo "after";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "after");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Compiles `@file_get_contents("missing.txt"); echo "continued";` and verifies
@@ -40,6 +41,7 @@ echo "continued";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "continued");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Pins that `readline()` and `fscanf()` tell the shared line reader they have no length bound.

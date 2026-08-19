@@ -21,7 +21,7 @@ use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, InstId, Module};
+use crate::ir::{BasicBlock, Function, Immediate, InstId, Module};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -919,9 +919,9 @@ fn emit_main_function(
 ///
 /// MEASURED on `php -n` 8.5.6, where the notice reads `The predefined locally
 /// scoped $http_response_header variable is deprecated, call
-/// http_get_last_response_headers() instead`. elephc's diagnostic channel does
-/// not carry the `in %s on line %d` suffix php appends, matching every other
-/// runtime notice this backend emits.
+/// http_get_last_response_headers() instead`. The ` in %s on line %d` suffix php
+/// appends is supplied by the diagnostic channel, from the line published in
+/// `emit_http_response_header_deprecation` below.
 const HTTP_RESPONSE_HEADER_DEPRECATION: &str =
     "Deprecated: The predefined locally scoped $http_response_header variable is deprecated, \
      call http_get_last_response_headers() instead\n";
@@ -951,6 +951,12 @@ fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
     let (label, len) = ctx
         .data
         .add_string(HTTP_RESPONSE_HEADER_DEPRECATION.as_bytes());
+    // BEFORE the message registers are loaded: the publisher works through scratch registers,
+    // and which ones those are is not this call site's business to depend on.
+    super::lower_inst::publish_diagnostic_line(
+        ctx,
+        first_mention_line(ctx.module, "http_response_header"),
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x1", &label);
@@ -961,7 +967,47 @@ fn emit_http_response_header_deprecation(ctx: &mut FunctionContext<'_>) {
             abi::emit_load_int_immediate(ctx.emitter, "rsi", len as i64);
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // stderr, and `@` suppresses it
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                       // php's stdout diagnostic funnel, and `@` suppresses it
+}
+
+/// Returns the source line of the FIRST mention of `$name`, for a diagnostic raised about it.
+///
+/// The mention is what php names — MEASURED: `if (false) { echo $http_response_header; }` on line
+/// 3 prints `on line 3`, even though the statement never runs, because php raises this while
+/// COMPILING. `global_names` interns names without spans, so the line has to come back from the
+/// instructions that carry the name as their immediate. The MINIMUM is taken rather than the
+/// first one walked: several functions are scanned and their instruction order is the lowering's,
+/// not the source's, while php reports the earliest mention in the file.
+fn first_mention_line(module: &crate::ir::Module, name: &str) -> u32 {
+    let Some(data_id) = module
+        .data
+        .global_names
+        .iter()
+        .position(|candidate| candidate.trim_start_matches('\\') == name)
+    else {
+        return 0;
+    };
+    let mut earliest = 0u32;
+    let groups = [
+        &module.functions,
+        &module.class_methods,
+        &module.closures,
+    ];
+    for group in groups {
+        for function in group.iter() {
+            for inst in &function.instructions {
+                if !matches!(inst.immediate, Some(Immediate::GlobalName(id)) if id.as_raw() as usize == data_id)
+                {
+                    continue;
+                }
+                let Some(span) = inst.span else { continue };
+                if span.line != 0 && (earliest == 0 || span.line < earliest) {
+                    earliest = span.line;
+                }
+            }
+        }
+    }
+    earliest
 }
 
 /// Returns true when a function is the process entry function.

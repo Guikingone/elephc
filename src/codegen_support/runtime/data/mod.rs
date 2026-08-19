@@ -57,6 +57,14 @@ pub(crate) const SOCKET_FAILED_SERVER_PREFIX: &str = "Warning: stream_socket_ser
 /// runtime appends `:` and the port to reach PHP's `host:port` spelling.
 pub(crate) const SOCKET_FAILED_FSOCKOPEN_PREFIX: &str = "Warning: fsockopen(): ";
 
+/// Bytes reserved for the diagnostic line buffer.
+///
+/// One php diagnostic, composed from however many pieces the emitting helper writes. The longest
+/// in this compiler names a filter, a wrapper class and a method, and stays well inside this; a
+/// message that would overflow is truncated rather than allowed to run past the buffer, because a
+/// clipped warning is a far better outcome than a corrupted heap.
+pub(crate) const RT_DIAG_BUF_BYTES: usize = 4096;
+
 /// Head of the connect-failure line, after the `Warning: <fn>(): ` the three prefixes carry.
 pub(crate) const SOCKET_FAILED_UNABLE: &str = "Unable to connect to ";
 

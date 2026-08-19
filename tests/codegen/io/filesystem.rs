@@ -395,7 +395,7 @@ echo "opened=", (count($here) > 0 ? "yes" : "no"), "\n";
     assert!(out.success, "the diagnostics must not disturb the program");
     assert_eq!(out.stdout, "opened=yes\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: scandir(/pas/la): Failed to open directory: No such file or directory\n\
          Warning: scandir(): (errno 2): No such file or directory\n\
          Warning: scandir(/etc/hosts): Failed to open directory: Not a directory\n\
@@ -429,7 +429,7 @@ var_dump(@file_put_contents("/no/such/dir/leak.txt", "SECRET-PAYLOAD"));
     assert!(out.success, "a failed write is not a crash");
     assert_eq!(out.stdout, "bool(false)\nbool(true)\nbool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: file_put_contents(/no/such/dir/leak.txt): Failed to open stream: \
          No such file or directory\n",
         "one warning in php's wording; the @-suppressed call prints nothing, \
@@ -1135,7 +1135,7 @@ rmdir($base);
         "the handle-less family follows the last opendir()/dir(), and refuses once it closed"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Deprecated: readdir(): Passing null is deprecated, instead the last opened \
          directory stream should be provided\n",
         "an explicit null is deprecated with php's own wording, and `@` silences the rest"

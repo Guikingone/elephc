@@ -63,6 +63,7 @@ use super::{
     WRAPPER_MISSING_HOOK_TAIL_WRITE,
 };
 use super::super::system;
+use super::RT_DIAG_BUF_BYTES;
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
@@ -202,6 +203,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_uwmh_tail_write", WRAPPER_MISSING_HOOK_TAIL_WRITE),
         ("_uwmh_head_select", WRAPPER_MISSING_HOOK_HEAD_SELECT),
         ("_uwmh_tail_cast", WRAPPER_MISSING_HOOK_TAIL_CAST),
+        ("_rt_diag_nl", "\n"),
+        ("_rt_diag_in", " in "),
         ("_select_cast_unrepresentable", SELECT_CAST_UNREPRESENTABLE),
         ("_select_cast_unrepresentable_memory", SELECT_CAST_UNREPRESENTABLE_MEMORY),
         ("_uwmh_tail_eof", WRAPPER_MISSING_HOOK_TAIL_EOF),
@@ -341,6 +344,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_stack_limit_main", 8, target));
     out.push_str(&comm_directive("_elephc_eval_dynamic_object_destruct_fn", 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
+    // The diagnostic LINE BUFFER and the location it is stamped with.
+    //
+    // php prints a warning as one line — a blank line, the message, ` in FILE on line N` — and
+    // routes it through the output buffer, so `ob_start()` captures it like any echo. elephc
+    // composes a message in several `__rt_diag_warning` calls (head, name, tail), so the pieces
+    // are accumulated here and written together once the piece carrying the newline arrives.
+    // Without that the location could only be appended per PIECE, three times per line.
+    //
+    // `_rt_diag_loc_ptr`/`_rt_diag_loc_len` hold the pre-rendered ` in FILE on line N\n` for the
+    // site about to warn. It is rendered at COMPILE time — both halves are constants there — so
+    // no integer formatting is needed at run time. A zero length means no site published one and
+    // the line ends with a bare newline, which keeps a partially-covered build well-formed.
+    out.push_str(&comm_directive("_rt_diag_buf", RT_DIAG_BUF_BYTES, target));
+    out.push_str(&comm_directive("_rt_diag_buf_len", 8, target));
+    out.push_str(&comm_directive("_rt_diag_loc_ptr", 8, target));
+    out.push_str(&comm_directive("_rt_diag_loc_len", 8, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to

@@ -612,6 +612,35 @@ pub(super) fn emit_zlib_deflate_wrapper_attach_in_place(ctx: &mut FunctionContex
     }
 }
 
+/// Attaches the `bzip2.compress` transform to the descriptor a `compress.bzip2://` write opened.
+///
+/// The same shape the `bzip2.compress` FILTER installs, with php's wrapper defaults: block size 9
+/// and work factor 0. `compress.zlib://` reads its level from the stream context; bzip2 has no
+/// such context option in php, so there is nothing to publish and no option walk to spill across.
+pub(super) fn emit_bzip2_compress_wrapper_attach_in_place(ctx: &mut FunctionContext<'_>) {
+    let fwrite_label = ctx.next_label("bz2_wrapper_fwrite");
+    let close_label = ctx.next_label("bz2_wrapper_close");
+    let skip_label = ctx.next_label("bz2_wrapper_skip_helpers");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => crate::codegen::stream_filters::bzip2::emit_compress_arm64(
+            ctx.emitter,
+            &fwrite_label,
+            &close_label,
+            &skip_label,
+            9,
+            0,
+        ),
+        Arch::X86_64 => crate::codegen::stream_filters::bzip2::emit_compress_x86_64(
+            ctx.emitter,
+            &fwrite_label,
+            &close_label,
+            &skip_label,
+            9,
+            0,
+        ),
+    }
+}
+
 /// Opens `underlying` through `__rt_fopen` and attaches the transform its DIRECTION selects,
 /// boxing the filtered descriptor as a resource.
 ///
@@ -638,12 +667,7 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
     kind: CompressWrapper,
     mode: &str,
 ) -> Result<()> {
-    let mut direction = compress_wrapper_direction(mode);
-    if direction == CompressWrapperDirection::Write && matches!(kind, CompressWrapper::Bzip2) {
-        // bzip2 has no write wrapper here yet; keep the pre-existing read attach rather than
-        // silently writing plain bytes through a `compress.bzip2://` handle.
-        direction = CompressWrapperDirection::Read;
-    }
+    let direction = compress_wrapper_direction(mode);
     let literal_underlying = match underlying {
         CompressUnderlying::Literal(path) => Some(path),
         CompressUnderlying::Staged { .. } => None,
@@ -657,7 +681,7 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
     }
     let writing = direction == CompressWrapperDirection::Write;
     let staged = matches!(underlying, CompressUnderlying::Staged { .. });
-    if writing {
+    if writing && matches!(kind, CompressWrapper::Zlib) {
         // The level has to be read BEFORE the open: `__rt_fopen` returns the descriptor in the
         // very register the option walk would clobber, and the context scope is live either way.
         //
@@ -754,7 +778,11 @@ pub(super) fn emit_literal_compress_wrapper_fopen_result(
             emit_record_stream_meta_after_boxed_literal(ctx, 8, full_uri);
         }
         CompressWrapper::Bzip2 => {
-            emit_bzip2_decompress_attach_in_place(ctx);
+            if writing {
+                emit_bzip2_compress_wrapper_attach_in_place(ctx);
+            } else {
+                emit_bzip2_decompress_attach_in_place(ctx);
+            }
             emit_adopt_attached_compress_descriptor(ctx);
             emit_record_stream_meta_after_boxed_literal(ctx, 9, full_uri);
         }

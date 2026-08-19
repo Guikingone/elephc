@@ -6653,9 +6653,9 @@ echo "done";
         "Warning: file(missing_c.txt): Failed to open stream: No such file or directory",
     ] {
         assert!(
-            out.stderr.contains(expected),
-            "missing {expected:?}, got stderr={}",
-            out.stderr
+            out.diagnostics.contains(expected),
+            "missing {expected:?}, got diagnostics={}",
+            out.diagnostics
         );
     }
 }
@@ -7787,7 +7787,7 @@ echo call_user_func("preg_match_all", "/([a-z])/", "ab", $flagged, PREG_SET_ORDE
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "1:old|2:old|1:old|2:old");
     for warning in [
@@ -7795,9 +7795,9 @@ echo call_user_func("preg_match_all", "/([a-z])/", "ab", $flagged, PREG_SET_ORDE
         "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -7971,7 +7971,7 @@ echo count($read) . ":" . count($write) . ":" . count($except);');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "lock:old:0:1:0:0");
     for warning in [
@@ -7981,9 +7981,9 @@ echo count($read) . ":" . count($write) . ":" . count($except);');
         "stream_select(): Argument #3 ($except) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -9246,10 +9246,10 @@ echo eval('return function_exists("define") && function_exists("defined") ? "Y" 
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "YY77NNYYYYY");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: define(): Constant already defined"),
-        "expected duplicate eval define warning, got stderr={}",
-        out.stderr
+        "expected duplicate eval define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -9271,10 +9271,10 @@ echo eval('return (PHP_EOL === "\n" ? "eol" : "bad") . ":" .
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "eol:os:/:int:defined:root:case:locked");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: define(): Constant already defined"),
-        "expected predefined eval define warning, got stderr={}",
-        out.stderr
+        "expected predefined eval define warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -9291,6 +9291,7 @@ echo eval('return DynEvalSuppressedConst;');
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ok1");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies native `defined()` probes can see constants defined by eval after the barrier.
@@ -9455,15 +9456,15 @@ echo eval('return define("EvalErrorContractConst", 2) ? "bad" : "ok";');
     assert!(
         warning.success,
         "warning fixture should not fail: {}",
-        warning.stderr
+        warning.diagnostics
     );
     assert_eq!(warning.stdout, "ok");
     assert!(
         warning
-            .stderr
+            .diagnostics
             .contains("Warning: define(): Constant already defined"),
         "stderr did not contain eval warning diagnostic: {}",
-        warning.stderr
+        warning.diagnostics
     );
 }
 
@@ -12551,15 +12552,15 @@ echo call_user_func("eval_cuf_ref_string", $value) . ":" . $value;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "ax:a");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "eval_cuf_ref_string(): Argument #1 ($value) must be passed by reference, value given"
         ),
         "missing by-ref warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -12580,15 +12581,15 @@ echo call_user_func("eval_aot_cuf_ref_int", $value) . ":" . $value;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "5:3");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "eval_aot_cuf_ref_int(): Argument #1 ($value) must be passed by reference, value given"
         ),
         "missing by-ref warning: {}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -12632,7 +12633,7 @@ echo call_user_func($staticFirst, $staticValue) . ":" . $staticValue;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "ax:a|5:3|qi:q|bx:b|6:4");
     for warning in [
@@ -12641,9 +12642,9 @@ echo call_user_func($staticFirst, $staticValue) . ":" . $staticValue;');
         "EvalCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }
@@ -12691,7 +12692,7 @@ echo call_user_func($invokable, $invokableValue, 4) . ":" . $invokableValue;');
     assert!(
         out.success,
         "program failed: stdout={:?} stderr={}",
-        out.stdout, out.stderr
+        out.stdout, out.diagnostics
     );
     assert_eq!(out.stdout, "5:3|7:4|10:8|7:5|10:9|10:6");
     for warning in [
@@ -12700,9 +12701,9 @@ echo call_user_func($invokable, $invokableValue, 4) . ":" . $invokableValue;');
         "EvalAotCufMethodRefBox::__invoke(): Argument #1 ($value) must be passed by reference, value given",
     ] {
         assert!(
-            out.stderr.contains(warning),
+            out.diagnostics.contains(warning),
             "missing by-ref warning {warning:?}: {}",
-            out.stderr
+            out.diagnostics
         );
     }
 }

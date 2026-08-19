@@ -270,9 +270,9 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert!(
-        out.stderr.contains("Warning: Attempt to read property \"msg\" on null"),
+        out.diagnostics.contains("Warning: Attempt to read property \"msg\" on null"),
         "{}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -295,6 +295,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Tests that assigning a property on a non-null `?Holder` receiver executes

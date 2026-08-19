@@ -86,11 +86,11 @@ echo $f === false ? "false" : "resource";
     // php-src puts the PATH inside the parentheses and the reason after it; the bare
     // `fopen()` this used to assert named neither.
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: fopen(no_such_file.txt): Failed to open stream: No such file or directory"
         ),
-        "expected the path and reason in the warning, got stderr={}",
-        out.stderr
+        "expected the path and reason in the warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -107,6 +107,7 @@ echo $f === false ? "false" : "resource";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "boolean|false");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies fopen() returns false for invalid or empty mode strings without emitting a warning.
@@ -123,6 +124,7 @@ echo ($empty === false ? "e" : "!");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "ze");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies a stream resource passed through a mixed-type parameter preserves its resource type.
@@ -909,9 +911,9 @@ fclose($h);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "resource");
     assert!(
-        !out.stderr.contains("dynamic property"),
-        "a declared $context must not be deprecated as invented, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("dynamic property"),
+        "a declared $context must not be deprecated as invented, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -940,10 +942,10 @@ fclose($h);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "resource");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Creation of dynamic property N::$context is deprecated"),
-        "expected PHP 8.2's deprecation, got stderr={}",
-        out.stderr
+        "expected PHP 8.2's deprecation, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -962,16 +964,16 @@ echo $h === false ? "false" : "resource";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: fopen(): Unable to find the wrapper \"bogus\" - did you forget to enable it when you configured PHP?"
         ),
-        "missing the unknown-wrapper warning, got stderr={}",
-        out.stderr
+        "missing the unknown-wrapper warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr.contains("Warning: fopen(bogus://x): Failed to open stream:"),
-        "the failed-open warning must still follow it, got stderr={}",
-        out.stderr
+        out.diagnostics.contains("Warning: fopen(bogus://x): Failed to open stream:"),
+        "the failed-open warning must still follow it, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1004,9 +1006,9 @@ echo "done";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert!(
-        !out.stderr.contains("Unable to find the wrapper"),
-        "a registered wrapper, a built-in scheme and a plain path must all stay quiet, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Unable to find the wrapper"),
+        "a registered wrapper, a built-in scheme and a plain path must all stay quiet, got diagnostics={}",
+        out.diagnostics
     );
     assert_eq!(out.stdout, "done");
 }
@@ -1160,18 +1162,18 @@ echo $c === false ? "|false" : "|read";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false|false");
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: fopen(/no/such/dir/missing.txt): Failed to open stream: No such file or directory"
         ),
-        "fopen warning lost the path or the reason, got stderr={}",
-        out.stderr
+        "fopen warning lost the path or the reason, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: file_get_contents(/no/such/dir/other.txt): Failed to open stream: No such file or directory"
         ),
-        "file_get_contents warning lost the path or the reason, got stderr={}",
-        out.stderr
+        "file_get_contents warning lost the path or the reason, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1207,17 +1209,17 @@ unlink($f);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
     for reason in ["`z'", "`'", "`br'"] {
         assert!(
-            out.stderr.contains(&format!(
+            out.diagnostics.contains(&format!(
                 "Warning: fopen(invalid_mode_probe.txt): Failed to open stream: {reason} is not a valid mode for fopen"
             )),
-            "missing php's wording for mode {reason}, got stderr={}",
-            out.stderr
+            "missing php's wording for mode {reason}, got diagnostics={}",
+            out.diagnostics
         );
     }
     assert!(
-        !out.stderr.contains("Unknown error"),
-        "the mode failure still went through the errno path, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Unknown error"),
+        "the mode failure still went through the errno path, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1278,7 +1280,7 @@ unlink("sup_probe.txt");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n".repeat(8));
     assert_eq!(
-        out.stderr.trim(),
+        out.diagnostics.trim(),
         "Warning: fopen(glob://*.php): Failed to open stream: wrapper does not support stream open",
         "`@` let a wrapper-refusal line through, or the control line went missing"
     );
@@ -1555,11 +1557,11 @@ foreach ([
         ("data://text/plain;,hi", "rfc2397: illegal parameter"),
     ] {
         assert!(
-            out.stderr.contains(&format!(
+            out.diagnostics.contains(&format!(
                 "Warning: fopen({url}): Failed to open stream: {reason}"
             )),
-            "missing php's reason for {url}, got stderr={}",
-            out.stderr
+            "missing php's reason for {url}, got diagnostics={}",
+            out.diagnostics
         );
     }
 }
@@ -1616,35 +1618,35 @@ var_dump(fopen($v, "r"));
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\nbool(false)\n");
     assert_eq!(
-        out.stderr.matches("Warning: fopen(): Invalid php:// URL specified").count(),
+        out.diagnostics.matches("Warning: fopen(): Invalid php:// URL specified").count(),
         2,
-        "the direct php_error_docref line is missing or duplicated, got stderr={}",
-        out.stderr
+        "the direct php_error_docref line is missing or duplicated, got diagnostics={}",
+        out.diagnostics
     );
     for url in ["php://bogus", "php://foo/bar"] {
         assert!(
-            out.stderr.contains(&format!(
+            out.diagnostics.contains(&format!(
                 "Warning: fopen({url}): Failed to open stream: operation failed"
             )),
-            "missing the failed-open line for {url}, got stderr={}",
-            out.stderr
+            "missing the failed-open line for {url}, got diagnostics={}",
+            out.diagnostics
         );
     }
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches(
                 "Warning: fopen(php://fd/): Failed to open stream: \
                  php://fd/ stream must be specified in the form php://fd/<orig fd>"
             )
             .count(),
         2,
-        "php://fd/ lost its own sentence on one of the two dispatches, got stderr={}",
-        out.stderr
+        "php://fd/ lost its own sentence on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("No such file or directory"),
-        "a php:// URL reached the file opener, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("No such file or directory"),
+        "a php:// URL reached the file opener, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1687,7 +1689,7 @@ var_dump(fopen($c, "r"));
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n".repeat(6));
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches(
                 "Warning: fopen(php://fd/99): Failed to open stream: \
                  Error duping file descriptor 99; possibly it doesn't exist: \
@@ -1695,40 +1697,40 @@ var_dump(fopen($c, "r"));
             )
             .count(),
         2,
-        "the duping refusal is missing on one of the two dispatches, got stderr={}",
-        out.stderr
+        "the duping refusal is missing on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
     );
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches(
                 "Warning: fopen(php://fd/-1): Failed to open stream: \
                  The file descriptors must be non-negative numbers smaller than "
             )
             .count(),
         2,
-        "the range refusal is missing on one of the two dispatches, got stderr={}",
-        out.stderr
+        "the range refusal is missing on one of the two dispatches, got diagnostics={}",
+        out.diagnostics
     );
     assert_eq!(
-        out.stderr
+        out.diagnostics
             .matches(
                 "Warning: fopen(php://fd/abc): Failed to open stream: \
                  php://fd/ stream must be specified in the form php://fd/<orig fd>"
             )
             .count(),
         2,
-        "a descriptor that is not a number lost php's form sentence, got stderr={}",
-        out.stderr
+        "a descriptor that is not a number lost php's form sentence, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("No such file or directory"),
-        "a php://fd/ URL reached the file opener, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("No such file or directory"),
+        "a php://fd/ URL reached the file opener, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("Invalid php:// URL specified"),
-        "php://fd/abc was reported as an unknown php:// target, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Invalid php:// URL specified"),
+        "php://fd/abc was reported as an unknown php:// target, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1753,9 +1755,9 @@ fwrite($g, "runtime\n");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(true)\nliteral\nbool(true)\nruntime\n");
     assert!(
-        !out.stderr.contains("Warning"),
-        "a descriptor that exists warned about itself, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Warning"),
+        "a descriptor that exists warned about itself, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1781,17 +1783,17 @@ var_dump(fopen($u, "r"));
     assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
     for url in ["glob://*.php", "glob:///tmp/*"] {
         assert!(
-            out.stderr.contains(&format!(
+            out.diagnostics.contains(&format!(
                 "Warning: fopen({url}): Failed to open stream: wrapper does not support stream open"
             )),
-            "missing php's reason for {url}, got stderr={}",
-            out.stderr
+            "missing php's reason for {url}, got diagnostics={}",
+            out.diagnostics
         );
     }
     assert!(
-        !out.stderr.contains("No such file or directory"),
-        "a glob:// URL reached the file opener, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("No such file or directory"),
+        "a glob:// URL reached the file opener, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1814,21 +1816,21 @@ fclose($h);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: stream_filter_append(): Unable to locate filter \"no.such.filter\""),
-        "missing the append warning, got stderr={}",
-        out.stderr
+        "missing the append warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: stream_filter_prepend(): Unable to locate filter \"also.missing\""),
-        "missing the prepend warning, got stderr={}",
-        out.stderr
+        "missing the prepend warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("suppressed.one"),
-        "`@` must suppress the warning, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("suppressed.one"),
+        "`@` must suppress the warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -1860,14 +1862,14 @@ unlink("dep_out.csv");
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
-    let notices = out.stderr.matches("the $escape parameter must be provided").count();
-    assert_eq!(notices, 3, "expected three notices, got stderr={}", out.stderr);
+    let notices = out.diagnostics.matches("the $escape parameter must be provided").count();
+    assert_eq!(notices, 3, "expected three notices, got diagnostics={}", out.diagnostics);
     for name in ["fgetcsv", "fputcsv", "str_getcsv"] {
         assert!(
-            out.stderr
+            out.diagnostics
                 .contains(&format!("Deprecated: {name}(): the $escape parameter")),
-            "missing the {name} notice, got stderr={}",
-            out.stderr
+            "missing the {name} notice, got diagnostics={}",
+            out.diagnostics
         );
     }
 }
@@ -1876,8 +1878,9 @@ unlink("dep_out.csv");
 ///
 /// PHP 8.4 introduced it; 8.2 and 8.3 print nothing. elephc emitted it at every
 /// `--php-version`, which makes a program built for 8.3 noisier than the interpreter it is
-/// asked to imitate. stderr is what has to be inspected — the notice never touches stdout, so
-/// a stdout-only check reads the same for a gate that works and a gate that is missing.
+/// asked to imitate. The DIAGNOSTIC stream is what has to be inspected — the notice never
+/// reaches the program's own output, so a stdout-only check reads the same for a gate that
+/// works and a gate that is missing.
 #[test]
 fn test_csv_escape_deprecation_is_gated_by_php_version() {
     let source = r#"<?php
@@ -1892,12 +1895,12 @@ echo "done";
     assert_eq!(modern.stdout, "done");
     assert_eq!(
         modern
-            .stderr
+            .diagnostics
             .matches("the $escape parameter must be provided")
             .count(),
         2,
-        "8.4 must still raise both notices, got stderr={}",
-        modern.stderr
+        "8.4 must still raise both notices, got diagnostics={}",
+        modern.diagnostics
     );
 
     for version in [
@@ -1908,9 +1911,9 @@ echo "done";
         assert!(old.success, "{version:?} run failed: {}", old.stderr);
         assert_eq!(old.stdout, "done");
         assert!(
-            !old.stderr.contains("$escape parameter"),
-            "{version:?} must print nothing, got stderr={}",
-            old.stderr
+            !old.diagnostics.contains("$escape parameter"),
+            "{version:?} must print nothing, got diagnostics={}",
+            old.diagnostics
         );
     }
 }
@@ -2408,7 +2411,7 @@ var_dump($c);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(php://filter/read=string.toupper/resource=absent_abc.txt): \
          Failed to open stream: operation failed\n\
          Warning: fopen(php://filter/write=string.rot13/resource=missing_dir_abc/out.txt): \
@@ -2462,7 +2465,7 @@ var_dump($f);
         "resource|hi|HI|resource|resource|resource|bool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
          Warning: fopen(): Unable to create filter (no.such.filter)\n\
          Warning: fopen(): Unable to locate filter \"one.bad\"\n\
@@ -4577,10 +4580,10 @@ fclose($m);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n<p>Hello <b>World</b></p>");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Unable to locate filter \"string.strip_tags\""),
-        "expected php's unknown-filter warning, got stderr={}",
-        out.stderr
+        "expected php's unknown-filter warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -5970,16 +5973,16 @@ var_dump(fopen("zip://{p}#f.txt", "w"));
         format!("Warning: fopen(zip://{p}#f.txt): Failed to open stream: operation failed"),
     ] {
         assert!(
-            out.stderr.contains(&expected),
-            "missing php's failed-open line {expected:?}, got stderr={}",
-            out.stderr
+            out.diagnostics.contains(&expected),
+            "missing php's failed-open line {expected:?}, got diagnostics={}",
+            out.diagnostics
         );
     }
     // php's zip wrapper EXISTS, so none of these may claim otherwise.
     assert!(
-        !out.stderr.contains("Unable to find the wrapper"),
-        "the zip wrapper is registered now, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Unable to find the wrapper"),
+        "the zip wrapper is registered now, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -6056,16 +6059,16 @@ var_dump(stream_get_contents(fopen($url, "r")));
         )
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: rewind(): Stream does not support seeking"),
-        "expected php's rewind refusal, got stderr={}",
-        out.stderr
+        "expected php's rewind refusal, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: fseek(): Stream does not support seeking"),
-        "expected php's fseek refusal, got stderr={}",
-        out.stderr
+        "expected php's fseek refusal, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -8175,11 +8178,11 @@ echo "|", ($g === false ? "udg-false" : "udg-open");
     // PHP words a failure nothing described as "Unknown error", not as an empty pair of
     // parentheses, and still leaves `&$error_message` empty — the two come from different places.
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: stream_socket_server(): Unable to connect to udp://127.0.0.1:54906 (Unknown error)"
         ),
-        "expected PHP's wording for a failure with no reason, got stderr={}",
-        out.stderr
+        "expected PHP's wording for a failure with no reason, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -8955,6 +8958,48 @@ fclose($f);
     );
 }
 
+/// Verifies the `$http_response_header` deprecation NAMES ITS LINE, as every php diagnostic does.
+///
+/// MEASURED on `php -n` 8.5.6, on this exact program:
+///
+/// ```text
+/// Deprecated: The predefined locally scoped $http_response_header variable is deprecated, call
+/// http_get_last_response_headers() instead in /path/test.php on line 3
+/// x
+///
+/// Warning: Undefined variable $http_response_header in /path/test.php on line 3
+/// y
+/// ```
+///
+/// elephc printed the deprecation with NO location at all. The suffix is published per
+/// instruction by the lowering, and this notice is emitted from the main prologue, where there is
+/// no instruction to read a span from — so the channel had nothing to append.
+///
+/// KNOWN GAP, deliberately not asserted: php also raises `Warning: Undefined variable
+/// $http_response_header` at the read itself, which elephc does not emit at all — a separate
+/// hole, in the undefined-variable path rather than in the location one this test pins. Asserting
+/// the deprecation line alone keeps the test honest about what was fixed; when the missing
+/// warning lands, the expectation below grows a second line.
+#[test]
+fn test_http_response_header_deprecation_names_the_mention_line() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo "x\n";
+$v = $http_response_header;
+echo "y\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "x\ny\n");
+    assert_eq!(
+        out.located_diagnostics,
+        concat!(
+            "Deprecated: The predefined locally scoped $http_response_header variable is ",
+            "deprecated, call http_get_last_response_headers() instead in test.php on line 3\n",
+        )
+    );
+}
+
 /// Verifies php 8.5's `$http_response_header` deprecation is version-gated.
 ///
 /// php raises it while COMPILING a file that names the variable, so it fires once
@@ -9662,10 +9707,9 @@ echo stream_wrapper_register("foo", "W") ? "true" : "false";
 /// with a Notice; a scheme that never existed reports `false` with a Warning. The return
 /// values already matched — the two diagnostics were missing.
 ///
-/// Severity decides the stream, following what elephc does for every other diagnostic:
-/// Notices go to stdout through the output-buffer funnel, Warnings to stderr through the
-/// `@`-aware path. PHP CLI puts both on stdout; that divergence is repo-wide, not specific
-/// to this builtin.
+/// Both travel on the diagnostic stream, in the order the calls run: PHP CLI writes every
+/// severity to stdout through the output buffer, and elephc now does the same. The three return
+/// values print on their own.
 #[test]
 fn test_stream_wrapper_restore_reports_phps_three_cases() {
     let out = compile_and_run_capture(
@@ -9677,16 +9721,11 @@ var_dump(stream_wrapper_restore("file"));
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(true)\n");
     assert_eq!(
-        out.stdout,
+        out.diagnostics,
         "Notice: stream_wrapper_restore(): file:// was never changed, nothing to restore\n\
-         bool(true)\n\
-         bool(false)\n\
-         bool(true)\n"
-    );
-    assert_eq!(
-        out.stderr,
-        "Warning: stream_wrapper_restore(): nosuch:// never existed, nothing to restore\n"
+         Warning: stream_wrapper_restore(): nosuch:// never existed, nothing to restore\n"
     );
 }
 
@@ -9699,6 +9738,7 @@ fn test_stream_wrapper_restore_warning_is_suppressible() {
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\n");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies compiled PHP output for stream socket enable crypto reads peer name from context.
@@ -10366,7 +10406,7 @@ unlink("fgcrt.txt");
         "URYYB JBEYQ|ABC|bool(false)\nHello World|bool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: file_get_contents(): Unable to locate filter \"no.such\"\n\
          Warning: file_get_contents(): Unable to create filter (no.such)\n\
          Warning: file_get_contents(): Unable to locate filter \"missing.too\"\n\
@@ -10405,7 +10445,7 @@ var_dump(file_put_contents("php://filter/write=string.rot13/resource=/no/such/wf
     assert!(out.success);
     assert_eq!(out.stdout, "int(5)\nURYYB|int(2)\nABpq|bool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: file_put_contents(php://filter/write=string.rot13/resource=/no/such/wf.txt): \
          Failed to open stream: operation failed\n",
         "php's wording, the whole URL, and no inner-opener leak"
@@ -10738,23 +10778,23 @@ fclose($m);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "[][]at::isset:n:coalesce:dflt");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: Uninitialized string offset 9"),
-        "expected the offset warning, got stderr={}",
-        out.stderr
+        "expected the offset warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: Uninitialized string offset -9"),
-        "expected the negative offset reported as written, got stderr={}",
-        out.stderr
+        "expected the negative offset reported as written, got diagnostics={}",
+        out.diagnostics
     );
     // Exactly two: `@`, isset() and `??` must not add a third.
     assert_eq!(
-        out.stderr.matches("Uninitialized string offset").count(),
+        out.diagnostics.matches("Uninitialized string offset").count(),
         2,
-        "silent readers must not warn, got stderr={}",
-        out.stderr
+        "silent readers must not warn, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -11616,9 +11656,9 @@ echo $f === false ? "false" : "open";
     );
     assert_eq!(out.stdout, "false");
     assert!(
-        !out.stderr.contains("Failed to open"),
-        "registered user wrapper should not produce the failed-to-open warning, got stderr: {:?}",
-        out.stderr,
+        !out.diagnostics.contains("Failed to open"),
+        "registered user wrapper should not produce the failed-to-open warning, got diagnostics: {:?}",
+        out.diagnostics,
     );
 }
 
@@ -12584,9 +12624,9 @@ echo $f === false ? "false" : "open";
     );
     assert_eq!(out.stdout, "false");
     assert!(
-        !out.stderr.contains("Failed to open"),
-        "wrapper stream_open returning false should not emit the failed-to-open warning, got stderr: {:?}",
-        out.stderr,
+        !out.diagnostics.contains("Failed to open"),
+        "wrapper stream_open returning false should not emit the failed-to-open warning, got diagnostics: {:?}",
+        out.diagnostics,
     );
 }
 
@@ -12919,10 +12959,10 @@ echo "done";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "done");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Deprecated: Creation of dynamic property NoCtx::$context is deprecated"),
-        "expected php's wording, got stderr={}",
-        out.stderr
+        "expected php's wording, got diagnostics={}",
+        out.diagnostics
     );
     // The declaring class is the control, and it declares `mixed $context` rather than a bare
     // `$context` on purpose. An UNTYPED property is not typed `Mixed` here, and the vtable slot
@@ -12931,9 +12971,9 @@ echo "done";
     // receives its context, and collects this deprecation. That is tracked on its own; pinning
     // it here would tie an unrelated typing defect to this notice.
     assert!(
-        !out.stderr.contains("HasCtx::$context"),
-        "a declared property must not be deprecated, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("HasCtx::$context"),
+        "a declared property must not be deprecated, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -14076,7 +14116,7 @@ fclose($f);
          --- suppressed ---\nbool(false)\nbool(true)\nbool(false)\nbool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fwrite(): Bare::stream_write is not implemented!\n\
          Warning: feof(): Bare::stream_eof is not implemented! Assuming EOF\n\
          Warning: fstat(): Bare::stream_stat is not implemented!\n\
@@ -14151,7 +14191,7 @@ var_dump(@unlink("bare://a"));
          bool(false)\nbool(false)\nbool(false)\nbool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: unlink(): Bare::unlink is not implemented!\n\
          Warning: rename(): Bare::rename is not implemented!\n\
          Warning: mkdir(): Bare::mkdir is not implemented!\n\
@@ -14202,7 +14242,7 @@ var_dump(is_file("/definitely/not/here"));
          bool(true)\nint(42)\nbool(true)\nbool(false)\nbool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: file_exists(): Bare::url_stat is not implemented!\n\
          Warning: filesize(): Bare::url_stat is not implemented!\n\
          Warning: filesize(): stat failed for bare://a\n\
@@ -14687,10 +14727,10 @@ echo ($c === false ? "false" : "resource");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: stream_socket_client(): Unable to connect to tcp://127.0.0.1:9 ("),
-        "expected PHP's connect warning, got stderr={}",
-        out.stderr
+        "expected PHP's connect warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -14706,6 +14746,7 @@ echo ($c === false ? "false" : "resource");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies `stream_get_meta_data()['stream_type']` names the wrapper, not the descriptor.
@@ -14826,8 +14867,8 @@ echo ($c === false ? "false" : "resource");
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
-    let lines: Vec<&str> = out.stderr.lines().collect();
-    assert_eq!(lines.len(), 2, "expected two warnings, got stderr={}", out.stderr);
+    let lines: Vec<&str> = out.diagnostics.lines().collect();
+    assert_eq!(lines.len(), 2, "expected two warnings, got diagnostics={}", out.diagnostics);
     assert!(
         lines[0].starts_with(
             "Warning: stream_socket_client(): php_network_getaddresses: getaddrinfo for \
@@ -14858,10 +14899,10 @@ echo ($c === false ? "false" : "resource");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: fsockopen(): Unable to connect to 127.0.0.1:9 ("),
-        "expected PHP's connect warning, got stderr={}",
-        out.stderr
+        "expected PHP's connect warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -14896,7 +14937,7 @@ var_dump(fopen($p, "r"));
     assert!(out.success);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(php://filter/read=string.toupper/resource=absent_dyn.txt): \
          Failed to open stream: operation failed\n\
          Warning: fopen(php://filter/read=no.such/resource=absent_dyn2.txt): \
@@ -14942,7 +14983,7 @@ unlink("rtu.txt");
     assert!(out.success);
     assert_eq!(out.stdout, "bool(true)\nhello|HELLO\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(): Unable to locate filter \"no.such.filter\"\n\
          Warning: fopen(): Unable to create filter (no.such.filter)\n\
          Warning: fopen(): Unable to locate filter \"one.bad\"\n\
@@ -14995,7 +15036,7 @@ unlink("rtdx.txt");
     let pair = "Warning: fopen(): Unable to locate filter \"no.such\"\n\
                 Warning: fopen(): Unable to create filter (no.such)\n";
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         pair.repeat(6),
         "one pair for `r`, two for `r+`, NONE for `x`, two for the run-time `r+`, one for `read=`"
     );
@@ -15028,7 +15069,7 @@ unlink("rta.txt");
     assert!(out.success);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(true)\nok\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(php://filter/read=no.such/resource=absent_rta.txt): \
          Failed to open stream: operation failed\n",
         "the failed open speaks alone; `@` and an empty segment say nothing at all"
@@ -15068,7 +15109,7 @@ unlink("rtw.txt");
         )
     };
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         format!(
             "{}{}{}{}{}",
             lines("file_get_contents"),
@@ -15121,7 +15162,7 @@ var_dump(fopen($b, "r"));
     assert!(out.success);
     assert_eq!(out.stdout, "bool(true)\nbool(false)\nbool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(absent_after_t8.txt): Failed to open stream: No such file or directory\n\
          Warning: fopen(php://filter/read=string.toupper/resource=absent_t8.txt): \
          Failed to open stream: operation failed\n",
@@ -15207,7 +15248,7 @@ var_dump(stream_get_contents(fopen($u, "r")));
     assert!(out.success);
     assert_eq!(out.stdout, "string(3) \"abc\"\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
          Warning: fopen(): Unable to create filter (outer.absent)\n",
         "the outer URL's own skipped name must survive the inner open's parse"
@@ -15258,6 +15299,7 @@ var_dump(file_put_contents($w, "abc"));
         "both path routes must attach their OWN chain, not the nested open's"
     );
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nesting PAST the parked-frame bound stays quiet instead of corrupting the outer open.
@@ -15380,7 +15422,7 @@ var_dump(stream_get_contents(fopen($u, "r")));
     assert!(out.success);
     assert_eq!(out.stdout, "string(3) \"abc\"\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(): Unable to locate filter \"inner.absent\"\n\
          Warning: fopen(): Unable to create filter (inner.absent)\n\
          Warning: fopen(): Unable to locate filter \"outer.absent\"\n\
@@ -15432,7 +15474,7 @@ var_dump(stream_get_contents(fopen($u, "r")));
     assert!(out.success);
     assert_eq!(out.stdout, "string(3) \"ABC\"\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(definitely_absent_inner7.txt): \
          Failed to open stream: No such file or directory\n",
         "the wrapper's own failed open speaks, and the outer chain still applies"
@@ -15484,7 +15526,7 @@ var_dump(fopen($q, "r"));
     assert!(out.success);
     assert_eq!(out.stdout, "string(3) \"abc\"\nafter\nbool(false)\n");
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(absent_after_c9.txt): Failed to open stream: No such file or directory\n",
         "`@` still covers the whole open, and gives the depth back when it ends"
     );
@@ -15544,7 +15586,7 @@ var_dump(fopen($bad, "r"));
          bool(false)\n"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: fopen(php://filter/read=no.such/resource=absent_x7.txt): \
          Failed to open stream: operation failed\n",
         "twelve throws must cost no filter frame, so the last open still names the whole URL"
@@ -15681,7 +15723,7 @@ var_dump(filesize("bd://x"));
         "an unnamed stat field is php's zero; only url_stat() answering false is a failed stat"
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Notice: filetype(): Unknown file type (0)\n",
         "a successful stat that names few fields warns about nothing, but a mode php cannot \
          classify still gets its notice"
@@ -15786,7 +15828,7 @@ var_dump(@is_dir("bare://a"));
     assert!(out.success, "the diagnostics must not disturb the program");
     assert_eq!(out.stdout, "bool(false)\n".repeat(17));
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: is_dir(): Bare::url_stat is not implemented!\n\
          Warning: is_link(): Bare::url_stat is not implemented!\n\
          Warning: is_readable(): Bare::url_stat is not implemented!\n\
@@ -15848,7 +15890,7 @@ var_dump(file_exists($p));
     assert!(out.success);
     assert_eq!(out.stdout, "bool(false)\n".repeat(15));
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         "Warning: filesize(): stat failed for /definitely/not/here\n\
          Warning: filemtime(): stat failed for /definitely/not/here\n\
          Warning: fileatime(): stat failed for /definitely/not/here\n\
@@ -16083,7 +16125,7 @@ echo json_encode(stream_context_get_options($c7)), "\n";
         )
     );
     assert_eq!(
-        out.stderr,
+        out.diagnostics,
         concat!(
             "Deprecated: Calling stream_context_set_option() with 2 arguments is deprecated, \
              use stream_context_set_options() instead\n",
@@ -16268,13 +16310,13 @@ fclose($h);
         )
     );
     let notices = out
-        .stderr
+        .diagnostics
         .matches("the $escape parameter must be provided")
         .count();
     assert_eq!(
         notices, 1,
-        "only the call that survived validation may warn, got stderr={}",
-        out.stderr
+        "only the call that survived validation may warn, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -16361,9 +16403,9 @@ fclose($h);
         "Unable to locate filter \"nosuchfilter\"",
     ] {
         assert!(
-            out.stderr.contains(expected),
-            "missing {expected}, got stderr={}",
-            out.stderr
+            out.diagnostics.contains(expected),
+            "missing {expected}, got diagnostics={}",
+            out.diagnostics
         );
     }
 }
@@ -16473,7 +16515,7 @@ echo implode("\n", $out), "\n";
         )
     );
     let notices = out
-        .stderr
+        .diagnostics
         .matches("Cannot represent a stream of type MEMORY as a select()able descriptor")
         .count();
     // Three, not two: php walks the arrays TWICE — once to build the descriptor sets and once to
@@ -16481,8 +16523,8 @@ echo implode("\n", $out), "\n";
     // twice while the memory-only one warns once, its ValueError landing before the second pass.
     assert_eq!(
         notices, 3,
-        "one per pass that reached the memory stream, got stderr={}",
-        out.stderr
+        "one per pass that reached the memory stream, got diagnostics={}",
+        out.diagnostics
     );
 }
 

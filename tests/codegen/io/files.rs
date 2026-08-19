@@ -120,23 +120,23 @@ echo var_export(is_float(disk_free_space("/")), true);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false|false|false|true");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: disk_free_space(): No such file or directory\n"),
-        "expected php's wording, got stderr={}",
-        out.stderr
+        "expected php's wording, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: disk_total_space(): No such file or directory\n"),
-        "expected the total-space wording too, got stderr={}",
-        out.stderr
+        "expected the total-space wording too, got diagnostics={}",
+        out.diagnostics
     );
     // Three calls fail, one of them suppressed: exactly two lines may be printed.
     assert_eq!(
-        out.stderr.matches("No such file or directory").count(),
+        out.diagnostics.matches("No such file or directory").count(),
         2,
-        "@ must suppress the third, got stderr={}",
-        out.stderr
+        "@ must suppress the third, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -268,11 +268,11 @@ echo "after";
     // php-src puts the PATH inside the parentheses and the reason after it; the bare
     // `file_get_contents()` this used to assert named neither.
     assert!(
-        out.stderr.contains(
+        out.diagnostics.contains(
             "Warning: file_get_contents(missing.txt): Failed to open stream: No such file or directory"
         ),
-        "expected the path and reason in the warning, got stderr={}",
-        out.stderr
+        "expected the path and reason in the warning, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -291,6 +291,7 @@ echo $value === false ? "false" : "string";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies `file_get_contents` on an existing file returns a truthy value, not `false`.
@@ -575,15 +576,15 @@ unlink("seek.txt");
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
     assert!(
-        out.stderr
+        out.diagnostics
             .contains("Warning: file_get_contents(): Failed to seek to position -30 in the stream"),
-        "expected the php-src seek warning, got stderr={}",
-        out.stderr
+        "expected the php-src seek warning, got diagnostics={}",
+        out.diagnostics
     );
     assert!(
-        !out.stderr.contains("position -11"),
-        "the @-suppressed read must not warn, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("position -11"),
+        "the @-suppressed read must not warn, got diagnostics={}",
+        out.diagnostics
     );
 }
 
@@ -644,9 +645,9 @@ unlink("neg.txt");
         "ValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\nValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\n"
     );
     assert!(
-        !out.stderr.contains("Failed to open stream"),
-        "the negative-length ValueError must precede the open, got stderr={}",
-        out.stderr
+        !out.diagnostics.contains("Failed to open stream"),
+        "the negative-length ValueError must precede the open, got diagnostics={}",
+        out.diagnostics
     );
 }
 

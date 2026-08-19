@@ -265,6 +265,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies mixed chain (nullsafe ?-> followed by regular ->) emits a warning
@@ -292,9 +293,9 @@ echo $root?->branch->leaf->name ?? "fallback";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert!(
-        out.stderr.contains("Warning: Attempt to read property \"name\" on null"),
+        out.diagnostics.contains("Warning: Attempt to read property \"name\" on null"),
         "{}",
-        out.stderr
+        out.diagnostics
     );
 }
 
@@ -326,6 +327,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies mixed chain with non-null base but null mid-hop (Branch->leaf is
@@ -385,6 +387,7 @@ echo $root->branch?->leaf->name ?? "fallback";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) skips array index expression evaluation when
@@ -411,6 +414,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) skips callable invocation argument evaluation when
@@ -441,6 +445,7 @@ read(null);
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "fallback");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }
 
 /// Verifies nullsafe (?->) calls the loaded callable and evaluates arguments
@@ -471,4 +476,5 @@ read(new Root());
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "noisy|21");
     assert_eq!(out.stderr, "");
+    assert_eq!(out.diagnostics, "");
 }

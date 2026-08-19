@@ -989,7 +989,11 @@ pub(crate) fn assemble_and_run(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    String::from_utf8(output.stdout).unwrap()
+    // php's diagnostics share stdout with the program's own output; a test reading this wants
+    // what the PROGRAM printed. `compile_and_run_capture` keeps both halves apart instead.
+    let raw = String::from_utf8(output.stdout).unwrap();
+    let script_path = dir.join("test.php").to_string_lossy().into_owned();
+    split_php_diagnostics(&raw, &script_path).0
 }
 
 /// Assembles, links, and runs a happy-path fixture with per-process environment
@@ -1037,6 +1041,91 @@ pub(crate) struct ProgramOutput {
     // The exit code itself, or None when a signal ended the process. php distinguishes its
     // statuses — 255 for a fatal, 1 for `exit(1)` — so `success` alone cannot pin one.
     pub(crate) exit_code: Option<i32>,
+    // The php diagnostics the program printed, in order, one per line and without the blank
+    // line php separates them with. php CLI writes these to STDOUT — `ob_start()` captures them
+    // like any echo — so they arrive mixed into the program's own output and are split back out
+    // here. A test that cares about them asserts on this; one that cares about what the program
+    // itself printed reads `stdout`, which has them removed.
+    pub(crate) diagnostics: String,
+    // The same diagnostics with php's ` in <file> on line <n>` suffix intact, the script path
+    // folded to its basename. The location comes from a mechanism of its own — the line the
+    // lowering publishes per instruction — so it needs assertions of its own; `diagnostics`
+    // above deliberately drops it so the common wording assertions carry no line number.
+    pub(crate) located_diagnostics: String,
+}
+
+/// Splits php's diagnostics out of a program's stdout.
+///
+/// A diagnostic is a blank line, then `<Kind>: <message> in <file> on line <n>`. The match is
+/// anchored on the SCRIPT'S OWN PATH, so a program that merely echoes the word `Warning:` keeps
+/// its output intact — only a line naming the very file under test is treated as a diagnostic.
+///
+/// The path is also folded to its basename on the way out. It is an absolute path into a
+/// per-test temporary directory, different on every run, so a test could not otherwise write
+/// down what it expects to see.
+/// Splits php's diagnostics out of a program's stdout, returning
+/// `(program_output, messages, located_messages)`.
+///
+/// `messages` carries the wording alone, which is what almost every assertion wants. The third
+/// string keeps php's full line — ` in <file> on line <n>` included, with the temp-directory path
+/// folded to its basename so it is stable across runs — because the location is produced by its
+/// own mechanism and needs assertions of its own. Without it a location bug is invisible: the
+/// suffix would be stripped before any test could look at it.
+pub(crate) fn split_php_diagnostics(stdout: &str, script_path: &str) -> (String, String, String) {
+    const KINDS: &[&str] = &[
+        "Warning: ",
+        "Notice: ",
+        "Deprecated: ",
+        "Fatal error: ",
+        "Parse error: ",
+    ];
+    let basename = std::path::Path::new(script_path)
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| script_path.to_string());
+    // php ends every diagnostic with this. elephc does not yet publish a location at EVERY
+    // warning site, so it is used to STRIP the tail rather than to decide what a diagnostic is —
+    // deciding on it would file an unlocated warning as program output, which is a far more
+    // confusing failure than a missing suffix.
+    let needle = format!(" in {} on line ", script_path);
+    let mut program = String::with_capacity(stdout.len());
+    let mut diagnostics = String::new();
+    let mut located = String::new();
+    for line in stdout.split_inclusive('\n') {
+        let body = line.strip_suffix('\n').unwrap_or(line);
+        // Which STREAM a line belongs to is decided by its kind prefix alone. Whether it carries
+        // php's ` in FILE on line N` is a SEPARATE property, asserted through
+        // `located_diagnostics` by the tests that care — conflating the two made every
+        // location gap surface as "the program printed something unexpected".
+        let is_diagnostic = KINDS.iter().any(|kind| body.starts_with(kind));
+        if is_diagnostic {
+            // Drop the blank line php opens the diagnostic with, now that the diagnostic itself
+            // is leaving. Exactly ONE newline, and without asking what precedes it: the program's
+            // own output and that blank line share a line whenever the program did not end its
+            // last write with a newline — `echo "false|"` followed by a warning arrives as the
+            // single line `false|\n`, and treating that newline as the program's left a stray
+            // one behind.
+            if program.ends_with('\n') {
+                program.truncate(program.len() - 1);
+            }
+            // The MESSAGE only. php ends every diagnostic with ` in <file> on line <n>`, which is
+            // produced by one runtime path and pinned by tests of its own; repeating it in every
+            // assertion that cares about a wording would add a line number to maintain and no
+            // coverage. A test that wants the location asserts on `stdout` before the split, or
+            // on the dedicated location tests.
+            let message = match body.find(&needle) {
+                Some(cut) => &body[..cut],
+                None => body,
+            };
+            diagnostics.push_str(message);
+            diagnostics.push('\n');
+            located.push_str(&body.replace(script_path, &basename));
+            located.push('\n');
+            continue;
+        }
+        program.push_str(line);
+    }
+    (program, diagnostics, located)
 }
 
 /// Assembles user assembly, links it with a runtime object, runs the binary,
@@ -1065,16 +1154,32 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    // php prints its diagnostics to STDOUT, so they arrive mixed into the program's own output.
+    // Splitting them back apart is what lets a test assert either one without the other.
+    let raw_stdout = String::from_utf8(output.stdout).unwrap();
+    let script_path = dir.join("test.php").to_string_lossy().into_owned();
+    let (stdout, diagnostics, located_diagnostics) =
+        split_php_diagnostics(&raw_stdout, &script_path);
+
     ProgramOutput {
-        stdout: String::from_utf8(output.stdout).unwrap(),
+        stdout,
         stderr: String::from_utf8(output.stderr).unwrap(),
         success: output.status.success(),
         exit_code: output.status.code(),
+        diagnostics,
+        located_diagnostics,
     }
 }
 
-/// Assembles user assembly, links it with a runtime object, runs the binary,
-/// and returns stderr. Asserts the binary exits with failure. Used for error/regression tests.
+/// Assembles user assembly, links it with a runtime object, runs the binary, and returns
+/// everything php said WENT WRONG. Asserts the binary exits with failure. Used for
+/// error/regression tests.
+///
+/// A failing program's account of itself now travels on two streams: the warnings that led up to
+/// the failure go to stdout, where php's CLI writes its diagnostics, and the uncaught-exception
+/// report stays on stderr. Returning only stderr would hand a test half the story — and the half
+/// it gets would still be non-empty, so the loss reads as a wording change rather than a missing
+/// stream. Diagnostics come first, which is the order php emits them in.
 pub(crate) fn assemble_and_run_expect_failure(
     user_asm: &str,
     runtime_obj: &Path,
@@ -1100,5 +1205,9 @@ pub(crate) fn assemble_and_run_expect_failure(
     let output = run_binary(&bin_path, dir);
     assert!(!output.status.success(), "binary unexpectedly succeeded");
 
-    String::from_utf8(output.stderr).unwrap()
+    let raw_stdout = String::from_utf8(output.stdout).unwrap();
+    let script_path = dir.join("test.php").to_string_lossy().into_owned();
+    let (_program, diagnostics, _located) = split_php_diagnostics(&raw_stdout, &script_path);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    format!("{diagnostics}{stderr}")
 }
