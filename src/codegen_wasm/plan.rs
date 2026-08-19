@@ -439,6 +439,12 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // allocation. `__rt_decref_object` walks these descriptors to release refcounted
     // property values before freeing an object at refcount zero.
     cursor = objects::emit_gc_desc_table(&mut wm, &module.class_infos, cursor);
+    // The per-class PUBLIC property metadata `json_encode`'s object walk reads. Laid out beside
+    // the gc descriptors because it answers the same question about the same layout, from the
+    // same class-id index — only about a different subset of the properties.
+    if super::json::module_uses_json_encode(module) {
+        cursor = super::json::emit_json_property_table(&mut wm, module, cursor);
+    }
 
     // P6f class-metadata tables (`__class_parent_ids`, `__class_interface_ptrs`,
     // `__class_name_entries`, `__class_name_missing`), advancing the static-data
@@ -608,6 +614,13 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // Emit one wrapper per closure body plus the `__rt_closure_call` if-ladder that
     // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are
     // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
+    // `json_encode`'s per-class public-property metadata, and the encoder that reads it. Both
+    // only for a module that calls it, so every other module's data segments are unchanged.
+    if super::json::module_uses_json_encode(module) {
+        let arms = super::json::jsonserialize_ladder(module);
+        super::json::emit_json_runtime(&mut wm, &arms);
+    }
+
     closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
 
     // Output buffering intercepts every stdout write, so its `__rt_stdout_write` replaces the

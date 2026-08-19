@@ -7911,6 +7911,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
+        // Values the audit proved encodable; a float or a bare `mixed` keeps refusing.
+        | RuntimeFnId::JsonEncode
         // The output-buffer stack: every stdout write funnels through one interception point.
         | RuntimeFnId::ObStart
         | RuntimeFnId::ObGetClean
@@ -8343,7 +8345,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Hrtime
         | RuntimeFnId::HttpResponseCode
         | RuntimeFnId::JsonDecode
-        | RuntimeFnId::JsonEncode
         | RuntimeFnId::JsonLastError
         | RuntimeFnId::JsonLastErrorMsg
         | RuntimeFnId::JsonValidate

@@ -19163,3 +19163,134 @@ echo "tail";
 ob_end_flush();
 echo "\n";
 "##;
+
+/// `json_encode` matches php: objects, `JsonSerializable`, containers, and the default escaping.
+///
+/// The escaping cases are the ones no example reaches — `/` escaped, the five short forms, a
+/// control byte as `\u0001`, and an astral code point as a SURROGATE PAIR. Each is a place where
+/// output that merely looks like JSON would still not be php's.
+#[test]
+fn test_cli_wasm_json_encode_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_json");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, JSON_ENCODE_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile json_encode to WASM");
+    assert!(
+        output.status.success(),
+        "json_encode compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run json_encode under Node");
+    assert!(
+        run.status.success(),
+        "json_encode trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "{\"id\":42,\"total\":{\"currency\":\"EUR\",\"amount\":19,\"cents\":95}}\n",
+            "[{\"currency\":\"USD\",\"amount\":1,\"cents\":0}]\n",
+            "{\"a\":{\"currency\":\"JPY\",\"amount\":0,\"cents\":7}}\n",
+            "\"quote\\\"inside\"\n",
+            "\"slash\\/inside\"\n",
+            "\"tab\\there\"\n",
+            "\"\\u0001\"\n",
+            "\"caf\\u00e9\"\n",
+            "\"\\ud83d\\ude00\"\n",
+            "[1,2,3]\n",
+            "[]\n",
+            "{\"5\":\"sparse\"}\n",
+        ),
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A JsonSerializable nested in a plain object, then the escaping and container cases.
+const JSON_ENCODE_PHP: &str = r##"<?php
+class Money implements JsonSerializable
+{
+    public int $amountCents;
+    public string $currency;
+    private string $internalNote = "ignored";
+
+    public function __construct(int $cents, string $currency)
+    {
+        $this->amountCents = $cents;
+        $this->currency = $currency;
+    }
+
+    public function jsonSerialize(): mixed
+    {
+        $major = (int) ($this->amountCents / 100);
+        return [
+            "currency" => $this->currency,
+            "amount"   => $major,
+            "cents"    => $this->amountCents - $major * 100,
+        ];
+    }
+}
+
+class Order
+{
+    public int $id;
+    public Money $total;
+
+    public function __construct(int $id, Money $total)
+    {
+        $this->id = $id;
+        $this->total = $total;
+    }
+}
+
+echo json_encode(new Order(42, new Money(1995, "EUR"))), "\n";
+echo json_encode([new Money(100, "USD")]), "\n";
+echo json_encode(["a" => new Money(7, "JPY")]), "\n";
+
+echo json_encode("quote\"inside"), "\n";
+echo json_encode("slash/inside"), "\n";
+echo json_encode("tab\there"), "\n";
+echo json_encode("\x01"), "\n";
+echo json_encode("caf\u{e9}"), "\n";
+echo json_encode("\u{1f600}"), "\n";
+
+echo json_encode([1, 2, 3]), "\n";
+echo json_encode([]), "\n";
+echo json_encode([5 => "sparse"]), "\n";
+"##;

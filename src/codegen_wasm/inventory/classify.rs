@@ -293,6 +293,16 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
             ][..],
         ),
+        // Every value the audit proved encodable. An object answers through `jsonSerialize` when
+        // it implements `JsonSerializable`, and through its public properties otherwise.
+        RuntimeFnId::JsonEncode => (
+            "codegen_wasm::json",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::json_encode_admits_only_provably_encodable_values",
+                "codegen::cli::test_cli_wasm_json_encode_matches_php",
+            ][..],
+        ),
         // The buffer stack. One interception point serves every stdout write, and the handler
         // path reaches user code through the callable ladder.
         RuntimeFnId::ObStart

@@ -4369,6 +4369,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
+            | RuntimeFnId::JsonEncode
             | RuntimeFnId::ObStart
             | RuntimeFnId::ObGetClean
             | RuntimeFnId::ObEndFlush
@@ -4492,6 +4493,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::VarDump {
         return var_dump_shape_issue(module, function, call);
+    }
+    if target == RuntimeFnId::JsonEncode {
+        return json_encode_shape_issue(module, function, call);
     }
     if matches!(
         target,
@@ -4816,6 +4820,27 @@ pub(super) fn lower_direct_builtin(
             | RuntimeFnId::ObGetStatus
     ) {
         return lower_output_buffer(ctx, inst, target);
+    }
+    if target == RuntimeFnId::JsonEncode {
+        // Boxed like `var_dump`'s operand, and for the same reason: the encoder dispatches on a
+        // cell TAG, which a raw container pointer does not carry.
+        let allocated = super::transfer::emit_push_call_argument(
+            ctx,
+            operand(inst, 0)?,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        )?;
+        ctx.fb
+            .ins("call $__rt_json_encode", "php's json_encode, boxed as string|false");
+        if let Some((cell, _kind)) = allocated {
+            ctx.fb.ins(
+                &format!("local.get {cell}"),
+                "the cell synthesized for the argument",
+            );
+            ctx.fb
+                .ins("call $__rt_decref_any", "free it now the encode is done");
+        }
+        return store_result(ctx, inst);
     }
     if target == RuntimeFnId::VarDump {
         // Boxed first, because the renderer dispatches on a cell TAG: a raw container pointer
@@ -5514,6 +5539,39 @@ fn lower_output_buffer(
     };
     ctx.fb.ins(helper, "output-buffer stack operation");
     store_result(ctx, inst)
+}
+
+/// Validates `json_encode`, which this target serves for values it can prove encodable.
+///
+/// php's second argument is `$flags`, and every flag changes the OUTPUT — `JSON_PRETTY_PRINT`
+/// its whitespace, `JSON_UNESCAPED_SLASHES` its escaping — so only the default form is admitted
+/// rather than accepting a flag and ignoring it.
+fn json_encode_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
+    if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+        return Some("json_encode writes through the command runtime".to_string());
+    }
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "json_encode with {} operands on wasm32-wasi (flags change the output, so only the \
+             default form is served)",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("json_encode operand is missing from the value table".to_string());
+    };
+    if !super::json::type_is_encodable(module, &value.php_type) {
+        return Some(format!(
+            "json_encode of {:?} on wasm32-wasi (a float needs serialize_precision, and a bare \
+             mixed proves nothing about its runtime tag)",
+            value.php_type
+        ));
+    }
+    None
 }
 
 /// Whether a runtime-call operand is a hash rather than an indexed array.
@@ -9299,6 +9357,58 @@ mod tests {
             assert!(
                 super::super::capability::runtime_function_is_supported(target),
                 "{target:?} must be admitted"
+            );
+        }
+    }
+
+    /// `json_encode` admits a value only when everything it can contain has a JSON form here.
+    ///
+    /// A bare `mixed` is refused: its runtime tag could be a float or a resource, and the
+    /// encoder would then have to answer for a value the audit never saw. A float is refused
+    /// even when its type IS known, because php writes one with serialize_precision rather than
+    /// the precision the existing formatter uses.
+    #[test]
+    fn json_encode_admits_only_provably_encodable_values() {
+        assert!(
+            is_direct_builtin(RuntimeFnId::JsonEncode),
+            "json_encode must be audited as a direct builtin"
+        );
+        assert!(
+            super::super::capability::runtime_function_is_supported(RuntimeFnId::JsonEncode),
+            "json_encode must be admitted"
+        );
+
+        let module = Module::new(crate::codegen_support::platform::Target::wasm());
+        for encodable in [
+            PhpType::Int,
+            PhpType::Str,
+            PhpType::Bool,
+            PhpType::Array(Box::new(PhpType::Int)),
+            PhpType::Array(Box::new(PhpType::Array(Box::new(PhpType::Str)))),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+        ] {
+            assert!(
+                super::super::json::type_is_encodable(&module, &encodable),
+                "{encodable:?} has a JSON form"
+            );
+        }
+        for refused in [
+            PhpType::Float,
+            PhpType::Mixed,
+            PhpType::Array(Box::new(PhpType::Float)),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
+            // No class is declared in an empty module, so an object names nothing to walk.
+            PhpType::Object("Money".to_string()),
+        ] {
+            assert!(
+                !super::super::json::type_is_encodable(&module, &refused),
+                "{refused:?} must keep refusing"
             );
         }
     }
