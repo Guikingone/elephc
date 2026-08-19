@@ -35,8 +35,10 @@ object, so user declarations are removed by the AST pass instead of by
 Callback-consuming AOT builtins expose their callback slots through structural
 shared-contract metadata, independently of the PHP parameter name and its broad
 storage type. Registry validation rejects unknown or duplicate callback slots, and
-a registry-wide test pins the complete current set so declaration reachability does
-not depend on a parameter-naming convention.
+registry-wide tests pin the complete current set and require every conventional
+`$callback` parameter to resolve through structural metadata or a callable type.
+Mixed callback parameters with other names remain explicit semantic metadata because
+their role cannot be inferred from the PHP storage type alone.
 
 Operations that invoke PHP protocols implicitly, including `foreach`, `count()`,
 object offset access, `json_encode()`, and iterator helpers, keep the corresponding

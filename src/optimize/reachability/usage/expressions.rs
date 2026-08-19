@@ -1031,4 +1031,24 @@ mod tests {
             "callback-taking builtins must expose structural callback metadata or a callable type",
         );
     }
+
+    /// Verifies the legacy `$callback` convention cannot bypass structural callback metadata.
+    #[test]
+    fn callback_named_registry_parameters_are_declared() {
+        for builtin_name in crate::builtins::registry::names() {
+            let definition = crate::builtins::registry::lookup(builtin_name)
+                .expect("registry names must resolve to builtin definitions");
+            let callback_indices =
+                crate::builtins::registry::callback_parameter_indices(definition);
+            for (index, (parameter, _)) in definition.params.iter().enumerate() {
+                if parameter == "callback" {
+                    assert!(
+                        callback_indices.contains(&index),
+                        "{}() parameter ${parameter} must declare structural callback metadata or a callable type",
+                        definition.name,
+                    );
+                }
+            }
+        }
+    }
 }
