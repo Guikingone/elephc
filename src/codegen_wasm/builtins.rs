@@ -3869,6 +3869,13 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             &[STREAM],
             STREAM,
         ),
+        // `string|false`, so a boxed cell: php distinguishes a NUL byte from end of file.
+        RuntimeFnId::Fgetc => ("$__rt_fgetc", &[STREAM], STREAM),
+        // `int|false` — the byte count written to stdout.
+        RuntimeFnId::Readfile => ("$__rt_readfile", &[IrType::Str], STREAM),
+        RuntimeFnId::Flock => ("$__rt_flock", &[STREAM, IrType::I64], IrType::I64),
+        // No operands at all: php's `tmpfile()` takes none and answers a handle or false.
+        RuntimeFnId::Tmpfile => ("$__rt_tmpfile", &[], STREAM),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -4361,6 +4368,10 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
+            | RuntimeFnId::Fgetc
+            | RuntimeFnId::Readfile
+            | RuntimeFnId::Flock
+            | RuntimeFnId::Tmpfile
             | RuntimeFnId::Fclose
             | RuntimeFnId::FileExists
             | RuntimeFnId::Unlink

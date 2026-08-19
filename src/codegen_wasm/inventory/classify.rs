@@ -226,6 +226,10 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         // Not a file, but the same WASI forwarding through the same contract table:
         // `getenv` reads `environ_get` fresh on every call and answers `string|false`
         // — a boxed cell, since a missing name and an empty value are both zero-length.
+        | RuntimeFnId::Fgetc
+        | RuntimeFnId::Readfile
+        | RuntimeFnId::Flock
+        | RuntimeFnId::Tmpfile
         | RuntimeFnId::Getenv
         | RuntimeFnId::GetResourceType
         | RuntimeFnId::Define => (
@@ -235,6 +239,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
                 "codegen::cli::test_cli_wasm_file_round_trip_matches_php",
                 "codegen::cli::test_cli_wasm_reads_and_writes_an_in_memory_stream",
+                "codegen::cli::test_cli_wasm_stream_extensions_match_php",
             ][..],
         ),
         // The four namespace questions share one closed-world answer and one lowering: the

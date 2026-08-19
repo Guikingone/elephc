@@ -34,6 +34,20 @@ const IO_SCRATCH: u32 = 0x3000;
 /// "not at EOF"; `fclose` clears the byte because WASI recycles fd numbers.
 const FD_EOF_FLAGS: u32 = IO_SCRATCH + 0x50;
 
+/// Offset of the per-fd temp-file table: one byte per real WASI fd, 256 fds.
+///
+/// `tmpfile()` opens a file that PHP deletes when the handle closes. WASI preview1 cannot
+/// unlink an open file, so the deletion happens at `fclose` instead — which means `fclose` has
+/// to know the NAME. It is not stored: the name is a function of the index this table holds
+/// (0 means "not a temp file", n means index n-1), so one byte per fd suffices.
+const FD_TMP_INDEX: u32 = IO_SCRATCH + 0x150;
+
+/// Scratch for the generated temp-file name, rebuilt on open and again on close.
+const TMP_NAME: u32 = IO_SCRATCH + 0x250;
+
+/// Length of the generated temp-file name: `.elephc_tmpNNN`.
+const TMP_NAME_LEN: u32 = 14;
+
 /// Offset of the per-fd stream-metadata table: 16 bytes per fd, 256 fds.
 ///
 /// `stream_get_meta_data` reports the MODE and URI `fopen` was called with, and a
@@ -54,9 +68,14 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&rt_fwrite());
     wm.add_raw_func(RT_FWRITE_BOXED);
     wm.add_raw_func(&rt_fread());
+    wm.add_raw_func(&rt_fgetc());
+    wm.add_raw_func(&rt_tmp_name());
+    wm.add_raw_func(&rt_tmpfile());
     wm.add_raw_func(&rt_fclose());
+    wm.add_raw_func(RT_FLOCK);
     wm.add_raw_func(&rt_file_exists());
     wm.add_raw_func(&rt_unlink());
+    wm.add_raw_func(&rt_readfile());
     wm.add_raw_func(&rt_file_size());
     wm.add_raw_func(&rt_file_get_contents());
     wm.add_raw_func(&rt_file_put_contents());
@@ -887,7 +906,9 @@ const RT_STREAM_COPY_TO_STREAM: &str = r#"(func $__rt_stream_copy_to_stream (par
 /// loses its output and, measured, dies at the next write. Nothing depends on that, and the
 /// alternative failure mode — silently swallowing all remaining output — is far worse.
 fn rt_fclose() -> String {
-    r#"(func $__rt_fclose (param $fd i32) (result i64)
+    format!(
+        r#"(func $__rt_fclose (param $fd i32) (result i64)
+  (local $tmp i32)
   (if (i32.lt_s (local.get $fd) (i32.const 0))
     (then (return (i64.const 0))))
   (if (i32.and (local.get $fd) (i32.const 1073741824))
@@ -896,9 +917,158 @@ fn rt_fclose() -> String {
   (call $__rt_fd_meta_clear (local.get $fd))                      ;; and must not inherit this stream's mode/uri
   (if (i32.lt_s (local.get $fd) (i32.const 3))                    ;; stdin/stdout/stderr survive
     (then (return (i64.const 1))))
+  ;; A `tmpfile()` handle is deleted when it closes. The name is rebuilt from the index this fd
+  ;; carries rather than stored, and the entry is cleared because WASI recycles fd numbers.
+  (if (i32.lt_u (local.get $fd) (i32.const 256))
+    (then
+      (local.set $tmp (i32.load8_u (i32.add (i32.add (global.get $__float_scratch) (i32.const {tmp})) (local.get $fd))))
+      (if (local.get $tmp)
+        (then
+          (i32.store8 (i32.add (i32.add (global.get $__float_scratch) (i32.const {tmp})) (local.get $fd)) (i32.const 0))
+          (drop (call $wasi_fd_close (local.get $fd)))
+          (call $__rt_tmp_name (i32.sub (local.get $tmp) (i32.const 1)))
+          (drop (call $__rt_unlink
+            (i32.add (global.get $__float_scratch) (i32.const {name}))
+            (i64.const {name_len})))
+          (return (i64.const 1))))))
   (if (i32.ne (call $wasi_fd_close (local.get $fd)) (i32.const 0))
     (then (return (i64.const 0))))
   (i64.const 1))
+"#,
+        tmp = FD_TMP_INDEX,
+        name = TMP_NAME,
+        name_len = TMP_NAME_LEN
+    )
+}
+
+/// `__rt_fgetc`: PHP's one-byte read, answering `string|false`.
+///
+/// A one-byte `fread` would answer the empty string at end of file, which PHP distinguishes
+/// from a NUL byte — so the boxed result is built here: a read of zero bytes is `false`, and a
+/// read of one is a one-character string, NUL included.
+fn rt_fgetc() -> String {
+    r#"(func $__rt_fgetc (param $fd i32) (result i32)
+  (local $ptr i32) (local $len i64)
+  (call $__rt_fread (local.get $fd) (i64.const 1))
+  (local.set $len)
+  (local.set $ptr)
+  (if (i64.eqz (local.get $len))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (call $__rt_mixed_from_value (i64.const 1)
+    (i64.extend_i32_u (local.get $ptr)) (local.get $len)))
+"#
+    .to_string()
+}
+
+/// `__rt_tmp_name`: writes `.elephc_tmpNNN` for `index` into the name scratch.
+///
+/// Three decimal digits, zero-padded, so the name has a FIXED length: `fclose` rebuilds it from
+/// the same index and must produce the same bytes without storing a length.
+fn rt_tmp_name() -> String {
+    format!(
+        r#"(func $__rt_tmp_name (param $index i32)
+  (local $base i32)
+  (local.set $base (i32.add (global.get $__float_scratch) (i32.const {name})))
+  (i32.store8 offset=0 (local.get $base) (i32.const 46))           ;; '.'
+  (i32.store8 offset=1 (local.get $base) (i32.const 101))          ;; 'e'
+  (i32.store8 offset=2 (local.get $base) (i32.const 108))          ;; 'l'
+  (i32.store8 offset=3 (local.get $base) (i32.const 101))          ;; 'e'
+  (i32.store8 offset=4 (local.get $base) (i32.const 112))          ;; 'p'
+  (i32.store8 offset=5 (local.get $base) (i32.const 104))          ;; 'h'
+  (i32.store8 offset=6 (local.get $base) (i32.const 99))           ;; 'c'
+  (i32.store8 offset=7 (local.get $base) (i32.const 95))           ;; '_'
+  (i32.store8 offset=8 (local.get $base) (i32.const 116))          ;; 't'
+  (i32.store8 offset=9 (local.get $base) (i32.const 109))          ;; 'm'
+  (i32.store8 offset=10 (local.get $base) (i32.const 112))         ;; 'p'
+  (i32.store8 offset=11 (local.get $base)
+    (i32.add (i32.const 48) (i32.rem_u (i32.div_u (local.get $index) (i32.const 100)) (i32.const 10))))
+  (i32.store8 offset=12 (local.get $base)
+    (i32.add (i32.const 48) (i32.rem_u (i32.div_u (local.get $index) (i32.const 10)) (i32.const 10))))
+  (i32.store8 offset=13 (local.get $base)
+    (i32.add (i32.const 48) (i32.rem_u (local.get $index) (i32.const 10)))))
+"#,
+        name = TMP_NAME
+    )
+}
+
+/// `__rt_tmpfile`: PHP's self-deleting temporary handle.
+///
+/// KNOWN DIVERGENCE: php-src creates the file in the system temp directory and, on POSIX,
+/// unlinks it immediately so it is never visible. WASI preview1 has neither a temp directory nor
+/// a way to unlink an open file, so the file lives in the PREOPENED directory under a generated
+/// name until `fclose` deletes it. A program that lists that directory while the handle is open
+/// sees an entry php would not show; everything read or written through the handle matches.
+///
+/// The first unused index wins, so two live temp handles never share a name. 256 is the ceiling
+/// because the fd table that remembers which index an fd holds is one byte per fd.
+fn rt_tmpfile() -> String {
+    format!(
+        r#"(func $__rt_tmpfile (result i32)
+  (local $i i32) (local $cell i32) (local $fd i32)
+  (block $picked (loop $scan
+    (br_if $picked (i32.ge_u (local.get $i) (i32.const 256)))
+    (call $__rt_tmp_name (local.get $i))
+    (br_if $picked (i64.eqz (call $__rt_file_exists
+      (i32.add (global.get $__float_scratch) (i32.const {name}))
+      (i64.const {name_len}))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $scan)))
+  (if (i32.ge_u (local.get $i) (i32.const 256))                    ;; every name is taken
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  ;; The mode is `w+`, written into the tail of the same scratch: a temp file must be both
+  ;; readable and writable, and truncating an unused name costs nothing.
+  (i32.store8 offset=16 (i32.add (global.get $__float_scratch) (i32.const {name})) (i32.const 119))
+  (i32.store8 offset=17 (i32.add (global.get $__float_scratch) (i32.const {name})) (i32.const 43))
+  (local.set $cell (call $__rt_fopen
+    (i32.add (global.get $__float_scratch) (i32.const {name}))
+    (i64.const {name_len})
+    (i32.add (i32.add (global.get $__float_scratch) (i32.const {name})) (i32.const 16))
+    (i64.const 2)
+    (i32.const 0)))
+  (local.set $fd (call $__rt_stream_fd (local.get $cell)))
+  (if (i32.lt_s (local.get $fd) (i32.const 0))
+    (then (return (local.get $cell))))                             ;; the open failed; php answers false
+  (if (i32.lt_u (local.get $fd) (i32.const 256))
+    (then (i32.store8
+      (i32.add (i32.add (global.get $__float_scratch) (i32.const {tmp})) (local.get $fd))
+      (i32.add (local.get $i) (i32.const 1)))))                    ;; 0 means "not a temp file"
+  (local.get $cell))
+"#,
+        name = TMP_NAME,
+        name_len = TMP_NAME_LEN,
+        tmp = FD_TMP_INDEX
+    )
+}
+
+/// `__rt_flock`: PHP's advisory lock.
+///
+/// KNOWN DIVERGENCE: WASI preview1 exposes no advisory-locking call at all, and a WASI command
+/// is one single-threaded process, so there is no second locker inside the module to contend
+/// with. Every operation therefore succeeds, which is what php answers whenever the lock is
+/// uncontended — the case a wasm module can reach on its own. What it cannot reproduce is
+/// contention with a HOST process sharing the preopened directory: php would block, or answer
+/// false under `LOCK_NB`, where this answers true.
+const RT_FLOCK: &str = r#"(func $__rt_flock (param $fd i32) (param $op i64) (result i64)
+  (if (i32.lt_s (local.get $fd) (i32.const 0))
+    (then (return (i64.const 0))))                                 ;; php answers false for a bad handle
+  (i64.const 1))
+"#;
+
+/// `__rt_readfile`: writes a whole file to stdout and answers the byte count.
+///
+/// Reuses `file_get_contents` rather than streaming in chunks: the same bytes, one boxed result
+/// to release, and the count php answers is that string's length.
+fn rt_readfile() -> String {
+    r#"(func $__rt_readfile (param $path i32) (param $path_len i64) (result i32)
+  (local $cell i32) (local $ptr i32) (local $len i64)
+  (local.set $cell (call $__rt_file_get_contents (local.get $path) (local.get $path_len)))
+  (if (i64.ne (i64.load (local.get $cell)) (i64.const 1))          ;; tag 1 = string; anything else is false
+    (then (return (local.get $cell))))
+  (local.set $ptr (i32.wrap_i64 (i64.load offset=8 (local.get $cell))))
+  (local.set $len (i64.load offset=16 (local.get $cell)))
+  (drop (call $__rt_fwrite (i32.const 1) (local.get $ptr) (local.get $len)))
+  (call $__rt_decref_any (local.get $cell))
+  (call $__rt_mixed_from_value (i64.const 0) (local.get $len) (i64.const 0)))
 "#
     .to_string()
 }

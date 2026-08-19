@@ -7911,6 +7911,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
+        | RuntimeFnId::Fgetc
+        | RuntimeFnId::Readfile
+        | RuntimeFnId::Flock
+        | RuntimeFnId::Tmpfile
         | RuntimeFnId::Fclose
         | RuntimeFnId::Feof
         | RuntimeFnId::Ftell
@@ -8105,7 +8109,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::DiskTotalSpace
         | RuntimeFnId::Fdatasync
         | RuntimeFnId::Fflush
-        | RuntimeFnId::Fgetc
         | RuntimeFnId::Fgetcsv
         | RuntimeFnId::Fgets
         | RuntimeFnId::File
@@ -8118,7 +8121,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fileperms
         | RuntimeFnId::Filesize
         | RuntimeFnId::Filetype
-        | RuntimeFnId::Flock
         | RuntimeFnId::Fnmatch
         | RuntimeFnId::Fpassthru
         | RuntimeFnId::Fprintf
@@ -8170,7 +8172,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Pfsockopen
         | RuntimeFnId::Popen
         | RuntimeFnId::Readdir
-        | RuntimeFnId::Readfile
         | RuntimeFnId::Readlink
         | RuntimeFnId::Realpath
         | RuntimeFnId::RealpathCacheGet
@@ -8223,7 +8224,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Symlink
         | RuntimeFnId::SysGetTempDir
         | RuntimeFnId::Tempnam
-        | RuntimeFnId::Tmpfile
         | RuntimeFnId::Touch
         | RuntimeFnId::Umask
         | RuntimeFnId::VarDump

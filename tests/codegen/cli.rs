@@ -18855,3 +18855,114 @@ foreach (class_parents("Stale") as $name => $value) {
     echo "- " . $name . " => " . $value . PHP_EOL;
 }
 "##;
+
+/// `fgetc`, `readfile`, `flock` and `tmpfile` match php, and the temp file does not survive.
+///
+/// The directory listing is part of the assertion, not a tidiness check: WASI preview1 cannot
+/// unlink an open file, so `tmpfile()` leaves a real entry behind until `fclose` removes it. A
+/// leak there would be invisible in stdout and would collide with the next `tmpfile()`.
+#[test]
+fn test_cli_wasm_stream_extensions_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_stream_ext");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, STREAM_EXT_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the stream extensions to WASM");
+    assert!(
+        output.status.success(),
+        "stream-extension compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the stream extensions under Node");
+    assert!(
+        run.status.success(),
+        "stream extensions trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "fgetc: hi!\nreadfile: hi! (3 bytes)\nlocked file: exclusive write\ntmpfile contents: ephemeral\ndone\n",
+    );
+
+    // The temp file must be gone: `fclose` is the only chance to unlink it.
+    let leftovers: Vec<String> = fs::read_dir(&dir)
+        .expect("failed to list the work directory")
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with(".elephc_tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "tmpfile left {leftovers:?} behind");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One use of each extension, in the order the assertion above reads them.
+const STREAM_EXT_PHP: &str = r##"<?php
+file_put_contents("greet.txt", "hi!");
+$h = fopen("greet.txt", "r");
+echo "fgetc: ";
+while (!feof($h)) {
+    $c = fgetc($h);
+    if ($c !== false) {
+        echo $c;
+    }
+}
+echo "\n";
+fclose($h);
+
+echo "readfile: ";
+$bytes = readfile("greet.txt");
+echo " (" . $bytes . " bytes)\n";
+
+$h = fopen("locked.txt", "w");
+if (flock($h, LOCK_EX)) {
+    fwrite($h, "exclusive write\n");
+    flock($h, LOCK_UN);
+}
+fclose($h);
+echo "locked file: " . file_get_contents("locked.txt");
+
+$tmp = tmpfile();
+fwrite($tmp, "ephemeral\n");
+rewind($tmp);
+echo "tmpfile contents: " . fread($tmp, 64);
+fclose($tmp);
+
+unlink("greet.txt");
+unlink("locked.txt");
+echo "done\n";
+"##;
