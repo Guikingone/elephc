@@ -16,7 +16,7 @@ use crate::parser::ast::{
 };
 use crate::types::FunctionSig;
 
-use super::Scanner;
+use super::{type_is_definitely_non_object, Scanner};
 
 impl Scanner<'_> {
     /// Scans one expression and records all declaration edges it contains.
@@ -37,6 +37,11 @@ impl Scanner<'_> {
             ExprKind::NewObject { class_name, args } => {
                 let key = self.record_class(class_name.as_str());
                 self.usage.instantiated_classes.insert(key.clone());
+                if key == php_symbol_key("IteratorIterator") {
+                    if let Some(source) = args.first().map(unwrap_named_arg) {
+                        self.record_iterator_protocol(source);
+                    }
+                }
                 self.scan_method_signature_arguments(
                     &[key.clone()].into_iter().collect(),
                     "__construct",
@@ -162,6 +167,11 @@ impl Scanner<'_> {
             ExprKind::ArrayAccess { array, index } => {
                 if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
                     self.record_globals_index(index);
+                } else {
+                    self.record_protocol_methods(
+                        array,
+                        &["offsetExists", "offsetGet", "offsetSet", "offsetUnset"],
+                    );
                 }
                 self.scan_expr(array);
                 self.scan_expr(index);
@@ -209,8 +219,24 @@ impl Scanner<'_> {
                 false,
             ));
         }
-        let first = args.first().map(unwrap_named_arg);
+        let normalized = self.normalized_function_arguments(&key, args);
+        let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {
+            "count" => {
+                if let Some(receiver) = first {
+                    self.record_protocol_methods(receiver, &["count"]);
+                }
+            }
+            "iterator_apply" | "iterator_count" | "iterator_to_array" => {
+                if let Some(receiver) = first {
+                    self.record_iterator_protocol(receiver);
+                }
+            }
+            "json_encode" => {
+                self.usage
+                    .wildcard_methods
+                    .insert((php_symbol_key("jsonSerialize"), false));
+            }
             "function_exists" => self.literal_function_or_hazard(first),
             "is_callable" | "call_user_func" | "call_user_func_array" => self.callable_or_hazard(first),
             "method_exists" => self.method_exists(args),
@@ -315,14 +341,8 @@ impl Scanner<'_> {
         let Some(definition) = crate::builtins::registry::lookup(name) else {
             return;
         };
-        let callback_indices: Vec<_> = definition
-            .params
-            .iter()
-            .enumerate()
-            .filter_map(|(index, (param, ty))| {
-                builtin_parameter_may_be_callback(param, ty).then_some(index)
-            })
-            .collect();
+        let callback_indices =
+            crate::builtins::registry::callback_parameter_indices(definition);
         if callback_indices.is_empty() {
             return;
         }
@@ -550,6 +570,59 @@ impl Scanner<'_> {
         }
     }
 
+    /// Records implicit instance calls emitted for one compiler-managed runtime protocol.
+    pub(super) fn record_protocol_methods(&mut self, receiver: &Expr, methods: &[&str]) {
+        if !self.expr_may_be_object(receiver) {
+            return;
+        }
+        self.record_protocol_methods_for_classes(self.expr_classes(receiver), methods);
+    }
+
+    /// Records implicit protocol calls for a variable-backed receiver without fabricating AST.
+    pub(super) fn record_variable_protocol_methods(&mut self, variable: &str, methods: &[&str]) {
+        if self
+            .definitely_non_object_variables
+            .contains(variable)
+        {
+            return;
+        }
+        let classes = self
+            .variable_classes
+            .get(variable)
+            .cloned()
+            .unwrap_or_default();
+        self.record_protocol_methods_for_classes(classes, methods);
+    }
+
+    /// Adds exact or wildcard method edges for the resolved runtime-protocol receiver set.
+    fn record_protocol_methods_for_classes(
+        &mut self,
+        classes: HashSet<String>,
+        methods: &[&str],
+    ) {
+        for method in methods {
+            let method = php_symbol_key(method);
+            if classes.is_empty() {
+                self.usage.wildcard_methods.insert((method, false));
+            } else {
+                self.usage.methods.extend(
+                    classes
+                        .iter()
+                        .cloned()
+                        .map(|class| (class, method.clone(), false)),
+                );
+            }
+        }
+    }
+
+    /// Records the complete Iterator and IteratorAggregate call surface for one source.
+    fn record_iterator_protocol(&mut self, receiver: &Expr) {
+        self.record_protocol_methods(
+            receiver,
+            &["getIterator", "rewind", "valid", "current", "key", "next"],
+        );
+    }
+
     /// Records one static-method reference and its receiver class when statically known.
     pub(super) fn record_static_method(&mut self, receiver: &StaticReceiver, method: &str) {
         if let Some(class) = self.receiver_class(receiver) {
@@ -585,6 +658,7 @@ impl Scanner<'_> {
 
     /// Unions statically evident receiver classes without reviving an opaque variable fact.
     pub(super) fn remember_assignment(&mut self, name: &str, value: &Expr) {
+        self.definitely_non_object_variables.remove(name);
         let classes = self.expr_classes(value);
         if classes.is_empty() {
             self.forget_variable(name);
@@ -603,10 +677,17 @@ impl Scanner<'_> {
         type_expr: &TypeExpr,
         value: &Expr,
     ) {
+        self.definitely_non_object_variables.remove(name);
         let mut classes = self.type_classes(type_expr);
         classes.extend(self.expr_classes(value));
         if classes.is_empty() {
-            self.forget_variable(name);
+            if type_is_definitely_non_object(type_expr) {
+                self.variable_classes.remove(name);
+                self.definitely_non_object_variables
+                    .insert(name.to_string());
+            } else {
+                self.forget_variable(name);
+            }
         } else if !self.invalidated_variables.contains(name) {
             self.variable_classes
                 .entry(name.to_string())
@@ -618,7 +699,42 @@ impl Scanner<'_> {
     /// Permanently makes one local receiver opaque for the remainder of this conservative scan.
     pub(super) fn forget_variable(&mut self, name: &str) {
         self.variable_classes.remove(name);
+        self.definitely_non_object_variables.remove(name);
         self.invalidated_variables.insert(name.to_string());
+    }
+
+    /// Returns whether an expression may carry an object that implements a runtime protocol.
+    fn expr_may_be_object(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Variable(name) => !self.definitely_non_object_variables.contains(name),
+            ExprKind::This
+            | ExprKind::NewObject { .. }
+            | ExprKind::NewDynamic { .. }
+            | ExprKind::NewDynamicObject { .. }
+            | ExprKind::NewScopedObject { .. } => true,
+            ExprKind::Ternary {
+                then_expr,
+                else_expr,
+                ..
+            } => self.expr_may_be_object(then_expr) || self.expr_may_be_object(else_expr),
+            ExprKind::NullCoalesce { value, default }
+            | ExprKind::ShortTernary { value, default } => {
+                self.expr_may_be_object(value) || self.expr_may_be_object(default)
+            }
+            ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::StringLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+            | ExprKind::ArrayLiteral(_)
+            | ExprKind::ArrayLiteralAssoc(_)
+            | ExprKind::ClassConstant { .. }
+            | ExprKind::ObjectClassName { .. }
+            | ExprKind::BufferNew { .. }
+            | ExprKind::Cast { .. }
+            | ExprKind::PtrCast { .. } => false,
+            _ => true,
+        }
     }
 
     /// Returns statically evident runtime classes for a narrow set of value expressions.
@@ -858,11 +974,6 @@ impl Scanner<'_> {
 
 }
 
-/// Returns whether registry metadata identifies one parameter as callback-bearing.
-fn builtin_parameter_may_be_callback(param: &str, ty: &crate::types::PhpType) -> bool {
-    param == "callback" || php_type_may_be_callable(ty)
-}
-
 /// Returns whether a declared PHP parameter type can receive a callable descriptor.
 fn php_type_may_be_callable(ty: &crate::types::PhpType) -> bool {
     match ty {
@@ -879,23 +990,45 @@ fn unwrap_named_arg(expr: &Expr) -> &Expr {
 
 #[cfg(test)]
 mod tests {
-    use super::builtin_parameter_may_be_callback;
-    use crate::types::PhpType;
+    const CALLBACK_BUILTINS: &[&str] = &[
+        "array_all",
+        "array_any",
+        "array_filter",
+        "array_find",
+        "array_map",
+        "array_reduce",
+        "array_udiff",
+        "array_uintersect",
+        "array_walk",
+        "array_walk_recursive",
+        "call_user_func",
+        "call_user_func_array",
+        "iterator_apply",
+        "ob_start",
+        "preg_replace_callback",
+        "spl_autoload_register",
+        "spl_autoload_unregister",
+        "uasort",
+        "uksort",
+        "usort",
+    ];
 
-    /// Verifies callable registry types identify callbacks independently of parameter spelling.
+    /// Verifies every callback-consuming AOT builtin exposes structural scanner metadata.
     #[test]
-    fn builtin_callback_parameters_are_recognized_structurally() {
-        assert!(builtin_parameter_may_be_callback(
-            "handler",
-            &PhpType::Callable
-        ));
-        assert!(builtin_parameter_may_be_callback(
-            "callback",
-            &PhpType::Mixed
-        ));
-        assert!(!builtin_parameter_may_be_callback(
-            "value",
-            &PhpType::Mixed
-        ));
+    fn callback_builtin_registry_contract_is_complete() {
+        let mut registry_callbacks = crate::builtins::registry::names()
+            .filter(|name| {
+                crate::builtins::registry::lookup(name).is_some_and(|definition| {
+                    !crate::builtins::registry::callback_parameter_indices(definition).is_empty()
+                })
+            })
+            .collect::<Vec<_>>();
+        registry_callbacks.sort_unstable();
+
+        assert_eq!(
+            registry_callbacks,
+            CALLBACK_BUILTINS,
+            "callback-taking builtins must expose structural callback metadata or a callable type",
+        );
     }
 }

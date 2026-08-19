@@ -8,6 +8,7 @@
 //! Key details:
 //! - Dynamic hazards widen roots only after their behaviorally reachable declaration is scanned.
 //! - Method-name dispatch is deliberately conservative across all live class-like declarations.
+//! - Scoped parent edges stay class-specific while preserving matching slots on the whole vtable lineage.
 //! - Checker-injected interface contracts retain implementations even without source interface AST.
 
 use std::collections::{HashMap, HashSet};
@@ -125,6 +126,8 @@ struct GraphState {
     reach: Reachability,
     behavioral: BehavioralReachability,
     structural_referenced_methods: HashSet<(String, bool)>,
+    scoped_methods: HashSet<(String, String, bool)>,
+    behavioral_scoped_methods: HashSet<(String, String, bool)>,
     instantiated_classes: HashSet<String>,
     scanned_functions: HashSet<String>,
     behaviorally_scanned_functions: HashSet<String>,
@@ -138,6 +141,7 @@ struct GraphState {
     internal_callable_methods: HashSet<(String, String, bool)>,
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
+    vtable_slots: HashSet<(String, String, bool)>,
 }
 
 impl GraphState {
@@ -192,6 +196,23 @@ impl GraphState {
                     }))
             })
             .collect();
+        let vtable_slots = check_result
+            .classes
+            .iter()
+            .flat_map(|(class, info)| {
+                let class = php_symbol_key(class);
+                info.vtable_methods
+                    .iter()
+                    .map({
+                        let class = class.clone();
+                        move |method| (class.clone(), php_symbol_key(method), false)
+                    })
+                    .chain(info.static_vtable_methods.iter().map({
+                        let class = class.clone();
+                        move |method| (class.clone(), php_symbol_key(method), true)
+                    }))
+            })
+            .collect();
         Self {
             index,
             reach: Reachability {
@@ -200,6 +221,8 @@ impl GraphState {
             },
             behavioral: BehavioralReachability::default(),
             structural_referenced_methods: HashSet::new(),
+            scoped_methods: HashSet::new(),
+            behavioral_scoped_methods: HashSet::new(),
             instantiated_classes: HashSet::new(),
             scanned_functions: HashSet::new(),
             behaviorally_scanned_functions: HashSet::new(),
@@ -213,6 +236,7 @@ impl GraphState {
             internal_callable_methods,
             checker_interface_methods,
             checker_method_implementations,
+            vtable_slots,
         }
     }
 
@@ -386,8 +410,39 @@ impl GraphState {
                 }
             }
         }
+        self.seed_vtable_slot_families();
         self.seed_explicit_method_implementations();
         self.seed_inherited_implementations();
+    }
+
+    /// Keeps shared virtual slots on every live class in a lineage once any occupant survives.
+    fn seed_vtable_slot_families(&mut self) {
+        let live_classes: Vec<_> = self.reach.classes.iter().cloned().collect();
+        let kept_methods: Vec<_> = self.reach.methods.iter().cloned().collect();
+        for (class, method, is_static) in kept_methods {
+            if !self.has_vtable_slot(&class, &method, is_static) {
+                continue;
+            }
+            let lineage_root = self.vtable_lineage_root(&class, &method, is_static);
+            let behavioral = self.behavioral.methods.contains(&(
+                class.clone(),
+                method.clone(),
+                is_static,
+            ));
+            for candidate in &live_classes {
+                if !self.class_is_or_descends_from(candidate, &lineage_root) {
+                    continue;
+                }
+                let visible_method = (candidate.clone(), method.clone(), is_static);
+                if !self.has_vtable_slot(candidate, &method, is_static) {
+                    continue;
+                }
+                self.reach.methods.insert(visible_method.clone());
+                if behavioral {
+                    self.behavioral.methods.insert(visible_method);
+                }
+            }
+        }
     }
 
     /// Resolves class-qualified method edges to the checker-selected implementation body.
@@ -640,9 +695,11 @@ impl GraphState {
             self.reach.classes.insert(class.clone());
             let key = (class.clone(), method, is_static);
             self.reach.methods.insert(key.clone());
+            self.scoped_methods.insert(key.clone());
             if behavioral {
                 self.behavioral.classes.insert(class);
-                self.behavioral.methods.insert(key);
+                self.behavioral.methods.insert(key.clone());
+                self.behavioral_scoped_methods.insert(key);
             }
         }
         if behavioral {
@@ -663,24 +720,7 @@ impl GraphState {
             .index
             .classes
             .keys()
-            .filter(|class| {
-                let mut current = Some((*class).clone());
-                let mut seen = HashSet::new();
-                while let Some(candidate) = current {
-                    if !seen.insert(candidate.clone()) {
-                        return false;
-                    }
-                    if candidate == root {
-                        return true;
-                    }
-                    current = self
-                        .index
-                        .classes
-                        .get(&candidate)
-                        .and_then(|node| node.parent.clone());
-                }
-                false
-            })
+            .filter(|class| self.class_is_or_descends_from(class, &root))
             .cloned()
             .collect();
         self.reach.classes.extend(classes.iter().cloned());
@@ -689,6 +729,55 @@ impl GraphState {
             self.behavioral.classes.extend(classes.iter().cloned());
             self.behavioral.instantiated_classes.extend(classes);
         }
+    }
+
+    /// Returns whether the checker assigned a virtual slot for this visible method.
+    fn has_vtable_slot(&self, class: &str, method: &str, is_static: bool) -> bool {
+        self.vtable_slots
+            .contains(&(class.to_string(), method.to_string(), is_static))
+    }
+
+    /// Returns the oldest ancestor that still occupies the same virtual slot.
+    fn vtable_lineage_root(&self, class: &str, method: &str, is_static: bool) -> String {
+        let mut current = class.to_string();
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(current.clone()) {
+                return current;
+            }
+            let Some(parent) = self
+                .index
+                .classes
+                .get(&current)
+                .and_then(|node| node.parent.clone())
+            else {
+                return current;
+            };
+            if !self.has_vtable_slot(&parent, method, is_static) {
+                return current;
+            }
+            current = parent;
+        }
+    }
+
+    /// Returns whether one indexed class is the named root or inherits from it.
+    fn class_is_or_descends_from(&self, class: &str, root: &str) -> bool {
+        let mut current = Some(class.to_string());
+        let mut seen = HashSet::new();
+        while let Some(candidate) = current {
+            if !seen.insert(candidate.clone()) {
+                return false;
+            }
+            if candidate == root {
+                return true;
+            }
+            current = self
+                .index
+                .classes
+                .get(&candidate)
+                .and_then(|node| node.parent.clone());
+        }
+        false
     }
 
     /// Turns method calls on interprocedurally aliased variable names into wildcard edges.
@@ -723,6 +812,8 @@ impl GraphState {
             + self.behavioral.referenced_methods.len()
             + self.behavioral.instantiated_classes.len()
             + self.structural_referenced_methods.len()
+            + self.scoped_methods.len()
+            + self.behavioral_scoped_methods.len()
             + self.instantiated_classes.len()
             + self.opaque_variables.len()
             + usize::from(self.all_variables_opaque)

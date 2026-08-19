@@ -207,4 +207,9 @@ impl BuiltinContract {
             required_param_count: None,
         }
     }
+
+    /// Returns the fixed PHP parameter names that can contain callable descriptors.
+    pub fn callback_parameter_names(&self) -> &'static [&'static str] {
+        crate::callback_parameters::names(self.id)
+    }
 }

@@ -8,6 +8,7 @@
 //! Key details:
 //! - Synthetic checker-only classes are preserved unless backed by a pruned source declaration.
 //! - Vtable survivor order is stable and slots are compacted from zero.
+//! - Shared virtual methods retain identical slots along every live inheritance lineage.
 
 use std::collections::{HashMap, HashSet};
 
@@ -104,6 +105,8 @@ fn retain_class_metadata(
             prune_class_methods(&key, class_info, reachability);
         }
     }
+    #[cfg(debug_assertions)]
+    assert_inherited_vtable_slots_aligned(&check.classes);
     check.interfaces.retain(|name, _| {
         let key = php_symbol_key(name);
         !matches!(
@@ -122,6 +125,39 @@ fn retain_class_metadata(
         let key = php_symbol_key(name);
         !declarations.packed_classes.contains(&key) || reachability.classes.contains(&key)
     });
+}
+
+/// Asserts shared virtual methods retain one slot number across each live inheritance edge.
+#[cfg(debug_assertions)]
+fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
+    let by_key: HashMap<_, _> = classes
+        .iter()
+        .map(|(name, info)| (php_symbol_key(name), info))
+        .collect();
+    for (class_name, child) in classes {
+        let Some(parent_name) = child.parent.as_deref() else {
+            continue;
+        };
+        let Some(parent) = by_key.get(&php_symbol_key(parent_name)).copied() else {
+            continue;
+        };
+        for (method, parent_slot) in &parent.vtable_slots {
+            if let Some(child_slot) = child.vtable_slots.get(method) {
+                debug_assert_eq!(
+                    child_slot, parent_slot,
+                    "instance vtable slot for {class_name}::{method} diverged from {parent_name}",
+                );
+            }
+        }
+        for (method, parent_slot) in &parent.static_vtable_slots {
+            if let Some(child_slot) = child.static_vtable_slots.get(method) {
+                debug_assert_eq!(
+                    child_slot, parent_slot,
+                    "static vtable slot for {class_name}::{method} diverged from {parent_name}",
+                );
+            }
+        }
+    }
 }
 
 /// Filters every instance/static method map and rebuilds stable compact vtable slots.

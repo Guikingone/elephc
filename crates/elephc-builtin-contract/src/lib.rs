@@ -13,6 +13,7 @@
 //!   validated for uniqueness by catalog consumers.
 
 mod aot_profile;
+mod callback_parameters;
 mod catalog_data;
 mod catalog_surfaces;
 mod eval_profile;

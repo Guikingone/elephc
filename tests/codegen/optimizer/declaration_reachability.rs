@@ -380,6 +380,161 @@ fn test_parent_dispatch_bypasses_child_override_after_pruning() {
     assert_eq!(out, "42");
 }
 
+/// Verifies a `parent::` call cannot desynchronize parent and child instance-vtable slots.
+#[test]
+fn test_parent_scoped_call_keeps_instance_slots_aligned_across_the_chain() {
+    let out = compile_and_run(
+        "<?php
+        class SlotBase {
+            public function shadowed(): string { return 'base'; }
+            public function later(): string { return 'later'; }
+        }
+        class SlotChild extends SlotBase {
+            public function shadowed(): string { return 'child'; }
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_base(SlotBase $value): string { return $value->later(); }
+        $child = new SlotChild();
+        $child->boot();
+        echo through_base($child);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies scoped parent retention cannot desynchronize late-bound static-vtable slots.
+#[test]
+fn test_parent_scoped_call_keeps_static_slots_aligned_across_the_chain() {
+    let out = compile_and_run(
+        "<?php
+        class StaticSlotBase {
+            public static function shadowed(): string { return 'base'; }
+            public static function dispatch(): string { return static::later(); }
+            public static function later(): string { return 'later'; }
+        }
+        class StaticSlotChild extends StaticSlotBase {
+            public static function shadowed(): string { return 'child'; }
+            public static function boot(): string { return parent::shadowed(); }
+        }
+        StaticSlotChild::boot();
+        echo StaticSlotChild::dispatch();
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies `count()` still executes a dynamic method inside Countable::count after pruning.
+#[test]
+fn test_countable_protocol_body_keeps_dynamic_method_target() {
+    let out = compile_and_run(
+        "<?php
+        class Items implements Countable {
+            public function count(): int {
+                $name = 'target';
+                $this->$name();
+                return 1;
+            }
+            public function target(): void { echo 'hit'; }
+        }
+        echo count(new Items());
+        ",
+    );
+    assert_eq!(out, "hit1");
+}
+
+/// Verifies foreach still executes a dynamic method inside Iterator::rewind after pruning.
+#[test]
+fn test_iterator_protocol_body_keeps_dynamic_method_target() {
+    let out = compile_and_run(
+        "<?php
+        class Items implements Iterator {
+            public function rewind(): void {
+                $name = 'target';
+                $this->$name();
+            }
+            public function current(): mixed { return 1; }
+            public function key(): mixed { return 0; }
+            public function next(): void {}
+            public function valid(): bool { return false; }
+            public function target(): void { echo 'hit'; }
+        }
+        foreach (new Items() as $value) {}
+        ",
+    );
+    assert_eq!(out, "hit");
+}
+
+/// Verifies a mid-chain `parent::` call cannot desynchronize the grandparent instance vtable.
+#[test]
+fn test_parent_scoped_call_keeps_grandparent_instance_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        class SlotRoot {
+            public function shadowed(): string { return 'root'; }
+            public function later(): string { return 'later'; }
+        }
+        class SlotMid extends SlotRoot {
+            public function shadowed(): string { return 'mid'; }
+        }
+        class SlotLeaf extends SlotMid {
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_root(SlotRoot $value): string { return $value->later(); }
+        $leaf = new SlotLeaf();
+        $leaf->boot();
+        echo through_root($leaf);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies a mid-chain `parent::` call cannot desynchronize an abstract grandparent vtable.
+#[test]
+fn test_parent_scoped_call_keeps_abstract_grandparent_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        abstract class SlotRoot {
+            abstract public function shadowed(): string;
+            public function later(): string { return 'later'; }
+        }
+        class SlotMid extends SlotRoot {
+            public function shadowed(): string { return 'mid'; }
+        }
+        class SlotLeaf extends SlotMid {
+            public function boot(): string { return parent::shadowed(); }
+        }
+        function through_root(SlotRoot $value): string { return $value->later(); }
+        $leaf = new SlotLeaf();
+        $leaf->boot();
+        echo through_root($leaf);
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
+/// Verifies a mid-chain static `parent::` call cannot desynchronize late-bound static slots.
+#[test]
+fn test_parent_scoped_call_keeps_grandparent_static_slots_aligned() {
+    let out = compile_and_run(
+        "<?php
+        class StaticSlotRoot {
+            public static function shadowed(): string { return 'root'; }
+            public static function dispatch(): string { return static::later(); }
+            public static function later(): string { return 'later'; }
+        }
+        class StaticSlotMid extends StaticSlotRoot {
+            public static function shadowed(): string { return 'mid'; }
+        }
+        class StaticSlotLeaf extends StaticSlotMid {
+            public static function boot(): string { return parent::shadowed(); }
+        }
+        StaticSlotLeaf::boot();
+        echo StaticSlotLeaf::dispatch();
+        ",
+    );
+    assert_eq!(out, "later");
+}
+
 /// Verifies a runtime-generated TypeError retains its checker-injected class metadata after pruning.
 #[test]
 fn test_synthetic_type_error_metadata_survives_declaration_pruning() {

@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_method};
 use crate::parser::ast::{
-    AttributeGroup, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
+    AttributeGroup, BinOp, ClassConst, ClassMethod, ClassProperty, Expr, ExprKind, Stmt, StmtKind,
     TraitUse, TypeExpr,
 };
 use crate::types::{CheckResult, FunctionSig};
@@ -113,12 +113,14 @@ pub(super) fn scan_function(stmt: &Stmt, call_signatures: &CallSignatureIndex) -
     scanner.scan_attributes(&stmt.attributes);
     if let StmtKind::FunctionDecl {
         params,
+        param_attributes,
         variadic_type,
         return_type,
         body,
         ..
     } = &stmt.kind
     {
+        scanner.scan_parameter_attributes(param_attributes);
         scanner.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
         scanner.scan_nested(body, false);
     }
@@ -228,6 +230,7 @@ pub(super) fn scan_class_shell(stmt: &Stmt) -> Usage {
 struct Scanner<'a> {
     usage: Usage,
     variable_classes: HashMap<String, HashSet<String>>,
+    definitely_non_object_variables: HashSet<String>,
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,
     current_method: Option<String>,
@@ -416,6 +419,8 @@ impl Scanner<'_> {
             StmtKind::ArrayAssign { array, index, value } => {
                 if array == "GLOBALS" {
                     self.record_globals_index(index);
+                } else {
+                    self.record_variable_protocol_methods(array, &["offsetSet"]);
                 }
                 self.scan_expr(index);
                 self.scan_expr(value);
@@ -423,6 +428,8 @@ impl Scanner<'_> {
             StmtKind::ArrayPush { array, value } => {
                 if array == "GLOBALS" {
                     self.usage.dynamic_global_alias = true;
+                } else {
+                    self.record_variable_protocol_methods(array, &["offsetSet"]);
                 }
                 self.scan_expr(value);
             }
@@ -472,10 +479,10 @@ impl Scanner<'_> {
             }
             StmtKind::If { condition, then_body, elseif_clauses, else_body } => {
                 self.scan_expr(condition);
-                self.scan_nested(then_body, declarations);
+                self.scan_guarded_non_object_body(condition, then_body, declarations);
                 for (condition, body) in elseif_clauses {
                     self.scan_expr(condition);
-                    self.scan_nested(body, declarations);
+                    self.scan_guarded_non_object_body(condition, body, declarations);
                 }
                 if let Some(body) = else_body { self.scan_nested(body, declarations); }
             }
@@ -500,6 +507,10 @@ impl Scanner<'_> {
                 body,
                 ..
             } => {
+                self.record_protocol_methods(
+                    array,
+                    &["getIterator", "rewind", "valid", "current", "key", "next"],
+                );
                 self.scan_expr(array);
                 if let Some(key_var) = key_var {
                     self.forget_variable(key_var);
@@ -573,19 +584,59 @@ impl Scanner<'_> {
         for stmt in body { self.scan_statement(stmt, declarations); }
     }
 
+    /// Scans a branch with positive `is_array()` facts that exclude protocol dispatch.
+    fn scan_guarded_non_object_body(
+        &mut self,
+        condition: &Expr,
+        body: &[Stmt],
+        declarations: bool,
+    ) {
+        let mut guarded = HashSet::new();
+        collect_is_array_guards(condition, &mut guarded);
+        let added: Vec<_> = guarded
+            .into_iter()
+            .filter(|name| self.definitely_non_object_variables.insert(name.clone()))
+            .collect();
+        self.scan_nested(body, declarations);
+        for name in added {
+            self.definitely_non_object_variables.remove(&name);
+        }
+    }
+
     /// Scans one class method contract and body.
     fn scan_method(&mut self, method: &ClassMethod) {
         let prior_method = self.current_method.replace(method.name.clone());
         self.scan_attributes(&method.attributes);
+        self.scan_parameter_attributes(&method.param_attributes);
         self.scan_params(&method.params, method.variadic_type.as_ref(), method.return_type.as_ref());
         self.scan_nested(&method.body, true);
         self.current_method = prior_method;
     }
 
-    /// Scans parameter defaults and declared class types.
+    /// Scans attribute classes and arguments attached to fixed or variadic parameters.
+    fn scan_parameter_attributes(&mut self, parameter_attributes: &[Vec<AttributeGroup>]) {
+        for groups in parameter_attributes {
+            self.scan_attributes(groups);
+        }
+    }
+
+    /// Scans parameter defaults and records declared receiver domains for the body scan.
     fn scan_params(&mut self, params: &[(String, Option<TypeExpr>, Option<Expr>, bool)], variadic: Option<&TypeExpr>, ret: Option<&TypeExpr>) {
-        for (_, ty, default, _) in params {
-            if let Some(ty) = ty { self.scan_type(ty); }
+        for (name, ty, default, _) in params {
+            if let Some(ty) = ty {
+                self.scan_type(ty);
+                let classes = self.type_classes(ty);
+                if classes.is_empty() {
+                    if type_is_definitely_non_object(ty) {
+                        self.definitely_non_object_variables.insert(name.clone());
+                    }
+                } else {
+                    self.variable_classes
+                        .entry(name.clone())
+                        .or_default()
+                        .extend(classes);
+                }
+            }
             if let Some(default) = default { self.scan_expr(default); }
         }
         if let Some(ty) = variadic { self.scan_type(ty); }
@@ -655,4 +706,56 @@ impl Scanner<'_> {
         }
     }
 
+}
+
+/// Returns whether a declared local type excludes every object representation.
+fn type_is_definitely_non_object(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Int
+        | TypeExpr::Float
+        | TypeExpr::Bool
+        | TypeExpr::False
+        | TypeExpr::Str
+        | TypeExpr::Void
+        | TypeExpr::Never
+        | TypeExpr::Array(_)
+        | TypeExpr::Ptr(_)
+        | TypeExpr::Buffer(_) => true,
+        TypeExpr::Named(name) => matches!(
+            name.as_str().to_ascii_lowercase().as_str(),
+            "array" | "bool" | "false" | "float" | "int" | "never" | "null" | "string" | "void"
+        ),
+        TypeExpr::Nullable(inner) => type_is_definitely_non_object(inner),
+        TypeExpr::Union(types) => types.iter().all(type_is_definitely_non_object),
+        TypeExpr::Iterable | TypeExpr::Intersection(_) => false,
+    }
+}
+
+/// Collects variables proven arrays by positive conjuncts of one branch condition.
+fn collect_is_array_guards(condition: &Expr, variables: &mut HashSet<String>) {
+    match &condition.kind {
+        ExprKind::FunctionCall { name, args }
+            if php_symbol_key(name.as_str().trim_start_matches('\\')) == "is_array" =>
+        {
+            if let Some(argument) = args.first() {
+                let argument = if let ExprKind::NamedArg { value, .. } = &argument.kind {
+                    value.as_ref()
+                } else {
+                    argument
+                };
+                if let ExprKind::Variable(name) = &argument.kind {
+                    variables.insert(name.clone());
+                }
+            }
+        }
+        ExprKind::BinaryOp {
+            left,
+            op: BinOp::And,
+            right,
+        } => {
+            collect_is_array_guards(left, variables);
+            collect_is_array_guards(right, variables);
+        }
+        _ => {}
+    }
 }

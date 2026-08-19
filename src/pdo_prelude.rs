@@ -3945,7 +3945,7 @@ class PDOStatement implements IteratorAggregate {
 
     private function copyConstructorArgs(mixed $source): array {
         $_copy = [];
-        foreach ($source as $_key => $_value) {
+        foreach ((array) $source as $_key => $_value) {
             $_copy[$_key] = $_value;
         }
         return $_copy;
