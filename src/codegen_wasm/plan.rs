@@ -149,6 +149,19 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     if !layout_values.iter().any(|value| value == "count") {
         layout_values.push("count".to_string());
     }
+    // `ob_get_status` answers an ordered map whose KEY NAMES are backend constants, so they
+    // need addresses for the same reason the enum case names do.
+    if super::output_buffer::module_uses_output_buffering(module) {
+        for name in super::output_buffer::STATUS_KEYS
+            .iter()
+            .copied()
+            .chain(std::iter::once(super::output_buffer::DEFAULT_HANDLER_NAME))
+        {
+            if !layout_values.iter().any(|value| value == name) {
+                layout_values.push(name.to_string());
+            }
+        }
+    }
     // The names a class-relation builtin answers with. They are computed from the module's
     // declarations rather than written in the program, so they have no `DataId` of their own.
     for name in super::builtins::class_relation_answer_strings(module) {
@@ -596,6 +609,37 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `ClosureCall` lowering dispatches through (P7a1). Must run after closure bodies are
     // lowered (wrappers call `fn___eir_closure_<owner>_<n>`) but before `wm.render()`.
     closures::emit_closure_dispatch(&mut wm, module, &fcc_entries)?;
+
+    // Output buffering intercepts every stdout write, so its `__rt_stdout_write` replaces the
+    // passthrough one for a module that can actually enter a buffer. The handler path needs the
+    // callable ladder, which exists exactly when this module has a closure or a first-class
+    // callable — and a module with neither cannot have produced a handler either.
+    // Both variants call `__rt_wasi_write_or_fail`, which only a COMMAND module has: the
+    // five sites that reach `__rt_stdout_write` all live in the command runtime, so a
+    // reactor module references neither and needs neither.
+    if !has_main {
+        // no stdout write exists in this module
+    } else if super::output_buffer::module_uses_output_buffering(module) {
+        let has_callable_ladder = !module.closures.is_empty() || !fcc_entries.is_empty();
+        super::output_buffer::emit_output_buffer_runtime(&mut wm, has_callable_ladder);
+        wm.add_raw_func(super::output_buffer::RT_STDOUT_WRITE);
+        let status_keys: Vec<(u32, u32)> = super::output_buffer::STATUS_KEYS
+            .iter()
+            .map(|name| {
+                default_strings
+                    .get(*name)
+                    .copied()
+                    .expect("ob_get_status key laid out above")
+            })
+            .collect();
+        let handler = default_strings
+            .get(super::output_buffer::DEFAULT_HANDLER_NAME)
+            .copied()
+            .expect("default handler name laid out above");
+        super::output_buffer::emit_ob_get_status(&mut wm, &status_keys, handler);
+    } else {
+        wm.add_raw_func(super::output_buffer::RT_STDOUT_WRITE_PASSTHROUGH);
+    }
 
     // The `[$object, "method"]` / `["Class", "method"]` ladders and their per-method wrappers.
     // Runs after class methods are lowered (a wrapper calls the method body by symbol) and

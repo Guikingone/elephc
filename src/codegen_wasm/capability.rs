@@ -7911,6 +7911,12 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
+        // The output-buffer stack: every stdout write funnels through one interception point.
+        | RuntimeFnId::ObStart
+        | RuntimeFnId::ObGetClean
+        | RuntimeFnId::ObEndFlush
+        | RuntimeFnId::ObEndClean
+        | RuntimeFnId::ObGetStatus
         // Pure computation over bytes already in memory: no WASI call is involved.
         | RuntimeFnId::Long2ip
         | RuntimeFnId::Ip2long
@@ -8161,18 +8167,13 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Lstat
         | RuntimeFnId::Mkdir
         | RuntimeFnId::ObClean
-        | RuntimeFnId::ObEndClean
-        | RuntimeFnId::ObEndFlush
         | RuntimeFnId::ObFlush
-        | RuntimeFnId::ObGetClean
         | RuntimeFnId::ObGetContents
         | RuntimeFnId::ObGetFlush
         | RuntimeFnId::ObGetLength
         | RuntimeFnId::ObGetLevel
-        | RuntimeFnId::ObGetStatus
         | RuntimeFnId::ObImplicitFlush
         | RuntimeFnId::ObListHandlers
-        | RuntimeFnId::ObStart
         | RuntimeFnId::Opendir
         | RuntimeFnId::Pathinfo
         | RuntimeFnId::Pclose

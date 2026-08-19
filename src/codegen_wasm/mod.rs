@@ -44,6 +44,7 @@ mod mixed;
 mod mixed_numeric;
 mod npm;
 mod objects;
+mod output_buffer;
 mod plan;
 mod refcount;
 mod refcell;

@@ -45,7 +45,8 @@ pub(super) const FLOAT_SCRATCH_BASE: u32 = RT_SCRATCH_END;
 /// (16 bytes per fd, 256 fds — mode and uri as persisted-string ptr/len pairs
 /// recorded by `fopen`) fills +0x4000..+0x5000; the `parse_url` parts table (eight
 /// `(start, len)` pairs, a presence mask and the port) sits at +0x5000..+0x5100.
-pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x5100;
+/// Grown by one page-eighth for `output_buffer::OB_LEVELS`, which sits at the old top.
+pub(super) const FLOAT_SCRATCH_SIZE: u32 = 0x5200;
 
 /// First byte reserved for command-runtime fatal diagnostics.
 const COMMAND_DATA_BASE: u32 = FLOAT_SCRATCH_BASE + FLOAT_SCRATCH_SIZE;
@@ -990,7 +991,7 @@ fn emit_print_r_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
       (call $__rt_mixed_from_value (i64.const 1)
         (i64.extend_i32_u (local.get $buf)) (i64.extend_i32_u (local.get $len))))
     (else                                                         ;; echo mode: write, answer true
-      (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $buf) (local.get $len))
+      (call $__rt_stdout_write (local.get $buf) (local.get $len))
       (call $__rt_mixed_from_value (i64.const 3) (i64.const 1) (i64.const 0))))
   (local.set $out)
   (if (local.get $buf)
@@ -2537,7 +2538,7 @@ const RT_ECHO_BOOL: &str = r#"(func $__rt_echo_bool (param $v i64)
   (if (i64.ne (local.get $v) (i64.const 0))
     (then
       (i32.store8 (i32.const 16) (i32.const 49))            ;; '1' into the number buffer
-      (call $__rt_wasi_write_or_fail (i32.const 1) (i32.const 16) (i32.const 1))))) ;; write "1""#;
+      (call $__rt_stdout_write (i32.const 16) (i32.const 1))))) ;; write "1""#;
 
 /// `__rt_echo_str`: writes a string (a linear-memory pointer + byte length) to
 /// stdout via `fd_write`. The length is an i64 (PHP int) wrapped to the i32 the
@@ -2547,7 +2548,7 @@ const RT_ECHO_STR: &str = r#"(func $__rt_echo_str (param $ptr i32) (param $len i
     (then
       (call $__rt_fail (i32.const 5))
       unreachable))                                          ;; elephc-trap:post-noreturn:echo-string-length-overflow wasm32 cannot address a larger byte range
-  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (i32.wrap_i64 (local.get $len)))) ;; write to stdout"#;
+  (call $__rt_stdout_write (local.get $ptr) (i32.wrap_i64 (local.get $len)))) ;; write to stdout"#;
 
 /// `__rt_echo_i64`: writes a signed 64-bit integer to stdout as decimal text.
 ///
@@ -2584,7 +2585,7 @@ const RT_ECHO_I64: &str = r#"(func $__rt_echo_i64 (param $v i64)
           (local.set $ptr (i32.sub (local.get $ptr) (i32.const 1))) ;; back up one byte for '-'
           (i32.store8 (local.get $ptr) (i32.const 45))))))     ;; '-'
   (local.set $len (i32.sub (i32.const 64) (local.get $ptr)))   ;; byte count
-  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (local.get $len))) ;; write to stdout"#;
+  (call $__rt_stdout_write (local.get $ptr) (local.get $len))) ;; write to stdout"#;
 
 /// `__rt_echo_f64`: writes a PHP float to stdout as `%.14G` text. The float arrives
 /// as a wasm `f64`; its bits are reinterpreted to an `i64` for `__rt_ftoa`, which
@@ -2599,7 +2600,7 @@ const RT_ECHO_F64: &str = r#"(func $__rt_echo_f64 (param $v f64)
   (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096 -> (ptr,len)
   (local.set $len)                                          ;; pop ftoa length (result 1, on top)
   (local.set $ptr)                                          ;; pop ftoa pointer (result 0)
-  (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (local.get $len))) ;; write to stdout"#;
+  (call $__rt_stdout_write (local.get $ptr) (local.get $len))) ;; write to stdout"#;
 
 #[cfg(test)]
 mod tests {
@@ -2663,10 +2664,23 @@ mod tests {
     /// overflow before allocating.
     #[test]
     fn command_runtime_propagates_write_errors_and_guards_argv_size() {
+        // The helpers reach the checked path THROUGH `__rt_stdout_write`, which is where an
+        // output buffer intercepts them. Both of its variants must still end in the checked
+        // write, so the errno guarantee survives the indirection rather than being weakened by
+        // it.
+        for variant in [
+            crate::codegen_wasm::output_buffer::RT_STDOUT_WRITE,
+            crate::codegen_wasm::output_buffer::RT_STDOUT_WRITE_PASSTHROUGH,
+        ] {
+            assert!(
+                variant.contains("call $__rt_wasi_write_or_fail"),
+                "the stdout interception point bypasses the checked WASI write path:\n{variant}"
+            );
+        }
         for echo in [RT_ECHO_BOOL, RT_ECHO_STR, RT_ECHO_I64, RT_ECHO_F64] {
             assert!(
-                echo.contains("call $__rt_wasi_write_or_fail"),
-                "echo helper bypasses the checked WASI write path:\n{echo}"
+                echo.contains("call $__rt_stdout_write"),
+                "echo helper bypasses the stdout interception point:\n{echo}"
             );
             assert!(
                 !echo.contains("drop (call $__rt_wasi_write_all"),

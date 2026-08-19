@@ -4369,6 +4369,11 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::PrintR
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
+            | RuntimeFnId::ObStart
+            | RuntimeFnId::ObGetClean
+            | RuntimeFnId::ObEndFlush
+            | RuntimeFnId::ObEndClean
+            | RuntimeFnId::ObGetStatus
             | RuntimeFnId::Long2ip
             | RuntimeFnId::Ip2long
             | RuntimeFnId::InetNtop
@@ -4487,6 +4492,16 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::VarDump {
         return var_dump_shape_issue(module, function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ObStart
+            | RuntimeFnId::ObGetClean
+            | RuntimeFnId::ObEndFlush
+            | RuntimeFnId::ObEndClean
+            | RuntimeFnId::ObGetStatus
+    ) {
+        return output_buffer_shape_issue(module, function, call, target);
     }
     if matches!(
         target,
@@ -4791,6 +4806,16 @@ pub(super) fn lower_direct_builtin(
         ctx.emit_load_value(operand(inst, 0)?)?;
         ctx.fb.ins(helper, "IPv4 conversion");
         return store_result(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ObStart
+            | RuntimeFnId::ObGetClean
+            | RuntimeFnId::ObEndFlush
+            | RuntimeFnId::ObEndClean
+            | RuntimeFnId::ObGetStatus
+    ) {
+        return lower_output_buffer(ctx, inst, target);
     }
     if target == RuntimeFnId::VarDump {
         // Boxed first, because the renderer dispatches on a cell TAG: a raw container pointer
@@ -5395,6 +5420,100 @@ fn php_type_is_dumpable_scalar(php: &PhpType) -> bool {
         }
         _ => false,
     }
+}
+
+/// Validates one output-buffering call.
+///
+/// `ob_start` is the only one with operands: an optional callable handler and an optional chunk
+/// size. The other four take none, which is what makes the whole family a stack operation rather
+/// than something addressed by handle.
+fn output_buffer_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+        return Some("output buffering writes through the command runtime".to_string());
+    }
+    if target == RuntimeFnId::ObStart {
+        if call.operands.len() > 2 {
+            return Some(format!(
+                "ob_start takes at most a handler and a chunk size, got {} operands",
+                call.operands.len()
+            ));
+        }
+        // A handler must be a CALLABLE DESCRIPTOR: this target invokes it through the closure
+        // ladder, which is keyed on that descriptor. A string function name would need the
+        // runtime name lookup this backend does not have.
+        if let Some(handler) = call.operands.first() {
+            let Some(value) = function.value(*handler) else {
+                return Some("ob_start handler is missing from the value table".to_string());
+            };
+            if value.ir_type != IrType::I64
+                || value.php_type.codegen_repr() != PhpType::Callable
+            {
+                return Some(format!(
+                    "ob_start handler {:?}/{:?} is not a callable descriptor",
+                    value.ir_type,
+                    value.php_type.codegen_repr()
+                ));
+            }
+        }
+        if let Some(chunk) = call.operands.get(1) {
+            let Some(value) = function.value(*chunk) else {
+                return Some("ob_start chunk size is missing from the value table".to_string());
+            };
+            if value.ir_type != IrType::I64 {
+                return Some(format!(
+                    "ob_start chunk size {:?} is not an int",
+                    value.ir_type
+                ));
+            }
+        }
+        return None;
+    }
+    if !call.operands.is_empty() {
+        return Some(format!(
+            "{target:?} takes no operands, got {}",
+            call.operands.len()
+        ));
+    }
+    None
+}
+
+/// Lowers one output-buffering call.
+///
+/// `ob_start`'s two optional operands are supplied here when the call site omits them: zero for
+/// the handler means "no handler", and zero for the chunk size means "no auto-flush", which is
+/// what php's defaults are.
+fn lower_output_buffer(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    target: RuntimeFnId,
+) -> Result<()> {
+    if target == RuntimeFnId::ObStart {
+        if inst.operands.is_empty() {
+            ctx.fb.ins("i64.const 0", "no handler");
+        } else {
+            ctx.emit_load_value(operand(inst, 0)?)?;
+        }
+        if inst.operands.len() >= 2 {
+            ctx.emit_load_value(operand(inst, 1)?)?;
+        } else {
+            ctx.fb.ins("i64.const 0", "no chunk size: never auto-flushes");
+        }
+        ctx.fb.ins("call $__rt_ob_start", "push a buffer level");
+        return store_result(ctx, inst);
+    }
+    let helper = match target {
+        RuntimeFnId::ObGetClean => "call $__rt_ob_get_clean",
+        RuntimeFnId::ObEndFlush => "call $__rt_ob_end_flush",
+        RuntimeFnId::ObEndClean => "call $__rt_ob_end_clean",
+        _ => "call $__rt_ob_get_status",
+    };
+    ctx.fb.ins(helper, "output-buffer stack operation");
+    store_result(ctx, inst)
 }
 
 /// Whether a runtime-call operand is a hash rather than an indexed array.
@@ -9182,6 +9301,47 @@ mod tests {
                 "{target:?} must be admitted"
             );
         }
+    }
+
+    /// `ob_start` admits a handler only as a callable DESCRIPTOR, and the other four take none.
+    ///
+    /// The handler is invoked through the closure ladder, which is keyed on that descriptor: a
+    /// string function name would need a runtime name lookup this backend does not have, so it
+    /// is refused rather than silently ignored — a buffer whose handler never runs would emit
+    /// the wrong bytes without any diagnostic.
+    #[test]
+    fn output_buffering_admits_only_a_descriptor_handler() {
+        for target in [
+            RuntimeFnId::ObStart,
+            RuntimeFnId::ObGetClean,
+            RuntimeFnId::ObEndFlush,
+            RuntimeFnId::ObEndClean,
+            RuntimeFnId::ObGetStatus,
+        ] {
+            assert!(
+                is_direct_builtin(target),
+                "{target:?} must be audited as a direct builtin"
+            );
+            assert!(
+                super::super::capability::runtime_function_is_supported(target),
+                "{target:?} must be admitted"
+            );
+        }
+
+        // The seven keys `ob_get_status` answers, in php's own order — `foreach` makes that
+        // order observable, so it is part of the contract rather than an implementation detail.
+        assert_eq!(
+            super::super::output_buffer::STATUS_KEYS,
+            [
+                "name",
+                "type",
+                "flags",
+                "level",
+                "chunk_size",
+                "buffer_size",
+                "buffer_used",
+            ]
+        );
     }
 
     /// `var_dump` admits a value only when EVERY type it can hold renders.

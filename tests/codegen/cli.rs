@@ -19052,3 +19052,114 @@ echo "packed -> " . inet_ntop($packed) . "\n";
 
 var_dump(inet_pton("8.8.8.8"));
 "##;
+
+/// Output buffering matches php: capture, nesting, status, discard, handlers and chunking.
+///
+/// The chunked case is the one that pins the auto-flush: `{12345678}{tail}` is two handler
+/// runs, and a buffer that only flushed at the end would answer `{12345678tail}` — a single
+/// wrong line that no other case in this file would catch.
+#[test]
+fn test_cli_wasm_output_buffering_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_ob");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, OUTPUT_BUFFERING_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the output buffering to WASM");
+    assert!(
+        output.status.success(),
+        "output-buffering compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the output buffering under Node");
+    assert!(
+        run.status.success(),
+        "output buffering trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "HELLO\n",
+            "outer:inner\n",
+            "1234567\n",
+            "handler=default output handler used=7\n",
+            "discarded\n",
+            "HANDLED\n",
+            "{12345678}{tail}\n",
+        ),
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// One case per mechanism: capture, nesting, status, discard, a handler, and chunking.
+const OUTPUT_BUFFERING_PHP: &str = r##"<?php
+ob_start();
+echo "hello";
+echo strtoupper(ob_get_clean()), "\n";
+
+ob_start();
+echo "outer:";
+ob_start();
+echo "inner";
+ob_end_flush();
+echo ob_get_clean(), "\n";
+
+ob_start();
+echo "1234567";
+$status = ob_get_status();
+echo ob_get_clean(), "\n";
+echo "handler=", $status["name"], " used=", $status["buffer_used"], "\n";
+
+ob_start();
+var_dump(["noisy" => "debug"]);
+ob_end_clean();
+echo "discarded\n";
+
+ob_start(function (string $buffer, int $phase): string {
+    return strtoupper($buffer);
+});
+echo "handled";
+ob_end_flush();
+echo "\n";
+
+ob_start(function (string $b, int $p): string { return "{" . $b . "}"; }, 8);
+echo "12345678";
+echo "tail";
+ob_end_flush();
+echo "\n";
+"##;

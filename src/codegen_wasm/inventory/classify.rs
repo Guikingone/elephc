@@ -293,6 +293,20 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_ipv4_conversions_and_scalar_var_dump_match_php",
             ][..],
         ),
+        // The buffer stack. One interception point serves every stdout write, and the handler
+        // path reaches user code through the callable ladder.
+        RuntimeFnId::ObStart
+        | RuntimeFnId::ObGetClean
+        | RuntimeFnId::ObEndFlush
+        | RuntimeFnId::ObEndClean
+        | RuntimeFnId::ObGetStatus => (
+            "codegen_wasm::output_buffer",
+            "codegen_wasm::builtins::lower_output_buffer",
+            &[
+                "codegen_wasm::builtins::tests::output_buffering_admits_only_a_descriptor_handler",
+                "codegen::cli::test_cli_wasm_output_buffering_matches_php",
+            ][..],
+        ),
         RuntimeFnId::Readline => (
             "codegen_wasm::runtime",
             "codegen_wasm::builtins::lower_direct_builtin",
