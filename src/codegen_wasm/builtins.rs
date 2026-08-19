@@ -19,8 +19,8 @@ use super::wat::WatModule;
 use super::inst::{operand, store_result};
 use super::WasmError;
 use crate::ir::{
-    Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeFnId,
-    UnaryStringRuntime,
+    Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeCallTarget,
+    RuntimeFnId, UnaryStringRuntime,
 };
 use crate::types::PhpType;
 
@@ -2738,6 +2738,234 @@ fn lower_class_exists(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) 
     store_result(ctx, inst)
 }
 
+/// Maps the three class-relation builtins onto the shared relation they ask for.
+fn class_relation_of(target: RuntimeFnId) -> Option<crate::ir::class_relations::ClassRelation> {
+    use crate::ir::class_relations::ClassRelation;
+    match target {
+        RuntimeFnId::ClassImplements => Some(ClassRelation::Implements),
+        RuntimeFnId::ClassParents => Some(ClassRelation::Parents),
+        RuntimeFnId::ClassUses => Some(ClassRelation::Uses),
+        _ => None,
+    }
+}
+
+/// Resolves the class-like target of one class-relation call, or `None` when it cannot be
+/// settled at compile time.
+///
+/// Two spellings are settled: a STATICALLY TYPED object (the class is in its EIR type) and a
+/// literal name. Anything else — a `mixed` receiver, a computed name — is runtime state this
+/// closed-world fold cannot answer, and is refused rather than guessed.
+fn class_relation_target(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<crate::ir::class_relations::ClassLikeTarget> {
+    use crate::ir::class_relations;
+    let operand = *call.operands.first()?;
+    let value = function.value(operand)?;
+    match value.php_type.codegen_repr() {
+        PhpType::Object(class_name) => {
+            Some(class_relations::resolve_object_target(module, &class_name))
+        }
+        PhpType::Str => {
+            let name = literal_string_operand(function, module, operand)?;
+            Some(class_relations::resolve_named_target(module, &name))
+        }
+        _ => None,
+    }
+}
+
+/// Every name any class-relation call in this module can answer with.
+///
+/// Read by `plan_module` so those bytes get a data segment: they are computed from the module's
+/// declarations, never written as PHP literals, so they have no `DataId` of their own.
+pub(super) fn class_relation_answer_strings(module: &Module) -> Vec<String> {
+    use crate::ir::class_relations;
+    let mut names = Vec::new();
+    for function in module.functions.iter().chain(module.class_methods.iter()) {
+        for inst in &function.instructions {
+            let Some(Immediate::RuntimeCall(target)) = inst.immediate.as_ref() else {
+                continue;
+            };
+            let target = match target {
+                RuntimeCallTarget::Function(id) => *id,
+                RuntimeCallTarget::ProfiledFunction { target, .. } => *target,
+                _ => continue,
+            };
+            let Some(relation) = class_relation_of(target) else {
+                continue;
+            };
+            let Some(resolved) = class_relation_target(module, function, inst) else {
+                continue;
+            };
+            for name in class_relations::relation_names(module, relation, &resolved) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Whether this class-relation call is one the closed-world answer covers.
+fn class_relation_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    use crate::ir::class_relations::ClassLikeTarget;
+    // PHP's second argument is `$autoload`, which cannot change a closed-world answer.
+    if call.operands.is_empty() || call.operands.len() > 2 {
+        return Some(format!(
+            "expected one or two operands, got {}",
+            call.operands.len()
+        ));
+    }
+    // PHP returns `array<string,string>|false`, which reaches codegen boxed.
+    if call.result.is_some()
+        && (call.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || call.result_php_type.codegen_repr() != PhpType::Mixed)
+    {
+        return Some(format!(
+            "{target:?} answers a boxed array|false, got {:?}/{:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    let Some(resolved) = class_relation_target(module, function, call) else {
+        return Some(format!(
+            "{target:?} needs a literal name or a statically typed object to answer statically"
+        ));
+    };
+    // `Unknown` is not a failure: PHP answers `false` for a name it cannot resolve, and so does
+    // the fold. It is listed here only to show the case was considered.
+    let _ = matches!(resolved, ClassLikeTarget::Unknown);
+    None
+}
+
+/// Lowers a class-relation call to the hash its declarations imply.
+///
+/// An unresolvable target answers PHP's `false`, boxed; anything else builds the `name => name`
+/// hash entry by entry, in the order `ir::class_relations` produced — `foreach` walks a hash in
+/// insertion order, so that order is observable output.
+fn lower_class_relation(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
+    use crate::ir::class_relations::{self, ClassLikeTarget};
+
+    let relation = class_relation_of(target)
+        .ok_or_else(|| WasmError::Unsupported(format!("{target:?} is not a class relation")))?;
+    let resolved = class_relation_target(ctx.module, ctx.function, inst).ok_or_else(|| {
+        WasmError::Unsupported(format!("{target:?} target is not statically known"))
+    })?;
+    if matches!(resolved, ClassLikeTarget::Unknown) {
+        ctx.fb.ins("i64.const 3", "mixed tag = bool");
+        ctx.fb.ins("i64.const 0", "false: this module declares no such name");
+        ctx.fb.ins("i64.const 0", "no high payload");
+        ctx.fb.ins(
+            "call $__rt_mixed_from_value",
+            "PHP answers false for an unresolvable class-like name",
+        );
+        return store_result(ctx, inst);
+    }
+
+    let names = class_relations::relation_names(ctx.module, relation, &resolved);
+    let capacity = (names.len() * 2).max(16);
+    let string_tag = crate::codegen::runtime_value_tag(&PhpType::Str) as i64;
+    let hash = ctx.fresh_temp(super::wat::ValType::I32);
+    ctx.fb.ins(
+        &format!(
+            "(local.set {} (call $__rt_hash_new (i64.const {}) (i64.const {})))",
+            hash, capacity, string_tag
+        ),
+        "the class-relation hash, string-keyed and string-valued",
+    );
+    for name in &names {
+        let (offset, len) = ctx.default_str_literal(name)?;
+        // Key and value are the SAME bytes: PHP answers `name => name`.
+        ctx.fb.ins(
+            &format!(
+                "(local.set {} (call $__rt_hash_set (local.get {})                  (i64.const {}) (i64.const {}) (i64.const {}) (i64.const {}) (i64.const {})))",
+                hash, hash, offset, len, offset, len, string_tag
+            ),
+            &format!("{:?} entry", name),
+        );
+    }
+    ctx.fb.ins("i64.const 5", "mixed tag = hash");
+    ctx.fb.ins(
+        &format!("(i64.extend_i32_u (local.get {}))", hash),
+        "the hash pointer as the cell payload",
+    );
+    ctx.fb.ins("i64.const 0", "no high payload");
+    ctx.fb.ins(
+        "call $__rt_mixed_from_value",
+        "box the relation hash, which PHP types array|false",
+    );
+    store_result(ctx, inst)
+}
+
+/// Whether `count($obj)` on this class is one the Countable path can serve.
+fn countable_count_shape_issue(
+    module: &Module,
+    class_name: &str,
+    call: &Instruction,
+) -> Option<String> {
+    use crate::ir::class_relations;
+    if !class_relations::class_implements_interface(module, class_name, "Countable") {
+        return Some(format!(
+            "count() of {} which does not implement Countable",
+            class_name
+        ));
+    }
+    // The body has to exist HERE: `Countable::count` is a declaration, not an implementation.
+    let key = crate::names::php_symbol_key("count");
+    let Some(info) = class_relations::lookup_class(module, class_name) else {
+        return Some(format!("count() of undeclared class {}", class_name));
+    };
+    let impl_class = info
+        .method_impl_classes
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let wanted = crate::names::php_symbol_key(&format!("{}::count", impl_class));
+    if !module
+        .class_methods
+        .iter()
+        .any(|body| crate::names::php_symbol_key(&body.name) == wanted)
+    {
+        return Some(format!("count() of {} has no compiled body", class_name));
+    }
+    // php-src ignores `$mode` entirely for a Countable, so a second operand is accepted.
+    if call.operands.is_empty() || call.operands.len() > 2 {
+        return Some(format!(
+            "count() expects one or two operands, got {}",
+            call.operands.len()
+        ));
+    }
+    if call.result.is_some() && call.result_type != IrType::I64 {
+        return Some(format!(
+            "count() answers an int, got {:?}",
+            call.result_type
+        ));
+    }
+    None
+}
+
+/// Lowers `count($obj)` on a Countable to the object's own `count()`.
+fn lower_countable_count(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    receiver: crate::ir::ValueId,
+    class_name: &str,
+) -> Result<()> {
+    let key = crate::names::php_symbol_key("count");
+    // The method name is needed as bytes for the null-receiver diagnostic, and "count" is a
+    // backend constant here rather than a PHP literal the program wrote.
+    let (ptr, len) = ctx.default_str_literal("count")?;
+    super::methods::emit_no_arg_method_call(ctx, receiver, class_name, &key, "count", ptr, len)?;
+    store_result(ctx, inst)
+}
+
 /// Recovers a literal string operand's text, or `None` when it is not a literal.
 fn literal_string_operand(
     function: &Function,
@@ -4147,6 +4375,9 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::TraitExists
             | RuntimeFnId::EnumExists
             | RuntimeFnId::FunctionExists
+            | RuntimeFnId::ClassImplements
+            | RuntimeFnId::ClassParents
+            | RuntimeFnId::ClassUses
             | RuntimeFnId::InArray
             | RuntimeFnId::ArrayReverse
             | RuntimeFnId::ArraySum
@@ -4237,6 +4468,12 @@ pub(super) fn direct_builtin_shape_issue(
             | RuntimeFnId::FunctionExists
     ) {
         return class_exists_shape_issue(module, function, call, target);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ClassImplements | RuntimeFnId::ClassParents | RuntimeFnId::ClassUses
+    ) {
+        return class_relation_shape_issue(module, function, call, target);
     }
     if matches!(
         target,
@@ -4433,6 +4670,12 @@ fn count_shape_issue(
     let Some(value) = function.value(*operand) else {
         return Some("container operand is missing from the value table".to_string());
     };
+    // PHP defines `count()` on a Countable as a call to the object's own `count()`, which is
+    // what the lowering emits. The method must have a BODY in this module: an interface-only
+    // declaration has nothing to call.
+    if let PhpType::Object(class_name) = value.php_type.codegen_repr() {
+        return countable_count_shape_issue(module, &class_name, call);
+    }
     // A boxed container counts too when the box is PROVABLY one — `array_map` types its result
     // `mixed` because of its CALLBACK, never because the value might not be an array — so the
     // `TypeError` this refusal protects against cannot arise.
@@ -4493,6 +4736,12 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Count {
         return lower_count(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ClassImplements | RuntimeFnId::ClassParents | RuntimeFnId::ClassUses
+    ) {
+        return lower_class_relation(ctx, inst, target);
     }
     if target == RuntimeFnId::ArrayIsList {
         return lower_array_is_list(ctx, inst);
@@ -7075,6 +7324,9 @@ fn lower_string_predicate(
 /// Lowers `count($array)` to the container header's element count at `[ptr + 0]`.
 fn lower_count(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let container = operand(inst, 0)?;
+    if let PhpType::Object(class_name) = ctx.value_php_type(container)?.codegen_repr() {
+        return lower_countable_count(ctx, inst, container, &class_name);
+    }
     let boxed = matches!(
         ctx.function.value(container).map(|v| v.ir_type),
         Some(IrType::Heap(IrHeapKind::Mixed))
@@ -8644,6 +8896,68 @@ mod tests {
     /// part of the name. Both directions matter: missing a match answers false for a class that
     /// exists, and matching too eagerly answers true for one that does not.
     #[test]
+    /// The three class relations resolve names PHP's way and refuse what they cannot settle.
+    ///
+    /// Order matters and is not incidental: `foreach` walks the answer hash in INSERTION order,
+    /// so `class_parents` listing the immediate parent before its ancestors is observable
+    /// output, not an implementation detail.
+    #[test]
+    fn class_relations_answer_from_the_modules_own_declarations() {
+        use crate::ir::class_relations::{ClassLikeTarget, ClassRelation};
+
+        // The mapping is the whole reason three builtins share one lowering.
+        assert_eq!(
+            ClassRelation::from_builtin_name("class_implements"),
+            Some(ClassRelation::Implements)
+        );
+        assert_eq!(
+            ClassRelation::from_builtin_name("class_parents"),
+            Some(ClassRelation::Parents)
+        );
+        assert_eq!(
+            ClassRelation::from_builtin_name("class_uses"),
+            Some(ClassRelation::Uses)
+        );
+        assert_eq!(ClassRelation::from_builtin_name("class_exists"), None);
+        for target in [
+            RuntimeFnId::ClassImplements,
+            RuntimeFnId::ClassParents,
+            RuntimeFnId::ClassUses,
+        ] {
+            assert!(
+                class_relation_of(target).is_some(),
+                "{target:?} must map to a relation"
+            );
+            assert!(
+                is_direct_builtin(target),
+                "{target:?} must be audited as a direct builtin"
+            );
+        }
+        assert!(class_relation_of(RuntimeFnId::ClassExists).is_none());
+
+        // An empty module declares nothing, so every name is unresolvable — which PHP answers
+        // `false` for rather than treating as an error.
+        let module = Module::new(crate::codegen_support::platform::Target::wasm());
+        assert_eq!(
+            crate::ir::class_relations::resolve_named_target(&module, "Cart"),
+            ClassLikeTarget::Unknown
+        );
+        for relation in [
+            ClassRelation::Implements,
+            ClassRelation::Parents,
+            ClassRelation::Uses,
+        ] {
+            assert!(crate::ir::class_relations::relation_names(
+                &module,
+                relation,
+                &ClassLikeTarget::Unknown
+            )
+            .is_empty());
+        }
+        // Nothing to lay out when nothing calls one.
+        assert!(class_relation_answer_strings(&module).is_empty());
+    }
+
     fn the_exists_family_answers_from_the_modules_own_declarations() {
         let circle = "Circle".to_string();
         let namespaced = "\\App\\Model".to_string();

@@ -7902,6 +7902,11 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::TraitExists
         | RuntimeFnId::EnumExists
         | RuntimeFnId::FunctionExists
+        // The three class relations fold the same way, into an assoc hash rather than a bool:
+        // which interfaces, ancestors or traits a declared name has is settled by this module.
+        | RuntimeFnId::ClassImplements
+        | RuntimeFnId::ClassParents
+        | RuntimeFnId::ClassUses
         | RuntimeFnId::Readline
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
@@ -8061,9 +8066,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::CallUserFunc
         | RuntimeFnId::CallUserFuncArray
         | RuntimeFnId::ClassAlias
-        | RuntimeFnId::ClassImplements
-        | RuntimeFnId::ClassParents
-        | RuntimeFnId::ClassUses
         | RuntimeFnId::GetDeclaredClasses
         | RuntimeFnId::GetDeclaredInterfaces
         | RuntimeFnId::GetDeclaredTraits

@@ -18748,3 +18748,110 @@ foreach (["greet", "shout"] as $command) {
 $class = "Commands";
 echo $class::help(), "\n";
 "##;
+
+/// `class_implements`/`class_uses`/`class_parents` and `count()` on a Countable match php.
+///
+/// The three relations fold to a hash at compile time, so what has to be proven is not that a
+/// call happens but that the ANSWER agrees with php — including its iteration ORDER, which
+/// `foreach` makes observable. `count($cart)` shares the run because it is the other half of
+/// the same SPL foundation and reaches the object's own method.
+#[test]
+fn test_cli_wasm_class_relations_and_countable_count_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_class_relations");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, CLASS_RELATIONS_PHP).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the class relations to WASM");
+    assert!(
+        output.status.success(),
+        "class-relation compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true, preopens: { ".": "." } });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the class relations under Node");
+    assert!(
+        run.status.success(),
+        "class relations trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same file.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "items: 2\nCart interfaces:\n- Countable => Countable\nCart traits:\n- Auditable => Auditable\nStale parents:\n- RuntimeException => RuntimeException\n- Exception => Exception\n",
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A Countable class with a trait and an interface, plus a two-deep exception ancestry: enough
+/// for `class_parents` to have an order worth checking.
+const CLASS_RELATIONS_PHP: &str = r##"<?php
+trait Auditable {}
+
+class Cart implements Countable {
+    use Auditable;
+
+    private array $items = [];
+
+    public function add(string $item): void {
+        $this->items[] = $item;
+    }
+
+    public function count(): int {
+        return count($this->items);
+    }
+}
+
+$cart = new Cart();
+$cart->add("apple");
+$cart->add("bread");
+echo "items: " . count($cart) . PHP_EOL;
+
+echo "Cart interfaces:" . PHP_EOL;
+foreach (class_implements("Cart") as $name => $value) {
+    echo "- " . $name . " => " . $value . PHP_EOL;
+}
+echo "Cart traits:" . PHP_EOL;
+foreach (class_uses("Cart") as $name => $value) {
+    echo "- " . $name . " => " . $value . PHP_EOL;
+}
+
+class Stale extends RuntimeException {}
+
+echo "Stale parents:" . PHP_EOL;
+foreach (class_parents("Stale") as $name => $value) {
+    echo "- " . $name . " => " . $value . PHP_EOL;
+}
+"##;

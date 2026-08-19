@@ -235,6 +235,55 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     Ok(())
 }
 
+/// Emits a no-argument call to `class_name::method_key` on an already-checked receiver, leaving
+/// the body's result on the stack.
+///
+/// Shares `lower_method_call`'s dispatch decision: a method that occupies a vtable slot and is
+/// not final is reached through its introducer's stub, so an overriding subclass still wins;
+/// anything else is called by symbol. Callers that synthesise such a call — `count()` on a
+/// Countable is the one today — must not re-derive that rule.
+pub(super) fn emit_no_arg_method_call(
+    ctx: &mut FnCtx,
+    receiver: crate::ir::ValueId,
+    class_name: &str,
+    method_key: &str,
+    method_name: &str,
+    method_ptr: u32,
+    method_len: u32,
+) -> Result<()> {
+    let ci = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
+    let dynamic = ci.vtable_slots.contains_key(method_key) && !ci.final_methods.contains(method_key);
+    let impl_class = ci
+        .method_impl_classes
+        .get(method_key)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let callee_symbol = if dynamic {
+        let introducer = resolve_vtable_introducer(ctx, class_name, method_key)?;
+        method_dispatch_symbol(&introducer, method_key)
+    } else {
+        method_symbol(&format!("{}::{}", impl_class, method_name))
+    };
+    // The same null check an ordinary call makes: a raw object pointer can be 0, and PHP names
+    // that case rather than reading through it.
+    emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
+    ctx.emit_load_value(receiver)?;
+    ctx.fb.ins(
+        &format!("call ${}", callee_symbol),
+        &format!(
+            "{}::{} ({})",
+            class_name,
+            method_name,
+            if dynamic { "dispatch" } else { "direct" }
+        ),
+    );
+    Ok(())
+}
+
 /// Lowers a method call whose receiver is typed by an INTERFACE.
 ///
 /// The receiver is one object pointer whose header names its real class, so the call goes

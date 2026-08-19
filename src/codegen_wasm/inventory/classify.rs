@@ -252,6 +252,19 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_answers_the_exists_family_from_its_own_declarations",
             ][..],
         ),
+        // The three class relations are settled by the same closed world, into an assoc hash
+        // rather than a bool. Their NAMES come from `ir::class_relations`, shared with the
+        // native backend so the two backends cannot answer differently.
+        RuntimeFnId::ClassImplements
+        | RuntimeFnId::ClassParents
+        | RuntimeFnId::ClassUses => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_class_relation",
+            &[
+                "codegen_wasm::builtins::tests::class_relations_answer_from_the_modules_own_declarations",
+                "codegen::cli::test_cli_wasm_class_relations_and_countable_count_match_php",
+            ][..],
+        ),
         RuntimeFnId::Readline => (
             "codegen_wasm::runtime",
             "codegen_wasm::builtins::lower_direct_builtin",

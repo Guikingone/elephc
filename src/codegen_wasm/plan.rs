@@ -144,6 +144,18 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // A `count($obj)` on a Countable names the method in its null-receiver diagnostic, and
+    // "count" is a backend constant there rather than a PHP literal the program wrote.
+    if !layout_values.iter().any(|value| value == "count") {
+        layout_values.push("count".to_string());
+    }
+    // The names a class-relation builtin answers with. They are computed from the module's
+    // declarations rather than written in the program, so they have no `DataId` of their own.
+    for name in super::builtins::class_relation_answer_strings(module) {
+        if !layout_values.contains(&name) {
+            layout_values.push(name);
+        }
+    }
     // `gettype()` answers one of a fixed set of php-src spellings. Any module that calls it needs
     // those bytes addressable, whether the answer is settled at compile time or picked by a tag.
     if module
